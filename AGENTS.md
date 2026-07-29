@@ -148,11 +148,13 @@ Order matters. Each step catches a class the previous one cannot.
 
 | Document | Answers | Must not contain |
 |---|---|---|
-| Product doc | What the product does and why | File paths, schema, component names |
-| Architecture doc | How it is built, and what must not break | Product justification (link to the product doc instead) |
-| ADRs | Why we chose this over the alternative | Implementation detail that will drift |
+| [`SPEC/PRD/`](SPEC/PRD/) | What the product does and why | File paths, schema, component names |
+| [`SPEC/TECH/`](SPEC/TECH/) | How it is built, and what must not break | Product justification (link to the PRD instead) |
+| [`SPEC/decisions/`](SPEC/decisions/) | Why we chose this over the alternative | Implementation detail that will drift |
 | History | How we got here, bug by bug | Anything needed to work today |
 | `AGENTS.md` (this file) | How to work | Anything specific to one feature |
+
+Start at [`SPEC/README.md`](SPEC/README.md), which indexes all of it.
 
 **Where a doc disagrees with the repo, the repo is right and the doc is the bug.** Fix it in
 the same change. This is the only rule that keeps a spec from going stale, and it only works
@@ -198,7 +200,7 @@ below is not._
 # test
 # database up / migrate
 
-# re-export the system overview image from ARCHITECTURE-DIAGRAMS.md.
+# re-export the system overview image from SPEC/TECH/17-diagrams.md.
 # Run in the same change as any edit to that file's first diagram, or the
 # checked-in image silently drifts from its source.
 ./scripts/render-diagrams.sh
@@ -208,7 +210,13 @@ below is not._
 
 | Path | What it is |
 |---|---|
-| | |
+| `SPEC/README.md` | Index of everything below. Start here. |
+| `SPEC/PRD/` | Product requirements, one file per feature area |
+| `SPEC/TECH/` | Technical spec, one file per subsystem |
+| `SPEC/decisions/` | Accepted ADRs. Immutable; supersede rather than edit |
+| `SPEC/templates/` | Feature spec, authorization checklist, migration checklist, ADR |
+| `SPEC/TECH/assets/` | Generated diagram exports. Do not hand-edit; see `scripts/` |
+| `scripts/render-diagrams.sh` | Re-exports the system overview from `SPEC/TECH/17-diagrams.md` |
 
 ### 5.3 Failure modes specific to this codebase
 

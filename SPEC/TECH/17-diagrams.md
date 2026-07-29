@@ -14,7 +14,7 @@ The same shape as the WhatsApp reference drawing: client on the left, load balan
 of connection-holding servers in the middle, and the stores and services fanning out to the
 right. What differs is section 2.
 
-![ClubChat system overview](system-overview.png)
+![ClubChat system overview](assets/system-overview.png)
 
 > **The Mermaid source below is authoritative; the image above is a generated export** for
 > viewers that do not render Mermaid. It goes stale the moment the source changes. Re-export it
@@ -24,7 +24,7 @@ right. What differs is section 2.
 > ./scripts/render-diagrams.sh     # writes system-overview.png and .svg
 > ```
 >
-> `system-overview.svg` is the same diagram as vector, for zooming without the pixels showing.
+> `assets/system-overview.svg` is the same diagram as vector, for zooming without the pixels showing.
 
 ```mermaid
 flowchart LR

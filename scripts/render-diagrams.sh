@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Re-export the system overview diagram from ARCHITECTURE-DIAGRAMS.md.
+# Re-export the system overview diagram from SPEC/TECH/17-diagrams.md.
 #
-# The Mermaid source in ARCHITECTURE-DIAGRAMS.md is authoritative. The exported
+# The Mermaid source in SPEC/TECH/17-diagrams.md is authoritative. The exported
 # image is a convenience for viewers that do not render Mermaid, and it goes
 # stale the moment the source changes. Run this in the same change as any edit
 # to the first diagram block.
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$ROOT/ARCHITECTURE-DIAGRAMS.md"
+SRC="$ROOT/SPEC/TECH/17-diagrams.md"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -49,18 +49,18 @@ node -e '
 for FMT in png svg; do
   npx --yes @mermaid-js/mermaid-cli \
     -i "$TMP/system-overview.mmd" \
-    -o "$ROOT/system-overview.$FMT" \
+    -o "$ROOT/SPEC/TECH/assets/system-overview.$FMT" \
     -p "$TMP/puppeteer.json" \
     -b "$BG" \
     -w "$WIDTH" \
     ${FMT:+$([ "$FMT" = png ] && echo "-s 2")} >/dev/null
-  echo "wrote system-overview.$FMT"
+  echo "wrote SPEC/TECH/assets/system-overview.$FMT"
 done
 
 # Guard against silently shipping an empty render.
 for FMT in png svg; do
-  if [ ! -s "$ROOT/system-overview.$FMT" ]; then
-    echo "ERROR: system-overview.$FMT is empty" >&2
+  if [ ! -s "$ROOT/SPEC/TECH/assets/system-overview.$FMT" ]; then
+    echo "ERROR: SPEC/TECH/assets/system-overview.$FMT is empty" >&2
     exit 1
   fi
 done
