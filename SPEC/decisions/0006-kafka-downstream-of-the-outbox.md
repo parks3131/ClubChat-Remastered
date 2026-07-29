@@ -36,6 +36,34 @@ row's `partition_key`** and will never sit on the message send path.
 | Negative | A system to operate that the throughput does not require. Accepted knowingly. At-least-once delivery now has two causes rather than one - relay retries and consumer rebalances - so consumer idempotency becomes load-bearing twice over. |
 | Follow-up needed | Outbox pruning must not outpace Kafka retention, or replay stops being possible. A hosted Kafka provider is still undecided; verify current offerings rather than trusting memory, as this market has shifted. |
 
+## Exit ramp
+
+This decision is deliberately cheap to reverse, and the reversal is defined here so it is a
+choice rather than a defeat.
+
+**Drop Kafka if, during or after Phase 1.5, any of these is true:**
+
+- Operating it is consuming time that Phase 2 needs, and the learning goal has already been met.
+- A production incident traces to Kafka itself - a rebalance storm, a stuck partition, a
+  misconfigured retention - rather than to our own consumer logic.
+- The hosted provider situation turns out to be expensive or awkward enough that self-hosting a
+  broker becomes the path of least resistance. Running a broker to serve 50 writes/sec is not a
+  trade worth making.
+
+**What reversal costs, in full:**
+
+| Change | Size |
+|---|---|
+| Merge the relay back into the worker, reading the outbox directly with `FOR UPDATE SKIP LOCKED` | One file |
+| Rename `outbox.published_at` back to `processed_at`, since it would again mean "effect performed" | One migration |
+| Delete the DLQ topic and its alerting | Config |
+| Update [Effects engine](../TECH/04-effects-engine.md), [Failure modes](../TECH/11-failure-modes.md) and the system diagram | Docs |
+
+Nothing in the domain model, the channel log, the policy module, the protocol, or the client is
+affected. **The outbox already works without Kafka** - that is the property that makes this
+decision safe to take, and it must not be traded away by letting business logic drift into the
+relay or by making any consumer depend on Kafka-specific semantics.
+
 ## Alternatives considered
 
 | Alternative | Why not |
