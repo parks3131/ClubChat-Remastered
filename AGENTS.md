@@ -197,6 +197,11 @@ below is not._
 # type check
 # test
 # database up / migrate
+
+# re-export the system overview image from ARCHITECTURE-DIAGRAMS.md.
+# Run in the same change as any edit to that file's first diagram, or the
+# checked-in image silently drifts from its source.
+./scripts/render-diagrams.sh
 ```
 
 ### 5.2 Repo map
