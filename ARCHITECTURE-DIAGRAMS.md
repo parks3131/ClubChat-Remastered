@@ -29,7 +29,9 @@ flowchart LR
     end
 
     API["API<br/><br/>command + query handlers<br/>policy module<br/>one predicate, defined once"]
-    WORKER["Worker<br/><br/>outbox drain, 250ms poll<br/>system messages, cards<br/>notification fan-out<br/>cascades, scheduled jobs"]
+    RELAY["Relay<br/><br/>outbox poll, 250ms<br/>marks published_at<br/>no business logic"]
+    KAFKA["Kafka<br/><br/>clubchat.events<br/>partitioned by partition_key<br/>clubchat.events.dlq"]
+    WORKER["Worker<br/>consumer group<br/><br/>system messages, cards<br/>notification fan-out<br/>cascades, scheduled jobs"]
 
     PG[("Postgres<br/><br/>channel log with seq<br/>outbox<br/>all domain tables")]
     REDIS[("Redis<br/><br/>connection registry<br/>per-channel pub/sub<br/>rate limit buckets")]
@@ -50,7 +52,9 @@ flowchart LR
 
     API -->|"domain rows + outbox<br/>one transaction"| PG
 
-    PG -->|"claim batch<br/>FOR UPDATE SKIP LOCKED"| WORKER
+    PG -->|"claim batch<br/>FOR UPDATE SKIP LOCKED"| RELAY
+    RELAY -->|"produce, keyed by<br/>partition_key"| KAFKA
+    KAFKA -->|"consume"| WORKER
     WORKER -.->|"effects written back"| PG
     WORKER -->|"publish"| REDIS
     WORKER -->|"per device, suppressed<br/>by read cursor"| PUSH
@@ -69,8 +73,11 @@ flowchart LR
     class G1,G2,G3 gateway
     class LB4,LB7 lb
     class PG,REDIS store
-    class API,WORKER,PUSH,CDN svc
+    class API,RELAY,WORKER,PUSH,CDN svc
+    class KAFKA bus
     class BLOB blob
+
+    classDef bus fill:#2a1f3d,stroke:#a78bfa,stroke-width:2px,color:#f5f5f5
 
     style GWC fill:#241f12,stroke:#d99a2b,stroke-width:2px,color:#e8b45a
 ```
@@ -87,7 +94,8 @@ Every row here is argued in `ARCHITECTURE.md` §12. This table is the index, not
 
 | Reference drawing | ClubChat | Why |
 |---|---|---|
-| Message Queue - Message Storage Service - Message Database, as three components | **One Postgres**, holding the channel log and the outbox | An external queue cannot be transactional with the domain write, which is the exact property we need. At 50 writes/sec the three-tier split buys nothing. §7 |
+| Message Queue - Message Storage Service - Message Database, as three components | **Postgres holds the channel log and the outbox; Kafka sits downstream of the outbox** | The outbox is the transactional boundary, because a queue cannot be atomic with the domain write. Kafka then adds durable replay and independent consumers. Not on the send path. §7.4 |
+| Per-recipient one-to-one messaging as the primary feature | **Group chat is primary; DMs are a fourth channel scope** | Reversed from a v1 non-goal. Restricted to members who share a club, and obliged to ship with blocking and a report destination. §5.6 |
 | Chat Servers own routing *and* business logic | **Gateway** holds sockets only; **API** holds all logic; **Worker** holds all effects | A gateway can be killed at any instant with zero data loss. That property is load-bearing. §3 |
 | User Connection Cache gates delivery *and* notification | **Redis registry routes publishes only** | Liveness is not proof of receipt. A dead phone keeps a registry entry alive and would silently swallow every push in that window. Suppression is the read cursor. §6.2 |
 | Per-user pub/sub channels, one publish per recipient | **Per-channel topics**, one publish per message | Authorizes once at subscribe instead of once per message per recipient. Cost per message is independent of channel size. §4 |

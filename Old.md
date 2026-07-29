@@ -37,6 +37,7 @@ unless a section explicitly says "not built".
    - [4.9 Polls](#49-polls)
    - [4.10 Notifications](#410-notifications)
    - [4.11 Media, galleries, attachments](#411-media-galleries-attachments)
+   - [4.12 Direct messages](#412-direct-messages)
 5. [Screen map and information architecture](#5-screen-map-and-information-architecture)
 6. [Server-side event catalogue](#6-server-side-event-catalogue)
 7. [Authorization requirements](#7-authorization-requirements)
@@ -107,11 +108,17 @@ history.
 | Structured exercise builders (sets/reps/splits) | Explicit "keep it very simple" call |
 | RSVP or attendance, anywhere | No attendance concept exists in the product |
 | Cross-club discovery or a social graph | Clubs are found by name or invite link, nothing more |
-| Direct messages between members | Every conversation is scoped to a club, race, or Eboard |
 | An "invite-only" club tier | Covered by the `request` policy plus a private share link |
 | Threaded replies, message editing, message search | Out of scope by decision |
 | Comments on news posts | Discussion belongs in chat |
 | Recurring events | Weekly training is Routines' job |
+
+> **Reversed 2026-07-28: direct messages.** DMs were a non-goal in v1, on the reasoning that
+> every conversation is scoped to a club, a race, or an Eboard. They are now **in scope for the
+> remaster** as a fourth channel scope, restricted to members who share a club. **Group chat
+> remains the main feature; DMs are additive and must never become the centre of gravity.** See
+> [4.12](#412-direct-messages). The reversal carries an obligation: it moves member blocking
+> and a report destination from "important, not blocking" into the same release as the feature.
 
 ### Platforms
 
@@ -158,6 +165,7 @@ channel concept with three scopes:
 | Club main chat | A club | Every club member |
 | Race chat | A race | Every race roster member |
 | Eboard chat | An Eboard channel | Every Eboard member |
+| **Direct message** | **A pair of users** | **Exactly those two, while they share a club** |
 
 Everything that hangs off a channel - messages, reactions, mentions, reports, read cursors,
 pins, announcements, highlights, galleries - works **identically in all three scopes with
@@ -168,6 +176,13 @@ parameter. Polls repeat the same trick: one poll concept with a club/race/Eboard
 poll-access predicate, one branch per notification audience rule, and a set of thin screen
 wrappers. Nothing shared should change. If a fourth scope would require forking chat, the
 abstraction has been broken.
+
+> **The rule was tested and held.** Direct messages became that fourth scope on 2026-07-28.
+> Cost: one membership predicate (`isDmParticipant`), one admin predicate (constant-false, which
+> removes announcements and polls for free), one nullable column, and thin screen wrappers.
+> Sequencing, sync, cursors, unread counts, pins, reactions, gallery, media and push fan-out all
+> carried over untouched. The one thing the rule did **not** anticipate is that a scope with no
+> admins has nowhere to send a report - see [4.12](#412-direct-messages).
 
 ### Entity notes
 
@@ -1011,6 +1026,84 @@ hold different signed URLs for the same object, so N viewers is still N origin d
 
 ---
 
+### 4.12 Direct messages
+
+**Added 2026-07-28.** A private one-to-one conversation between two members who share a club.
+
+**Purpose.** The small coordination exchanges that do not belong in front of the whole club:
+"can you pick me up on the way", "are you racing Saturday", a captain checking in on someone.
+Today these leave the app entirely and happen over text message, which means they are invisible
+to the product and the context is lost.
+
+**Positioning, and the guardrail.** **Group chat is the product. DMs are additive.** The bet in
+[section 1](#1-the-product-in-one-page) is that a club's coordination becomes *more* structured,
+not that ClubChat becomes a general messenger. Any DM feature request that would pull activity
+out of club, race, or Eboard chat and into private threads is working against the product, and
+should be refused on those grounds.
+
+**Behaviour rules**
+
+1. **A DM exists only between members who share at least one club.** Discovery is a search over
+   people the viewer already shares a club with. There is no global user search.
+2. **There is exactly one thread per pair of people, ever** - not one per shared club. Two
+   people in three clubs together have one conversation.
+3. **Losing the last shared club makes the thread read-only**, it does not delete it. History
+   stays readable, consistent with a message never being hard-deleted.
+4. **A DM has no admins.** No announcements, no pinning-as-authority, no polls, no system
+   messages about roles. Either participant may pin an ordinary message for reference.
+5. **Everything else in chat works identically**: text, photos, documents, reactions, mentions,
+   the gallery, unread counts, opening on the first unread message, and paging backward.
+6. **Either participant can block the other.** Blocking is instant, self-service, and needs no
+   review. A block prevents new messages in both directions, hides each party from the other's
+   DM search, and stops notifications. Existing history remains visible to both.
+7. **Either participant can report a message.** Because there is no admin in the conversation,
+   a DM report goes to a **platform moderation queue** rather than to any club admin. No club
+   admin ever sees the contents of a DM.
+8. **A conversation can be muted** without blocking: no push notifications, unread count still
+   accrues.
+9. **A DM is never visible on the calendar, in Highlights, or in any club-scoped surface.**
+
+**Permissions**
+
+| Action | Participant | The other participant | Anyone else |
+|---|---|---|---|
+| Read or post | ✅ | ✅ | ❌ |
+| Pin a message | ✅ | ✅ | ❌ |
+| React, attach media, mention | ✅ | ✅ | ❌ |
+| Post an announcement, create a poll | ❌ | ❌ | ❌ |
+| Delete own message | ✅ | ✅ | ❌ |
+| Delete the other's message | ❌ | ❌ | ❌ |
+| Report a message | ✅ (not one's own) | ✅ | ❌ |
+| Block, unblock, mute | ✅ | ✅ | - |
+
+Note the row that differs from every other scope: **nobody can delete someone else's message in
+a DM**, because the admin who would hold that power in club chat does not exist here. Moderation
+is blocking plus reporting, not deletion.
+
+**Edge cases**
+
+| State | Behaviour |
+|---|---|
+| Both people leave their last shared club | Thread becomes read-only; neither can send |
+| A blocked user opens the existing thread | History visible, composer disabled with the reason stated |
+| A blocked user searches for the blocker | No result, indistinguishable from "no such member" |
+| Blocking someone mid-conversation | Their queued but unsent messages never arrive |
+| Unblocking | The thread becomes writable again; nothing is retroactively delivered |
+| One participant deletes their account | Thread persists, their messages unattributed, as everywhere else |
+| A DM report is filed | Reaches platform moderators only; the other participant is not told |
+
+**Out of scope.** Group DMs of three or more people (that is what a club, race, or Eboard is
+for). DM requests or acceptance flows. Disappearing messages. Voice notes, unless and until
+they exist in group chat first. Read receipts and typing indicators, exactly as in every other
+scope.
+
+**Open questions.** Should a club admin be able to disable DMs for their club entirely, for a
+team of minors? Should blocking be reciprocal-visible, or silent to the blocked party as
+specified above? Should there be a cap on how many new conversations one member can open per
+day beyond ordinary rate limiting?
+
+---
+
 ## 5. Screen map and information architecture
 
 Described as screens and entry points, not routes. The remaster may reshape navigation, but
@@ -1472,7 +1565,7 @@ they cost.
 | **Offline** | At minimum read-only cached chat; ideally a send outbox with optimistic messages. A club at a race venue with poor signal is the real failure case |
 | **Test coverage** | Today: date/formatting and calendar-feed logic only. **The permission matrix is verified by hand.** The remaster should have automated permission tests |
 | **Muting and notification preferences** | Everything fans out to everyone eligible, with no member control |
-| **Block or mute between members** | No member-level safety tool exists. Notable for a product that will include minors |
+| ~~**Block or mute between members**~~ | **No longer deferrable.** Promoted out of this list on 2026-07-28: with direct messages in scope, blocking, conversation mute, and a report destination ship in the same release as DMs. A private one-to-one channel with no admin party to it, no block, and nowhere for a report to go, is a materially different risk class in a product that will include minors. See [4.12](#412-direct-messages) |
 | **Over-the-air updates** | Every fix currently needs a full store release |
 
 ### Architectural debt worth designing away

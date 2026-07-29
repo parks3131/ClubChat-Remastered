@@ -92,7 +92,7 @@ and a system that is a science project.
 | Transcript component | ClubChat verdict |
 |---|---|
 | Cassandra / DynamoDB for messages | **No.** One Postgres primary absorbs 50 writes/sec without noticing. Partition `messages` by channel later if ever. |
-| Kafka / RabbitMQ | **No.** A Postgres transactional outbox table + a worker loop. Same guarantees, one less system, and it is *transactional with the domain write* - which Kafka is not. |
+| Kafka / RabbitMQ | **Yes, but downstream of the outbox, never instead of it.** The outbox stays as the transactional boundary; a relay publishes it to Kafka, and consumers read from there. See §7.4. |
 | Sharding by user ID | **No.** Single database. |
 | Multi-region, cross-region replication | **No.** Single region. |
 | Per-shard read replicas | **Later.** One read replica when read load justifies it. |
@@ -150,7 +150,21 @@ building the scaled implementation now.
     │  · rate limit │              │    with seq      │
     │    buckets    │              │  · outbox        │
     └───────────────┘              └────────┬─────────┘
-                                            │ polls outbox
+                                            │ polls outbox, 250ms
+                                            ▼
+                                   ┌──────────────────┐
+                                   │  RELAY           │
+                                   │  marks published │
+                                   └────────┬─────────┘
+                                            ▼
+                                   ┌──────────────────┐
+                                   │  KAFKA           │
+                                   │  clubchat.events │
+                                   │  partitioned by  │
+                                   │  partition_key   │
+                                   │  + .dlq          │
+                                   └────────┬─────────┘
+                                            │ consumer group
                                             ▼
                                    ┌──────────────────┐
                                    │  WORKER          │
@@ -191,8 +205,13 @@ does not contain business logic.
 > + api-and-worker) or three. The boundary that matters is the *code* boundary, so splitting
 > later is a deploy change, not a refactor.
 
-**Worker.** Drains the outbox. Every server-side effect in `Old.md` §6 lives here, and nowhere
-else. Also runs the one scheduled job (poll closing-soon) and the housekeeping jobs.
+**Relay.** Polls the outbox and publishes to Kafka, keyed by `partition_key`. Owns no business
+logic whatsoever - if it ever needs to know what an event *means*, the split has been drawn in
+the wrong place.
+
+**Worker.** A Kafka consumer group. Every server-side effect in `Old.md` §6 lives here, and
+nowhere else. Also runs the one scheduled job (poll closing-soon) and the housekeeping jobs,
+which are timer-driven rather than event-driven and so bypass Kafka entirely.
 
 **Redis.** Three jobs: connection registry (`user → gateway`, TTL-refreshed by heartbeat),
 pub/sub for cross-gateway delivery, and rate-limit token buckets. **Redis is a cache and a
@@ -384,6 +403,60 @@ costs the product nothing, because the product never displayed those states.
 Read cursors still exist, but they are *per-user unread bookkeeping*, not receipts: they are
 never shown to the sender.
 
+### 5.6 The fourth scope: direct messages
+
+`Old.md` §2 sets an explicit test for the channel abstraction:
+
+> Adding a fourth scope must cost one membership predicate, one admin predicate, one
+> poll-access predicate, one branch per notification audience rule, and a set of thin screen
+> wrappers. Nothing shared should change. If a fourth scope would require forking chat, the
+> abstraction has been broken.
+
+Direct messages are that fourth scope, and they pass the test. `scope = 'dm'`, a
+`dm_conversations` row holding exactly two participants, one new predicate `isDmParticipant`.
+
+**Unchanged, with no DM-specific code at all:** sequence allocation, gap detection, the sync
+engine, read cursors and unread counts, the send outbox and idempotency, pins, reactions,
+mentions, the gallery, the media pipeline, push fan-out and cursor-based suppression, and every
+failure-mode guarantee in §13. That is the entire return on the channel abstraction, collected
+in one feature.
+
+Three things genuinely change.
+
+**1. `channels.club_id` becomes nullable.** Every other scope belongs to a club. A DM cannot,
+because two people who share two clubs would otherwise get two separate threads with the same
+person. `notifications.club_id` goes nullable for the same reason, and every audience query has
+to tolerate it. Enforced with a check constraint so the nullability cannot be abused by the
+other three scopes:
+
+```sql
+CHECK ((club_id IS NULL) = (scope = 'dm'))
+```
+
+**2. Nobody is an admin in a DM.** `isChannelAdmin` is constant-false for the scope, which
+removes announcements (admin-gated), polls (creation is admin-gated), and role system messages.
+Pins stay - both participants may pin, and it costs nothing. This is precisely the "one admin
+predicate" the abstraction test predicted.
+
+**3. Reporting has no destination.** In club, race and Eboard chat a report surfaces to that
+space's admins. A DM has no admins, so a report written the current way goes nowhere and is
+silently discarded. This is a defect, not an inconvenience, and §8 defines where those reports
+go instead.
+
+**Eligibility: participants must share at least one club.** This follows `Old.md` §8.7, which
+already restricts profile visibility to people who share a club, and it keeps the abuse surface
+bounded by club membership rather than by the whole user table. Losing the last shared club does
+**not** delete the thread - it becomes read-only, since deleting history would tear holes in a
+conversation the same way hard-deleting a message does (`Old.md` invariant 7).
+
+> **DMs change the safety requirements of the product, and this is the most important sentence
+> in this section.** `Old.md` §11 currently lists "block or mute between members" as *important,
+> not blocking*, noting it is "notable for a product that will include minors." That assessment
+> was correct while every conversation sat inside a club with admins who could see it and remove
+> people from it. A private one-to-one channel, with no admin party to it, no block, and no
+> report destination, is a different risk class. **Blocking and a report destination ship in the
+> same release as DMs, not after it.**
+
 ---
 
 ## 6. Message flows
@@ -562,19 +635,19 @@ CREATE TABLE outbox (
   event_type    text NOT NULL,
   payload       jsonb NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now(),
-  processed_at  timestamptz,
+  published_at  timestamptz,     -- handed to Kafka, NOT "effect performed". See §7.4.
   attempts      int NOT NULL DEFAULT 0,
   last_error    text
 );
-CREATE INDEX ON outbox (partition_key, id) WHERE processed_at IS NULL;
+CREATE INDEX ON outbox (partition_key, id) WHERE published_at IS NULL;
 ```
 
 Every command handler writes domain rows **and** outbox events in one transaction. Either both
 land or neither does - a guarantee an external queue like Kafka cannot give you, and the reason
 we are not adding one.
 
-The worker claims batches with `FOR UPDATE SKIP LOCKED`, processes in `id` order within a
-partition key, and marks `processed_at`. Failures retry with backoff; after N attempts the row
+A relay claims batches with `FOR UPDATE SKIP LOCKED`, publishes them in `id` order within a
+partition key, and marks `published_at`. Failures retry with backoff; after N attempts the row
 is parked and alerted on.
 
 **The outbox drains by polling - every 250 ms - and uses no `LISTEN`/`NOTIFY` anywhere.** This
@@ -613,6 +686,74 @@ createClub(name, sport, policy, creator):
 
 The ordering is now readable in one function, in one file, and covered by one test.
 
+### 7.4 Kafka, downstream of the outbox
+
+```
+command handler ──▶ domain rows + outbox row          [ONE TRANSACTION]
+                                │
+                          relay, 250ms poll
+                          marks published_at
+                                ▼
+                    ┌───────────────────────┐
+                    │  KAFKA                │
+                    │  clubchat.events      │  partitioned by partition_key
+                    │  clubchat.events.dlq  │
+                    └───────────┬───────────┘
+                                │  consumer group: effects
+                    ┌───────────┴───────────┐
+                    ▼           ▼           ▼
+                 effects      push       future consumers
+                 worker       sender     search, analytics, audit
+```
+
+**The outbox does not go away, and this is the whole point.** Kafka cannot participate in the
+Postgres transaction that writes the domain rows, so publishing directly from a handler leaves a
+window in which the commit succeeds and the publish does not - and the effect is lost with no
+error anywhere. The outbox closes that window. Kafka then provides what the outbox does not: a
+durable replayable log with independent consumers that can be added without touching the
+producer.
+
+Splitting the responsibilities:
+
+| Concern | Owned by |
+|---|---|
+| Atomicity with the domain write | **Outbox** - it is in the same transaction |
+| Durability and replay after a consumer bug | **Kafka** - rewind the offset and reprocess |
+| Multiple independent consumers | **Kafka** - a new consumer group, no producer change |
+| Ordering within a channel | **Kafka partitioning** - see below |
+| Idempotency | **Consumers** - unchanged, see the table above |
+
+**Partition by `partition_key`, which is already `channel_id` or `club_id` on the outbox row.**
+Kafka guarantees ordering *within a partition only*. Partitioning by anything else - round
+robin, message id, producer default - silently breaks the ordering guarantee §6.4 depends on,
+and the symptom is a system message arriving before the event that caused it. This is the single
+most important Kafka configuration decision in the system, and it is the reason `partition_key`
+exists on the outbox schema.
+
+Consequences of the relay split:
+
+- `processed_at` on the outbox becomes `published_at`. The outbox now records "handed to Kafka",
+  not "effect performed". Effect completion is tracked by the **consumer group offset**.
+- Delivery is still at-least-once, now for two reasons rather than one: relay retries and
+  consumer rebalances. The idempotency table above is unchanged and is now load-bearing twice
+  over.
+- A poisoned event goes to `clubchat.events.dlq` after N consumer failures rather than blocking
+  its partition forever. Anything in the DLQ is alerted on, because a stuck partition means
+  system messages and notifications silently stop for that channel.
+- The outbox pruning job (§7 housekeeping) keys off `published_at`, and must not prune faster
+  than Kafka's own retention, or replay stops being possible.
+
+**Kafka is never on the message send path.** A send commits and acks from the API as described in
+§6.1, with no Kafka hop before the ack. Ack latency is the number a chat app is judged on, and
+nothing about the effects pipeline belongs in front of it.
+
+> **Standing note on why this exists.** Kafka is not load-bearing at ClubChat's volume; a
+> `FOR UPDATE SKIP LOCKED` worker loop handles this throughput indefinitely. It is here because
+> operating a real event log - partitions, consumer groups, offsets, rebalancing, replay, DLQs -
+> is an explicit learning goal for this project. That is a legitimate reason, and it is recorded
+> honestly rather than dressed up as a scaling requirement. If it ever becomes a burden, the
+> relay is the only thing that has to change: the outbox already works without it.
+
 ### The one scheduled job
 
 `Old.md` §6 is emphatic that poll closing-soon is the *only* effect with no data change to hang
@@ -636,7 +777,7 @@ per poll, ever. **No job closes polls**; closed-ness is evaluated at read time a
 |---|---|---|
 | Orphaned object GC - objects whose owning row is gone | Nightly | Debt 8 ("nothing is ever deleted from object storage") |
 | Notification archival - move rows older than 90 days to cold table | Nightly | Debt 10 (unbounded growth) |
-| Outbox pruning - delete `processed_at < now() − 7 days` | Nightly | New |
+| Outbox pruning - delete `published_at < now() − 7 days` | Nightly | New. **Must not prune faster than Kafka's retention**, or replay stops being possible (§7.4) |
 | Stale connection sweep | Every 5 min | Belt-and-braces on Redis TTL |
 
 ---
@@ -665,6 +806,8 @@ type AccessContext = {
   clubRole: Map<ClubId, 'owner' | 'admin' | 'member'>
   raceRoster: Set<RaceId>
   eboardMember: Set<EboardId>
+  dmThreads: Set<DmId>            // threads this user is a participant in
+  blockedEither: Set<UserId>      // blocked BY me, or blocking me - symmetric on purpose
 }
 
 const isClubMember  = (ctx, club) => ctx.clubRole.has(club)
@@ -676,7 +819,26 @@ const canPostInRace = (ctx, race) => isRaceMember(ctx, race)
 const canPinInRace  = (ctx, race) => isRaceMember(ctx, race) && isClubAdmin(ctx, race.clubId)
 const isEboardMember= (ctx, eb)   => ctx.eboardMember.has(eb)
 const canAccessPoll = (ctx, poll) => …scope switch…
+
+// direct messages
+const isDmParticipant = (ctx, dm) => ctx.dmThreads.has(dm)
+const isBlocked       = (ctx, other) => ctx.blockedEither.has(other)
+const sharesAClub     = (ctx, other) => …intersection of club membership…
+const canOpenDm       = (ctx, other) => sharesAClub(ctx, other) && !isBlocked(ctx, other)
+const canPostInDm     = (ctx, dm) => isDmParticipant(ctx, dm)
+                                  && !isBlocked(ctx, dm.otherParticipant)
+const isChannelAdmin  = (ctx, ch) => ch.scope === 'dm' ? false : …existing…
 ```
+
+**`blockedEither` is deliberately symmetric.** A block is stored one-directionally
+(`blocker → blocked`), but it is *evaluated* in both directions: neither party can message the
+other, and neither appears in the other's DM-eligible search. A one-directional read would let
+the blocked user keep opening the thread and sending into a void, which is worse than a clean
+refusal for both.
+
+**`isChannelAdmin` returning false for `dm` is the whole of the "one admin predicate" cost.**
+Announcements, polls and admin-only pins fall out automatically, because every one of them is
+already gated on that single predicate rather than on a per-scope branch.
 
 Properties that the old build could not have:
 
@@ -726,11 +888,43 @@ half-maintained second enforcement layer is a liability, not a safety net.
 The remaining backstop is the grant level, which needs no per-rule maintenance and therefore
 cannot drift.
 
+### Where a DM report goes
+
+Every other scope answers "who sees a report?" with "that space's admins". A DM has none, so the
+question needs its own answer rather than a fallback.
+
+**Reports raised in a DM route to a platform moderation queue**, read by users carrying
+`is_platform_moderator`. Mechanically it is the same `message_reports` row; only the *reader*
+differs, selected by the reported message's channel scope:
+
+| Channel scope | Report visible to |
+|---|---|
+| club / race / eboard | admins of that space, in the Highlights Reports tab |
+| **dm** | **platform moderators, in a separate queue** |
+
+Two rules that follow, and both matter for a product including minors:
+
+1. **A platform moderator can read the reported message and its immediate context, and nothing
+   else.** Moderation is not a licence to browse private conversations. The read is scoped to a
+   window around the reported `seq` and is itself audit-logged.
+2. **`Old.md` §4.3 rule 10 - "reporting twice is a no-op" - still holds**, via the existing
+   `UNIQUE (message_id, reporter_id)`. Nothing about the DM path relaxes it.
+
+The blocking path is deliberately separate from the reporting path: **blocking is instant and
+self-service, reporting is reviewed.** A member protecting themselves must never have to wait on
+a moderator.
+
 ### Rate limiting
 
 `Old.md` §7.12: token bucket, burst 30, refill 1/sec per sender, enforced before the insert.
 Preserved, moved to the gateway (Redis `INCR` + TTL), and **extended to the endpoints the old
 build left unthrottled**: reports, reactions, join requests, media presign requests.
+
+**DMs need a second dimension the group scopes do not.** A per-sender bucket is sufficient in
+club chat, where a spammer is visible to the whole club and removable by an admin. In DMs the
+abuse pattern is one sender opening many threads, each individually under the per-sender limit.
+So DMs additionally carry a **per-sender, per-new-conversation** limit: opening a thread with
+someone who has never replied is throttled far harder than continuing an existing exchange.
 
 ---
 
@@ -944,10 +1138,10 @@ Each of these is a considered rejection. Do not re-litigate without new informat
 | **Presence, "last seen", typing indicators** | **No** as a feature. Connection registry is internal routing only. | Out of scope in `Old.md` §4.3. Removes the presence service entirely. |
 | **Per-user Redis pub/sub channels** | **No.** Per-*channel* topics. | Authorizes once at subscribe instead of once per message per recipient; fixes `Old.md` debt 2. |
 | **Cassandra / DynamoDB** | **No.** Postgres. | 50 writes/sec. We need joins, transactions and constraints far more than we need write throughput. |
-| **Kafka / RabbitMQ** | **No.** Postgres outbox. | An external queue cannot be transactional with the domain write - which is the exact property we need. §7. |
+| **Kafka as a replacement for the outbox** | **No.** Outbox stays; Kafka sits downstream of it. | A publish cannot be atomic with the domain write, so a crash between commit and publish loses the effect silently. Kafka *downstream* is kept - see §7.4. |
 | **Sharding by user id; multi-region; per-shard replicas; DR Kafka cluster** | **No.** Single region, single primary, PITR backups. | Four orders of magnitude premature. Seams are named so it is addable. |
 | **Service discovery cluster (Consul)** | **No.** Platform-native service registry. | Solved by the host. |
-| **1:1 direct messages** | **No.** | `Old.md` non-goal: every conversation is scoped to a club, race, or Eboard. |
+| **1:1 direct messages** | **Yes, as a fourth channel scope** - restricted to members who share a club. | Reversed on 2026-07-28. Group chat remains the main feature; DMs are additive. They cost one membership predicate and one admin predicate, exactly as `Old.md` §2's abstraction test predicted, and they oblige blocking plus a report destination in the same release. §5.6 |
 | **Phone-number identity** | **No.** Email + password. | `Old.md` §4.1. |
 | **Group cap of 100** | **No cap at 100.** Design for ~300. | A university club roster exceeds 100 routinely. |
 
@@ -970,7 +1164,9 @@ the channel log is committed before any delivery is attempted.
 | **A gateway crashes** | Sockets drop. Clients reconnect (backoff + jitter) to another gateway, subscribe, sync by `seq`. Stale Redis entries expire by TTL. | **None.** Everything acked was committed. |
 | **All gateways down** | No realtime. Clients fall back to REST reads (`Old.md` §8 rule 4). Sends queue in the client outbox. | None. Degraded, not broken. |
 | **Redis is wiped or unavailable** | Connection registry empty → cross-gateway publish finds nothing → realtime stops. Clients keep working over REST and recover via sync on reconnect. Rate limiting fails **open** (log and alert). | **None** - Redis holds no source of truth. This property is non-negotiable. |
-| **The worker is down** | Outbox backs up. Chat still works (messages commit and deliver). System messages, cards, notifications and pushes are *delayed*, not lost - they replay in order on restart. | None. |
+| **The worker is down** | Kafka retains the events; the consumer group's offset stops advancing. Chat still works (messages commit and deliver). System messages, cards, notifications and pushes are *delayed*, not lost - they resume from the offset on restart. | None. |
+| **Kafka is down** | The relay cannot publish, so outbox rows accumulate unpublished. Chat still works, exactly as when the worker is down. On recovery the relay drains in `id` order and nothing is skipped. | None - the outbox is the buffer, which is the second reason it survives §7.4. |
+| **Kafka loses a partition / consumer rebalances mid-batch** | Events are redelivered. Every effect is idempotent by construction (§7), so redelivery is a no-op. | None. |
 | **Postgres primary fails** | Writes fail. Clients show visible send failure and retry from the outbox. Restore from replica / PITR. | Bounded by replication lag. |
 | **A push send fails** | Retried by the worker; the notification row exists regardless, so the in-app inbox is still correct. Dead tokens are marked `invalidated_at`. | None in-app. |
 | **A client is offline for a week** | On return: sync by `seq` per channel, batched and paginated. | None. |
@@ -989,7 +1185,12 @@ Postgres throughout. Grouped by concern; `Old.md` §2 is the authority on semant
 ### Identity
 ```
 users                 id, email, full_name, avatar_media_id, bio, city, dob, school,
-                      created_at, anonymized_at, blocked_at
+                      created_at, anonymized_at, signin_blocked_at,
+                      is_platform_moderator
+                      -- signin_blocked_at, not blocked_at: since member-to-member blocking
+                      -- now exists, an unqualified "blocked" is ambiguous between "cannot
+                      -- sign in" and "blocked by another member". Two very different things.
+                      -- is_platform_moderator gates the DM report queue only. See §8.
 devices               id, user_id, push_token, platform, last_seen_at, invalidated_at
 sessions              id, user_id, device_id, refresh_token_hash, expires_at
 ```
@@ -1005,11 +1206,14 @@ club_join_requests    id, club_id, user_id, status, decided_by, decided_at
                       UNIQUE (club_id, user_id) WHERE status='pending'   ← idempotent decisions
 ```
 
-### The channel abstraction - one concept, three scopes
+### The channel abstraction - one concept, four scopes
 ```
-channels              id, club_id, scope ∈ {club,race,eboard}, scope_id, last_seq
+channels              id, club_id NULL, scope ∈ {club,race,eboard,dm}, scope_id, last_seq
                       UNIQUE (club_id) WHERE scope='club'      ← invariant 2
                       UNIQUE (scope, scope_id)
+                      CHECK ((club_id IS NULL) = (scope = 'dm'))
+                      -- club_id is nullable ONLY for dm. The check stops the other three
+                      -- scopes from ever exploiting the relaxed column. See §5.6.
 messages              id, channel_id, seq, sender_id NOT NULL, type, body, media_id,
                       document_name, document_size, pinned, deleted_at,
                       client_msg_id NOT NULL,
@@ -1073,14 +1277,37 @@ news_posts            id, club_id, author_id, body, media_id, created_at
 news_reactions        post_id, user_id, emoji
 ```
 
+### Direct messages and member safety
+```
+dm_conversations      id, user_a, user_b, channel_id, created_at
+                      CHECK (user_a < user_b)      -- canonical order, enforced by the DB
+                      UNIQUE (user_a, user_b)      -- exactly one thread per pair, ever
+                      -- the CHECK forces the handler to sort the pair before insert, so
+                      -- (alice,bob) and (bob,alice) cannot both exist. Without it the
+                      -- UNIQUE is useless and two threads race into being.
+
+blocks                blocker_id, blocked_id, created_at   PK (blocker_id, blocked_id)
+                      CHECK (blocker_id <> blocked_id)
+                      -- stored one-directionally, EVALUATED symmetrically. See §8.
+
+channel_mutes         user_id, channel_id, muted_until NULL  PK (user_id, channel_id)
+                      -- NULL muted_until means muted indefinitely.
+                      -- Read by the push audience function (§6.2); applies to every
+                      -- scope, not just dm.
+```
+
 ### Infrastructure
 ```
 media_objects         id, owner_type, owner_id, bucket, object_key, mime, bytes, status,
                       variants jsonb, created_at
-notifications         id, recipient_id, actor_id, club_id, type, body, target, outbox_event_id,
-                      read_at, created_at
+notifications         id, recipient_id, actor_id, club_id NULL, type, body, target,
+                      outbox_event_id, read_at, created_at
                       UNIQUE (outbox_event_id, recipient_id)       ← at-least-once safety
-outbox                id, partition_key, event_type, payload, processed_at, attempts, last_error
+                      -- club_id nullable for dm-scoped notifications; every audience
+                      -- query must tolerate it. See §5.6.
+outbox                id, partition_key, event_type, payload, published_at, attempts, last_error
+                      -- published_at means "handed to Kafka", NOT "effect performed".
+                      -- Effect completion is the consumer group offset. See §7.4.
 ```
 
 Notes:
@@ -1174,6 +1401,7 @@ counter-example to `Old.md` §10.1.
 | **DB access** | Drizzle | SQL-shaped, typed, migrations as files. **A migration is never edited after being applied** (`Old.md` §10.29). |
 | **Database** | Postgres 17, managed (Neon / RDS / Fly Postgres) | Managed hosting was never the problem; putting logic in the DB was. |
 | **Cache / bus** | Redis (Upstash or a managed instance) | Registry, pub/sub, rate limits. Never a source of truth. |
+| **Event log** | Kafka, downstream of the outbox - *decided* | Durable replayable event log with independent consumer groups. Explicitly a learning goal, not a scaling requirement; recorded as such in §7.4. Redpanda or Kafka in Docker for local dev. **Hosted provider still open - see §19.** |
 | **Object storage** | S3-compatible (Cloudflare R2 recommended - zero egress) + CDN | Media egress is the dominant variable cost. |
 | **Auth** | `better-auth`, self-hosted, in our Postgres - *decided* | Email/password only. Identity in our own Postgres keeps the entire domain in one transactional store, which matters most for account deletion: anonymise + block future sign-in becomes one transaction rather than a two-system dance. We own password reset and email deliverability (transactional email provider needed - see §19.3). |
 | **Push** | Expo Push Service → APNs / FCM | One adapter, three platforms. |
@@ -1244,6 +1472,15 @@ clearing rules including the two exceptions. Device registry and Expo Push. The 
 *Done when: an announcement in club chat reaches a backgrounded phone as a push that deep-links
 to the right message.*
 
+**Phase 1.5 - Kafka downstream of the outbox.**
+Split the worker into relay plus consumer. Topics, partitioning by `partition_key`, consumer
+group, offset management, DLQ, and a deliberate replay drill. Slotted here rather than in
+Phase 0 because the effects pipeline must be *correct* before it is *distributed* - debugging
+an ordering bug and a rebalance at the same time is how a learning goal turns into a week lost.
+*Done when: a consumer is stopped for ten minutes, restarted, and every effect lands exactly
+once, in order, with nothing lost - and when rewinding the offset by an hour replays cleanly
+without duplicating a single notification or system message.*
+
 **Phase 2 - Breadth across the domain.**
 Races (roster, Meet Information, car groups, pins), Eboard (auto-membership sync, meetings),
 polls in all three scopes, calendar, routines, news. Every one reuses the channel abstraction -
@@ -1256,6 +1493,15 @@ Upload intent, presigned PUT, thumbnail derivation, the `/media/:id` authorized-
 galleries. Local SQLite cache for offline chat reads.
 *Done when: a private Eboard photo is provably unreachable without membership, and chat is
 readable in airplane mode.*
+
+**Phase 3.5 - Direct messages, with their safety tooling.**
+The fourth channel scope: `dm_conversations`, `isDmParticipant`, nullable `club_id`, the
+shared-club eligibility predicate. **In the same release, not after it:** member blocking,
+conversation mute, and the platform moderation queue for DM reports. Placed after media because
+DMs inherit the media pipeline wholesale and would otherwise ship without photo support.
+*Done when: a blocked member can neither open a thread nor send into an existing one, in either
+direction; a DM report reaches the moderation queue and reaches no club admin; and a muted
+conversation produces no push while still incrementing its unread count.*
 
 **Phase 4 - Hardening.**
 Rate limits everywhere. Retention and GC jobs. Accessibility pass on every icon-only control.
@@ -1276,6 +1522,8 @@ all three platforms.
 | RLS | **Deny-by-default at the role level, no per-row policies** | Per-row RLS as defence in depth |
 | Encryption | **TLS + at rest, no E2E** (§12) | End-to-end encryption |
 | Postgres | **Neon** | Fly Postgres (unmanaged VM you operate) |
+| Direct messages | **In scope, fourth channel scope, shared-club only** (§5.6) | Global DMs open to any user; admin-to-any-member DMs |
+| Event log | **Kafka downstream of the outbox** (§7.4) | Kafka replacing the outbox; Kafka as analytics-only side-channel; no Kafka |
 
 On Neon specifically: the usual objection is that transaction-mode pooling breaks
 `LISTEN`/`NOTIFY`. §7 commits to a polling outbox and no `LISTEN` anywhere in the system, so
@@ -1298,7 +1546,20 @@ free. One network hop of extra latency is irrelevant against a 250 ms poll inter
    instead of rendered English costs little now and **cannot** be retrofitted to historical
    rows. *Recommendation: store `type` + `params`, render at read time, from Phase 1.*
 
-4. **Group size ceiling.** §12 designs for ~300 members per channel against WhatsApp's 100.
+4. **Hosted Kafka provider.** Local development is Docker (Kafka or Redpanda) and settled.
+   Production hosting is not: this market has shifted enough recently that I would not name a
+   provider from memory - at least one managed Kafka service I might have suggested has since
+   been discontinued. **Check current offerings and pricing before committing**, and weigh
+   Redpanda against Kafka proper, since Redpanda is protocol-compatible and materially simpler
+   to operate at one broker. Not blocking until Phase 1.5.
+
+5. **Does the DM report queue need a reviewer other than you?** §8 routes DM reports to
+   `is_platform_moderator`. For a single-club pilot that is one person. Before any public
+   release with minors, decide whether a lone moderator is an acceptable answer, and what the
+   response-time expectation is - a queue nobody reads is worse than no queue, because it
+   implies a promise.
+
+6. **Group size ceiling.** §12 designs for ~300 members per channel against WhatsApp's 100.
    Is there a real upper bound for a university club, or should the largest channel be treated
    as unbounded? Affects whether roster reads and push fan-out need pagination in Phase 2.
 
