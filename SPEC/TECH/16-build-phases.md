@@ -31,9 +31,52 @@ And from [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) "
 
 ---
 
+## Where we are
+
+**Last updated 2026-07-30, after Phase 3.5 and the close of Phase 3.**
+
+| Phase | State | Note |
+|---|---|---|
+| 0 - Skeleton and the vertical slice | **Done** | Exit drill passes: nothing lost, nothing twice, identical order |
+| 1 - Effects, notifications, push | **Done** | |
+| 1.5 - Kafka downstream of the outbox | **Not started** | Skipped over. The worker still drains the outbox directly with `FOR UPDATE SKIP LOCKED`, which works and is correct - see below |
+| 2 - Breadth across the domain | **Done at the domain layer only** | Schema, 32 command handlers and the permission matrix. **No HTTP routes and no screens** - see below |
+| 3 - Media and offline | **Done** | Closed 2026-07-30; the client can attach and render. Gallery grid and full-screen viewer outstanding |
+| 3.5 - Direct messages and safety tooling | **Done** | |
+| 4 - Hardening | **Not started** | Next, unless the surface gap below is taken first |
+
+### The two things this table is really saying
+
+**1. Phase 2 shipped a domain, not a feature.** Races, polls, calendar, routines, news and Eboard
+meetings all have schema, handlers and tests - 32 exported command handlers across four modules,
+47 test cases - and **none of them is reachable over HTTP**. The API exposes clubs, channels,
+chat, media, DMs, moderation, notifications and devices, and nothing else. The Expo client has six
+screens: sign-in, the club list, chat, the DM list, and two layout files.
+
+That happened because Phase 2's exit gate was *"the permission-matrix test suite covers every cell
+of the three matrices"* - a test suite, which a domain layer can satisfy on its own. Every other
+phase gate names something a person can do, and those phases all shipped a surface. **A gate that
+can be met without a running surface will be**, which is worth carrying into how Phase 4's gate is
+written.
+
+This is the largest outstanding body of work in the project and it does not currently belong to
+any phase. It is sketched as "Phase 3.75" below, but numbering it is a product call.
+
+**2. Phase 1.5 was skipped and is still owed.** The outbox is drained directly by the worker,
+which is correct, ordered and idempotent - so nothing is broken. What is missing is the
+distribution the ADR-0006 design calls for, and the `processed_at` to `published_at` rename that
+comes with it. It was slotted *before* Phase 2 deliberately, on the reasoning that the effects
+pipeline must be correct before it is distributed. It now has considerably more effects to be
+correct about, which cuts both ways: more confidence in the pipeline, more surface to migrate.
+
+---
+
 ## Build phases
 
 Each phase ends with something demonstrably working end-to-end. No phase is "backend only".
+
+> *Phase 2 is the exception that proves this rule, and it was not noticed until Phase 3.5 was
+> finished. See "Where we are" above.*
 
 **Phase 0 - Skeleton and the vertical slice.**
 Auth, users. Clubs + memberships + the one-owner constraint. Channels. The channel log with
@@ -184,7 +227,37 @@ conversation produces no push while still incrementing its unread count.*
 > check constraint, so widening it starts with dropping that constraint - which is the right place
 > to be forced to think about validating arbitrary Unicode.
 
+**Phase 3.75 - The missing surface.** *(Proposed 2026-07-30. Numbering is a product call.)*
+Wire the 32 Phase 2 command handlers to HTTP routes, and build the screens
+[Screen map](../PRD/15-screen-map.md) already specifies for them: races and their roster, Meet
+Information and car groups; polls in three scopes with inline voting; the calendar and events
+list; routines; news and Highlights; the Eboard space and its meetings. Plus the surfaces every
+phase has quietly deferred - the notification inbox, the member roster, profile, and chat's own
+Highlights tabs. And Phase 3's remaining two: the Gallery grid and the full-screen viewer.
+
+Nothing here needs new domain logic or new schema. It is routes and screens over work that is
+already written, already authorized and already tested, which is the cheapest this will ever be.
+*Done when: every screen in [Screen map](../PRD/15-screen-map.md) exists and is reachable, and the
+[Acceptance checklist](../PRD/18-acceptance-checklist.md) can be attempted at all.*
+
 **Phase 4 - Hardening.**
 Rate limits everywhere. Retention and GC jobs. Accessibility pass on every icon-only control.
 Sentry dashboards. Load test at 10× projected peak. The [Acceptance checklist](../PRD/18-acceptance-checklist.md) parity checklist, run on
 all three platforms.
+
+What that means concretely, as of today:
+
+| Item | State | What is actually left |
+|---|---|---|
+| **Rate limits everywhere** | Messages only | The gateway throttles sends (burst 30, refill 1/sec). Reports, reactions, join requests and presign requests are unthrottled, and DMs need the second dimension [Authorization](05-authorization.md) describes: a per-sender, per-new-conversation limit, because one sender opening many threads stays under any per-sender bucket |
+| **Retention and GC** | Media GC exists | `runMediaGc` sweeps stale pending uploads and orphaned objects. Still owed: notification archival, and outbox pruning after 7 days - which the `push_deliveries` ledger is deliberately designed to outlive |
+| **Error monitoring** | **Not started** | No Sentry anywhere. [Stack and hosting](15-stack-and-hosting.md) says "in the error path from the first commit" and that has not been true for any commit |
+| **Accessibility** | Partial, by habit | Controls carry `accessibilityRole` and `accessibilityLabel` as they are built. Never audited: contrast against WCAG AA, dynamic type, reduced motion, screen-reader navigation order |
+| **Load test** | **Not started** | At 10× projected peak. The two numbers to watch first are the per-channel `last_seq` row lock under concurrent sends, and the access-context query now that it carries DM threads and blocks |
+| **Parity checklist** | Blocked | Cannot be run until the surface exists |
+
+**Beyond Phase 4 - release readiness.** Not engineering phases, and tracked in
+[Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) rather than here: legal
+review of the Privacy Policy and Terms (**with the obligation ADR-0005 adds - without E2E, the
+policy must state that message content is readable by the service**), paid iOS developer-program
+enrolment, and over-the-air updates so a fix does not need a store release.

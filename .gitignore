@@ -23,3 +23,7 @@ coverage/
 
 # os
 .DS_Store
+
+# Local agent settings. Untracked because it accumulates one-off dev commands,
+# including bearer tokens from smoke tests against the local database.
+.claude/settings.local.json

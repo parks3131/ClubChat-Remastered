@@ -1,13 +1,24 @@
 # Roadmap and open questions
 
+> **Status, 2026-07-30.** Phases 0, 1, 2, 3 and 3.5 are built; see
+> [Build phases](../TECH/16-build-phases.md) for the phase-by-phase state and what each one still
+> owes. Two facts dominate everything below:
+>
+> 1. **Most of the product has no user interface.** Races, polls, calendar, routines, news and
+>    Eboard meetings have schema, command handlers and tests, and no HTTP routes and no screens.
+>    The app is sign-in, a club list, chat, and a DM list.
+> 2. **Phase 1.5 (Kafka) was skipped** and the worker still drains the outbox directly. Correct
+>    and ordered, but not the distributed design ADR-0006 specifies.
+
 ### Blocking a real release today
 
 | Gap | Impact | Note for the remaster |
 |---|---|---|
-| **Push notifications** | A member learns nothing until they open the app. The single biggest functional gap | Everything a push payload needs already exists: each notification carries a fully rendered body and a target route. What is missing is a device-token registry and a delivery path. **Build this into the notification fan-out from day one.** |
+| ~~**Push notifications**~~ | | **Done in Phase 1.** Device registry, Expo Push, per-device fan-out, and suppression by read cursor rather than by connection liveness (ADR-0008). Phase 3.5 added the DM push (ADR-0015) |
+| **A user interface for most of the product** | Races, polls, calendar, routines, news and Eboard are unreachable from the app | **Newly surfaced 2026-07-30, and now the largest single gap.** 32 command handlers, fully authorized and tested, with no routes and no screens. Sketched as Phase 3.75 in [Build phases](../TECH/16-build-phases.md). No new domain logic or schema needed |
 | **Legal review** of Privacy Policy and Terms | The shipped documents are an in-house first draft, explicitly not legal advice | Must happen before any public release |
 | **iOS distribution** | Blocked on paid developer-program enrolment | Not a code problem |
-| **Error monitoring** | A crash or failed load in real use is **invisible** | Today errors are shown to the user and dropped on the floor. Wire a reporting service in the error path from the start |
+| **Error monitoring** | A crash or failed load in real use is **invisible** | **Still true of the remaster.** [Stack and hosting](../TECH/15-stack-and-hosting.md) says Sentry "in the error path from the first commit"; there is no Sentry anywhere. Phase 4 |
 
 ### Important, not blocking
 
@@ -15,8 +26,8 @@
 |---|---|
 | **Accessibility** | Every interactive control labelled, screen-reader navigable, contrast verified against WCAG AA, dynamic type supported, reduced motion respected. Start with the icon-only controls |
 | ~~**Offline**~~ | **Done in Phase 3.** Read-only cached chat plus a send outbox with optimistic messages, which was the "ideally" of this entry rather than the minimum. See [Cross-cutting UX](16-cross-cutting-ux.md) |
-| **Test coverage** | Today: date/formatting and calendar-feed logic only. **The permission matrix is verified by hand.** The remaster should have automated permission tests |
-| **Muting and notification preferences** | Everything fans out to everyone eligible, with no member control |
+| ~~**Test coverage**~~ | **Substantially done.** 531 tests, five permission matrices asserted cell by cell in both directions, 62 constraint assertions attempted against a live database, and mutation checks on the authorization gates. The gap that remains is UI tests, which wait on there being a UI |
+| ~~**Muting**~~ | **Done in Phase 3.5.** Per-conversation, every scope: no push, unread count still accrues. Per-**type** and per-club preferences are still open, and are now one check inside the audience function rather than something with nowhere to live |
 | ~~**Block or mute between members**~~ | **No longer deferrable.** Promoted out of this list on 2026-07-28: with direct messages in scope, blocking, conversation mute, and a report destination ship in the same release as DMs. A private one-to-one channel with no admin party to it, no block, and nowhere for a report to go, is a materially different risk class in a product that will include minors. See [Direct messages](14-direct-messages.md) |
 | **Over-the-air updates** | Every fix currently needs a full store release |
 
@@ -25,7 +36,7 @@
 These are recorded remediation items in the current build. A remaster gets them for free if
 designed in.
 
-1. **Realtime reconciliation on reconnect and foreground** (see lesson 25).
+1. ~~**Realtime reconciliation on reconnect and foreground**~~ **Done** - sync engine plus gapless `seq`, reconciled on connect, foreground and network regained.
 2. **Filtered subscriptions** (lesson 26). Today three subscriptions are project-wide; with
    200 concurrent users, one message insert costs ~200 authorizations, ~200 billed messages,
    and ~200 full refetches.
@@ -37,19 +48,31 @@ designed in.
    merged calendar currently reads once per feature **per club the user belongs to**.
 6. **Highlights must not silently lose pins past the loaded window.** Today the pinned and
    announcement lists are computed over a bounded slice of history.
-7. **Media cost.** Signed URLs are memoized per device, which fixed the repeat-fetch
+7. ~~**Media cost.**~~ **Done in Phase 3**, and the mechanism turned out to matter more than expected - see [Media pipeline](../TECH/07-media-pipeline.md) on which of the CDN and the object store signs. Originally: Signed URLs are memoized per device, which fixed the repeat-fetch
    multiplier, but two devices still hold different URLs for the same object, so N viewers is
    still N origin downloads. A CDN-friendly scheme (stable URLs plus an authorization gate, or
    a transformation layer) belongs in the design, not bolted on.
-8. **Storage cleanup.** Nothing is ever deleted from object storage today.
-9. **File size and MIME-type limits.** Currently unset everywhere; a member can upload an
-   arbitrarily large "document", and documents are never scanned or type-restricted.
-10. **Notification retention.** The table grows unbounded, with no archival path.
-11. **Localisation.** Notification bodies are built server-side in English and are
-    unlocalizable and untestable from the client.
+8. ~~**Storage cleanup.**~~ **Done** - `runMediaGc` sweeps stale pending uploads and orphaned objects nightly.
+9. ~~**File size and MIME-type limits.**~~ **Done** - allowlist and cap enforced at intent and **re-verified against the real object** at complete, because a presigned URL cannot police bytes the client chose to send anyway.
+10. **Notification retention.** The table grows unbounded, with no archival path. **Still true.** Phase 4, along with pruning the outbox after 7 days.
+11. ~~**Localisation.**~~ **Designed away in Phase 1** - notifications store `type` plus structured `params` and render at read time (ADR-0013), so a second locale is another implementation of one function rather than a migration over every historical row. The English renderer is the only one that exists.
 12. **Rate limiting beyond messages** - reports, reactions, and join requests are still
-    unthrottled.
-13. **Backups and version parity** between development and production data stores.
+    unthrottled. **Still true**, and DMs add a second dimension: a per-sender,
+    per-new-conversation limit, because one sender opening many threads stays under any
+    per-sender bucket. Phase 4.
+13. **Backups and version parity** between development and production data stores. **Still open** - there is no production yet. Migrations already replay cleanly from zero, which is half of it.
+
+### Verification owed
+
+Things that are built and not yet proved on every surface they claim to work on.
+
+| What | Verified on | Still to verify |
+|---|---|---|
+| **Everything, on iOS and Android** | Web only, via the browser | **The simulator has never been run.** Every smoke test in this project so far has been react-native-web in Chrome. Deferred by agreement, not by oversight, but it means "works" currently means "works on web" |
+| **The attachment upload path** | Web (`blob:` URI through `fetch`) | Native reads a `file:` URI through the same `fetch` call - one path rather than an unverified branch, and untested |
+| **The pickers** | Web file chooser | Native permission prompts for library and camera, which have no web equivalent |
+| **Push** | The Expo transport, with a fake token that was correctly rejected | A real device token reaching a real backgrounded phone |
+| **`MEDIA_URL_MODE=cdn`** | Not at all | Only `presign` runs today. The CDN branch is the production one and has never served a byte |
 
 ### Deliberately deferred (do not "fix")
 

@@ -5,6 +5,12 @@ session; the long narrative lives here (`AGENTS.md` section 2.4.2).
 
 Newest first.
 
+> **Picking this up again?** Read [`SPEC/TECH/16-build-phases.md`](SPEC/TECH/16-build-phases.md)
+> first - its "Where we are" table is the phase-by-phase state, and it names the two things this
+> log will not tell you at a glance: most of the product has no user interface, and Phase 1.5 was
+> skipped. Outstanding work and unproved verification live in
+> [`SPEC/PRD/17-roadmap-and-open-questions.md`](SPEC/PRD/17-roadmap-and-open-questions.md).
+
 ---
 
 ## 2026-07-30 - Completing Phase 3: attachments actually reachable from the app
