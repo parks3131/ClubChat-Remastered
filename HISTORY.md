@@ -13,6 +13,139 @@ Newest first.
 
 ---
 
+## 2026-07-30 - Reading v1 for the things a screenshot cannot show
+
+A session spent porting v1's shared screens, which turned into a session spent reading v1's
+*navigation* - because four of the five things the founder flagged were structural rather than
+visual, and none of them is visible in a screenshot.
+
+### Three founder corrections, and what each one actually was
+
+**"It is not Alerts, it is Notifications."** One word in the tab bar, and behind it a real defect.
+The read model was inverted: the inbox marked rows read on **focus**, so every row flipped to its
+read style before the reader could perceive that any of them were new. The unread state existed
+and was never once visible. It now marks on **blur**, so rows stay unread for the whole visit and
+are light the next time. The founder also specified the chat-unread rule precisely - those rows
+stay dark and their count does not come down until the chat itself is opened - which the server
+had implemented correctly since Phase 1 and the client had never expressed. Only the client was
+wrong, which is the useful shape here: a correct server does not make a correct product.
+
+The visual treatment was wrong too, and for the same reason. Unread was a small "New" badge on the
+right of the row; v1 tints the entire row, fills the icon well with the accent, darkens the body
+text and adds a dot. At a glance down a long list a corner badge is invisible, which is another way
+of saying the unread state was not communicating.
+
+**"Note how the navigation bar shows up and where it won't."** v1's rule turned out to be exactly
+one line, in `ChatScreen.tsx`: hide the tab bar on mount, restore it on unmount. So the tab bar is
+present on **every** signed-in screen except chat - club hub, rosters, polls, races, highlights,
+gallery - and chat is the sole exception because it owns both edges of the screen, a translucent
+header at the top and a composer at the bottom. The remaster had every non-destination screen as a
+sibling of the tab group, so a club, a race and a poll each hid the four destinations too.
+
+`PRD/05` rule 14 already said "chat is full-screen - the bottom tab bar is hidden while in a
+conversation", which is a rule about *chat*, and it had been implemented as a rule about
+everything below a destination. The spec was right and unread.
+
+The fix moved 26 route files into `app/(tabs)/(main)/`. **Not one URL changed**, because both
+`(tabs)` and `(main)` are route groups and a parenthesised segment contributes nothing to a path -
+which is the whole reason the tab is a group rather than a folder named `main` or `clubs`. A
+folder named `clubs` would have turned `/polls/:id` into `/clubs/polls/:id`.
+
+It also produced a defect worth recording because the diagnosis was initially wrong. After the
+move, every nested screen showed a "Clubs" bar above its own header, and this was first read as
+*the tab bar now rendering* - the desired outcome. It was a **double header**: `(main)` had become
+a tab screen supplying its own stack headers while the tab navigator still drew one of its own.
+The tab bar was not visible at all, because the session was signed out and the layout hides it in
+that state. **The lesson is about the evidence, not the bug**: "a bar appeared where I wanted a bar"
+is not a verification, and the screenshot supported either reading equally well.
+
+**"The grid in chat has separate features per scope, and so does the add button, and admin and
+member are not the same."** Read off v1's three chat call sites. The header grid is quick-nav and
+is **not** role-gated - every member sees the same entries, because reaching a screen is not acting
+on it. The "+" menu is gated on two independent axes that are easy to conflate: *which* create
+actions exist is a fact about the scope (Event is club-only, Meeting is Eboard-only), and *whether
+this person gets them* is a fact about their authority. Neither absence is a permission.
+
+The subtle part is that "admin" resolves to a different predicate per scope: club admin in club
+chat, a roster member who is also a club admin in race chat, and **every member** in Eboard chat,
+where membership is admin-tier by construction. One predicate already answers all three - the
+channel-admin question asked of the channel - so the screen asks it once rather than restating
+three role rules.
+
+### Two subsystems that were complete on both ends and joined by nothing
+
+Failure mode 11, twice in one session.
+
+**Chat had no pin, no delete and no announcement toggle.** `canPin` was on the channel meta,
+`setPinned` and `deleteMessage` were in the client's API module, the routes existed, and the
+server had enforced the announcement rule since Phase 2. Nothing in the app could reach any of it.
+Two things blocked it: `client-core`'s send-type union was `'text' | 'photo' | 'document'`, so an
+announcement was **unrepresentable in the outbox** and the control could not have been built; and
+the channel meta exposed only `canPin`, whose own doc comment warns against deriving other
+capabilities from it. Added `canAnnounce` and `canDeleteAnyMessage` as their own fields, and
+`canDeleteOthersMessages` as its own predicate.
+
+The DM case is what makes those separate fields load-bearing rather than tidy, and it is what the
+new test pins: **both participants can pin, and neither can announce or delete**, because a DM has
+no admin. Any implementation deriving announce or delete from `canPin` offers both to both people
+in every DM in the product, and no other scope would reveal it.
+
+**The add-member search had no search.** `POST /clubs/:id/members` takes a user id and nothing in
+the product could turn a name into one - so `PRD/04` rules 12 and 14 were unmet by a subsystem that
+looked finished. The founder scoped the fix away from v1's behaviour deliberately: v1 used a
+global user directory, and the remaster keeps `searchDmCandidates`' rule that there is no such
+thing, so the pool is people the caller already shares a club with. A stranger is reached with the
+invite link, which ADR-0010 already makes the only front door.
+
+The three candidate reads are authorized by **the same predicate as their own `add`**, not a
+similar one. A search anybody could run leaks a roster by exclusion: ask for every candidate, and
+whoever is missing is a member. The Eboard pool is narrower again - the club's admin tier only -
+because `addEboardMember` refuses anybody else, and offering a plain member there would be a
+search result that fails on tap.
+
+### The poll list card could not be drawn
+
+v1's poll card shows a vote tally and a countdown. `listPolls` returned `{id, question, closed,
+votedByMe}`, and a client cannot derive either from that. Added both, which pulled in two rules
+this repo has already paid for: `COALESCE` around the `SUM`, because a poll with no votes returns
+null rather than zero and would render an empty badge; and `isoUtc()` rather than `::text`, because
+Postgres renders a timestamptz as `2026-07-30 08:42:41.123+00`, which `new Date()` parses happily
+and a strict validator refuses. The test asserts the ISO shape rather than trusting it.
+
+`voteCount` is votes **cast**, not people - a multi-select poll counts one member several times.
+That is what v1 counted and what "42 VOTES" means on the card.
+
+### Three roster screens became one
+
+The club, race and Eboard rosters were three forked implementations of the same screen. They are
+now one `MembersScreen` parametrised by rows, sections and a per-row action list, which is
+design-system rule 5. The action list is a **function of the row** rather than a flag set, because
+the answer genuinely differs per row: an Owner cannot be removed, an Admin only by the Owner.
+
+It is also called for the caller's **own** row, which was a correction: the first version refused
+self-actions blanket-style and silently dropped the race roster's "Leave this race". Leaving is a
+real action a member performs on themselves, so whether the own row gets a menu belongs to the
+caller, where the rule actually lives.
+
+### Operational
+
+Two self-inflicted, both recorded because they cost time and would recur.
+
+**`pkill -f "watch src/api/main.ts"` killed the founder's dev server.** Two ClubChat stacks run
+side by side and `npm run dev:api` produces byte-identical command lines for both - the port is the
+only thing that distinguishes them, and a command-line pattern cannot see a port. Kill by the PID
+that owns the port.
+
+**A restarted API served the wrong client.** The port variable is `API_PORT`, not `PORT`, so a
+`PORT=3100` restart tried to bind 3000 and refused - which failed safely. Then `CLIENT_ORIGIN`
+defaulted to the founder's `:8081`, so CORS blocked the agent's client on `:8082` - and the app
+reports that as **"You appear to be offline"**, which reads like a dead server rather than a
+misconfigured one. Before that, a stale API had been answering with two-phase-old code, which is
+failure mode 15 arriving exactly as advertised: the new routes 404'd identically to a bogus route,
+and the running process had no `--watch` flag at all.
+
+---
+
 ## 2026-07-30 - The design system: Stitch, v1, and which one is the truth
 
 The designs live in a Google Stitch project, reached over MCP. Registering it with

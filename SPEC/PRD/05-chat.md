@@ -68,6 +68,43 @@ a jump window (chat only pages upward from the live tail).
 11. **The composer's "+" opens an attach menu** with Photos, Camera, and Document always
     available, plus admin-gated create actions for whatever the scope supports (club: Poll,
     Event; race: Poll; Eboard: Poll, Meeting).
+
+    **The two axes are independent, and conflating them is the mistake to avoid.** *Which*
+    actions the scope has is a fact about the scope; *whether this person gets them* is a fact
+    about their authority in it. Read off v1 on 2026-07-30:
+
+    | | Photos · Camera · Document | Poll | Event | Meeting |
+    |---|---|---|---|---|
+    | **Club chat** | anyone who can post | admin | admin | - |
+    | **Race chat** | anyone who can post | manager | - | - |
+    | **Eboard chat** | anyone who can post | member | - | member |
+
+    Event exists only in the club scope (an event belongs to a club and there is no race or
+    Eboard calendar), and Meeting only in the Eboard scope. Neither absence is a permission.
+
+    > **"Admin" resolves to a different predicate in each scope.** In club chat it is club
+    > admin-or-owner. In race chat it is a roster member who is *also* a club admin - so a
+    > roster member without club standing does not get these, and a club admin without a roster
+    > row never reaches race chat to begin with, because reading it requires the roster row.
+    > In Eboard chat it is **every member of the space**, because membership there is admin-tier
+    > by construction, so there is no second tier to gate against. Substituting one of these for
+    > another is the class of bug that shipped in five places in v1.
+    >
+    > One predicate already answers all three: **the channel-admin question, asked of the
+    > channel**. The screen asks that once and never re-derives it per scope, which is what stops
+    > the three from drifting apart.
+
+11a. **The header's grid menu is quick-nav and is NOT role-gated.** Every member of the scope
+    sees the same entries - club: Members, Poll, Routines, Events; race: Members, Meet
+    Information, Polls, Car Assignments and Groups; Eboard: Members, Meetings, Polls. Being
+    able to *reach* a screen is not being able to *act* on it, and each destination applies its
+    own rules on arrival. Hiding a destination a member may read would be a worse lie than
+    showing one whose controls are absent.
+
+11b. **The other admin-gated controls in chat**, in every scope, resolved by that scope's own
+    predicate as above: the announcement toggle beside the composer, and Pin / Unpin. **Delete
+    is the one that is not purely role-based** - a member may delete their own message, and an
+    admin may delete anyone's. Report is available to everyone who can read the conversation.
 12. **Creating a poll, event, or meeting posts a card into the corresponding chat**,
     regardless of whether it was created from chat or from its own screen.
 13. **Deleting the underlying poll, event, or meeting removes its chat card**, rather than

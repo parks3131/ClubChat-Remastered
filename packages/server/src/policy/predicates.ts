@@ -301,8 +301,22 @@ export const canDeleteMessage = (
   message: { senderId: string },
 ): boolean => {
   if (!isChannelMember(ctx, ch)) return false;
-  return message.senderId === ctx.userId || isChannelAdmin(ctx, ch);
+  return message.senderId === ctx.userId || canDeleteOthersMessages(ctx, ch);
 };
+
+/**
+ * The channel-level half of `canDeleteMessage`: may this user delete somebody ELSE's message?
+ *
+ * Its own predicate rather than an inlined `isChannelAdmin`, because the client has to answer
+ * "should this bubble offer Delete?" before it has a message in hand, and the only way to do
+ * that without shipping raw admin-ness to the screen is to name the capability. Failure mode 10
+ * in `AGENTS.md`: a capability that has its own name in the spec gets its own predicate, even
+ * when the body is one word - an alias is a claim that two things will never diverge.
+ *
+ * Constant-false in a DM, which is the point: neither participant can delete the other's
+ * message, and moderation there is blocking plus reporting instead.
+ */
+export const canDeleteOthersMessages = isChannelAdmin;
 
 /**
  * Anyone with access may report a message they did not send.

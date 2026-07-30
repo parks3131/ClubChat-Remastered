@@ -46,7 +46,8 @@ type Row =
       clientMsgId: string;
       body: string;
       failed: boolean;
-      type: "text" | "photo" | "document";
+      /** Mirrors the outbox entry, announcements included - see `store.ts`. */
+      type: "text" | "photo" | "document" | "announcement";
       /** Renders the photo the sender just picked, before any round trip. */
       localUri?: string | undefined;
       documentName?: string | undefined;
@@ -102,6 +103,64 @@ function scopeLinks(
     { href: `/eboard/${meta.scopeId}/meetings`, label: "Meetings" },
     { href: `/eboard/${meta.scopeId}/polls`, label: "Polls" },
   ];
+}
+
+/**
+ * The create actions the "+" menu offers, by scope.
+ *
+ * **This answers what the SCOPE has, never who the caller is** - the role half is one
+ * `canAnnounce` check at the call site. Keeping them apart is the point: an Event belongs to a
+ * club and there is no race or Eboard calendar to put one on, and a Meeting is an Eboard concept
+ * with no club-wide or race equivalent. Neither absence is a permission, and writing them as one
+ * combined condition is how "this scope has no Events" turns into "you are not allowed to make
+ * one" in somebody's head six months from now.
+ *
+ * A DM gets nothing: no polls, no events, no meetings, and `canAnnounce` is false there anyway.
+ */
+function createActions(meta: ChannelMeta): Array<{
+  label: string;
+  hint: string;
+  href: string;
+}> {
+  switch (meta.scope) {
+    case "club":
+      return [
+        {
+          label: "Poll",
+          hint: "Ask everyone here a question",
+          href: `/clubs/${meta.scopeId}/polls?create=1`,
+        },
+        {
+          label: "Event",
+          hint: "Put something on the club calendar",
+          href: `/clubs/${meta.scopeId}/events?create=1`,
+        },
+      ];
+    case "race":
+      // No Event: a calendar event belongs to a club, and a race has no calendar of its own.
+      return [
+        {
+          label: "Poll",
+          hint: "Ask this roster a question",
+          href: `/races/${meta.scopeId}/polls?create=1`,
+        },
+      ];
+    case "eboard":
+      return [
+        {
+          label: "Poll",
+          hint: "Ask the board a question",
+          href: `/eboard/${meta.scopeId}/polls?create=1`,
+        },
+        {
+          label: "Meeting",
+          hint: "Schedule a board meeting",
+          href: `/eboard/${meta.scopeId}/meetings?create=1`,
+        },
+      ];
+    case "dm":
+      return [];
+  }
 }
 
 /**
@@ -174,6 +233,18 @@ export default function ChatScreen() {
   const [selected, setSelected] = useState<number | null>(null);
   /** Set once Report is tapped, so the confirmation is a second deliberate step. */
   const [confirmingReport, setConfirmingReport] = useState<number | null>(null);
+  /**
+   * Set once Delete is tapped. Deleting is irreversible and destroys somebody's words, so it
+   * gets the same second deliberate step reporting does rather than firing off a long press.
+   */
+  const [confirmingDelete, setConfirmingDelete] = useState<number | null>(null);
+  /**
+   * Whether the next send goes out as an announcement.
+   *
+   * A compact armed toggle beside the composer rather than a permanent banner, which is what v1
+   * settled on after the banner ate the top of the conversation. It disarms on send.
+   */
+  const [asAnnouncement, setAsAnnouncement] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
   /** True while bytes are in flight, so the "+" cannot start a second upload. */
@@ -341,11 +412,54 @@ export default function ChatScreen() {
     const body = draft.trim();
     if (body.length === 0 || !client || !channelId || !canPost) return;
     setDraft("");
+    // Disarmed as the message goes, so the NEXT one is an ordinary message. An announcement
+    // toggle that stays armed is how somebody posts three of them by accident, and each one
+    // notifies the whole space.
+    const announcing = asAnnouncement;
+    setAsAnnouncement(false);
     try {
-      await client.sendWithRetry(channelId, body);
+      await client.sendWithRetry(
+        channelId,
+        body,
+        announcing ? { type: "announcement" } : {},
+      );
     } catch {
       // The send failed VISIBLY: the entry stays in the outbox marked failed, and the
       // row below renders it with a retry affordance. It is never silently dropped.
+    }
+    await refresh();
+  };
+
+  /**
+   * Pin or unpin, and delete.
+   *
+   * Both re-read afterwards rather than patching local state: pinning is a server fact that the
+   * pinned strip, Highlights and every other connected client read independently, and a local
+   * guess would be a second opinion about it.
+   */
+  const setPinned = async (seq: number, pinned: boolean) => {
+    if (!channelId) return;
+    setSelected(null);
+    try {
+      await channelApi.setPinned(channelId, seq, pinned);
+      setNotice(pinned ? "Pinned." : "Unpinned.");
+    } catch {
+      setNotice("Could not change the pin. Try again.");
+    }
+    await refresh();
+  };
+
+  const removeMessage = async (seq: number) => {
+    if (!channelId) return;
+    setSelected(null);
+    setConfirmingDelete(null);
+    try {
+      await channelApi.deleteMessage(channelId, seq);
+      // A tombstone, not a disappearance: the row stays and reads as deleted, which is what
+      // keeps the gapless sequence gapless.
+      setNotice("Message deleted.");
+    } catch {
+      setNotice("Could not delete that. Try again.");
     }
     await refresh();
   };
@@ -995,6 +1109,55 @@ export default function ChatScreen() {
                         >
                           <Text style={styles.secondaryLabel}>Close</Text>
                         </Pressable>
+                        {/*
+                          Pin, for an admin of this space. `canPin` and not `canAnnounce`: in
+                          race chat pinning additionally needs a roster row, and the server
+                          enforces exactly that - this only decides whether to offer it.
+                        */}
+                        {meta?.canPin === true && (
+                          <Pressable
+                            style={styles.secondaryButton}
+                            onPress={() =>
+                              void setPinned(message.seq, !message.pinned)
+                            }
+                            accessibilityRole="button"
+                            accessibilityLabel={
+                              message.pinned
+                                ? "Unpin this message"
+                                : "Pin this message"
+                            }
+                          >
+                            <Text style={styles.secondaryLabel}>
+                              {message.pinned ? "Unpin" : "Pin"}
+                            </Text>
+                          </Pressable>
+                        )}
+                        {/*
+                          Delete: your own message always, anybody's if you moderate here. The
+                          two halves are separate on purpose - a DM has no admin, so neither
+                          participant gets the second one.
+                        */}
+                        {(mine || meta?.canDeleteAnyMessage === true) && (
+                          <Pressable
+                            style={styles.secondaryButton}
+                            onPress={() => setConfirmingDelete(message.seq)}
+                            accessibilityRole="button"
+                            accessibilityLabel={
+                              mine
+                                ? "Delete your message"
+                                : "Delete this message"
+                            }
+                          >
+                            <Text
+                              style={[
+                                styles.secondaryLabel,
+                                styles.destructive,
+                              ]}
+                            >
+                              Delete
+                            </Text>
+                          </Pressable>
+                        )}
                         {/* Nobody can report their own message, so it is not offered. */}
                         {!mine && (
                           <Pressable
@@ -1016,6 +1179,37 @@ export default function ChatScreen() {
                       </View>
                     </View>
                   )}
+
+                {confirmingDelete === message.seq && (
+                  <View style={styles.actionSheet}>
+                    {/* Names what is lost, and does not pretend it can be undone. */}
+                    <Text style={styles.reportPrompt}>
+                      Delete this message? It is replaced by "This message was deleted" for
+                      everyone, and cannot be brought back.
+                    </Text>
+                    <View style={styles.reportActions}>
+                      <Pressable
+                        style={styles.secondaryButton}
+                        onPress={() => {
+                          setConfirmingDelete(null);
+                          setSelected(null);
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Keep this message"
+                      >
+                        <Text style={styles.secondaryLabel}>Keep</Text>
+                      </Pressable>
+                      <Pressable
+                        style={styles.button}
+                        onPress={() => void removeMessage(message.seq)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Confirm delete"
+                      >
+                        <Text style={styles.buttonLabel}>Delete</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                )}
 
                 {confirmingReport === message.seq && (
                   <View style={styles.actionSheet}>
@@ -1070,9 +1264,13 @@ export default function ChatScreen() {
       )}
 
       {/*
-        The attach menu. PRD/05 rule 11: Photos, Camera and Document are always available; the
-        admin-gated create actions (Poll, Event, Meeting) belong to their own phases and are
-        deliberately absent rather than stubbed.
+        The attach menu. PRD/05 rule 11: Photos, Camera and Document for anybody who can post,
+        plus the admin-gated create actions for whatever the scope supports.
+
+        The two axes are independent and are kept independent here. `createActions` answers
+        "what does this scope have" from the scope alone; `meta.canAnnounce` answers "may this
+        person create things here" - one channel-admin question the server already resolved per
+        scope, rather than three role rules restated in the client.
       */}
       {attachOpen && canPost && (
         <View style={styles.sheet}>
@@ -1104,6 +1302,25 @@ export default function ChatScreen() {
               <Text style={styles.sheetHint}>{hint}</Text>
             </Pressable>
           ))}
+
+          {meta !== null &&
+            meta.canAnnounce &&
+            createActions(meta).map((action) => (
+              <Pressable
+                key={action.label}
+                style={styles.sheetRow}
+                onPress={() => {
+                  setAttachOpen(false);
+                  router.push(action.href);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={action.label}
+              >
+                <Text style={styles.sheetLabel}>{action.label}</Text>
+                <Text style={styles.sheetHint}>{action.hint}</Text>
+              </Pressable>
+            ))}
+
           <Pressable
             style={styles.sheetRow}
             onPress={() => setAttachOpen(false)}
@@ -1138,14 +1355,44 @@ export default function ChatScreen() {
           </Pressable>
           <TextInput
             style={styles.input}
-            placeholder="Message"
+            placeholder={asAnnouncement ? "Announcement" : "Message"}
             placeholderTextColor={color.textSecondary}
             value={draft}
             onChangeText={setDraft}
             multiline
-            accessibilityLabel="Message"
+            accessibilityLabel={asAnnouncement ? "Announcement" : "Message"}
             onSubmitEditing={() => void send()}
           />
+          {/*
+            The announcement toggle, for an admin of this space.
+
+            A compact armed control rather than a persistent banner, which is what v1 landed on
+            after the banner ate the top of the conversation. The filled state is the whole
+            signal that the next send notifies everybody, so it has to be unmistakable - an
+            announcement posted by accident cannot be recalled.
+          */}
+          {meta?.canAnnounce === true && (
+            <Pressable
+              style={[
+                styles.announceButton,
+                asAnnouncement && styles.announceButtonArmed,
+              ]}
+              onPress={() => setAsAnnouncement((armed) => !armed)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: asAnnouncement }}
+              accessibilityLabel={
+                asAnnouncement
+                  ? "Send as an announcement, on. This notifies everybody here"
+                  : "Send as an announcement, off"
+              }
+            >
+              <MaterialIcons
+                name="campaign"
+                size={20}
+                color={asAnnouncement ? color.onAccent : color.textSecondary}
+              />
+            </Pressable>
+          )}
           <Pressable
             style={[
               styles.sendButton,
@@ -1332,6 +1579,21 @@ const styles = StyleSheet.create({
     backgroundColor: color.card,
     borderWidth: 1,
     borderColor: color.divider,
+  },
+  // Same footprint as the "+", so the composer's two flanking controls line up.
+  announceButton: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.pill,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: color.card,
+    borderWidth: 1,
+    borderColor: color.divider,
+  },
+  announceButtonArmed: {
+    backgroundColor: color.accent,
+    borderColor: color.accent,
   },
   // Optically centred: the glyph's own line height sits high in the box.
   attachLabel: {

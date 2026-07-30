@@ -367,7 +367,7 @@ export class ChatClient {
     body: string,
     opts: {
       clientMsgId?: string;
-      type?: 'text' | 'photo' | 'document';
+      type?: 'text' | 'photo' | 'document' | 'announcement';
       mediaId?: string;
       localUri?: string;
       documentName?: string;
@@ -428,7 +428,7 @@ export class ChatClient {
     channelId: string,
     body: string,
     attachment: {
-      type?: 'text' | 'photo' | 'document';
+      type?: 'text' | 'photo' | 'document' | 'announcement';
       mediaId?: string;
       localUri?: string;
       documentName?: string;

@@ -27,9 +27,17 @@ import {
 import { useLoad } from '../../../../../src/use-load.ts';
 
 export default function MeetingsScreen() {
-  const { eboardId } = useLocalSearchParams<{ eboardId: string }>();
+  const { eboardId, create } = useLocalSearchParams<{ eboardId: string; create?: string }>();
   const [when, setWhen] = useState<'upcoming' | 'past'>('upcoming');
-  const [composing, setComposing] = useState(false);
+  /*
+   * `?create=1` opens straight into the composer, which is how chat's "+" menu offers "Meeting".
+   * There is no separate create route - the composer lives here.
+   *
+   * Seeded directly, with no role check, because there is no role to check: every member of an
+   * Eboard space may schedule a meeting, and reaching this screen at all already requires
+   * membership. The server refuses a non-member regardless.
+   */
+  const [composing, setComposing] = useState(create === '1');
 
   const load = useLoad(() => contentApi.meetings(eboardId, when), [eboardId, when]);
 

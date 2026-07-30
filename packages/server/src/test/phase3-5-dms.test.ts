@@ -52,6 +52,7 @@ import {
 import { channelAudienceById } from '../domain/channel-access.ts';
 import { accessContextOf, loadAccessContext, type AccessContext } from '../policy/context.ts';
 import {
+  canDeleteMessage,
   canOpenDm,
   canPinInChannel,
   canPostInChannel,
@@ -296,6 +297,67 @@ describe('a DM has no admins, but it does have pins', () => {
       expect(canPinInChannel(await ctxFor(id), f.dmChannel)).toBe(true);
     }
     expect(canPinInChannel(await ctxFor(f.ownerId), f.dmChannel)).toBe(false);
+  });
+
+  /*
+   * The chat screen decides whether to OFFER the announcement toggle and Delete from the channel
+   * meta, so the meta has to carry both capabilities as their own fields. Pinned here because
+   * getting either wrong is silent: a control that should not be there still refuses on the
+   * server, and a control that should be there just never appears.
+   */
+  it('reports announce and delete authority on the meta, and never from canPin', async () => {
+    const f = await setup();
+
+    const asOwner = await readChannelMeta(h.db, await ctxFor(f.ownerId), f.clubChannelId);
+    const asMember = await readChannelMeta(h.db, await ctxFor(f.aliceId), f.clubChannelId);
+    if (!asOwner.ok || !asMember.ok) throw new Error('club channel meta unreadable');
+
+    expect(asOwner.canAnnounce).toBe(true);
+    expect(asOwner.canDeleteAnyMessage).toBe(true);
+    // A plain member gets neither, and the screen therefore renders neither control.
+    expect(asMember.canAnnounce).toBe(false);
+    expect(asMember.canDeleteAnyMessage).toBe(false);
+
+    /*
+     * The DM row is the one that proves these are not aliases of `canPin`.
+     *
+     * Both participants CAN pin (rule 4 above) and neither may announce or delete the other's
+     * message, because a DM has no admin. A client computing either from `canPin` would offer
+     * both to both people in every DM in the product.
+     */
+    const asAlice = await readChannelMeta(h.db, await ctxFor(f.aliceId), f.dmChannelId);
+    if (!asAlice.ok) throw new Error('dm meta unreadable');
+    expect(asAlice.canPin).toBe(true);
+    expect(asAlice.canAnnounce).toBe(false);
+    expect(asAlice.canDeleteAnyMessage).toBe(false);
+  });
+
+  it('refuses a member deleting somebody else\'s message, and allows their own', async () => {
+    const f = await setup();
+    const clubChannel = await getChannelRef(h.db, f.clubChannelId);
+    if (!clubChannel) throw new Error('club channel missing');
+
+    const posted = await sendMessage(h.db, await ctxFor(f.aliceId), clubChannel, {
+      channelId: f.clubChannelId,
+      clientMsgId: crypto.randomUUID(),
+      type: 'text',
+      body: 'mine',
+    });
+    if (!posted.ok) throw new Error('fixture message not sent');
+
+    // Proved by attempting it, not by reading the rule. Bob is a plain member, so somebody
+    // else's message is not his to remove.
+    expect(
+      canDeleteMessage(await ctxFor(f.bobId), clubChannel, { senderId: f.aliceId }),
+    ).toBe(false);
+    // Her own always is, with no admin standing at all.
+    expect(
+      canDeleteMessage(await ctxFor(f.aliceId), clubChannel, { senderId: f.aliceId }),
+    ).toBe(true);
+    // And the club Owner may remove anybody's.
+    expect(
+      canDeleteMessage(await ctxFor(f.ownerId), clubChannel, { senderId: f.aliceId }),
+    ).toBe(true);
   });
 });
 

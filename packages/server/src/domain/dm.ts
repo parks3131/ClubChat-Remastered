@@ -21,7 +21,9 @@ import { channelMutes, memberBlocks } from '../db/schema.ts';
 import { channelDisplayName, channelNameJoins } from './channel-access.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
+  canAnnounceInChannel,
   canBlock,
+  canDeleteOthersMessages,
   canMuteChannel,
   canOpenDm,
   canPinInChannel,
@@ -363,6 +365,24 @@ export type ChannelMeta = {
    * which is precisely why the client must not compute it from `canPin`.
    */
   canReadReports: boolean;
+  /**
+   * May this user post an announcement here?
+   *
+   * `canAnnounceInChannel`, which is `isChannelAdmin` - **not** `canPin`. The two come apart in
+   * race chat, where pinning additionally requires a roster row, so a client computing one from
+   * the other would offer the announce control to the wrong set of people in exactly one scope.
+   * Constant-false in a DM, where there are no admins and announcements do not exist.
+   */
+  canAnnounce: boolean;
+  /**
+   * May this user delete somebody ELSE's message here?
+   *
+   * The channel-level half of `canDeleteMessage`; a sender may always delete their own, which
+   * the client already knows without asking. Sent separately for the same reason as
+   * `canReadReports`: so the bubble decides whether to OFFER the control rather than offering it
+   * and letting the write fail.
+   */
+  canDeleteAnyMessage: boolean;
   muted: boolean;
   /** Present for a dm, so the client can offer block, unblock and report. */
   peer: { userId: string; name: string; blockedByMe: boolean } | null;
@@ -444,6 +464,8 @@ export async function readChannelMeta(
     postDeniedReason: canPost ? null : row.blocked_by_me ? 'you_blocked_them' : 'unavailable',
     canPin: canPinInChannel(ctx, channel),
     canReadReports: canReadReports(ctx, channel),
+    canAnnounce: canAnnounceInChannel(ctx, channel),
+    canDeleteAnyMessage: canDeleteOthersMessages(ctx, channel),
     muted: row.muted,
     peer:
       row.peer_id === null

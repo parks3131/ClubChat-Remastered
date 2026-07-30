@@ -17,8 +17,14 @@ export type PendingSend = {
   /**
    * The kind of message. Defaults to text at the call site rather than here, so a caller
    * attaching media has to say so.
+   *
+   * `announcement` is client-originated like the other three, and is the only one of them that
+   * is **authorized rather than merely accepted**: the server refuses it unless the sender is an
+   * admin of that space, so widening this union grants nothing on its own. It was omitted here
+   * until 2026-07-30, which is why the composer had no announcement control to build - the
+   * server had enforced the rule since Phase 2 with nothing able to exercise it.
    */
-  type?: 'text' | 'photo' | 'document';
+  type?: 'text' | 'photo' | 'document' | 'announcement';
   /**
    * An object already uploaded AND completed, for a photo or document send.
    *

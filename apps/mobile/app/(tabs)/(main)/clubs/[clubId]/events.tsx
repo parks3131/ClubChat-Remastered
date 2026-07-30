@@ -9,7 +9,7 @@
  * to a club and this screen already has one.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { calendarApi, clubApi, contentApi } from '../../../../../src/api.ts';
@@ -31,13 +31,25 @@ import { useLoad } from '../../../../../src/use-load.ts';
 const TYPES: readonly EventType[] = ['practice', 'team_bonding', 'volunteer', 'other', 'race'];
 
 export default function ClubEventsScreen() {
-  const { clubId } = useLocalSearchParams<{ clubId: string }>();
+  const { clubId, create } = useLocalSearchParams<{ clubId: string; create?: string }>();
   const [when, setWhen] = useState<'upcoming' | 'past'>('upcoming');
-  const [creating, setCreating] = useState(false);
 
   const feed = useLoad(() => calendarApi.feed({ club: clubId, when }), [clubId, when]);
   const club = useLoad(() => clubApi.detail(clubId), [clubId]);
   const isAdmin = club.data?.club.viewer.isAdmin === true;
+
+  /*
+   * `?create=1` opens straight into the composer, which is how chat's "+" menu offers "Event".
+   * There is no separate create route - the composer lives here.
+   *
+   * Started closed and opened by the effect rather than seeded into `useState`, because unlike
+   * polls this screen does not know whether the viewer is an admin until the club read lands.
+   * Seeding from the initial (undefined) value would open the composer for everybody.
+   */
+  const [creating, setCreating] = useState(false);
+  useEffect(() => {
+    if (create === '1' && isAdmin) setCreating(true);
+  }, [create, isAdmin]);
 
   if (creating) {
     return (

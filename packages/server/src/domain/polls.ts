@@ -15,6 +15,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { outbox, pollOptions, pollVotes, polls } from '../db/schema.ts';
+import { isoUtc } from '../db/sql-helpers.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
   canAccessPoll,
@@ -405,14 +406,33 @@ export async function deletePoll(
   return { ok: true, deleted: true };
 }
 
-/** Polls the viewer can access in a scope, plus the ones they have voted in. */
+/**
+ * Polls the viewer can access in a scope, plus the ones they have voted in.
+ *
+ * `voteCount` is **votes cast, not people** - the sum of the options' maintained counts. On a
+ * multi-select poll one member contributes several, which is the number the card means by
+ * "42 VOTES": how much response there has been, not how many members responded. `closesAt` rides
+ * along so the card can show a countdown without opening every poll to find its deadline.
+ *
+ * Both are on the list rather than derived per row in the client, because a client cannot derive
+ * them at all: it has the summary and nothing else.
+ */
 export async function listPolls(
   db: Db,
   ctx: AccessContext,
   // clubId is required, not optional: the club branch of canAccessPoll checks membership
   // against it, so passing a placeholder would deny every club poll silently.
   scope: { scope: 'club' | 'race' | 'eboard'; scopeId: string; clubId: string },
-): Promise<Array<{ id: string; question: string; closed: boolean; votedByMe: boolean }>> {
+): Promise<
+  Array<{
+    id: string;
+    question: string;
+    closed: boolean;
+    votedByMe: boolean;
+    voteCount: number;
+    closesAt: string | null;
+  }>
+> {
   // Checked ONCE, before the query, because access to a poll depends only on its scope -
   // every poll in one scope is visible to exactly the same people. Filtering row by row
   // afterwards would run the same predicate N times for the same answer.
@@ -431,11 +451,21 @@ export async function listPolls(
     question: string;
     closed: boolean;
     voted: boolean;
+    vote_count: number;
+    // A string, not a Date: `db.execute` applies none of the ORM's coercion. Failure mode 7.
+    closes_at: string | null;
   }>(sql`
     SELECT p.id, p.question,
            (p.closed_at IS NOT NULL OR (p.closes_at IS NOT NULL AND p.closes_at < now())) AS closed,
            EXISTS (SELECT 1 FROM poll_votes v
-                    WHERE v.poll_id = p.id AND v.user_id = ${ctx.userId}) AS voted
+                    WHERE v.poll_id = p.id AND v.user_id = ${ctx.userId}) AS voted,
+           -- COALESCE, because a poll whose options have no votes yet must read 0 rather than
+           -- null. SUM over an empty set is null, and null would render as an empty badge.
+           COALESCE((SELECT SUM(o.vote_count) FROM poll_options o WHERE o.poll_id = p.id), 0)
+             AS vote_count,
+           -- isoUtc, never ::text: Postgres renders a timestamptz as "... +00", which is not
+           -- ISO 8601 and which this API's own validators reject. Failure mode 14.
+           ${isoUtc('p.closes_at')} AS closes_at
       FROM polls p
      WHERE p.scope = ${scope.scope} AND p.scope_id = ${scope.scopeId}
      ORDER BY p.created_at DESC
@@ -446,5 +476,8 @@ export async function listPolls(
     question: row.question,
     closed: row.closed,
     votedByMe: row.voted,
+    // SUM returns a bigint, which the driver hands back as a string.
+    voteCount: Number(row.vote_count),
+    closesAt: row.closes_at,
   }));
 }

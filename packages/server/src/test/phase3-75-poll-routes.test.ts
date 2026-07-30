@@ -287,6 +287,69 @@ describe('poll routes: voting', () => {
   });
 });
 
+describe('poll routes: what the list row carries', () => {
+  /*
+   * The list card renders a tally and a countdown without opening the poll, so both have to be on
+   * the summary. Pinned here because the alternative is a client that shows "0 VOTES" on a poll
+   * with votes in it, and nothing else in the suite reads this row's shape.
+   */
+  it('sums votes ACROSS options and reports the deadline as ISO 8601', async () => {
+    const owner = await signUp('ListOwner');
+    const voter = await signUp('ListVoter');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, voter);
+
+    const created = await as(owner, 'POST', `/clubs/${clubId}/polls`, {
+      ...TWO_OPTIONS,
+      allowMultiple: true,
+      closesInMinutes: 60,
+    });
+    const pollId = created.body.pollId;
+    const options = (await as(owner, 'GET', `/polls/${pollId}`)).body.poll.options;
+
+    // A poll nobody has voted in reads 0, not null: SUM over no rows is null, and a null here
+    // would render as an empty badge rather than a zero.
+    const fresh = (await as(owner, 'GET', `/clubs/${clubId}/polls`)).body.polls[0];
+    expect(fresh.voteCount).toBe(0);
+    expect(fresh.votedByMe).toBe(false);
+
+    // Two people, and one of them votes twice - the count is votes cast, not people.
+    await as(owner, 'POST', `/poll-options/${options[0].id}/vote`);
+    await as(owner, 'POST', `/poll-options/${options[1].id}/vote`);
+    await as(voter, 'POST', `/poll-options/${options[0].id}/vote`);
+
+    const row = (await as(owner, 'GET', `/clubs/${clubId}/polls`)).body.polls[0];
+    expect(row.voteCount).toBe(3);
+    expect(row.closed).toBe(false);
+    expect(row.votedByMe).toBe(true);
+
+    // The other member sees the same public tally and their own vote state.
+    const asVoter = (await as(voter, 'GET', `/clubs/${clubId}/polls`)).body.polls[0];
+    expect(asVoter.voteCount).toBe(3);
+    expect(asVoter.votedByMe).toBe(true);
+
+    /*
+     * ISO 8601, not Postgres's own rendering.
+     *
+     * `::text` on a timestamptz produces "2026-07-30 08:42:41.123+00" - a space and a two-digit
+     * offset - which `new Date()` happily parses, so eyeballing a response never catches it, and
+     * a strict validator refuses it. Failure mode 14, asserted rather than trusted.
+     */
+    expect(row.closesAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/);
+    expect(Number.isNaN(Date.parse(row.closesAt))).toBe(false);
+  });
+
+  it('reports a null deadline for a poll that only closes by hand', async () => {
+    const owner = await signUp('OpenEndedOwner');
+    const { clubId } = await createClubAs(owner);
+    await as(owner, 'POST', `/clubs/${clubId}/polls`, TWO_OPTIONS);
+
+    const row = (await as(owner, 'GET', `/clubs/${clubId}/polls`)).body.polls[0];
+    expect(row.closesAt).toBeNull();
+    expect(row.closed).toBe(false);
+  });
+});
+
 describe('poll routes: privacy and management', () => {
   it('shows counts to everyone and voter names only where privacy allows', async () => {
     const creator = await signUp('PrivacyCreator');
