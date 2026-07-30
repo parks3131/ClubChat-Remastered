@@ -49,9 +49,22 @@ And from [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) "
 
 **1. Phase 2 shipped a domain, not a feature.** Races, polls, calendar, routines, news and Eboard
 meetings all have schema, handlers and tests - 32 exported command handlers across four modules,
-47 test cases - and **none of them is reachable over HTTP**. The API exposes clubs, channels,
-chat, media, DMs, moderation, notifications and devices, and nothing else. The Expo client has six
-screens: sign-in, the club list, chat, the DM list, and two layout files.
+47 test cases - and **none of them is reachable over HTTP**. The API registers 45 routes covering
+clubs, membership, chat reads, reactions, reports, moderation, mute, media, DMs, notifications,
+devices and sync, and nothing else. The Expo client has six screens: sign-in, the club list, chat,
+the DM list, and two layout files.
+
+**This is server work, not UI work**, and the distinction matters when planning: a finished screen
+would have nothing to call. Two further gaps found the same way, both outside Phase 2:
+
+- **`setPinned` and `softDeleteMessage` have no route either.** Pinning and soft-deleting a
+  message are Phase 0 chat features, and the column-level authority trap they exist to solve is
+  carefully handled in the domain and unreachable from any client. `msg.update` now publishes both,
+  so the realtime half works and there is no way to trigger it.
+- **`eboard_join_requests` is not in the schema at all**, though [Data model](09-data-model.md)
+  specifies it and [Eboard and Council](../PRD/10-eboard-and-council.md) depends on it. An admin
+  who leaves the Eboard space must request or be re-added, and there is nowhere to record the
+  request. That is a domain gap rather than a delivery one - the only one found so far.
 
 That happened because Phase 2's exit gate was *"the permission-matrix test suite covers every cell
 of the three matrices"* - a test suite, which a domain layer can satisfy on its own. Every other
