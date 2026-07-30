@@ -3,17 +3,47 @@
 Postgres throughout. Grouped by concern; [Domain model](../PRD/01-domain-model.md) is the authority on semantics.
 
 ### Identity
+
+`users`, `sessions`, `accounts` and `verifications` are **owned by better-auth** and their
+required columns are not ours to choose. What is ours is the naming and the profile columns
+layered on top.
+
 ```
-users                 id, email, full_name, avatar_media_id, bio, city, dob, school,
-                      created_at, anonymized_at, signin_blocked_at,
-                      is_platform_moderator
+users                 id, full_name, email, email_verified, image, created_at, updated_at,
+                      bio, city, dob, school,
+                      anonymized_at, signin_blocked_at, is_platform_moderator
+                      -- id DEFAULT gen_random_uuid(). Load-bearing: better-auth's Drizzle
+                      -- adapter emits `default` for id and relies on the database, and its
+                      -- own generateId setting does not fill it in. Same for the three
+                      -- tables below. See AGENTS.md 5.3 entry 2.
+                      -- full_name is the column; `name` is the property, because better-auth
+                      -- resolves its fields by Drizzle property name.
+                      -- email_verified and updated_at are better-auth requirements.
+                      -- `image` is better-auth's avatar field and is unused in Phase 0.
+                      -- Phase 3 adds avatar_media_id when media exists; until then there is
+                      -- deliberately no media reference here to dangle.
                       -- signin_blocked_at, not blocked_at: since member-to-member blocking
                       -- now exists, an unqualified "blocked" is ambiguous between "cannot
                       -- sign in" and "blocked by another member". Two very different things.
                       -- is_platform_moderator gates the DM report queue only. See [Authorization](05-authorization.md).
+sessions              id, user_id, token UNIQUE, expires_at, ip_address, user_agent,
+                      created_at, updated_at
+                      -- better-auth's shape. An earlier draft of this file specified
+                      -- (device_id, refresh_token_hash); the auth library owns session
+                      -- storage, so that never existed. device_id lives on `devices`.
+accounts              id, user_id, account_id, provider_id, password, created_at, updated_at,
+                      access_token, refresh_token, access_token_expires_at,
+                      refresh_token_expires_at, scope, id_token
+                      -- better-auth. Only password is used: email/password is the only method.
+verifications         id, identifier, value, expires_at, created_at, updated_at
 devices               id, user_id, push_token, platform, last_seen_at, invalidated_at
-sessions              id, user_id, device_id, refresh_token_hash, expires_at
+                      -- Phase 1, with push. Not yet built.
 ```
+
+**The system actor** is a seeded `users` row with the fixed id
+`00000000-0000-4000-8000-000000000001`, `signin_blocked_at` set at creation so nothing can ever
+authenticate as it. System messages are authored by it and never by `NULL`. See
+[Message flows](03-message-flows.md).
 
 ### Clubs and membership
 ```
@@ -21,7 +51,7 @@ clubs                 id, name, sport, description, avatar_media_id, join_policy
                       invite_token, invite_token_rotated_at, created_at
                       UNIQUE (invite_token)
                       -- invite_token, not invite_code. Nobody types it: it exists only
-                      -- inside a share link (Old.md 4.2 rule 5, changed 2026-07-28).
+                      -- inside a share link (PRD/04 rule 5, changed 2026-07-28).
                       -- Therefore it is 32 bytes of CSPRNG, base64url, matched exactly
                       -- and case-sensitively. Do NOT use a short human-friendly code:
                       -- that shape only existed to be typed, and it is the shape that
@@ -132,16 +162,21 @@ notifications         id, recipient_id, actor_id, club_id NULL, type, body, targ
                       UNIQUE (outbox_event_id, recipient_id)       ← at-least-once safety
                       -- club_id nullable for dm-scoped notifications; every audience
                       -- query must tolerate it. See [Channel log](02-channel-log.md).
-outbox                id, partition_key, event_type, payload, published_at, attempts, last_error
-                      -- published_at means "handed to Kafka", NOT "effect performed".
-                      -- Effect completion is the consumer group offset. See [Effects engine](04-effects-engine.md).
+outbox                id, partition_key, event_type, payload, processed_at, attempts, last_error
+                      -- Phase 0 ships this column as processed_at, and there it genuinely
+                      -- does mean "effect performed": the worker drains this table directly
+                      -- with FOR UPDATE SKIP LOCKED and there is no Kafka yet.
+                      -- Phase 1.5 renames it to published_at, at which point it means
+                      -- "handed to Kafka" and effect completion becomes the consumer group
+                      -- offset. Using the Kafka-era name for a non-Kafka meaning is exactly
+                      -- the drift ADR-0006 warns about. See [Effects engine](04-effects-engine.md).
 ```
 
 Notes:
 
 - Vote counts live on `poll_options` as a column, updated in the vote transaction. In an
   app-server world the RLS-driven reason for this is gone, but it stays for O(1) reads and
-  because `Old.md` invariant 6 makes counts and identity independently visible.
+  because domain invariant 6 makes counts and identity independently visible.
 - `meet_information` remains five columns on `races` ([Races and Meets](../PRD/09-races-and-meets.md): "edited together as one
   form").
 - Every unique partial index above encodes an invariant from [Domain model](../PRD/01-domain-model.md) **at the data layer**,

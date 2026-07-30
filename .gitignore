@@ -1,1 +1,25 @@
 learnings/
+
+# dependencies
+node_modules/
+
+# secrets - AGENTS.md non-negotiable 5
+.env
+.env.local
+.env.*.local
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+
+# expo
+.expo/
+web-build/
+
+# test and tooling
+coverage/
+.playwright-mcp/
+
+# os
+.DS_Store

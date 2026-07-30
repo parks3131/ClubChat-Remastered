@@ -19,6 +19,7 @@ server, not in the database.
 | Why a decision was made, and what was rejected | [`decisions/`](decisions/) |
 | To add a feature, a migration, or a resource | [`templates/`](templates/) |
 | How to work in this repo | [`../AGENTS.md`](../AGENTS.md) |
+| How we got here, bug by bug | [`../HISTORY.md`](../HISTORY.md) |
 
 **Start here:** [PRD/00-overview.md](PRD/00-overview.md) →
 [TECH/00-overview.md](TECH/00-overview.md) →

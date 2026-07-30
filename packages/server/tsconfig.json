@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // rootDir is "." rather than "./src" because drizzle.config.ts lives at the
+    // package root and must be typechecked too. TypeScript 6 stopped inferring
+    // rootDir from the source files, so it has to cover every included file.
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "drizzle.config.ts"]
+}

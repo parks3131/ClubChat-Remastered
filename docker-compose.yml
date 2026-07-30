@@ -1,0 +1,49 @@
+# Local development services only. Production is Neon Postgres plus Upstash Redis
+# per SPEC/TECH/15-stack-and-hosting.md; nothing here is deployed.
+#
+# Postgres is pinned to 17 because the schema leans on behaviour that is version
+# specific: partial unique indexes carrying the domain invariants, and NULL handling
+# in unique indexes (SPEC/TECH/09-data-model.md - a nullable column silently defeats
+# a unique constraint, which is why sender_id and client_msg_id are NOT NULL).
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: clubchat-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: clubchat
+      POSTGRES_PASSWORD: clubchat
+      POSTGRES_DB: clubchat
+      # Deterministic collation so ORDER BY and unique comparisons do not shift
+      # between a developer machine and CI.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - clubchat-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clubchat -d clubchat"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:8-alpine
+    container_name: clubchat-redis
+    restart: unless-stopped
+    # Redis is a cache and a bus, never a source of truth
+    # (SPEC/TECH/00-overview.md). No persistence is configured on purpose: if
+    # flushing Redis were to corrupt anything rather than merely degrade realtime,
+    # that is a design defect and this container is where it should show up first.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  clubchat-pgdata:

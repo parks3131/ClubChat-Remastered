@@ -1,11 +1,11 @@
 # AGENTS.md - working agreement
 
-How any agent (or human) should work in this repo. Read this first, then the product doc and
-the architecture doc.
+How any agent (or human) should work in this repo. Read this first, then
+[`SPEC/README.md`](SPEC/README.md), which indexes the product spec, the technical spec and the
+decisions.
 
 Sections 0 through 4 are general engineering discipline and apply to every task, always,
-without being restated. Section 5 is the repo-specific part and must be filled in as the
-project takes shape.
+without being restated. Section 5 is the repo-specific part.
 
 ---
 
@@ -89,9 +89,10 @@ project takes shape.
 
 ### 2.1 Before writing code
 
-1. **Read the product doc** for the intended behaviour, then **the architecture doc** for how
-   that area is built. Behaviour questions are answered by the first; structural questions by
-   the second.
+1. **Read [`SPEC/PRD/`](SPEC/PRD/)** for the intended behaviour, then
+   **[`SPEC/TECH/`](SPEC/TECH/)** for how that area is built. Behaviour questions are answered
+   by the first; structural questions by the second. Check
+   [`SPEC/decisions/`](SPEC/decisions/) before reopening anything that looks settled.
 2. **Find the closest existing feature and mirror it.** This codebase is deliberately
    pattern-heavy. Almost nothing should be genuinely novel, and something that looks novel is
    usually a sign the existing abstraction was not understood.
@@ -139,8 +140,10 @@ Order matters. Each step catches a class the previous one cannot.
 3. **If a decision was architectural and non-obvious, write an ADR**, with the rejected
    alternative recorded.
 4. **Commit only when asked.** No agent co-author line.
-5. **Branch and review policy:** _fill this in for the project (solo direct-to-main, or
-   branch-and-PR)._
+5. **Branch and review policy: solo, direct to main.** Recorded from observed practice rather
+   than chosen freshly - every commit in this repo's history is on `main`. The gate is therefore
+   not review but section 2.3: type check, full suite, and a live smoke test before anything is
+   called done. Revisit if a second person starts committing.
 
 ---
 
@@ -151,7 +154,7 @@ Order matters. Each step catches a class the previous one cannot.
 | [`SPEC/PRD/`](SPEC/PRD/) | What the product does and why | File paths, schema, component names |
 | [`SPEC/TECH/`](SPEC/TECH/) | How it is built, and what must not break | Product justification (link to the PRD instead) |
 | [`SPEC/decisions/`](SPEC/decisions/) | Why we chose this over the alternative | Implementation detail that will drift |
-| History | How we got here, bug by bug | Anything needed to work today |
+| [`HISTORY.md`](HISTORY.md) | How we got here, bug by bug | Anything needed to work today |
 | `AGENTS.md` (this file) | How to work | Anything specific to one feature |
 
 Start at [`SPEC/README.md`](SPEC/README.md), which indexes all of it.
@@ -194,17 +197,37 @@ below is not._
 ### 5.1 Commands
 
 ```bash
-# install
-# dev server
-# type check
-# test
-# database up / migrate
+npm install                  # install (npm workspaces; no pnpm/yarn)
+
+npm run db:up                # start Postgres 17 + Redis 8 in Docker, and WAIT for them
+npm run db:migrate           # apply pending migrations
+npm run db:generate          # generate a migration from a schema change
+npm run db:prove             # attempt to violate every constraint; must exit 0
+npm run db:down              # stop the containers
+npm run db:nuke              # stop AND destroy the volume. Development data only.
+
+npm run typecheck            # every workspace, strict
+npm test                     # every workspace. Handler tests start throwaway containers
+npm run lint:emdash          # standing instruction 1, with a detector self-test
+
+npm run dev:api              # API on :3000
+npm run dev:gateway          # WebSocket gateway on :3001
+npm run dev:worker           # outbox drain
+npm run dev:mobile           # Expo client
 
 # re-export the system overview image from SPEC/TECH/17-diagrams.md.
 # Run in the same change as any edit to that file's first diagram, or the
 # checked-in image silently drifts from its source.
 ./scripts/render-diagrams.sh
 ```
+
+**Node 24 or newer.** There is no build step and no bundler for the server: Node runs `.ts`
+directly by stripping types. That is why every import carries an explicit `.ts` extension.
+
+**TypeScript is pinned to 6.0.3, not 7.** TS 7 is npm `latest` and is the native compiler, but
+Expo 57's own TypeScript template pins `~6.0.3` and the client is half the deliverable. TS 6 is
+also the release designed to get a codebase ready for 7, so adopting it now makes the eventual
+move a version bump rather than a migration. Do not "upgrade" this without checking Expo first.
 
 ### 5.2 Repo map
 
@@ -216,10 +239,75 @@ below is not._
 | `SPEC/decisions/` | Accepted ADRs. Immutable; supersede rather than edit |
 | `SPEC/templates/` | Feature spec, authorization checklist, migration checklist, ADR |
 | `SPEC/TECH/assets/` | Generated diagram exports. Do not hand-edit; see `scripts/` |
-| `scripts/render-diagrams.sh` | Re-exports the system overview from `SPEC/TECH/17-diagrams.md` |
+| `packages/shared/` | Wire contract and domain vocabulary. Imported by client AND server, so neither can drift from the other |
+| `packages/client-core/` | Local store, send outbox, sync engine. Shared by the Expo app and the exit drill, so the drill tests what ships |
+| `packages/server/` | Three roles, one codebase: `src/api`, `src/gateway`, `src/worker` |
+| `packages/server/src/policy/` | **The** policy module. Every predicate lives here exactly once |
+| `packages/server/src/domain/` | Command handlers and query functions |
+| `packages/server/src/db/` | Schema, migrations, and `constraint-proof.sql` |
+| `apps/mobile/` | Expo client (iOS / Android / web) |
+| `scripts/` | Diagram export, service readiness, em-dash check |
+
+**Where the invariants actually live.** `packages/server/src/db/schema.ts` carries them as
+constraints, and `constraint-proof.sql` proves each one by attempting to violate it. If you add
+an invariant, it belongs in both, not in a handler - a handler races, a constraint does not.
 
 ### 5.3 Failure modes specific to this codebase
 
 _Add an entry every time a bug costs more than an hour. Include the symptom, the root cause,
 and the rule that prevents it. An entry that only records the fix is worth half as much as one
 that records how to recognise the class._
+
+1. **Drizzle wraps driver errors, so a pg error code is on `.cause` and not on the thrown
+   object.** Symptom: the idempotent-retry path in `appendMessage` never fired, and a concurrent
+   double-send surfaced as an unhandled unique-violation instead of returning the original
+   `seq`. Root cause: `error.code === '23505'` checked only the top level and silently matched
+   nothing. **Rule: when catching a driver error through an ORM, walk the cause chain.** A
+   never-matching check looks correct and is invisible until the exact concurrency it exists to
+   absorb actually happens - reading the function did not reveal it; the test did.
+
+2. **better-auth's Drizzle adapter emits `default` for `id` columns and expects the database to
+   supply one.** Symptom: sign-up died on `null value in column "id"`. Root cause:
+   `advanced.database.generateId: 'uuid'` does not make the adapter generate ids for these
+   tables. **Rule: give every better-auth-owned table (`users`, `sessions`, `accounts`,
+   `verifications`) a database-side `defaultRandom()`.** That works regardless of which id
+   strategy the library is using, which is the point.
+
+3. **Client-side gap detection is a read-then-write of the local max, and concurrent frame
+   application corrupts it.** Symptom: two in-order messages delivered together caused a
+   spurious sync, because both read the local max before either wrote. Root cause: no
+   serialization in `applyIncoming`. **Rule: apply frames one at a time per channel.** A gap
+   signal has to *mean* a gap; a racy one is worse than none, because it trains you to ignore it.
+
+4. **TypeScript 6 stopped inferring `rootDir` and stopped auto-discovering `@types`.** Symptom:
+   `TS6059 not under rootDir` for a config file at a package root, and missing Node globals.
+   **Rule: state `rootDir` and `types` explicitly in every package's tsconfig.** Also: `baseUrl`
+   is deprecated and `moduleResolution: node` is gone - do not reintroduce either.
+
+5. **Vitest and Node accept different TypeScript, so a green suite is not evidence the server
+   boots.** Symptom: every test passed, typecheck passed, and all three server processes
+   died at startup with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`. Root cause: a **parameter
+   property** (`constructor(readonly x: T)`). Vitest transforms with esbuild, which supports
+   the full grammar; Node runs `.ts` by *stripping* types, which supports strictly less.
+   **Rule: no parameter properties, enums or namespaces anywhere in server code, and
+   `npm run check:runtime` imports every module the way production does.** That check exists
+   precisely because no other gate in the pipeline can see this class.
+
+6. **An unbound global passed around as a method fails only in a browser.** Symptom: sync
+   silently failed on web with "Failed to execute 'fetch' on 'Window': Illegal invocation",
+   while the test suite and the whole exit drill passed. Root cause: a getter returning the
+   bare global `fetch`, then called as `this.fetch(...)`, which invokes it with `this` set to
+   the instance. Node's fetch does not check its receiver; a browser does. **Rule: bind
+   globals when storing or returning them (`globalThis.fetch.bind(globalThis)`), and smoke
+   test the real app in a real browser** - this was invisible to every automated check, and
+   doubly so because the caller logs and continues on the principle that realtime is an
+   enhancement.
+
+7. **A bundle-time resolution failure cannot be caught by a runtime `try`/`catch`.** Symptom:
+   the web app hung forever on a spinner after sign-up. Root cause: `expo-sqlite`'s web build
+   imports a `.wasm` binary that Metro does not resolve by default, so the *whole bundle*
+   failed - and the graceful in-memory fallback inside `openMessageStore` never ran, because
+   a static import fails before any of our code does. **Rule: `wasm` belongs in
+   `metro.config.js` `assetExts`, and a fallback around a static import is not a safety net.**
+   Note the shape of the symptom: a screen that spins forever, which is exactly the failure
+   `SPEC/PRD/03` warns about and which reads as a crash to whoever is holding the phone.

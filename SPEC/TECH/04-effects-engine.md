@@ -2,7 +2,7 @@
 
 [Server event catalogue](12-server-event-catalogue.md) catalogues ~9 bootstrap/sync effects, 5 system-message emitters, 3 card types, 18
 notification types, and 1 scheduled job. In the old build these were database triggers, and
-[Media pipeline](07-media-pipeline.md) records the cost: *"Ordering matters in bootstrap triggers. Create the channel before
+[Engineering pitfalls](14-engineering-pitfalls.md) 7 records the cost: *"Ordering matters in bootstrap triggers. Create the channel before
 adding the first member, or the first system message is silently swallowed."*
 
 ### Transactional outbox
@@ -14,7 +14,10 @@ CREATE TABLE outbox (
   event_type    text NOT NULL,
   payload       jsonb NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now(),
-  published_at  timestamptz,     -- handed to Kafka, NOT "effect performed". See [Effects engine](04-effects-engine.md).
+  published_at  timestamptz,     -- handed to Kafka, NOT "effect performed". See ADR-0006.
+                                 -- Phase 0 ships this column as `processed_at`, because
+                                 -- with no Kafka it genuinely does mean "effect
+                                 -- performed"; Phase 1.5 renames it. See below.
   attempts      int NOT NULL DEFAULT 0,
   last_error    text
 );
@@ -33,8 +36,8 @@ is parked and alerted on.
 is a deliberate constraint, not an oversight: `LISTEN` requires a dedicated session pinned for
 the lifetime of the listener, which is incompatible with transaction-mode connection pooling and
 would rule out serverless Postgres. Polling at 250 ms costs one trivially-indexed query per tick
-and keeps effect latency well inside anything a human perceives. It is also what makes [decisions/](../decisions/)'s
-Postgres choice free of caveats.
+and keeps effect latency well inside anything a human perceives. It is also what keeps
+[ADR-0004](../decisions/0004-postgres-not-nosql.md)'s Postgres choice free of caveats.
 
 **Delivery is at-least-once, so every effect must be idempotent.** Enforced structurally:
 
@@ -119,7 +122,7 @@ Consequences of the relay split:
 - A poisoned event goes to `clubchat.events.dlq` after N consumer failures rather than blocking
   its partition forever. Anything in the DLQ is alerted on, because a stuck partition means
   system messages and notifications silently stop for that channel.
-- The outbox pruning job ([Effects engine](04-effects-engine.md) housekeeping) keys off `published_at`, and must not prune faster
+- The outbox pruning job (housekeeping, below) keys off `published_at`, and must not prune faster
   than Kafka's own retention, or replay stops being possible.
 
 **Kafka is never on the message send path.** A send commits and acks from the API as described in
@@ -148,7 +151,7 @@ SELECT id FROM polls
 
 Stamp `closing_soon_notified_at` in the same transaction as the fan-out → fires at most once
 per poll, ever. **No job closes polls**; closed-ness is evaluated at read time as
-`closed_at IS NOT NULL OR closes_at < now()`, per `Old.md`.
+`closed_at IS NOT NULL OR closes_at < now()`, per [Polls](../PRD/11-polls.md).
 
 ### Housekeeping jobs (new, from [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md))
 
@@ -156,5 +159,5 @@ per poll, ever. **No job closes polls**; closed-ness is evaluated at read time a
 |---|---|---|
 | Orphaned object GC - objects whose owning row is gone | Nightly | Debt 8 ("nothing is ever deleted from object storage") |
 | Notification archival - move rows older than 90 days to cold table | Nightly | Debt 10 (unbounded growth) |
-| Outbox pruning - delete `published_at < now() − 7 days` | Nightly | New. **Must not prune faster than Kafka's retention**, or replay stops being possible ([Effects engine](04-effects-engine.md)) |
+| Outbox pruning - delete `published_at < now() − 7 days` | Nightly | New. **Must not prune faster than Kafka's retention**, or replay stops being possible ([ADR-0006](../decisions/0006-kafka-downstream-of-the-outbox.md)) |
 | Stale connection sweep | Every 5 min | Belt-and-braces on Redis TTL |

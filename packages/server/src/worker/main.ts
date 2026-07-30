@@ -1,0 +1,39 @@
+/**
+ * Worker entrypoint. Every async server-side effect runs here and nowhere else.
+ */
+
+import pino from 'pino';
+import { loadConfig } from '../config.ts';
+import { createDb, createPool } from '../db/client.ts';
+import { createRedis } from '../bus/redis.ts';
+import { startDrainLoop } from './drain.ts';
+import type { EffectDeps } from './effects.ts';
+
+const config = loadConfig();
+const logger = pino({ level: config.LOG_LEVEL, name: 'worker' });
+
+const pool = createPool(config.DATABASE_URL);
+const db = createDb(pool);
+const redis = createRedis(config.REDIS_URL);
+
+const controller = new AbortController();
+
+const deps: EffectDeps = {
+  db,
+  redis,
+  log: (level, message, extra) => logger[level](extra ?? {}, message),
+};
+
+const shutdown = async (signal: string) => {
+  logger.info({ signal }, 'shutting down');
+  controller.abort();
+  await redis.quit().catch(() => undefined);
+  await pool.end();
+  process.exit(0);
+};
+
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
+
+logger.info('worker started, draining outbox');
+await startDrainLoop(db, deps, { signal: controller.signal });

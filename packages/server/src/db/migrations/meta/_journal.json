@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1785376604520,
+      "tag": "0000_phase0_channel_log",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785376618538,
+      "tag": "0001_seed_system_actor",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785377825170,
+      "tag": "0002_auth_table_id_defaults",
+      "breakpoints": true
+    }
+  ]
+}

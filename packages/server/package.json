@@ -1,0 +1,40 @@
+{
+  "name": "@clubchat/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev:api": "node --env-file=../../.env --watch src/api/main.ts",
+    "dev:gateway": "node --env-file=../../.env --watch src/gateway/main.ts",
+    "dev:worker": "node --env-file=../../.env --watch src/worker/main.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node --env-file=../../.env src/db/migrate.ts",
+    "db:prove": "docker exec -i clubchat-postgres psql -q -v ON_ERROR_STOP=1 -U clubchat -d clubchat < src/db/constraint-proof.sql"
+  },
+  "dependencies": {
+    "@clubchat/shared": "*",
+    "@fastify/cors": "^11.2.0",
+    "better-auth": "^1.6.25",
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^5.10.0",
+    "ioredis": "^5.11.1",
+    "pg": "^8.16.3",
+    "pino": "^10.3.1",
+    "ws": "^8.21.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^12.0.4",
+    "@types/node": "^24.10.1",
+    "@types/pg": "^8.15.6",
+    "@types/ws": "^8.18.1",
+    "drizzle-kit": "^0.31.10",
+    "testcontainers": "^12.0.4",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.10",
+    "@clubchat/client-core": "*"
+  }
+}

@@ -1,0 +1,91 @@
+/**
+ * The local message store.
+ *
+ * An interface rather than a concrete implementation because the two consumers differ:
+ * the Expo app persists to SQLite (keyed by `(channel_id, seq)`, which is what makes
+ * chat readable offline instead of a spinner), while tests use the in-memory version.
+ * The client logic that matters - gap detection, the send outbox, sync - is identical
+ * over both, so it is written once against this interface and exercised by both.
+ */
+
+import type { MessageEnvelope } from '@clubchat/shared';
+
+export type PendingSend = {
+  clientMsgId: string;
+  channelId: string;
+  body: string;
+  /** Attempts so far. Surfaced so the UI can show "failed" after enough of them. */
+  attempts: number;
+  status: 'pending' | 'failed';
+};
+
+export interface MessageStore {
+  /** Highest contiguous seq held for a channel, or 0 if empty. */
+  localMaxSeq(channelId: string): Promise<number>;
+  /** Insert or replace by (channelId, seq). Must be idempotent. */
+  upsert(messages: readonly MessageEnvelope[]): Promise<void>;
+  /** Oldest-first, for rendering. */
+  list(channelId: string): Promise<MessageEnvelope[]>;
+  /** Every seq held for a channel, ascending. For gap auditing. */
+  seqs(channelId: string): Promise<number[]>;
+}
+
+export class InMemoryMessageStore implements MessageStore {
+  /** channelId -> seq -> message. A Map keyed by seq gives upsert-by-seq for free. */
+  private readonly byChannel = new Map<string, Map<number, MessageEnvelope>>();
+
+  private channel(channelId: string): Map<number, MessageEnvelope> {
+    let channel = this.byChannel.get(channelId);
+    if (!channel) {
+      channel = new Map();
+      this.byChannel.set(channelId, channel);
+    }
+    return channel;
+  }
+
+  async localMaxSeq(channelId: string): Promise<number> {
+    const channel = this.byChannel.get(channelId);
+    if (!channel || channel.size === 0) return 0;
+    return Math.max(...channel.keys());
+  }
+
+  async upsert(messages: readonly MessageEnvelope[]): Promise<void> {
+    for (const message of messages) {
+      this.channel(message.channelId).set(message.seq, message);
+    }
+  }
+
+  async list(channelId: string): Promise<MessageEnvelope[]> {
+    const channel = this.byChannel.get(channelId);
+    if (!channel) return [];
+    return [...channel.values()].sort((a, b) => a.seq - b.seq);
+  }
+
+  async seqs(channelId: string): Promise<number[]> {
+    const channel = this.byChannel.get(channelId);
+    if (!channel) return [];
+    return [...channel.keys()].sort((a, b) => a - b);
+  }
+}
+
+/**
+ * Find holes in a channel's local sequence.
+ *
+ * Exact rather than heuristic, because `seq` is gapless server-side: if the local set
+ * is {1,2,4} then 3 is definitively missing, not merely possibly missing. This is the
+ * audit the exit drill asserts against, and it is also what a client can use to decide
+ * it needs a sync rather than guessing.
+ */
+export function findGaps(seqs: readonly number[]): number[] {
+  if (seqs.length === 0) return [];
+  const holes: number[] = [];
+  const sorted = [...seqs].sort((a, b) => a - b);
+  // Sequences start at 1, so anything below the first held seq is history the client
+  // simply has not paged back to yet - not a gap.
+  for (let i = 1; i < sorted.length; i += 1) {
+    for (let missing = sorted[i - 1]! + 1; missing < sorted[i]!; missing += 1) {
+      holes.push(missing);
+    }
+  }
+  return holes;
+}

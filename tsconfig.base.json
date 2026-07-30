@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "//": [
+    "TypeScript 6.0 baseline. Its defaults are already the modern ones - strict, module",
+    "esnext, target es2025 - so this file only states what differs or what 6.0 stopped",
+    "inferring for us. Two of those are easy to miss and produce confusing failures:",
+    "  - `types` now defaults to [] rather than auto-discovering @types/*, so ambient Node",
+    "    globals are invisible unless a package names them.",
+    "  - `baseUrl` is deprecated and `moduleResolution: node` is gone. Path mappings carry",
+    "    their own prefixes and resolution is nodenext or bundler per package.",
+    "Do not reintroduce either. See AGENTS.md 5.1 for the pinned-version rationale.",
+    "",
+    "There is no bundler and no build step for the server: Node 24+ runs .ts directly",
+    "by stripping types. That imposes three settings together, and removing any one of",
+    "them breaks the other two:",
+    "  - imports must carry an explicit .ts extension (Node resolves the real file),",
+    "  - allowImportingTsExtensions permits that, which requires noEmit,",
+    "  - verbatimModuleSyntax forces `import type` to be marked, because a stripper",
+    "    cannot know which imports were types and would leave a runtime import of a",
+    "    module that only ever existed at the type level."
+  ],
+  "compilerOptions": {
+    "moduleResolution": "nodenext",
+    "module": "nodenext",
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "sourceMap": true
+  }
+}
