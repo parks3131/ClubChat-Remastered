@@ -584,6 +584,17 @@ export const channelApi = {
   reports: (channelId: string) =>
     apiFetch<{ reports: ReportRow[] }>(`/channels/${channelId}/reports`),
 
+  /**
+   * Clear a report without touching the message.
+   *
+   * The two resolutions are deliberately separate: dismissing says "I looked, this is fine", and
+   * deleting says "this had to go". Deleting is the harsher one and does NOT imply the other, so
+   * a screen that deletes should dismiss too, or the report sits in the queue forever with
+   * nothing left to act on.
+   */
+  dismissReport: (reportId: string) =>
+    apiFetch<unknown>(`/moderation/reports/${reportId}/dismiss`, { method: 'POST', body: {} }),
+
   /** The window jump-to-message needs. Paging back from the tail cannot do it in one tap. */
   around: (channelId: string, around: number, radius?: number) =>
     apiFetch<AroundWindow>(`/channels/${channelId}/messages/around${query({ around, radius })}`),

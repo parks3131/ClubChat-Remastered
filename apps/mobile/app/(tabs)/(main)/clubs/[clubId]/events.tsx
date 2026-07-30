@@ -10,19 +10,20 @@
  */
 
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { calendarApi, clubApi, contentApi } from '../../../../../src/api.ts';
-import type { EventType } from '../../../../../src/api-types.ts';
-import { color, space, type } from '../../../../../src/theme.ts';
+import type { EventType, FeedItem } from '../../../../../src/api-types.ts';
+import { bibParts, formatDateOnly, formatInstant } from '../../../../../src/dates.ts';
+import { color, radius, space, type } from '../../../../../src/theme.ts';
 import {
   Action,
-  Badge,
   Body,
   DataScreen,
   EmptyState,
+  Fab,
   Field,
-  Row,
   SectionHeader,
   Tabs,
 } from '../../../../../src/ui.tsx';
@@ -85,32 +86,101 @@ export default function ClubEventsScreen() {
         {(data) => (
           <Body>
             {data.items.map((item) => (
-              <Row
-                key={`${item.kind}:${item.id}`}
-                title={item.title}
-                subtitle={item.at === null ? 'No deadline' : item.at.slice(0, 10)}
-                href={
-                  item.kind === 'poll'
-                    ? `/polls/${item.id}`
-                    : item.kind === 'race'
-                      ? `/races/${item.id}`
-                      : item.kind === 'meeting'
-                        ? `/meetings/${item.id}`
-                        : undefined
-                }
-                right={<Badge label={item.kind} tone="muted" />}
-              />
+              <EventRow key={`${item.kind}:${item.id}`} item={item} faded={when === 'past'} />
             ))}
           </Body>
         )}
       </DataScreen>
 
-      {isAdmin && (
-        <View style={styles.footer}>
-          <Action label="Add an event" onPress={() => setCreating(true)} />
+      {/* Positioned absolutely, so the list's own bottom padding leaves room for it. */}
+      {isAdmin && <Fab onPress={() => setCreating(true)} accessibilityLabel="Add an event" />}
+    </View>
+  );
+}
+
+/** The tint for a row's kind. Shared vocabulary with the calendar's day list. */
+function tintFor(kind: FeedItem['kind']): { background: string; text: string } {
+  switch (kind) {
+    case 'race':
+      return { background: color.accent, text: color.onAccent };
+    case 'meeting':
+      return { background: color.inverseSurface, text: color.onInverseSurface };
+    case 'poll':
+      return { background: color.secondaryContainer, text: color.onSecondarySoft };
+    case 'event':
+      return { background: color.tertiarySoft, text: color.onTertiarySoft };
+  }
+}
+
+/**
+ * One row: a date "bib" beside the detail.
+ *
+ * v1's treatment, and it earns its space - a merged list of races, events, meetings and polls is
+ * scanned by date far more often than by kind, and a left-aligned column of days is scannable in a
+ * way a date buried in a subtitle is not.
+ *
+ * **A poll gets no bib.** Its `at` is a closing deadline rather than a day it happens on, and an
+ * open-ended one has no date at all - a day chip would state something untrue.
+ */
+function EventRow({ item, faded }: { item: FeedItem; faded: boolean }) {
+  const router = useRouter();
+  const tint = tintFor(item.kind);
+  const bib = item.kind === 'poll' || item.at === null ? null : bibParts(item.at);
+  const target =
+    item.kind === 'poll'
+      ? `/polls/${item.id}`
+      : item.kind === 'race'
+        ? `/races/${item.id}`
+        : item.kind === 'meeting'
+          ? `/meetings/${item.id}`
+          : undefined;
+
+  const body = (
+    <>
+      {bib === null ? (
+        <View style={[styles.bib, styles.bibEmpty]}>
+          <MaterialIcons name="how-to-vote" size={22} color={color.textSecondary} />
+        </View>
+      ) : (
+        <View style={[styles.bib, { backgroundColor: tint.background }]}>
+          <Text style={[styles.bibDay, { color: tint.text }]}>{bib.day}</Text>
+          <Text style={[styles.bibMonth, { color: tint.text }]}>{bib.month}</Text>
         </View>
       )}
-    </View>
+      <View style={styles.rowBody}>
+        <Text style={[styles.badge, { backgroundColor: tint.background, color: tint.text }]}>
+          {item.kind.toUpperCase()}
+        </Text>
+        <Text style={styles.rowTitle}>{item.title}</Text>
+        <Text style={styles.meta}>
+          {item.at === null
+            ? 'No deadline'
+            : item.kind === 'race'
+              ? formatDateOnly(item.at)
+              : formatInstant(item.at)}
+        </Text>
+        {/* A race the viewer can see but not enter still appears, and says so. */}
+        {item.kind === 'race' && !item.accessible && (
+          <Text style={styles.meta}>You are not on this roster.</Text>
+        )}
+      </View>
+      <MaterialIcons name="chevron-right" size={22} color={color.border} />
+    </>
+  );
+
+  if (target === undefined) {
+    return <View style={[styles.row, faded && styles.rowFaded]}>{body}</View>;
+  }
+
+  return (
+    <Pressable
+      style={[styles.row, faded && styles.rowFaded]}
+      onPress={() => router.push(target)}
+      accessibilityRole="button"
+      accessibilityLabel={`${item.title}, ${item.kind}`}
+    >
+      {body}
+    </Pressable>
   );
 }
 
@@ -195,11 +265,37 @@ function CreateEvent({
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
   tabsWrap: { padding: space.md, paddingBottom: 0 },
-  footer: {
+  row: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space.md,
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.hairline,
     padding: space.md,
-    backgroundColor: color.chrome,
-    borderTopWidth: 1,
-    borderTopColor: color.divider,
+  },
+  rowFaded: { opacity: 0.6 },
+  bib: {
+    width: 52,
+    height: 60,
+    borderRadius: radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bibEmpty: { backgroundColor: color.cardSunken },
+  bibDay: { ...type.numeric, fontSize: 22, lineHeight: 24 },
+  bibMonth: { ...type.label, fontSize: 10, marginTop: 2 },
+  rowBody: { flex: 1, gap: space.xs },
+  rowTitle: { ...type.headline, color: color.textPrimary },
+  badge: {
+    ...type.label,
+    fontSize: 10,
+    borderRadius: radius.pill,
+    paddingHorizontal: space.sm,
+    paddingVertical: 2,
+    alignSelf: 'flex-start',
+    overflow: 'hidden',
   },
   types: { flexDirection: 'row', gap: space.xs, flexWrap: 'wrap' },
   meta: { ...type.bodySmall, color: color.textSecondary },

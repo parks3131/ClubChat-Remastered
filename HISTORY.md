@@ -127,9 +127,36 @@ self-actions blanket-style and silently dropped the race roster's "Leave this ra
 real action a member performs on themselves, so whether the own row gets a menu belongs to the
 caller, where the rule actually lives.
 
+### The five screens themselves
+
+Highlights, Gallery, Calendar and the events list, after Members. Three details worth keeping:
+
+**The calendar reads once, not twice.** The grid needs to know which days carry something and the
+tapped day needs its items, and the obvious build asks the markers endpoint for the first and a
+paged feed for the second - two answers to the same question, free to disagree. One `when: 'all'`
+read grouped by day cannot. The two v1 grid rules came with it: always six weeks of cells, so
+paging never changes the grid's height; and a filler day from an adjacent month is never marked
+and never tappable, because a solid marker on a greyed-out day reads as a prominent control that
+does nothing.
+
+**The gallery is the one screen with no page margin.** Photographs are the content rather than
+something sitting inside content, so the tiles touch across a 2px gutter instead of sitting in
+rounded cards behind a 16px gutter. The full-screen viewer inverts the surface, which is the only
+place `inverseSurface` is the right token.
+
+**A poll gets no date bib in the events list.** Its `at` is a closing deadline rather than a day it
+happens on, and an open-ended poll has none at all - a day chip would state something untrue. It
+gets a ballot glyph instead.
+
 ### Operational
 
-Two self-inflicted, both recorded because they cost time and would recur.
+Three self-inflicted, all recorded because they cost time and would recur.
+
+**Metro served a stale module graph** after the 26-file move, reporting resolution failures against
+file contents that no longer existed. Restarting Expo with `--clear` fixed it. The trap is that the
+browser console *retains* those errors: they kept reappearing with their original timestamps long
+after the restart, which reads as "still broken" when the timestamp is the thing that proves
+otherwise.
 
 **`pkill -f "watch src/api/main.ts"` killed the founder's dev server.** Two ClubChat stacks run
 side by side and `npm run dev:api` produces byte-identical command lines for both - the port is the
@@ -137,12 +164,18 @@ only thing that distinguishes them, and a command-line pattern cannot see a port
 that owns the port.
 
 **A restarted API served the wrong client.** The port variable is `API_PORT`, not `PORT`, so a
-`PORT=3100` restart tried to bind 3000 and refused - which failed safely. Then `CLIENT_ORIGIN`
-defaulted to the founder's `:8081`, so CORS blocked the agent's client on `:8082` - and the app
-reports that as **"You appear to be offline"**, which reads like a dead server rather than a
-misconfigured one. Before that, a stale API had been answering with two-phase-old code, which is
-failure mode 15 arriving exactly as advertised: the new routes 404'd identically to a bogus route,
-and the running process had no `--watch` flag at all.
+`PORT=3100` restart tried to bind 3000 and refused - which failed safely. Then CORS blocked the
+agent's client on `:8082`, and the app reports that as **"You appear to be offline"**, which reads
+like a dead server rather than a misconfigured one.
+
+That one had a second layer. `CLIENT_ORIGIN=... npm run dev:api` does not work here: `.env` pins
+`CLIENT_ORIGIN` to `:8081` and `--env-file` wins over the shell, so the override was silently
+discarded. `API_PORT` had appeared to work only because `.env` does not mention it. The fix is a
+**second** `--env-file` after the first, since later files win; a shell variable never does.
+
+Before all of that, a stale API had been answering with two-phase-old code - failure mode 15
+arriving exactly as advertised. The new routes 404'd identically to a bogus route, and the running
+process turned out to have no `--watch` flag at all.
 
 ---
 

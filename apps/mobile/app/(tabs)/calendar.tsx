@@ -2,25 +2,38 @@
  * The Calendar destination: the cross-club merged feed.
  *
  * Two views over one read, which is the server's design and therefore this screen's: a month grid
- * for "what is happening when", and a list for "what is coming up". There is no calendar table for
+ * for "what is happening when", and a tapped day's items beneath it. There is no calendar table for
  * anything to write into, so neither view can be stale relative to the other.
  *
  * **The cross-club view tags every row with its club and offers no create action** - creating an
  * event belongs to a club, and a cross-club create would have to ask which one, which is the club
  * calendar's job. The club-scoped version of this screen is the same component with a club id.
+ *
+ * Two rules from v1's grid, both of which read as bugs when broken:
+ *
+ *  1. **Paging months never changes the grid's height.** Always six weeks of cells, so a month
+ *     starting on a Saturday and one starting on a Sunday do not render five rows and six.
+ *  2. **A filler day from an adjacent month is never marked and never tappable**, even when it
+ *     carries something. A solid marker on a greyed-out day reads as a prominent control that
+ *     does nothing.
  */
 
-import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { Redirect } from 'expo-router';
+import { useMemo, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
+import { Redirect, useRouter } from 'expo-router';
 import { calendarApi } from '../../src/api.ts';
 import type { FeedItem } from '../../src/api-types.ts';
 import { useSession } from '../../src/chat-provider.tsx';
+import { formatDayTitle, formatMonthTitle, formatTimeOfDay, toDateKey } from '../../src/dates.ts';
 import { color, radius, space, type } from '../../src/theme.ts';
-import { Badge, Card, DataScreen, EmptyState, Row, SectionHeader, Tabs } from '../../src/ui.tsx';
+import { DataScreen, EmptyState } from '../../src/ui.tsx';
 import { useLoad } from '../../src/use-load.ts';
 
-/** Local date parts, built from components rather than parsing an ISO string. */
+/** Six weeks, fixed, so the grid's height never changes as months are paged. */
+const CELLS = 42;
+const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'] as const;
+
 function todayParts(): { year: number; month: number } {
   const now = new Date();
   return { year: now.getFullYear(), month: now.getMonth() + 1 };
@@ -40,222 +53,325 @@ export default function CalendarScreen() {
  * a second implementation - design-system rule 5.
  */
 export function CalendarView({ clubId }: { clubId?: string } = {}) {
-  const [when, setWhen] = useState<'upcoming' | 'past'>('upcoming');
   const [cursor, setCursor] = useState(todayParts());
+  const [selected, setSelected] = useState<string | null>(null);
 
+  /*
+   * One read for both views.
+   *
+   * `when: 'all'` rather than the markers endpoint plus a second paged read: the grid needs to
+   * know which days carry something AND the tapped day needs its items, and asking twice would
+   * make the dots and the list two answers to the same question. The feed is one query per
+   * feature per club either way.
+   */
   const feed = useLoad(
-    () => calendarApi.feed({ ...(clubId ? { club: clubId } : {}), when }),
-    [clubId, when],
-  );
-  const markers = useLoad(
-    () => calendarApi.markers({ ...(clubId ? { club: clubId } : {}), ...cursor }),
-    [clubId, cursor.year, cursor.month],
+    () => calendarApi.feed({ ...(clubId ? { club: clubId } : {}), when: 'all' }),
+    [clubId],
   );
 
   const step = (delta: number) => {
+    setSelected(null);
     setCursor((current) => {
       const zeroBased = current.month - 1 + delta;
       return {
         year: current.year + Math.floor(zeroBased / 12),
-        month: ((zeroBased % 12) + 12) % 12 + 1,
+        month: (((zeroBased % 12) + 12) % 12) + 1,
       };
     });
   };
 
   return (
-    <View style={styles.flex}>
-      <View style={styles.gridWrap}>
-        <MonthGrid
-          year={cursor.year}
-          month={cursor.month}
-          marked={markers.data?.days ?? []}
-          onPrev={() => step(-1)}
-          onNext={() => step(1)}
-        />
-      </View>
-
-      <View style={styles.tabsWrap}>
-        <Tabs
-          tabs={[
-            { key: 'upcoming', label: 'Upcoming' },
-            { key: 'past', label: 'Past' },
-          ]}
-          active={when}
-          onChange={setWhen}
-        />
-      </View>
-
-      <DataScreen
-        load={feed}
-        isEmpty={(data) => data.items.length === 0}
-        empty={
-          <EmptyState
-            title={
-              when === 'upcoming'
-                ? clubId
-                  ? 'Nothing coming up'
-                  : 'No events across your clubs yet'
-                : 'Nothing in the past yet'
-            }
-          />
+    <DataScreen load={feed}>
+      {(data) => {
+        // Polls are excluded from the grid: a poll has a closing deadline, not a day it happens
+        // on. They stay in the events list, which is where PRD/07 puts them.
+        const byDay = new Map<string, FeedItem[]>();
+        for (const item of data.items) {
+          if (item.kind === 'poll' || item.at === null) continue;
+          const day = item.at.slice(0, 10);
+          const bucket = byDay.get(day);
+          if (bucket) bucket.push(item);
+          else byDay.set(day, [item]);
         }
-      >
-        {(data) => (
-          <View style={styles.list}>
-            {data.items.map((item) => (
-              <FeedRow key={`${item.kind}:${item.id}`} item={item} showClub={clubId === undefined} />
-            ))}
-          </View>
-        )}
-      </DataScreen>
-    </View>
+
+        const dayItems = selected === null ? [] : (byDay.get(selected) ?? []);
+
+        return (
+          <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
+            <MonthGrid
+              year={cursor.year}
+              month={cursor.month}
+              byDay={byDay}
+              selected={selected}
+              onSelect={(day) => setSelected((current) => (current === day ? null : day))}
+              onPrev={() => step(-1)}
+              onNext={() => step(1)}
+            />
+
+            {data.items.length === 0 && (
+              <EmptyState
+                title={clubId ? 'Nothing on the calendar' : 'No events across your clubs yet'}
+              />
+            )}
+
+            {selected !== null && (
+              <View style={styles.daySection}>
+                <Text style={styles.dayTitle}>{formatDayTitle(selected)}</Text>
+                {dayItems.length === 0 ? (
+                  <Text style={styles.meta}>Nothing on this day.</Text>
+                ) : (
+                  dayItems.map((item) => (
+                    <DayRow
+                      key={`${item.kind}:${item.id}`}
+                      item={item}
+                      showClub={clubId === undefined}
+                    />
+                  ))
+                )}
+              </View>
+            )}
+          </ScrollView>
+        );
+      }}
+    </DataScreen>
   );
 }
 
-function FeedRow({ item, showClub }: { item: FeedItem; showClub: boolean }) {
-  const dayLabel =
-    item.at === null
-      ? // A poll has a deadline rather than a day. An open one with no deadline shows neither,
-        // and must never read as overdue.
-        'No deadline'
-      : item.at.slice(0, 10);
+/** The tint for a feed row's badge. One vocabulary, so a race looks like a race everywhere. */
+function badgeTint(kind: FeedItem['kind']): { background: string; text: string } {
+  switch (kind) {
+    case 'race':
+      return { background: color.accent, text: color.onAccent };
+    case 'meeting':
+      return { background: color.inverseSurface, text: color.onInverseSurface };
+    case 'poll':
+      return { background: color.secondaryContainer, text: color.onSecondarySoft };
+    case 'event':
+      return { background: color.tertiarySoft, text: color.onTertiarySoft };
+  }
+}
 
-  const target =
-    item.kind === 'poll'
-      ? `/polls/${item.id}`
-      : item.kind === 'race'
-        ? `/races/${item.id}`
-        : item.kind === 'meeting'
-          ? `/meetings/${item.id}`
-          : undefined;
+function targetFor(item: FeedItem): string | undefined {
+  return item.kind === 'poll'
+    ? `/polls/${item.id}`
+    : item.kind === 'race'
+      ? `/races/${item.id}`
+      : item.kind === 'meeting'
+        ? `/meetings/${item.id}`
+        : // An event has no screen of its own: it lives in the club's merged events list, which
+          // is where PRD/07 puts it.
+          undefined;
+}
+
+/** One item under the selected day. */
+function DayRow({ item, showClub }: { item: FeedItem; showClub: boolean }) {
+  const router = useRouter();
+  const tint = badgeTint(item.kind);
+  const target = targetFor(item);
+
+  const body = (
+    <>
+      <View style={styles.dayRowHead}>
+        <Text style={[styles.badge, { backgroundColor: tint.background, color: tint.text }]}>
+          {item.kind.toUpperCase()}
+        </Text>
+        {showClub && <Text style={styles.clubTag}>{item.clubName}</Text>}
+        {/* A race the viewer can see but not enter still appears, and says so. */}
+        {item.kind === 'race' && !item.accessible && <Text style={styles.clubTag}>NO ACCESS</Text>}
+      </View>
+      <Text style={styles.dayRowTitle}>{item.title}</Text>
+      {item.at !== null && <Text style={styles.meta}>{formatTimeOfDay(item.at)}</Text>}
+    </>
+  );
+
+  if (target === undefined) return <View style={styles.dayRow}>{body}</View>;
 
   return (
-    <Row
-      title={item.title}
-      subtitle={`${dayLabel}${showClub ? `  ·  ${item.clubName}` : ''}`}
-      {...(target ? { href: target } : {})}
-      right={
-        <>
-          <Badge label={item.kind} tone="muted" />
-          {/* A race the viewer can see but not enter still appears, and says so. */}
-          {item.kind === 'race' && !item.accessible && <Badge label="No access" tone="muted" />}
-          {item.kind === 'poll' && item.open === false && <Badge label="Closed" tone="muted" />}
-        </>
-      }
-    />
+    <Pressable
+      style={styles.dayRow}
+      onPress={() => router.push(target)}
+      accessibilityRole="button"
+      accessibilityLabel={`${item.title}, ${item.kind}`}
+    >
+      {body}
+    </Pressable>
   );
 }
 
-/**
- * The month grid.
- *
- * Two rules from the acceptance checklist live here: **exactly the days that carry something are
- * marked, with no filler days**, and **paging months does not change the grid's height**. The
- * second is why the cell count is always six weeks: a month that starts on a Sunday and one that
- * starts on a Saturday would otherwise render five rows and six.
- */
 function MonthGrid({
   year,
   month,
-  marked,
+  byDay,
+  selected,
+  onSelect,
   onPrev,
   onNext,
 }: {
   year: number;
   month: number;
-  marked: readonly string[];
+  byDay: ReadonlyMap<string, FeedItem[]>;
+  selected: string | null;
+  onSelect: (day: string) => void;
   onPrev: () => void;
   onNext: () => void;
 }) {
-  const markedSet = new Set(marked);
-  // Built from components, never from a parsed ISO string: an ISO date is UTC midnight and
-  // renders a day early in a negative-offset timezone.
-  const first = new Date(year, month - 1, 1);
-  const leading = first.getDay();
-  const daysInMonth = new Date(year, month, 0).getDate();
+  const todayKey = toDateKey(new Date());
 
-  const cells: Array<{ day: number | null; iso: string }> = [];
-  for (let i = 0; i < leading; i += 1) cells.push({ day: null, iso: '' });
-  for (let day = 1; day <= daysInMonth; day += 1) {
-    const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    cells.push({ day, iso });
-  }
-  // Fixed at six weeks so the grid's height never changes as months are paged.
-  while (cells.length < 42) cells.push({ day: null, iso: '' });
-
-  const monthName = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const cells = useMemo(() => {
+    // Built from components, never from a parsed ISO string: an ISO date is UTC midnight and
+    // renders a day early in a negative-offset timezone.
+    const first = new Date(year, month - 1, 1);
+    const leading = first.getDay();
+    const start = new Date(year, month - 1, 1 - leading);
+    return Array.from({ length: CELLS }, (_, i) => {
+      const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+      return {
+        date,
+        key: toDateKey(date),
+        inMonth: date.getMonth() === month - 1,
+      };
+    });
+  }, [year, month]);
 
   return (
-    <Card>
-      <SectionHeader
-        title={monthName}
-        action={
-          <View style={styles.monthNav}>
-            <Text
-              style={styles.monthStep}
-              onPress={onPrev}
-              accessibilityRole="button"
-              accessibilityLabel="Previous month"
-            >
-              {'<'}
-            </Text>
-            <Text
-              style={styles.monthStep}
-              onPress={onNext}
-              accessibilityRole="button"
-              accessibilityLabel="Next month"
-            >
-              {'>'}
-            </Text>
-          </View>
-        }
-      />
-      <View style={styles.weekHeader}>
-        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((label, index) => (
+    <View>
+      <View style={styles.monthHead}>
+        <Pressable
+          onPress={onPrev}
+          hitSlop={space.sm}
+          accessibilityRole="button"
+          accessibilityLabel="Previous month"
+        >
+          <MaterialIcons name="chevron-left" size={26} color={color.textPrimary} />
+        </Pressable>
+        <Text style={styles.monthTitle}>{formatMonthTitle(year, month)}</Text>
+        <Pressable
+          onPress={onNext}
+          hitSlop={space.sm}
+          accessibilityRole="button"
+          accessibilityLabel="Next month"
+        >
+          <MaterialIcons name="chevron-right" size={26} color={color.textPrimary} />
+        </Pressable>
+      </View>
+
+      <View style={styles.weekRow}>
+        {WEEKDAYS.map((label, index) => (
           <Text key={`${label}${index}`} style={styles.weekLabel}>
             {label}
           </Text>
         ))}
       </View>
+
       <View style={styles.grid}>
-        {cells.map((cell, index) => (
-          <View key={index} style={styles.cell}>
-            {cell.day !== null && (
-              <>
-                <Text style={styles.cellDay}>{cell.day}</Text>
-                {/* A marker only ever belongs to the month on screen: a filler day has no iso. */}
-                {markedSet.has(cell.iso) && <View style={styles.dot} />}
-              </>
-            )}
-          </View>
-        ))}
+        {cells.map((cell) => {
+          // Gated on `inMonth` for BOTH the marker and the gesture: a filler day that happens to
+          // carry something must not render the same solid marker a real day gets, or it reads as
+          // a prominent control sitting in the wrong month that does nothing when tapped.
+          const marked = cell.inMonth && byDay.has(cell.key);
+          const isToday = cell.key === todayKey;
+          const isSelected = cell.key === selected;
+
+          return (
+            <Pressable
+              key={cell.key}
+              style={styles.cell}
+              disabled={!marked}
+              onPress={() => onSelect(cell.key)}
+              accessibilityRole="button"
+              accessibilityLabel={
+                marked
+                  ? `${formatDayTitle(cell.key)}, ${byDay.get(cell.key)?.length ?? 0} items`
+                  : formatDayTitle(cell.key)
+              }
+              accessibilityState={{ selected: isSelected, disabled: !marked }}
+            >
+              <View
+                style={[
+                  styles.marker,
+                  isToday && styles.markerToday,
+                  marked && styles.markerFilled,
+                  isSelected && styles.markerSelected,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.day,
+                    !cell.inMonth && styles.dayOutside,
+                    marked && styles.dayFilled,
+                  ]}
+                >
+                  {cell.date.getDate()}
+                </Text>
+              </View>
+            </Pressable>
+          );
+        })}
       </View>
-    </Card>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
-  gridWrap: { padding: space.md, paddingBottom: 0 },
-  tabsWrap: { padding: space.md, paddingBottom: space.sm },
-  list: { paddingHorizontal: space.md, gap: space.sm, paddingBottom: space.lg },
-  monthNav: { flexDirection: 'row', gap: space.md },
-  monthStep: { ...type.headline, color: color.accent, paddingHorizontal: space.sm },
-  weekHeader: { flexDirection: 'row' },
+  content: { padding: space.md, paddingBottom: space.xl },
+  meta: { ...type.bodySmall, color: color.textSecondary },
+
+  monthHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: space.md,
+  },
+  monthTitle: { ...type.title, fontSize: 20, lineHeight: 26, color: color.textPrimary },
+
+  weekRow: { flexDirection: 'row' },
   weekLabel: {
+    width: `${100 / 7}%`,
+    textAlign: 'center',
     ...type.label,
     color: color.textSecondary,
-    flexBasis: '14.2857%',
-    textAlign: 'center',
+    marginBottom: space.sm,
   },
+
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
-  cell: {
-    flexBasis: '14.2857%',
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 2,
+  // A fixed height rather than `aspectRatio: 1`: on a wide viewport - and this app also runs
+  // through react-native-web - a percentage-width cell with a square ratio grows as tall as it is
+  // wide and blows the grid's height past the screen.
+  cell: { width: `${100 / 7}%`, height: 56, alignItems: 'center', justifyContent: 'center' },
+  marker: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  markerToday: { borderWidth: 2, borderColor: color.accent },
+  markerFilled: { backgroundColor: color.textPrimary },
+  markerSelected: { backgroundColor: color.accent },
+  day: { ...type.bodySmall, color: color.textPrimary },
+  dayOutside: { color: color.textSecondary, opacity: 0.4 },
+  dayFilled: { color: color.appBackground },
+
+  daySection: {
+    marginTop: space.lg,
+    paddingTop: space.md,
+    borderTopWidth: 1,
+    borderTopColor: color.hairline,
+    gap: space.sm,
   },
-  cellDay: { ...type.bodySmall, color: color.textPrimary },
-  dot: { width: 5, height: 5, borderRadius: radius.pill, backgroundColor: color.accent },
+  dayTitle: { ...type.title, fontSize: 18, lineHeight: 24, color: color.textPrimary },
+  dayRow: {
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    padding: space.md,
+    gap: space.xs,
+  },
+  dayRowHead: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  dayRowTitle: { ...type.headline, color: color.textPrimary },
+  badge: {
+    ...type.label,
+    fontSize: 10,
+    borderRadius: radius.pill,
+    paddingHorizontal: space.sm,
+    paddingVertical: 2,
+    overflow: 'hidden',
+  },
+  clubTag: { ...type.label, fontSize: 10, color: color.textSecondary },
 });
