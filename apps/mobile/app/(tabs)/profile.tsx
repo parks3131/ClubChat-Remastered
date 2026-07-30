@@ -13,24 +13,32 @@
  */
 
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { Redirect, useRouter } from 'expo-router';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
+import { Link, Redirect, useRouter } from 'expo-router';
 import { accountApi, ApiError, clubApi } from '../../src/api.ts';
 import { useSession } from '../../src/chat-provider.tsx';
-import { color, space, type } from '../../src/theme.ts';
-import { Action, Avatar, Card, DataScreen, Field, Row, SectionHeader } from '../../src/ui.tsx';
+import { formatDateOfBirth } from '../../src/dates.ts';
+import { color, radius, space, type } from '../../src/theme.ts';
+import { Action, Card, DataScreen, Field, Row, SearchField, SectionHeader } from '../../src/ui.tsx';
 import { useLoad } from '../../src/use-load.ts';
 
 export default function ProfileScreen() {
   const { authState, userId, signOut, revision } = useSession();
   const router = useRouter();
   const [editing, setEditing] = useState(false);
+  const [clubsOpen, setClubsOpen] = useState(false);
+  const [clubSearch, setClubSearch] = useState('');
 
   const profile = useLoad(
     () => (userId ? accountApi.profile(userId) : Promise.reject(new Error('no session'))),
     [userId, revision],
   );
   const clubs = useLoad(() => clubApi.mine(), [revision]);
+  // The email lives on the identity read, never on a profile - see `readIdentity`.
+  const identity = useLoad(() => accountApi.me(), [revision]);
+  const allClubs = clubs.data?.clubs ?? [];
+  const clubCount = allClubs.length;
 
   if (authState === 'checking') return <View style={styles.flex} />;
   if (authState === 'signed-out') return <Redirect href="/sign-in" />;
@@ -48,71 +56,265 @@ export default function ProfileScreen() {
             onCancel={() => setEditing(false)}
           />
         ) : (
-          <View style={styles.body}>
-            <Card>
-              <View style={styles.identity}>
-                <Avatar name={data.profile.name} size={64} />
-                <View style={styles.identityText}>
-                  <Text style={styles.name}>{data.profile.name}</Text>
-                  {/* Absent rows are simply absent, never rendered as an empty line. */}
-                  {data.profile.city !== null && data.profile.city.length > 0 && (
-                    <Text style={styles.meta}>{data.profile.city}</Text>
-                  )}
-                  {data.profile.school !== null && data.profile.school.length > 0 && (
-                    <Text style={styles.meta}>{data.profile.school}</Text>
+          <ScrollView contentContainerStyle={styles.body}>
+            {/*
+              Identity, centred and at the top: this screen is about a person, so it opens with
+              their face rather than with a settings list they happen to own.
+            */}
+            <View style={styles.avatarWrap}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarInitial}>
+                  {data.profile.name.charAt(0).toUpperCase() || '?'}
+                </Text>
+              </View>
+              <Pressable
+                style={styles.editPic}
+                onPress={() => setEditing(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Change your picture"
+              >
+                <MaterialIcons name="edit" size={18} color={color.onAccent} />
+              </Pressable>
+            </View>
+
+            <Text style={styles.name}>{data.profile.name || 'ClubChat member'}</Text>
+            {identity.data !== null && <Text style={styles.email}>{identity.data.email}</Text>}
+            <Text style={styles.bioLine}>{data.profile.bio || 'No bio yet.'}</Text>
+
+            <View style={styles.section}>
+              <View style={styles.sectionHead}>
+                <Text style={styles.sectionTitle}>Your Clubs</Text>
+                <Text style={styles.sectionCount}>
+                  {clubCount} CLUB{clubCount === 1 ? '' : 'S'}
+                </Text>
+              </View>
+
+              {clubCount === 0 ? (
+                <Text style={styles.meta}>You have not joined any clubs yet.</Text>
+              ) : (
+                <View style={styles.chipRow}>
+                  {allClubs.slice(0, CLUB_CHIP_LIMIT).map((club) => (
+                    <Pressable
+                      key={club.id}
+                      style={styles.clubChip}
+                      /*
+                        A cross-tab jump, so it carries where it came from AND replaces rather
+                        than pushes. Both halves matter: `from=profile` makes the hub's back arrow
+                        return here, and replacing leaves the Clubs tab reading as the My Clubs
+                        list underneath. Push instead and tapping Clubs later lands back on this
+                        hub whose back bounces to Profile - a live loop rather than a quirk.
+                      */
+                      onPress={() => router.replace(`/clubs/${club.id}?from=profile`)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${club.name}, ${club.role}. Open`}
+                    >
+                      <Text style={styles.clubChipName}>{club.name}</Text>
+                      <Text style={styles.clubChipRole}>{roleLabel(club.role)}</Text>
+                    </Pressable>
+                  ))}
+                  {/*
+                    Three chips, then a count. A member of nine clubs would otherwise push their
+                    own details off the screen, and the overflow is a search rather than a longer
+                    list because finding one club by name is what somebody with nine of them wants.
+                  */}
+                  {clubCount > CLUB_CHIP_LIMIT && (
+                    <Pressable
+                      style={styles.moreChip}
+                      onPress={() => {
+                        setClubSearch('');
+                        setClubsOpen(true);
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Show all ${clubCount} clubs`}
+                    >
+                      <Text style={styles.moreChipLabel}>
+                        +{clubCount - CLUB_CHIP_LIMIT} more
+                      </Text>
+                    </Pressable>
                   )}
                 </View>
-              </View>
-              {data.profile.bio !== null && data.profile.bio.length > 0 && (
-                <Text style={styles.bio}>{data.profile.bio}</Text>
               )}
-              {/* Yours alone: the server does not return this field to anybody else. */}
-              {data.profile.dob !== null && data.profile.dob !== undefined && (
-                <Text style={styles.meta}>Born {data.profile.dob}</Text>
-              )}
-              <Action label="Edit profile" variant="secondary" onPress={() => setEditing(true)} />
-            </Card>
+            </View>
 
-            <SectionHeader title="Your clubs" />
-            {(clubs.data?.clubs ?? []).length === 0 ? (
-              <Text style={styles.meta}>You are not in any clubs yet.</Text>
-            ) : (
-              (clubs.data?.clubs ?? []).map((club) => (
-                <Row
-                  key={club.id}
-                  title={club.name}
-                  subtitle={`${club.sport}  ·  ${club.role}`}
-                  /*
-                    A cross-tab jump, so it carries where it came from AND replaces rather than
-                    pushes. Both halves matter: `from=profile` makes the hub's back arrow return
-                    here, and replacing leaves the Clubs tab reading as the My Clubs list
-                    underneath. Push instead, and tapping Clubs later lands back on this hub whose
-                    back bounces to Profile - a live loop rather than a quirk.
-                  */
-                  onPress={() => router.replace(`/clubs/${club.id}?from=profile`)}
-                />
-              ))
-            )}
+            <View style={styles.card}>
+              <DetailRow label="City" value={data.profile.city || 'Not set'} />
+              <DetailRow label="Date of birth" value={formatDateOfBirth(data.profile.dob)} />
+              <DetailRow label="School" value={data.profile.school || 'Not set'} last />
+            </View>
 
-            <SectionHeader title="Legal" />
-            {/* Readable signed in AND signed out, which is why they are their own routes. */}
-            <Row title="Privacy Policy" href="/legal/privacy" />
-            <Row title="Terms" href="/legal/terms" />
+            <View style={styles.card}>
+              <LinkRow
+                icon="manage-accounts"
+                label="Edit Profile"
+                onPress={() => setEditing(true)}
+              />
+              <View style={styles.linkDivider} />
+              <LinkRow icon="lock" label="Privacy Policy" href="/legal/privacy" />
+              <View style={styles.linkDivider} />
+              <LinkRow icon="description" label="Terms of Service" href="/legal/terms" last />
+            </View>
 
-            <SectionHeader title="Account" />
-            <Action
-              label="Sign out"
-              variant="secondary"
+            <Pressable
+              style={styles.signOut}
               onPress={() => {
                 void signOut();
                 router.replace('/sign-in');
               }}
-            />
-            <DeleteAccount ownedClubs={(clubs.data?.clubs ?? []).filter((c) => c.role === 'owner')} />
-          </View>
+              accessibilityRole="button"
+              accessibilityLabel="Sign out"
+            >
+              <MaterialIcons name="logout" size={18} color={color.onSecondaryContainer} />
+              <Text style={styles.signOutLabel}>Sign out</Text>
+            </Pressable>
+
+            <DeleteAccount ownedClubs={allClubs.filter((c) => c.role === 'owner')} />
+
+            {clubsOpen && (
+              <ClubsSheet
+                clubs={allClubs}
+                query={clubSearch}
+                onQuery={setClubSearch}
+                onDismiss={() => setClubsOpen(false)}
+                onPick={(clubId) => {
+                  setClubsOpen(false);
+                  router.replace(`/clubs/${clubId}?from=profile`);
+                }}
+              />
+            )}
+          </ScrollView>
         )
       }
     </DataScreen>
+  );
+}
+
+/** Three chips, then a count. See the note at the call site. */
+const CLUB_CHIP_LIMIT = 3;
+
+function roleLabel(role: string): string {
+  return role === 'owner' ? 'Owner' : role === 'admin' ? 'Admin' : 'Member';
+}
+
+/** A label-and-value line in the details card. */
+function DetailRow({ label, value, last }: { label: string; value: string; last?: boolean }) {
+  return (
+    <View style={[styles.detailRow, last === true && styles.detailRowLast]}>
+      <Text style={styles.detailLabel}>{label}</Text>
+      <Text style={styles.detailValue}>{value}</Text>
+    </View>
+  );
+}
+
+/** A settings row: a tinted icon well, a label, a chevron. */
+function LinkRow({
+  icon,
+  label,
+  href,
+  onPress,
+  last,
+}: {
+  icon: React.ComponentProps<typeof MaterialIcons>['name'];
+  label: string;
+  href?: string;
+  onPress?: () => void;
+  last?: boolean;
+}) {
+  const body = (
+    <>
+      <View style={styles.linkIcon}>
+        <MaterialIcons name={icon} size={18} color={color.secondary} />
+      </View>
+      <Text style={styles.linkLabel}>{label}</Text>
+      <MaterialIcons name="chevron-right" size={20} color={color.textSecondary} />
+    </>
+  );
+  /*
+   * Flattened, not an array. `Link asChild` clones its child and Expo Router rejects an array
+   * style on it outright - which renders the whole screen blank rather than mis-styling one row,
+   * so it fails loudly and in a way that looks nothing like its cause.
+   */
+  const style = StyleSheet.flatten([styles.linkRow, last === true && styles.linkRowLast]);
+
+  if (href !== undefined) {
+    return (
+      <Link href={href} asChild accessibilityRole="link" accessibilityLabel={label}>
+        <Pressable style={style}>{body}</Pressable>
+      </Link>
+    );
+  }
+  return (
+    <Pressable style={style} onPress={onPress} accessibilityRole="button" accessibilityLabel={label}>
+      {body}
+    </Pressable>
+  );
+}
+
+/**
+ * Every club, searchable.
+ *
+ * The overflow behind "+N more". A search rather than a longer list, because somebody with nine
+ * clubs is looking for one by name - scrolling a list of nine to find it is the thing the chips
+ * were already doing badly.
+ */
+function ClubsSheet({
+  clubs,
+  query,
+  onQuery,
+  onDismiss,
+  onPick,
+}: {
+  clubs: ReadonlyArray<{ id: string; name: string; role: string }>;
+  query: string;
+  onQuery: (next: string) => void;
+  onDismiss: () => void;
+  onPick: (clubId: string) => void;
+}) {
+  const needle = query.trim().toLowerCase();
+  const shown = needle.length === 0 ? clubs : clubs.filter((c) => c.name.toLowerCase().includes(needle));
+
+  return (
+    <View style={styles.sheetBackdrop}>
+      <Pressable
+        style={styles.sheetScrim}
+        onPress={onDismiss}
+        accessibilityRole="button"
+        accessibilityLabel="Close"
+      />
+      <View style={styles.sheet}>
+        <View style={styles.sheetHead}>
+          <Text style={styles.sheetTitle}>Your Clubs</Text>
+          <Pressable
+            onPress={onDismiss}
+            hitSlop={space.sm}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+          >
+            <MaterialIcons name="close" size={22} color={color.textPrimary} />
+          </Pressable>
+        </View>
+
+        <SearchField value={query} onChangeText={onQuery} placeholder="Search clubs" />
+
+        <ScrollView style={styles.sheetList}>
+          {shown.length === 0 ? (
+            <Text style={styles.meta}>No clubs match "{query}".</Text>
+          ) : (
+            shown.map((club) => (
+              <Pressable
+                key={club.id}
+                style={styles.sheetRow}
+                onPress={() => onPick(club.id)}
+                accessibilityRole="button"
+                accessibilityLabel={`${club.name}, ${club.role}. Open`}
+              >
+                <Text style={styles.sheetRowName}>{club.name}</Text>
+                <Text style={styles.sheetRowRole}>{roleLabel(club.role)}</Text>
+              </Pressable>
+            ))
+          )}
+        </ScrollView>
+      </View>
+    </View>
   );
 }
 
@@ -272,14 +474,177 @@ function DeleteAccount({ ownedClubs }: { ownedClubs: Array<{ id: string; name: s
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
-  body: { flex: 1, padding: space.md, gap: space.sm, backgroundColor: color.appBackground },
-  identity: { flexDirection: 'row', alignItems: 'center', gap: space.md },
-  identityText: { flex: 1, gap: space.xs },
-  name: { ...type.title, color: color.textPrimary },
-  bio: { ...type.body, color: color.textPrimary },
+  body: {
+    alignItems: 'center',
+    padding: space.md,
+    paddingBottom: space.xl,
+    gap: space.xs,
+  },
   meta: { ...type.bodySmall, color: color.textSecondary },
+
+  avatarWrap: { width: 112, height: 112, marginVertical: space.sm },
+  avatar: {
+    width: 112,
+    height: 112,
+    borderRadius: 56,
+    backgroundColor: color.cardRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 4,
+    borderColor: color.fallback,
+  },
+  avatarInitial: { ...type.display, fontSize: 40, lineHeight: 46, color: color.accent },
+  editPic: {
+    position: 'absolute',
+    right: 2,
+    bottom: 2,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: color.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: color.card,
+  },
+
+  name: { ...type.title, fontSize: 22, lineHeight: 28, color: color.textPrimary },
+  email: { ...type.body, color: color.textSecondary },
+  bioLine: {
+    ...type.body,
+    color: color.onSecondaryContainer,
+    textAlign: 'center',
+    maxWidth: 300,
+    marginTop: space.xs,
+  },
+
+  section: { width: '100%', maxWidth: 420, marginTop: space.lg },
+  sectionHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: space.sm,
+  },
+  sectionTitle: { ...type.title, fontSize: 17, lineHeight: 22, color: color.textPrimary },
+  sectionCount: { ...type.label, color: color.accent },
+
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
+  clubChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    backgroundColor: color.cardSunken,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+  },
+  clubChipName: { ...type.label, color: color.textPrimary, textTransform: 'none' },
+  clubChipRole: { ...type.label, color: color.textSecondary, textTransform: 'none' },
+  moreChip: {
+    backgroundColor: color.card,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: color.accent,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+  },
+  moreChipLabel: { ...type.label, color: color.accent, textTransform: 'none' },
+
+  card: {
+    width: '100%',
+    maxWidth: 420,
+    marginTop: space.lg,
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    overflow: 'hidden',
+  },
+  detailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm + 2,
+    borderBottomWidth: 1,
+    borderBottomColor: color.cardSunken,
+  },
+  detailRowLast: { borderBottomWidth: 0 },
+  detailLabel: { ...type.label, color: color.textSecondary, textTransform: 'none' },
+  detailValue: { ...type.bodySmall, color: color.textPrimary },
+
+  linkRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, padding: space.md },
+  linkRowLast: {},
+  linkIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.sm,
+    backgroundColor: color.secondaryContainer,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  linkLabel: { flex: 1, ...type.body, color: color.textPrimary },
+  linkDivider: { height: 1, backgroundColor: color.cardSunken, marginHorizontal: space.md },
+
+  signOut: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    backgroundColor: color.secondaryContainer,
+    borderRadius: radius.pill,
+    paddingVertical: space.sm + 4,
+    paddingHorizontal: space.md + 4,
+    marginTop: space.xl,
+  },
+  signOutLabel: { ...type.label, color: color.onSecondaryContainer, textTransform: 'none' },
+
+  sheetBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    padding: space.md,
+    zIndex: 100,
+  },
+  sheetScrim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  sheet: {
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    padding: space.md,
+    gap: space.sm,
+    maxHeight: '70%',
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+  },
+  sheetHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sheetTitle: { ...type.title, fontSize: 18, lineHeight: 24, color: color.textPrimary },
+  sheetList: { marginTop: space.xs },
+  sheetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: space.md,
+    borderBottomWidth: 1,
+    borderBottomColor: color.cardSunken,
+  },
+  sheetRowName: { ...type.body, color: color.textPrimary },
+  sheetRowRole: { ...type.label, color: color.textSecondary, textTransform: 'none' },
+
+  // Kept for the edit form and the delete-account flow below.
   error: { ...type.bodySmall, color: color.error },
-  confirmTitle: { ...type.headline, color: color.textPrimary },
   actions: { flexDirection: 'row', gap: space.sm },
   actionButton: { flex: 1 },
+  confirmTitle: { ...type.headline, color: color.textPrimary },
 });

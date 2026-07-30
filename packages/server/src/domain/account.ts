@@ -51,6 +51,30 @@ export type PublicProfile = Omit<Profile, 'dob'>;
  * An anonymised account is `not_found`. Their messages stay in history unattributed, so the
  * conversation is intact, and there is no profile left to open.
  */
+/**
+ * Who the caller is: their id, their email, and the clubs they belong to.
+ *
+ * **The one place an email is returned.** `readProfile` deliberately never carries it, in either
+ * its own-profile or public shape - a roster read that carried one would hand every club member a
+ * mailing list, and "own profile only" is the kind of rule somebody relaxes by accident later.
+ * Keeping it on the authenticated identity read means there is no profile shape it can leak from,
+ * which is a structural guarantee rather than a remembered condition.
+ */
+export async function readIdentity(
+  db: Db,
+  ctx: AccessContext,
+): Promise<{ userId: string; email: string; clubs: Array<{ clubId: string; role: string }> }> {
+  const rows = await db.execute<{ email: string }>(sql`
+    SELECT email FROM users WHERE id = ${ctx.userId}
+  `);
+
+  return {
+    userId: ctx.userId,
+    email: rows.rows[0]?.email ?? '',
+    clubs: [...ctx.clubRole.entries()].map(([clubId, role]) => ({ clubId, role })),
+  };
+}
+
 export async function readProfile(
   db: Db,
   ctx: AccessContext,

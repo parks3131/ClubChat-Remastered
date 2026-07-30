@@ -133,3 +133,19 @@ export function formatCountdown(iso: string): string {
   const days = Math.floor(hours / 24);
   return `${days} DAY${days === 1 ? '' : 'S'} LEFT`;
 }
+
+/**
+ * "20 August 2004", for a date of birth.
+ *
+ * Built from split components like every other date-only value here: parsing it would land on UTC
+ * midnight and show the day before for anybody west of Greenwich - which on a birthday is the kind
+ * of wrong that gets noticed.
+ */
+export function formatDateOfBirth(dateKey: string | null | undefined): string {
+  if (dateKey === null || dateKey === undefined || dateKey.length === 0) return 'Not set';
+  return fromDateKey(dateKey).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+}

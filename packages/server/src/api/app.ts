@@ -22,6 +22,7 @@ import { fromNodeHeaders } from 'better-auth/node';
 import { loadAccessContext } from '../policy/context.ts';
 import { isSessionUsable } from '../policy/predicates.ts';
 import { isUuid, type AppDeps } from './plumbing.ts';
+import { readIdentity } from '../domain/account.ts';
 import { registerAccountRoutes } from './routes/account.ts';
 import { registerCalendarRoutes } from './routes/calendar.ts';
 import { registerChatRoutes } from './routes/chat.ts';
@@ -131,13 +132,17 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       }
     });
 
-    protectedRoutes.get('/me', async (request) => {
-      const access = request.access!;
-      return {
-        userId: access.userId,
-        clubs: [...access.clubRole.entries()].map(([clubId, role]) => ({ clubId, role })),
-      };
-    });
+    /**
+     * Who the caller is.
+     *
+     * The email lives HERE and never on a profile read, which
+     * `phase3-75-account-and-eboard-routes` asserts for both the public and the own shape. It is a
+     * login identifier rather than a profile field: a roster that carried one would hand every
+     * club member a mailing list, and "own profile only" is a rule somebody would eventually
+     * relax by accident. Keeping it on the authenticated identity read means there is no profile
+     * shape it could leak from.
+     */
+    protectedRoutes.get('/me', async (request) => readIdentity(deps.db, request.access!));
 
     registerAccountRoutes(protectedRoutes, deps);
     registerClubRoutes(protectedRoutes, deps);

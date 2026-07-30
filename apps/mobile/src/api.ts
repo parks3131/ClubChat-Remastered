@@ -553,7 +553,17 @@ export const inboxApi = {
 };
 
 export const accountApi = {
-  me: () => apiFetch<{ userId: string; clubs: Array<{ clubId: string; role: ClubRole }> }>('/me'),
+  /**
+   * The signed-in identity.
+   *
+   * **The only read that carries an email.** A profile read never does, in either shape - see the
+   * server's note on `readIdentity`. So a screen wanting to show the viewer their own address asks
+   * here rather than reaching into a profile for it.
+   */
+  me: () =>
+    apiFetch<{ userId: string; email: string; clubs: Array<{ clubId: string; role: ClubRole }> }>(
+      '/me',
+    ),
 
   profile: (userId: string) => apiFetch<{ profile: Profile }>(`/users/${userId}`),
 
