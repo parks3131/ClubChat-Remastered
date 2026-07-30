@@ -215,6 +215,10 @@ export class ChatClient {
             channelId,
             seq,
             senderId: this.userId ?? '',
+            // Null on purpose: this is the sender's OWN message, acked before any read, and a
+            // sender does not need telling who they are. The server's copy carries the name and
+            // overwrites this on the next sync.
+            senderName: null,
             // The outbox knows what was sent. Hardcoding 'text' here stored a photo as a
             // text message locally until the next sync overwrote it.
             type: this.outbox.get(clientMsgId)?.type ?? 'text',

@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS messages (
   seq            INTEGER NOT NULL,
   id             TEXT NOT NULL,
   sender_id      TEXT NOT NULL,
+  sender_name    TEXT,
   type           TEXT NOT NULL,
   body           TEXT,
   client_msg_id  TEXT NOT NULL,
@@ -56,6 +57,7 @@ const MIGRATIONS: ReadonlyArray<{ column: string; statement: string }> = [
   { column: 'media_id', statement: `ALTER TABLE messages ADD COLUMN media_id TEXT` },
   { column: 'document_name', statement: `ALTER TABLE messages ADD COLUMN document_name TEXT` },
   { column: 'document_size', statement: `ALTER TABLE messages ADD COLUMN document_size INTEGER` },
+  { column: 'sender_name', statement: `ALTER TABLE messages ADD COLUMN sender_name TEXT` },
 ];
 
 async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
@@ -76,6 +78,7 @@ type Row = {
   seq: number;
   id: string;
   sender_id: string;
+  sender_name: string | null;
   type: string;
   body: string | null;
   client_msg_id: string;
@@ -112,6 +115,9 @@ const toEnvelope = (row: Row): MessageEnvelope => ({
   channelId: row.channel_id,
   seq: row.seq,
   senderId: row.sender_id,
+  // Cached with the message so an offline chat still says who is talking. A row written before
+  // this column existed reads null and renders unattributed until the next sync fills it.
+  senderName: row.sender_name,
   type: row.type as MessageEnvelope['type'],
   body: row.body,
   clientMsgId: row.client_msg_id,
@@ -149,12 +155,13 @@ class SqliteMessageStore implements MessageStore {
       for (const message of messages) {
         await this.db.runAsync(
           `INSERT INTO messages
-             (channel_id, seq, id, sender_id, type, body, client_msg_id, pinned, reactions,
+             (channel_id, seq, id, sender_id, sender_name, type, body, client_msg_id, pinned, reactions,
               media_id, document_name, document_size, deleted_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (channel_id, seq) DO UPDATE SET
              id = excluded.id,
              sender_id = excluded.sender_id,
+             sender_name = excluded.sender_name,
              type = excluded.type,
              body = excluded.body,
              client_msg_id = excluded.client_msg_id,
@@ -169,6 +176,7 @@ class SqliteMessageStore implements MessageStore {
           message.seq,
           message.id,
           message.senderId,
+          message.senderName,
           message.type,
           message.body,
           message.clientMsgId,

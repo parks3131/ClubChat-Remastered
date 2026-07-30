@@ -7,10 +7,10 @@
  * inbox, no drain-on-connect path and no delete-after-delivery job. See ADR-0003.
  */
 
-import { and, asc, desc, eq, gt, gte, isNull, lt, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, gte, isNull, lt, lte, sql } from 'drizzle-orm';
 import type { ChannelState, MessageEnvelope, MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
-import { channels, messages } from '../db/schema.ts';
+import { channels, messages, users } from '../db/schema.ts';
 import type { ChannelRef } from '../policy/predicates.ts';
 import { accessibleChannelPredicate } from './channel-access.ts';
 import { reactionsForMessages } from './reactions.ts';
@@ -21,7 +21,22 @@ export const HISTORY_PAGE_SIZE = 40;
 /** Cap on one sync response, so a client offline for a week pages rather than blocks. */
 export const SYNC_PAGE_SIZE = 500;
 
-type MessageRow = typeof messages.$inferSelect;
+/**
+ * A message row plus the sender's current name.
+ *
+ * The name is **joined, never stored on the message** - so a rename changes it everywhere at once,
+ * and a deleted account's history reads "Deleted member" without anything having to rewrite it.
+ */
+type MessageRow = typeof messages.$inferSelect & { senderName: string | null };
+
+/**
+ * Every read in this module selects the message columns plus the sender's name.
+ *
+ * A `leftJoin`, not an inner one: an inner join would silently drop a message whose sender row is
+ * missing, which turns a data problem into a hole in the conversation - and a hole is exactly what
+ * the gapless log exists to make impossible. A null name renders as unattributed instead.
+ */
+const messageColumns = { ...getTableColumns(messages), senderName: users.name };
 
 function toEnvelope(row: MessageRow): MessageEnvelope {
   return {
@@ -29,6 +44,7 @@ function toEnvelope(row: MessageRow): MessageEnvelope {
     channelId: row.channelId,
     seq: row.seq,
     senderId: row.senderId,
+    senderName: row.senderName,
     type: row.type as MessageType,
     body: row.body,
     clientMsgId: row.clientMsgId,
@@ -116,8 +132,9 @@ export async function readHistory(
       : and(eq(messages.channelId, channelId), lt(messages.seq, opts.before));
 
   const rows = await db
-    .select()
+    .select(messageColumns)
     .from(messages)
+    .leftJoin(users, eq(users.id, messages.senderId))
     .where(where)
     // Ordered by seq, never by timestamp. A timestamp is not an ordering: clock skew
     // is real, and timestamps here are for display only.
@@ -155,8 +172,9 @@ export async function readAround(
   const span = Math.min(Math.max(radius, 1), 100);
 
   const rows = await db
-    .select()
+    .select(messageColumns)
     .from(messages)
+    .leftJoin(users, eq(users.id, messages.senderId))
     .where(
       and(
         eq(messages.channelId, channelId),
@@ -214,8 +232,9 @@ export async function readHighlights(
   if (opts.before !== undefined) conditions.push(lt(messages.seq, opts.before));
 
   const rows = await db
-    .select()
+    .select(messageColumns)
     .from(messages)
+    .leftJoin(users, eq(users.id, messages.senderId))
     .where(and(...conditions))
     // Newest first: Highlights is a reference list rather than a conversation, so the most
     // recent pin is the one somebody opening the tab is looking for.
@@ -266,8 +285,9 @@ export async function syncSince(
   limit = SYNC_PAGE_SIZE,
 ): Promise<{ messages: MessageEnvelope[]; hasMore: boolean }> {
   const rows = await db
-    .select()
+    .select(messageColumns)
     .from(messages)
+    .leftJoin(users, eq(users.id, messages.senderId))
     .where(and(eq(messages.channelId, channelId), gt(messages.seq, sinceSeq)))
     .orderBy(asc(messages.seq))
     .limit(limit + 1);

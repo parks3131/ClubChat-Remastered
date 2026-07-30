@@ -271,6 +271,62 @@ describe('soft delete', () => {
   });
 });
 
+describe('sender attribution', () => {
+  /**
+   * A group chat that does not say who is talking is unusable, and the name reaches the client
+   * only because every read path joins `users`. There are four of those paths and they are
+   * separate queries, so a change to one does not touch the others: this asserts each carries
+   * the name rather than trusting that the join was copied everywhere.
+   */
+  it('carries the sender name on history, sync, the window around a seq, and highlights', async () => {
+    const owner = await signUp('AttributionOwner');
+    const member = await signUp('AttributionMember');
+    const { clubId, channelId } = await createClubAs(owner);
+    await join(clubId, member);
+
+    const seq = await post(member, channelId, 'who said this');
+    await as(owner, 'POST', `/channels/${channelId}/messages/${seq}/pinned`, { pinned: true });
+
+    const named = (body: { messages: Array<{ seq: number; senderName: string | null }> }) =>
+      body.messages.find((m) => m.seq === seq)?.senderName;
+
+    const history = await as(owner, 'GET', `/channels/${channelId}/messages`);
+    expect(named(history.body)).toBe('AttributionMember');
+
+    const sync = await as(owner, 'GET', `/sync?channels[]=${channelId}:0`);
+    expect(named(sync.body.channels[0])).toBe('AttributionMember');
+
+    const around = await as(owner, 'GET', `/channels/${channelId}/messages?around=${seq}`);
+    expect(named(around.body)).toBe('AttributionMember');
+
+    const pinned = await as(owner, 'GET', `/channels/${channelId}/pinned`);
+    expect(named(pinned.body)).toBe('AttributionMember');
+  });
+
+  /**
+   * A message outlives the account that sent it. Deletion is anonymise-and-block rather than a
+   * row removal - `messages_sender_id_users_id_fk` is RESTRICT, so it could not be a removal
+   * even if we wanted one - and this asserts the anonymised name actually reaches the bubble
+   * rather than the real one surviving in chat after the account is gone.
+   */
+  it('reads a deleted account\'s messages as the anonymised name, keeping the body', async () => {
+    const owner = await signUp('LeaverClubOwner');
+    const leaver = await signUp('LeaverMember');
+    const { clubId, channelId } = await createClubAs(owner);
+    await join(clubId, leaver);
+
+    const seq = await post(leaver, channelId, 'sent before leaving');
+    expect((await as(leaver, 'DELETE', '/me')).status).toBe(200);
+
+    const history = await as(owner, 'GET', `/channels/${channelId}/messages`);
+    const row = history.body.messages.find((m: { seq: number }) => m.seq === seq);
+    expect(row).toBeDefined();
+    // The conversation still reads. Only the attribution changes.
+    expect(row.body).toBe('sent before leaving');
+    expect(row.senderName).toBe('Deleted member');
+  });
+});
+
 describe('Highlights, and jump-to-message', () => {
   it('finds a pin far outside the loaded window', async () => {
     const owner = await signUp('HighlightOwner');

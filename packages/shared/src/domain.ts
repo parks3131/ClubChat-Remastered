@@ -125,6 +125,27 @@ export const MessageEnvelope = z.object({
   channelId: Uuid,
   seq: z.number().int().positive(),
   senderId: Uuid,
+  /**
+   * Who sent it, ready to render.
+   *
+   * > **A group chat that does not say who is talking is broken**, and until 2026-07-30 the
+   * > envelope carried only `senderId` - so every received bubble was anonymous. Found by
+   * > comparing against v1, which joins the profile on every message read.
+   *
+   * On the envelope rather than looked up by the client, because the local cache has to be
+   * **self-sufficient**: chat is readable in airplane mode from that cache, and a name resolved
+   * by a separate request would be the one thing missing exactly when there is no network.
+   *
+   * Joined at read time, never stored on `messages` - so a member who changes their name has it
+   * change everywhere, and a deleted account's history reads "Deleted member" by itself, which is
+   * what "messages remain, unattributed" means in practice.
+   *
+   * **Nullable, and deliberately without a default.** Null is the honest answer for the client's
+   * own optimistic bubble, which is built locally before any round trip and never renders a name
+   * anyway - a sender does not need telling who they are. Leaving the default off keeps the
+   * compiler forcing every construction site to answer, which is how all eight of them were found.
+   */
+  senderName: z.string().nullable(),
   type: MessageType,
   body: z.string().nullable(),
   clientMsgId: Uuid,

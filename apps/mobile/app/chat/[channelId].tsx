@@ -707,6 +707,17 @@ export default function ChatScreen() {
                   style={mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs}
                 >
                   <BubbleContainer mine={mine}>
+                    {/*
+                      Attribution on received bubbles only. Your own messages are already
+                      identified by the side they sit on and the accent fill, so a name on
+                      them would be noise; a group chat without one leaves you guessing who
+                      is talking. Null when the sender's row is gone, or when the message was
+                      cached before this column existed - it renders unattributed rather
+                      than blank-labelled, and the next sync fills it in.
+                    */}
+                    {!mine && message.senderName !== null && (
+                      <Text style={styles.senderName}>{message.senderName}</Text>
+                    )}
                     {message.type === "photo" && message.mediaId !== null && (
                       <PhotoBubble mediaId={message.mediaId} mine={mine} />
                     )}
@@ -1025,6 +1036,8 @@ const styles = StyleSheet.create({
   // where its tail would be. The sent bubble carries no backgroundColor because its fill is the
   // gradient in BubbleContainer.
   bubble: { padding: space.sm + 4, gap: space.xs },
+  /** v1's treatment: 10px Inter in the accent colour, above the body. */
+  senderName: { ...type.label, fontSize: 10, color: color.accent },
   bubbleWrapMine: { alignSelf: "flex-end", maxWidth: "82%" },
   bubbleWrapTheirs: { alignSelf: "flex-start", maxWidth: "82%" },
   sent: {

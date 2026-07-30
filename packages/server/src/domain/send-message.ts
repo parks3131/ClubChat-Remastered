@@ -16,6 +16,7 @@ import {
   messageReactions,
   messages,
   outbox,
+  users,
 } from '../db/schema.ts';
 import { appendMessage, type AppendMessageResult } from './append-message.ts';
 import { channelAudience } from './channel-access.ts';
@@ -171,6 +172,16 @@ async function filterReachableMentions(
 export type ModerationRefusal = { ok: false; code: 'forbidden' | 'not_found' };
 export type ModerationResult = { ok: true; message: MessageEnvelope } | ModerationRefusal;
 
+/** The sender's display name, for an envelope built from a message that already exists. */
+async function senderNameOf(db: Db, senderId: string): Promise<string | null> {
+  const rows = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, senderId))
+    .limit(1);
+  return rows[0]?.name ?? null;
+}
+
 async function loadMessage(db: Db, channelId: string, seq: number) {
   const rows = await db
     .select()
@@ -180,12 +191,16 @@ async function loadMessage(db: Db, channelId: string, seq: number) {
   return rows[0] ?? null;
 }
 
-function toEnvelope(row: typeof messages.$inferSelect): MessageEnvelope {
+function toEnvelope(
+  row: typeof messages.$inferSelect,
+  senderName: string | null,
+): MessageEnvelope {
   return {
     id: row.id,
     channelId: row.channelId,
     seq: row.seq,
     senderId: row.senderId,
+    senderName,
     type: row.type as MessageType,
     body: row.body,
     clientMsgId: row.clientMsgId,
@@ -252,7 +267,7 @@ export async function setPinned(
     payload: { channelId: channel.id, seq, pinned },
   });
 
-  return { ok: true, message: toEnvelope(row) };
+  return { ok: true, message: toEnvelope(row, await senderNameOf(db, row.senderId)) };
 }
 
 /**
@@ -306,5 +321,5 @@ export async function softDeleteMessage(
   });
 
   if (!updated) return { ok: false, code: 'not_found' };
-  return { ok: true, message: toEnvelope(updated) };
+  return { ok: true, message: toEnvelope(updated, await senderNameOf(db, updated.senderId)) };
 }

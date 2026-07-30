@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import type { MessageEnvelope, MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
-import { messages, outbox } from '../db/schema.ts';
+import { messages, outbox, users } from '../db/schema.ts';
 import { isUniqueViolation } from '../db/errors.ts';
 
 export type AppendMessageInput = {
@@ -77,12 +77,16 @@ export function deriveClientMsgId(scope: string, key: string | number): string {
   ].join('-');
 }
 
-function toEnvelope(row: typeof messages.$inferSelect): MessageEnvelope {
+function toEnvelope(
+  row: typeof messages.$inferSelect,
+  senderName: string | null,
+): MessageEnvelope {
   return {
     id: row.id,
     channelId: row.channelId,
     seq: row.seq,
     senderId: row.senderId,
+    senderName,
     type: row.type as MessageType,
     body: row.body,
     clientMsgId: row.clientMsgId,
@@ -98,9 +102,31 @@ function toEnvelope(row: typeof messages.$inferSelect): MessageEnvelope {
   };
 }
 
+/**
+ * The sender's current display name, for the envelope.
+ *
+ * > **Read OUTSIDE the transaction below, deliberately.** That transaction holds a row lock on the
+ * > channel until commit and serializes every send to it, so the rule stated on `appendMessage` is
+ * > that nothing gets added to it. A name lookup is a local indexed read rather than the network
+ * > round trip that rule was written about, and it still does not belong inside: the sender's name
+ * > has nothing to do with allocating a sequence number.
+ *
+ * Null rather than a throw if the row is missing. A message with an unattributed sender renders as
+ * unattributed; it does not fail to send.
+ */
+async function senderNameOf(db: Db, senderId: string): Promise<string | null> {
+  const rows = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, senderId))
+    .limit(1);
+  return rows[0]?.name ?? null;
+}
+
 async function findByIdempotencyKey(
   db: Db,
   input: Pick<AppendMessageInput, 'channelId' | 'senderId' | 'clientMsgId'>,
+  senderName: string | null,
 ): Promise<MessageEnvelope | null> {
   const found = await db
     .select()
@@ -114,7 +140,7 @@ async function findByIdempotencyKey(
     )
     .limit(1);
   const row = found[0];
-  return row ? toEnvelope(row) : null;
+  return row ? toEnvelope(row, senderName) : null;
 }
 
 /**
@@ -138,9 +164,12 @@ export async function appendMessage(
   db: Db,
   input: AppendMessageInput,
 ): Promise<AppendMessageResult> {
+  // Resolved once, before the transaction, and used by both paths below.
+  const senderName = await senderNameOf(db, input.senderId);
+
   // Fast path. A retry that we can recognise before touching the counter costs one
   // indexed lookup and burns no sequence number.
-  const existing = await findByIdempotencyKey(db, input);
+  const existing = await findByIdempotencyKey(db, input, senderName);
   if (existing) return { message: existing, deduplicated: true };
 
   try {
@@ -215,7 +244,7 @@ export async function appendMessage(
         })),
       ]);
 
-      return toEnvelope(row);
+      return toEnvelope(row, senderName);
     });
 
     return { message, deduplicated: false };
@@ -223,7 +252,7 @@ export async function appendMessage(
     // A concurrent identical send won the race. The transaction rolled back, so the
     // counter was restored and no gap exists; the winner's row is now visible.
     if (isUniqueViolation(error)) {
-      const winner = await findByIdempotencyKey(db, input);
+      const winner = await findByIdempotencyKey(db, input, senderName);
       if (winner) return { message: winner, deduplicated: true };
     }
     throw error;

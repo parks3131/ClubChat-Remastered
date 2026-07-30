@@ -358,6 +358,7 @@ export async function readReportedContext(
       channel_id: string;
       seq: number;
       sender_id: string;
+      sender_name: string | null;
       type: string;
       body: string | null;
       client_msg_id: string;
@@ -368,13 +369,17 @@ export async function readReportedContext(
       deleted_at: string | null;
       created_at: string;
     }>(sql`
-      SELECT id::text AS id, channel_id::text AS channel_id, seq, sender_id::text AS sender_id,
-             type, body, client_msg_id::text AS client_msg_id, pinned,
-             media_id::text AS media_id, document_name, document_size,
-             deleted_at::text AS deleted_at, created_at::text AS created_at
-        FROM messages
-       WHERE channel_id = ${channel.id} AND seq BETWEEN ${fromSeq} AND ${toSeq}
-       ORDER BY seq
+      SELECT m.id::text AS id, m.channel_id::text AS channel_id, m.seq,
+             m.sender_id::text AS sender_id,
+             -- Who said what. A moderation transcript without names is not evidence.
+             u.full_name AS sender_name,
+             m.type, m.body, m.client_msg_id::text AS client_msg_id, m.pinned,
+             m.media_id::text AS media_id, m.document_name, m.document_size,
+             m.deleted_at::text AS deleted_at, m.created_at::text AS created_at
+        FROM messages m
+        LEFT JOIN users u ON u.id = m.sender_id
+       WHERE m.channel_id = ${channel.id} AND m.seq BETWEEN ${fromSeq} AND ${toSeq}
+       ORDER BY m.seq
     `);
 
     return rows.rows;
@@ -398,6 +403,8 @@ export async function readReportedContext(
       id: row.id,
       channelId: row.channel_id,
       seq: Number(row.seq),
+      // The moderation window shows who said what: an unattributed transcript is not evidence.
+      senderName: row.sender_name ?? null,
       senderId: row.sender_id,
       type: row.type as MessageType,
       body: row.body,
