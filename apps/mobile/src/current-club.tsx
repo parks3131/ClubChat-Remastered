@@ -85,7 +85,39 @@ export function useDeclareClub(clubId: string | undefined | null, name?: string 
          */
         name: name ?? (previous?.clubId === clubId ? previous.name : ''),
       }));
-      return () => setCurrentClub(null);
+
+      /*
+       * **Deliberately no cleanup.**
+       *
+       * Clearing on blur meant the OUTGOING screen wiped what the INCOMING one had just set:
+       * navigating between two screens of the same club ran B's focus effect, then A's blur
+       * cleanup, leaving the context null until B's own data landed. The header showed the word
+       * "Club" for that instant and then swapped to the club's name - a visible flicker on every
+       * push inside a club.
+       *
+       * Leaving a club is therefore declared by the screens that are OUTSIDE one, through
+       * `useClearClub`, rather than inferred from a blur that also fires for an ordinary push.
+       * Blur cannot distinguish "went deeper into this club" from "left it", and treating both
+       * the same is what produced the flicker.
+       */
+      return undefined;
     }, [clubId, name, setCurrentClub]),
+  );
+}
+
+/**
+ * Declare that this screen is NOT inside any club.
+ *
+ * The counterpart to `useDeclareClub`, for the four destinations and the My Clubs list. Somebody
+ * has to say when the club's world has been left, and a blur cannot: it fires just as loudly for
+ * a push one level deeper.
+ */
+export function useClearClub(): void {
+  const { setCurrentClub } = useCurrentClub();
+  useFocusEffect(
+    useCallback(() => {
+      setCurrentClub(null);
+      return undefined;
+    }, [setCurrentClub]),
   );
 }

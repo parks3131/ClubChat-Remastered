@@ -223,6 +223,8 @@ export default function ChatScreen() {
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [meta, setMeta] = useState<ChannelMeta | null>(null);
+  /** Whether the meta read has finished, successfully or not. See `loadMeta`. */
+  const [metaResolved, setMetaResolved] = useState(false);
   // Chat counts as inside the club, which is what keeps the Clubs tab's shortcut working
   // from a race or Eboard conversation. Null for a DM, which belongs to no club.
   useDeclareClub(meta?.clubId);
@@ -326,6 +328,16 @@ export default function ChatScreen() {
       setMeta(await dmApi.meta(channelId));
     } catch {
       setMeta(null);
+    } finally {
+      /*
+       * Settled, whether it worked or not.
+       *
+       * A null `meta` alone cannot tell "still loading" from "this read failed", and the header
+       * needs the difference: while loading it renders nothing, because the name is milliseconds
+       * away and a word that swaps looks like a glitch. Once the read has FAILED nothing is
+       * coming, so a permanently blank header would read as broken - it falls back to "Chat".
+       */
+      setMetaResolved(true);
     }
   }, [channelId]);
 
@@ -628,13 +640,23 @@ export default function ChatScreen() {
           column so a chat opened from a notification says what you are looking at without
           needing the screen behind it.
         */}
-        <Avatar name={meta?.name ?? "Chat"} size={36} />
+        {/*
+          Nothing until the channel resolves, rather than the word "Chat" and a letter "C" that
+          both swap a moment later. A placeholder that is visibly replaced reads as a glitch; a
+          header that fills in reads as loading. The column keeps its height either way, so the
+          controls beside it do not shift when the name arrives.
+        */}
+        {meta === null ? (
+          <View style={styles.headerAvatarPlaceholder} />
+        ) : (
+          <Avatar name={meta.name} size={36} />
+        )}
         <View style={styles.headerTitleColumn}>
           <Text style={styles.headerTitle} numberOfLines={1}>
-            {meta?.name ?? "Chat"}
+            {meta?.name ?? (metaResolved ? "Chat" : "")}
           </Text>
           <Text style={styles.headerSubtitle} numberOfLines={1}>
-            {offline ? "Reconnecting" : "ClubChat"}
+            {meta === null ? "" : offline ? "Reconnecting" : "ClubChat"}
           </Text>
         </View>
         <Pressable
@@ -1678,6 +1700,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(0,0,0,0.05)",
+  },
+  // Same footprint as the avatar, so the row does not jump when the real one replaces it.
+  headerAvatarPlaceholder: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.pill,
+    backgroundColor: color.cardSunken,
   },
   headerTitleColumn: { flex: 1, minWidth: 0 },
   headerTitle: { ...type.headerTitle, color: color.textPrimary },

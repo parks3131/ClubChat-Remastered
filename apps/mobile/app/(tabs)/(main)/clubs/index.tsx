@@ -14,6 +14,7 @@ import { useCallback, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Redirect, useRouter } from 'expo-router';
+import { useClearClub } from '../../../../src/current-club.tsx';
 import { unreadCount, type Club } from '@clubchat/shared';
 import { clubApi } from '../../../../src/api.ts';
 import type { ClubSearchResult } from '../../../../src/api-types.ts';
@@ -25,6 +26,8 @@ import { useLoad } from '../../../../src/use-load.ts';
 type Mode = 'list' | 'create' | 'join';
 
 export default function ClubsScreen() {
+  // Outside every club: leaving one is declared here rather than inferred from a blur.
+  useClearClub();
   const { authState, channels, client, revision } = useSession();
   const router = useRouter();
   const [mode, setMode] = useState<Mode>('list');

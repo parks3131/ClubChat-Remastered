@@ -16,6 +16,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Link, Redirect, useRouter } from 'expo-router';
+import { useClearClub } from '../../../../src/current-club.tsx';
 import { accountApi, ApiError, clubApi } from '../../../../src/api.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { formatDateOfBirth } from '../../../../src/dates.ts';
@@ -25,6 +26,8 @@ import { Action, Card, DataScreen, Field, Row, SearchField, SectionHeader } from
 import { useLoad } from '../../../../src/use-load.ts';
 
 export default function ProfileScreen() {
+  // Outside every club: leaving one is declared here rather than inferred from a blur.
+  useClearClub();
   const { authState, userId, signOut, revision } = useSession();
   const router = useRouter();
   const [clubsOpen, setClubsOpen] = useState(false);

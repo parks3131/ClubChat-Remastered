@@ -96,8 +96,13 @@ export default function HighlightsScreen() {
         </Pressable>
         <View>
           <Text style={styles.headerTitle}>ClubChat</Text>
+          {/*
+            The channel's name arrives a moment after the screen, so the subtitle fills in rather
+            than showing "Highlights" and replacing it with "Track Club · Highlights". Same rule as
+            chat's header: never render a word that is about to be swapped.
+          */}
           <Text style={styles.headerSubtitle}>
-            {meta.data === null ? 'Highlights' : `${meta.data.name} · Highlights`}
+            {meta.data === null ? '' : `${meta.data.name} · Highlights`}
           </Text>
         </View>
       </BlurView>

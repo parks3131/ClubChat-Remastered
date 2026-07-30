@@ -139,14 +139,17 @@ export function ClubHeaderTitle({ fallback }: { fallback: string }) {
   const router = useRouter();
 
   /*
-   * The name is only known once some screen in this club has read it. Arriving cold - a deep
-   * link, a refresh, a notification tap - means nothing has, so the header falls back to the
-   * screen's own title rather than rendering empty. An empty header is worse than a plain one:
-   * it reads as a broken screen rather than as a loading one.
+   * Two different unknowns, drawn differently.
+   *
+   *  - **Inside a club whose name has not arrived yet** (a cold deep link, a refresh): render
+   *    NOTHING. The name is milliseconds away, and a word that visibly swaps for another word is
+   *    the flicker this screen was reported for. Empty for an instant is quiet; "Club" turning
+   *    into "Binghamton Running Club" is not.
+   *  - **Not inside a club at all**: render the screen's own title, because nothing is coming and
+   *    an empty header really would read as broken.
    */
-  if (currentClub === null || currentClub.name.length === 0) {
-    return <Text style={styles.clubName}>{fallback}</Text>;
-  }
+  if (currentClub === null) return <Text style={styles.clubName}>{fallback}</Text>;
+  if (currentClub.name.length === 0) return null;
 
   return (
     <Pressable
