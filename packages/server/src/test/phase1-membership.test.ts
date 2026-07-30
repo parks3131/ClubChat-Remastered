@@ -19,6 +19,7 @@ import {
   redeemInvite,
   removeMember,
   setJoinPolicy,
+  updateClub,
   transferOwnership,
 } from '../domain/membership.ts';
 import { loadAccessContext } from '../policy/context.ts';
@@ -518,5 +519,71 @@ describe('deleting a club', () => {
     const revoked = revocations.filter((r) => r.channel === 'ctrl:revoke');
     const users = revoked.map((r) => (JSON.parse(r.payload) as { userId: string }).userId);
     expect(users.sort()).toEqual([f.ownerId, member].sort());
+  });
+});
+
+describe('editing the club', () => {
+  /*
+   * An authorization change, so it is proved by attempting the forbidden action rather than by
+   * reading the predicate. A plain member editing the club's identity is the exact thing this
+   * handler exists to refuse, and a handler that authorizes nothing looks identical to one that
+   * authorizes correctly until somebody tries.
+   */
+  it('refuses a plain member and allows the admin tier', async () => {
+    const owner = await makeUser('EditOwner');
+    const admin = await makeUser('EditAdmin');
+    const member = await makeUser('EditMember');
+    const club = await createClub(h.db, { name: 'Before', sport: 'running', creatorId: owner });
+
+    await addMember(h.db, await loadAccessContext(h.db, owner), club.clubId, admin);
+    await addMember(h.db, await loadAccessContext(h.db, owner), club.clubId, member);
+    await changeRole(h.db, await loadAccessContext(h.db, owner), club.clubId, admin, 'admin');
+
+    // The forbidden action, attempted.
+    const asMember = await updateClub(h.db, await loadAccessContext(h.db, member), club.clubId, {
+      name: 'Renamed by a member',
+    });
+    expect(asMember).toEqual({ ok: false, code: 'forbidden' });
+
+    const stillNamed = await h.db.execute<{ name: string }>(
+      sql`SELECT name FROM clubs WHERE id = ${club.clubId}`,
+    );
+    expect(stillNamed.rows[0]?.name, 'a refused edit still changed the club').toBe('Before');
+
+    // An admin may, and so may the owner.
+    expect(
+      await updateClub(h.db, await loadAccessContext(h.db, admin), club.clubId, { name: 'After' }),
+    ).toEqual({ ok: true, updated: true });
+
+    const renamed = await h.db.execute<{ name: string }>(
+      sql`SELECT name FROM clubs WHERE id = ${club.clubId}`,
+    );
+    expect(renamed.rows[0]?.name).toBe('After');
+  });
+
+  it('leaves an absent field alone and clears an explicit null', async () => {
+    const owner = await makeUser('PatchOwner');
+    const club = await createClub(h.db, {
+      name: 'Patchy',
+      sport: 'running',
+      description: 'the original',
+      creatorId: owner,
+    });
+    const ctx = await loadAccessContext(h.db, owner);
+
+    // Absent: untouched. The two are different instructions and must not collapse into one.
+    await updateClub(h.db, ctx, club.clubId, { name: 'Patchy II' });
+    const afterRename = await h.db.execute<{ name: string; description: string | null }>(
+      sql`SELECT name, description FROM clubs WHERE id = ${club.clubId}`,
+    );
+    expect(afterRename.rows[0]?.name).toBe('Patchy II');
+    expect(afterRename.rows[0]?.description).toBe('the original');
+
+    // Explicit null: cleared.
+    await updateClub(h.db, ctx, club.clubId, { description: null });
+    const afterClear = await h.db.execute<{ description: string | null }>(
+      sql`SELECT description FROM clubs WHERE id = ${club.clubId}`,
+    );
+    expect(afterClear.rows[0]?.description).toBeNull();
   });
 });

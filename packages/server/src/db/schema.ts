@@ -131,6 +131,14 @@ export const clubs = pgTable('clubs', {
   name: text('name').notNull(),
   sport: text('sport').notNull(),
   description: text('description'),
+  /**
+   * The club's picture, as a media id.
+   *
+   * Identity media, exactly like a person's `image`: it goes to the public bucket and is fetched
+   * through the same authorized hop. A club without one falls back to its initial, which is what
+   * every avatar in the product does.
+   */
+  image: text('image'),
   joinPolicy: text('join_policy').notNull().default('open'),
   inviteToken: text('invite_token').notNull().unique(),
   inviteTokenRotatedAt: timestamp('invite_token_rotated_at', { withTimezone: true }),

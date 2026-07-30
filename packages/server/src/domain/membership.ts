@@ -264,6 +264,41 @@ export async function addMember(
 }
 
 /**
+ * Edit the club's identity: its name, description and picture.
+ *
+ * **Admin tier, and the same predicate every other club edit uses.** The join policy is NOT set
+ * here even though the edit form shows it in the same panel - it has its own handler because
+ * switching to `open` auto-approves every pending request, which is a membership effect rather
+ * than an identity one and belongs in one transaction with the policy change.
+ *
+ * An absent field is left alone; an explicit null clears it. That distinction is why the type is
+ * `null | undefined` rather than optional-with-null: "do not touch the description" and "remove
+ * the description" are different instructions, and a form that sent an empty string for both
+ * would make them the same.
+ */
+export async function updateClub(
+  db: Db,
+  ctx: AccessContext,
+  clubId: string,
+  fields: {
+    name?: string | undefined;
+    description?: string | null | undefined;
+    image?: string | null | undefined;
+  },
+): Promise<Result<{ updated: true }>> {
+  if (!isClubAdmin(ctx, clubId)) return { ok: false, code: 'forbidden' };
+
+  const patch: Record<string, unknown> = {};
+  if (fields.name !== undefined) patch['name'] = fields.name;
+  if (fields.description !== undefined) patch['description'] = fields.description;
+  if (fields.image !== undefined) patch['image'] = fields.image;
+  if (Object.keys(patch).length === 0) return { ok: true, updated: true };
+
+  await db.update(clubs).set(patch).where(eq(clubs.id, clubId));
+  return { ok: true, updated: true };
+}
+
+/**
  * Flip the join policy.
  *
  * **Switching `request` to `open` auto-approves every pending request**, rather than
@@ -724,6 +759,8 @@ export type ClubDetail = {
   name: string;
   sport: string;
   description: string | null;
+  /** The club's picture, as a media id. Null falls back to its initial. */
+  image: string | null;
   joinPolicy: JoinPolicy;
   memberCount: number;
   createdAt: string;
@@ -760,6 +797,7 @@ export async function readClub(
     name: string;
     sport: string;
     description: string | null;
+    image: string | null;
     join_policy: string;
     invite_token: string;
     created_at: string;
@@ -771,6 +809,7 @@ export async function readClub(
            c.name,
            c.sport,
            c.description,
+           c.image,
            c.join_policy::text AS join_policy,
            c.invite_token,
            ${isoUtc('c.created_at')} AS created_at,
@@ -795,6 +834,7 @@ export async function readClub(
       name: row.name,
       sport: row.sport,
       description: row.description,
+      image: row.image,
       joinPolicy: row.join_policy as JoinPolicy,
       memberCount: Number(row.member_count),
       createdAt: row.created_at,

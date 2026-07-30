@@ -23,6 +23,7 @@ import {
   redeemInvite,
   removeMember,
   setJoinPolicy,
+  updateClub,
   transferOwnership,
 } from '../../domain/membership.ts';
 import { searchMemberCandidates } from '../../domain/member-candidates.ts';
@@ -188,17 +189,42 @@ export function registerClubRoutes(app: FastifyInstance, deps: AppDeps): void {
   );
 
   const PolicyBody = z.object({ joinPolicy: JoinPolicy });
+  /*
+   * Edit the club.
+   *
+   * One request from the form's point of view, two handlers underneath, and that split is
+   * deliberate: switching the policy to `open` auto-approves every pending request, which is a
+   * membership effect that belongs in one transaction with the policy change rather than mixed
+   * into an identity update. The route applies the identity fields first and the policy second,
+   * so a rejected policy change cannot leave a half-renamed club.
+   */
+  const EditClubBody = z.object({
+    name: z.string().min(1).max(120).optional(),
+    description: z.string().max(2_000).nullish(),
+    image: z.string().uuid().nullish(),
+    joinPolicy: JoinPolicy.optional(),
+  });
+
   app.patch<{ Params: { id: string } }>('/clubs/:id', async (request, reply) => {
-    const body = PolicyBody.safeParse(request.body);
+    const body = EditClubBody.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
-    const result = await setJoinPolicy(
-      deps.db,
-      request.access!,
-      request.params.id,
-      body.data.joinPolicy,
-    );
-    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
-    return result;
+
+    const { joinPolicy, ...identity } = body.data;
+
+    if (identity.name !== undefined || identity.description !== undefined || identity.image !== undefined) {
+      const updated = await updateClub(deps.db, request.access!, request.params.id, identity);
+      if (!updated.ok) {
+        return reply.code(refusalStatus(updated.code)).send({ error: updated.code });
+      }
+    }
+
+    if (joinPolicy !== undefined) {
+      const result = await setJoinPolicy(deps.db, request.access!, request.params.id, joinPolicy);
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return result;
+    }
+
+    return { ok: true, autoApproved: 0 };
   });
 
   app.delete<{ Params: { id: string } }>('/clubs/:id', async (request, reply) => {
