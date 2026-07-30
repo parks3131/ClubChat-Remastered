@@ -48,6 +48,34 @@ export type Published = {
   envelope: MessageEnvelope;
 };
 
+/**
+ * The revocation control topic.
+ *
+ * Because a subscription is authorized ONCE at subscribe time and never rechecked per
+ * message, a live socket outlives the membership that justified it. Deleting the database
+ * row is not enough: the removed member keeps receiving messages until they next
+ * reconnect, and **nothing in the system reports it**. That is the single cost per-channel
+ * fan-out carries over per-user fan-out (ADR-0007), and the failure is silent.
+ *
+ * The worker is a different process from the gateways, so it cannot call an in-process
+ * hook. This topic is how the instruction crosses that boundary. Every gateway subscribes
+ * to it for its whole life, not just when it happens to hold a relevant socket - a gateway
+ * that ignored revocations while idle would let a removed member keep reading.
+ */
+export const REVOKE_TOPIC = 'ctrl:revoke';
+
+export type RevokeInstruction = {
+  userId: string;
+  channelIds: string[];
+};
+
+export async function publishRevocation(
+  redis: Redis,
+  instruction: RevokeInstruction,
+): Promise<void> {
+  await redis.publish(REVOKE_TOPIC, JSON.stringify(instruction));
+}
+
 export function createRedis(url: string): Redis {
   return new Redis(url, {
     maxRetriesPerRequest: 3,

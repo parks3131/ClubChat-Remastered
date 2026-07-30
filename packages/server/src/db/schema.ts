@@ -162,6 +162,38 @@ export const clubMemberships = pgTable(
   ],
 );
 
+/**
+ * Pending and decided join requests.
+ *
+ * The partial unique index is what makes decisions idempotent: two admins hitting Approve
+ * on the same request must produce **one** membership, one notification and one recorded
+ * decider. Scoped to `pending` so a denied request can be re-filed later - a plain
+ * UNIQUE would permanently bar anyone who was ever turned down.
+ */
+export const clubJoinRequests = pgTable(
+  'club_join_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    clubId: uuid('club_id')
+      .notNull()
+      .references(() => clubs.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('pending'),
+    decidedBy: uuid('decided_by').references(() => users.id, { onDelete: 'set null' }),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('club_join_requests_one_pending')
+      .on(t.clubId, t.userId)
+      .where(sql`status = 'pending'`),
+    check('club_join_requests_status_valid', sql`status in ('pending', 'approved', 'denied')`),
+    index('club_join_requests_by_club').on(t.clubId, t.status),
+  ],
+);
+
 // ---------------------------------------------------------------------------
 // Eboard
 // ---------------------------------------------------------------------------

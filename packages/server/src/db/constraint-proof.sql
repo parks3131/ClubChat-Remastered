@@ -302,4 +302,39 @@ SELECT pg_temp.assert_rejected(
     SELECT id, '22222222-2222-4222-8222-222222222222' FROM messages
      WHERE channel_id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' AND seq = 1$$);
 
+-- ---------------------------------------------------------------------------
+-- Join requests: idempotent decisions, and a refusal that is not permanent
+-- ---------------------------------------------------------------------------
+
+INSERT INTO club_join_requests (club_id, user_id)
+VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '22222222-2222-4222-8222-222222222222');
+
+-- Two admins hitting Approve must produce ONE membership, one notification and one
+-- recorded decider. The partial index is what makes the decision idempotent.
+SELECT pg_temp.assert_rejected(
+  'join requests - a second pending request from the same person',
+  $$INSERT INTO club_join_requests (club_id, user_id)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            '22222222-2222-4222-8222-222222222222')$$);
+
+-- Scoped to `pending` on purpose. A plain UNIQUE would permanently bar anyone who was ever
+-- turned down, so a denied request must be re-fileable.
+SELECT pg_temp.assert_accepted(
+  'join requests - re-filing after a denial is allowed',
+  $$UPDATE club_join_requests SET status = 'denied', decided_at = now()
+     WHERE club_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+       AND user_id = '22222222-2222-4222-8222-222222222222'$$);
+
+SELECT pg_temp.assert_accepted(
+  'join requests - a fresh request after a denial',
+  $$INSERT INTO club_join_requests (club_id, user_id)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            '22222222-2222-4222-8222-222222222222')$$);
+
+SELECT pg_temp.assert_rejected(
+  'join requests - an invented status',
+  $$INSERT INTO club_join_requests (club_id, user_id, status)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            '00000000-0000-4000-8000-000000000001', 'maybe')$$);
+
 ROLLBACK;

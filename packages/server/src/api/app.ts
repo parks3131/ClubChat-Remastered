@@ -32,6 +32,18 @@ import { loadAccessContext, type AccessContext } from '../policy/context.ts';
 import { isChannelMember, isClubAdmin } from '../policy/predicates.ts';
 import { badgeCount, markInboxRead, markRosterSeen, openChat, readInbox } from '../domain/inbox.ts';
 import { registerDevice } from '../push/dispatch.ts';
+import {
+  addMember,
+  changeRole,
+  decideJoinRequest,
+  deleteClub,
+  joinClub,
+  leaveClub,
+  redeemInvite,
+  removeMember,
+  setJoinPolicy,
+  transferOwnership,
+} from '../domain/membership.ts';
 import { Platform } from '@clubchat/shared';
 
 declare module 'fastify' {
@@ -215,6 +227,147 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         };
       },
     );
+
+    // ---------------------------------------------------------------------
+    // Membership
+    // ---------------------------------------------------------------------
+
+    /** Map a domain refusal onto a status code, in one place. */
+    const refusalStatus = (code: string): number =>
+      code === 'forbidden' || code === 'not_found'
+        ? // 404 for both: a member who has no business with this club must not learn
+          // whether it exists, and "forbidden" would tell them.
+          404
+        : 409;
+
+    protectedRoutes.post<{ Params: { id: string } }>('/clubs/:id/join', async (request, reply) => {
+      const result = await joinClub(deps.db, request.userId!, request.params.id);
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return result;
+    });
+
+    protectedRoutes.post<{ Params: { token: string } }>(
+      '/invites/:token/redeem',
+      async (request, reply) => {
+        const result = await redeemInvite(deps.db, request.userId!, request.params.token);
+        if (!result.ok) {
+          // A revoked or malformed link gets a plain "no longer valid", never a hint about
+          // which clubs exist.
+          return reply.code(404).send({ error: 'invite_invalid' });
+        }
+        return result;
+      },
+    );
+
+    protectedRoutes.post<{ Params: { id: string } }>(
+      '/join-requests/:id/approve',
+      async (request, reply) => {
+        const result = await decideJoinRequest(deps.db, request.access!, request.params.id, true);
+        if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+        return result;
+      },
+    );
+
+    protectedRoutes.post<{ Params: { id: string } }>(
+      '/join-requests/:id/deny',
+      async (request, reply) => {
+        const result = await decideJoinRequest(deps.db, request.access!, request.params.id, false);
+        if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+        return result;
+      },
+    );
+
+    const AddMemberBody = z.object({ userId: z.string().uuid() });
+    protectedRoutes.post<{ Params: { id: string } }>(
+      '/clubs/:id/members',
+      async (request, reply) => {
+        const body = AddMemberBody.safeParse(request.body);
+        if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+        const result = await addMember(
+          deps.db,
+          request.access!,
+          request.params.id,
+          body.data.userId,
+        );
+        if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+        return result;
+      },
+    );
+
+    const RoleBody = z.object({ role: z.enum(['admin', 'member']) });
+    protectedRoutes.patch<{ Params: { id: string; uid: string } }>(
+      '/clubs/:id/members/:uid/role',
+      async (request, reply) => {
+        const body = RoleBody.safeParse(request.body);
+        if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+        const result = await changeRole(
+          deps.db,
+          request.access!,
+          request.params.id,
+          request.params.uid,
+          body.data.role,
+        );
+        if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+        return result;
+      },
+    );
+
+    protectedRoutes.delete<{ Params: { id: string; uid: string } }>(
+      '/clubs/:id/members/:uid',
+      async (request, reply) => {
+        const result = await removeMember(
+          deps.db,
+          request.access!,
+          request.params.id,
+          request.params.uid,
+        );
+        if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+        return result;
+      },
+    );
+
+    protectedRoutes.post<{ Params: { id: string } }>('/clubs/:id/leave', async (request, reply) => {
+      const result = await leaveClub(deps.db, request.access!, request.params.id);
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return result;
+    });
+
+    const TransferBody = z.object({ toUserId: z.string().uuid() });
+    protectedRoutes.post<{ Params: { id: string } }>(
+      '/clubs/:id/transfer-ownership',
+      async (request, reply) => {
+        const body = TransferBody.safeParse(request.body);
+        if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+        const result = await transferOwnership(
+          deps.db,
+          request.access!,
+          request.params.id,
+          body.data.toUserId,
+        );
+        if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+        return result;
+      },
+    );
+
+    const PolicyBody = z.object({ joinPolicy: JoinPolicy });
+    protectedRoutes.patch<{ Params: { id: string } }>('/clubs/:id', async (request, reply) => {
+      const body = PolicyBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+      const result = await setJoinPolicy(
+        deps.db,
+        request.access!,
+        request.params.id,
+        body.data.joinPolicy,
+      );
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return result;
+    });
+
+    protectedRoutes.delete<{ Params: { id: string } }>('/clubs/:id', async (request, reply) => {
+      const result = await deleteClub(deps.db, request.access!, request.params.id);
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return { deleted: true };
+    });
 
     // ---------------------------------------------------------------------
     // The inbox

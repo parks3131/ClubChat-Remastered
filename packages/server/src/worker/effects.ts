@@ -18,7 +18,7 @@ import { SYSTEM_ACTOR_ID } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { users } from '../db/schema.ts';
 import { appendMessage, deriveClientMsgId } from '../domain/append-message.ts';
-import { publishToChannel } from '../bus/redis.ts';
+import { publishToChannel, publishRevocation } from '../bus/redis.ts';
 import { resolveAudience } from './audience.ts';
 import { writeNotifications } from './notify.ts';
 import { dispatchPush, PUSH_DEFERRAL_MS } from '../push/dispatch.ts';
@@ -300,9 +300,317 @@ async function displayName(db: Db, userId: string): Promise<string> {
   return rows[0]?.name ?? 'Someone';
 }
 
+/** Look up a club's name and main channel once, for the system-message emitters. */
+async function clubContext(
+  db: Db,
+  clubId: string,
+): Promise<{ name: string; mainChannelId: string } | null> {
+  const rows = await db.execute<{ name: string; main_channel_id: string }>(sql`
+    SELECT cl.name, ch.id AS main_channel_id
+      FROM clubs cl
+      -- The scope predicate is not optional: joining on club_id alone also matches the
+      -- club's eboard channel, and forgetting it produced "more than one row returned by a
+      -- subquery" twice in v1.
+      JOIN channels ch ON ch.club_id = cl.id AND ch.scope = 'club'
+     WHERE cl.id = ${clubId}
+  `);
+  const row = rows.rows[0];
+  return row ? { name: row.name, mainChannelId: row.main_channel_id } : null;
+}
+
+/**
+ * Someone joined.
+ *
+ * Posts a system message and, when an admin did the adding, tells the person they were
+ * added. A member who joined an open club under their own steam is told nothing - they were
+ * there when it happened.
+ */
+const onMemberJoined: EffectHandler = async (event, deps) => {
+  const clubId = String(event.payload['clubId']);
+  const userId = String(event.payload['userId']);
+  const actorId = event.payload['actorId'] as string | null;
+  const via = String(event.payload['via']);
+
+  const club = await clubContext(deps.db, clubId);
+  if (!club) return;
+
+  const joinerName = await displayName(deps.db, userId);
+  const actorName = actorId ? await displayName(deps.db, actorId) : null;
+
+  await postSystemMessage(deps, {
+    channelId: club.mainChannelId,
+    body: actorName
+      ? `${joinerName} was added by ${actorName}`
+      : `${joinerName} joined the club`,
+    eventId: event.id,
+  });
+
+  // An approval produces its own "your request was approved" from club.join_decided.
+  // Emitting "you were added" here as well would tell one person the same thing twice, so
+  // the approval path suppresses it - which is why `via` is on the event at all.
+  if (via === 'added' && actorId) {
+    await writeNotifications(deps.db, {
+      outboxEventId: event.id,
+      type: 'member_added',
+      params: {
+        clubId,
+        clubName: club.name,
+        actorName: actorName ?? 'An admin',
+        scope: 'club',
+        scopeName: club.name,
+        scopeId: clubId,
+      },
+      recipients: [userId],
+      actorId,
+      clubId,
+    });
+  }
+};
+
+/** A join request was filed. Notifies the admin tier - both admin AND owner. */
+const onJoinRequested: EffectHandler = async (event, deps) => {
+  const clubId = String(event.payload['clubId']);
+  const userId = String(event.payload['userId']);
+
+  const club = await clubContext(deps.db, clubId);
+  if (!club) return;
+
+  const recipients = await resolveAudience(deps.db, {
+    type: 'club_join_request',
+    // The requester is not an admin, so there is nobody to exclude - but passing the actor
+    // keeps the exclusion rule uniform rather than special-cased.
+    actorId: userId,
+    clubId,
+  });
+
+  await writeNotifications(deps.db, {
+    outboxEventId: event.id,
+    type: 'club_join_request',
+    params: {
+      clubId,
+      clubName: club.name,
+      requesterName: await displayName(deps.db, userId),
+      requesterId: userId,
+    },
+    recipients,
+    actorId: userId,
+    clubId,
+  });
+};
+
+/**
+ * A request was decided.
+ *
+ * **The decided row stays in the admin's feed tagged approved or denied** rather than
+ * disappearing, so they keep a record of what they decided - that is the notification
+ * written here for the requester, plus the request row's own status.
+ */
+const onJoinDecided: EffectHandler = async (event, deps) => {
+  const clubId = String(event.payload['clubId']);
+  const userId = String(event.payload['userId']);
+  const actorId = String(event.payload['actorId']);
+  const approved = event.payload['approved'] === true;
+
+  const club = await clubContext(deps.db, clubId);
+  if (!club) return;
+
+  const actorName = await displayName(deps.db, actorId);
+
+  if (approved) {
+    await postSystemMessage(deps, {
+      channelId: club.mainChannelId,
+      body: `${await displayName(deps.db, userId)} joined the club`,
+      eventId: event.id,
+      scope: 'approved',
+    });
+  }
+
+  await writeNotifications(deps.db, {
+    outboxEventId: event.id,
+    type: approved ? 'request_approved' : 'request_denied',
+    params: {
+      clubId,
+      clubName: club.name,
+      actorName,
+      scope: 'club',
+      scopeName: club.name,
+      ...(approved ? { scopeId: clubId } : {}),
+    } as never,
+    recipients: [userId],
+    actorId,
+    clubId,
+  });
+};
+
+/** A role changed. Announced in chat, and the affected member is told. */
+const onRoleChanged: EffectHandler = async (event, deps) => {
+  const clubId = String(event.payload['clubId']);
+  const userId = String(event.payload['userId']);
+  const actorId = String(event.payload['actorId']);
+  const newRole = String(event.payload['newRole']) as 'admin' | 'member';
+
+  const club = await clubContext(deps.db, clubId);
+  if (!club) return;
+
+  const name = await displayName(deps.db, userId);
+  const actorName = await displayName(deps.db, actorId);
+
+  await postSystemMessage(deps, {
+    channelId: club.mainChannelId,
+    body:
+      newRole === 'admin'
+        ? `${name} is now an admin`
+        : `${name} is no longer an admin`,
+    eventId: event.id,
+  });
+
+  await writeNotifications(deps.db, {
+    outboxEventId: event.id,
+    type: 'role_changed',
+    params: { clubId, clubName: club.name, actorName, newRole },
+    recipients: [userId],
+    actorId,
+    clubId,
+  });
+};
+
+/**
+ * Ownership was transferred.
+ *
+ * **One system message, not two.** The outgoing owner's demotion to admin is suppressed:
+ * it is mechanically a role change but not a socially separate event, and posting both
+ * reads as though something went wrong. This is also why transfer emits its own event type
+ * instead of two role changes.
+ */
+const onOwnershipTransferred: EffectHandler = async (event, deps) => {
+  const clubId = String(event.payload['clubId']);
+  const toUserId = String(event.payload['toUserId']);
+  const fromUserId = String(event.payload['fromUserId']);
+
+  const club = await clubContext(deps.db, clubId);
+  if (!club) return;
+
+  const toName = await displayName(deps.db, toUserId);
+  const fromName = await displayName(deps.db, fromUserId);
+
+  await postSystemMessage(deps, {
+    channelId: club.mainChannelId,
+    body: `${fromName} transferred ownership to ${toName}`,
+    eventId: event.id,
+  });
+
+  await writeNotifications(deps.db, {
+    outboxEventId: event.id,
+    type: 'role_changed',
+    params: { clubId, clubName: club.name, actorName: fromName, newRole: 'owner' },
+    recipients: [toUserId],
+    actorId: fromUserId,
+    clubId,
+  });
+};
+
+/**
+ * Someone left or was removed.
+ *
+ * Two effects, and the second is the one that is easy to forget: the departing member's
+ * live sockets must be **force-unsubscribed**. Their membership row is already gone, but a
+ * subscription was authorized once at subscribe time and is never rechecked per message, so
+ * without this they keep receiving messages from a club they are no longer in - silently,
+ * with nothing reporting it (ADR-0007).
+ */
+function makeDepartureHandler(reason: 'removed' | 'left'): EffectHandler {
+  return async (event, deps) => {
+    const clubId = String(event.payload['clubId']);
+    const userId = String(event.payload['userId']);
+    const actorId = event.payload['actorId'] as string | null;
+
+    const club = await clubContext(deps.db, clubId);
+    const name = await displayName(deps.db, userId);
+
+    if (club) {
+      const actorName = actorId ? await displayName(deps.db, actorId) : null;
+      await postSystemMessage(deps, {
+        channelId: club.mainChannelId,
+        body:
+          reason === 'removed' && actorName
+            ? `${name} was removed by ${actorName}`
+            : `${name} left the club`,
+        eventId: event.id,
+      });
+
+      if (reason === 'removed' && actorId) {
+        await writeNotifications(deps.db, {
+          outboxEventId: event.id,
+          type: 'member_removed',
+          params: { clubId, clubName: club.name, actorName: actorName ?? 'An admin' },
+          recipients: [userId],
+          actorId,
+          clubId,
+        });
+      }
+    }
+
+    await revokeChannelsForClub(deps, clubId, userId);
+  };
+}
+
+/**
+ * Drop a departing member's subscriptions to every channel in the club.
+ *
+ * Every channel, not just the main one: they lose the Eboard space and (from Phase 2) every
+ * race chat in the club at the same moment.
+ */
+async function revokeChannelsForClub(deps: EffectDeps, clubId: string, userId: string) {
+  const channels = await deps.db.execute<{ id: string }>(
+    sql`SELECT id FROM channels WHERE club_id = ${clubId}`,
+  );
+  const channelIds = channels.rows.map((r) => r.id);
+  if (channelIds.length === 0) return;
+
+  await publishRevocation(deps.redis, { userId, channelIds });
+  deps.log('info', 'revoked subscriptions for a departing member', {
+    userId,
+    channels: channelIds.length,
+  });
+}
+
+/**
+ * A club was deleted.
+ *
+ * The rows are already gone by database cascade. What remains is telling every gateway to
+ * drop the sockets, since the channels those sockets subscribe to no longer exist - and the
+ * ids had to be captured before the delete, which is why they ride on the event.
+ */
+const onClubDeleted: EffectHandler = async (event, deps) => {
+  const channelIds = (event.payload['channelIds'] as string[] | undefined) ?? [];
+  const memberIds = (event.payload['memberIds'] as string[] | undefined) ?? [];
+  if (channelIds.length === 0) return;
+
+  for (const userId of memberIds) {
+    await publishRevocation(deps.redis, { userId, channelIds });
+  }
+  deps.log('info', 'club deleted, subscriptions revoked', {
+    members: memberIds.length,
+    channels: channelIds.length,
+  });
+};
+
 export const handlers: Record<string, EffectHandler> = {
   'club.created': onClubCreated,
   'message.created': onMessageCreated,
+  'message.deleted': async (event, deps) => {
+    // The tombstone is already in the log and the client learns of it by sync. Nothing to
+    // notify: a deletion is not an event anyone should be interrupted for.
+    deps.log('info', 'message.deleted', { eventId: event.id });
+  },
+  'club.member_joined': onMemberJoined,
+  'club.join_requested': onJoinRequested,
+  'club.join_decided': onJoinDecided,
+  'club.role_changed': onRoleChanged,
+  'club.ownership_transferred': onOwnershipTransferred,
+  'club.member_removed': makeDepartureHandler('removed'),
+  'club.member_left': makeDepartureHandler('left'),
+  'club.deleted': onClubDeleted,
 };
 
 export async function dispatch(event: OutboxEvent, deps: EffectDeps): Promise<void> {

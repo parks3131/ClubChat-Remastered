@@ -38,8 +38,10 @@ import {
   publishToChannel,
   type Published,
   type RateLimiter,
+  type RevokeInstruction,
   HEARTBEAT_INTERVAL_MS,
   REAPER_TIMEOUT_MS,
+  REVOKE_TOPIC,
 } from '../bus/redis.ts';
 
 /** The socket is closed if the first frame is not `auth` within this window. */
@@ -121,6 +123,26 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
     sockets.add(socket);
   };
 
+  /**
+   * Drop a user's subscriptions to specific channels, immediately.
+   *
+   * Called both locally and from the revocation topic. Only affects sockets this gateway
+   * holds, which is correct: every gateway receives the instruction and acts on its own.
+   */
+  function revoke(userId: string, channelIds: readonly string[]) {
+    let dropped = 0;
+    for (const [socket, state] of states) {
+      if (state.userId !== userId) continue;
+      for (const channelId of channelIds) {
+        if (!state.subscribed.has(channelId)) continue;
+        detach(socket, channelId);
+        state.subscribed.delete(channelId);
+        dropped += 1;
+      }
+    }
+    if (dropped > 0) deps.log('info', 'revoked subscriptions', { userId, dropped });
+  }
+
   const detach = (socket: WebSocket, channelId: string) => {
     const sockets = byChannel.get(channelId);
     if (!sockets) return;
@@ -131,7 +153,26 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
     }
   };
 
+  // Subscribed for the gateway's whole life, not only while it holds a relevant socket.
+  // A gateway that ignored revocations while idle would let a removed member keep reading
+  // the channel they were removed from.
+  void deps.subscriber.subscribe(REVOKE_TOPIC).catch((error) =>
+    deps.log('error', 'failed to subscribe to the revocation topic', {
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  );
+
   deps.subscriber.on('message', (topic: string, raw: string) => {
+    if (topic === REVOKE_TOPIC) {
+      try {
+        const instruction = JSON.parse(raw) as RevokeInstruction;
+        revoke(instruction.userId, instruction.channelIds);
+      } catch {
+        deps.log('warn', 'undecodable revocation instruction');
+      }
+      return;
+    }
+
     let published: Published;
     try {
       published = JSON.parse(raw) as Published;
@@ -458,15 +499,6 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
       for (const socket of states.keys()) socket.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     },
-    revokeSubscriptions(userId, channelIds) {
-      for (const [socket, state] of states) {
-        if (state.userId !== userId) continue;
-        for (const channelId of channelIds) {
-          if (!state.subscribed.has(channelId)) continue;
-          detach(socket, channelId);
-          state.subscribed.delete(channelId);
-        }
-      }
-    },
+    revokeSubscriptions: revoke,
   };
 }

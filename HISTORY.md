@@ -7,6 +7,48 @@ Newest first.
 
 ---
 
+## 2026-07-29 - Phase 1 completion: membership commands and revocation
+
+Closes the gap left open earlier in the phase. 192 tests green, 32 constraint assertions.
+
+**What was added.** Join by policy (open admits instantly, request files a pending row),
+invite-link redemption, approve/deny, add directly, promote/demote, transfer ownership,
+leave, remove, delete club, and the join-policy flip. Each posts its system message and
+notifies the people affected. `club_join_requests` turned out to be documented in `TECH/09`
+but never actually created in Phase 0 - confirmed against the live database rather than
+assumed - so it arrived with this work.
+
+**The revocation obligation is now met, and verified over a real gateway.** ADR-0007's cost
+is that a subscription is authorized once at subscribe time and never rechecked per message,
+so a removed member's socket keeps receiving until they reconnect. The hook existed as a
+stub since Phase 0 but nothing called it, and it could not be called: the worker is a
+different process from the gateways. It now crosses that boundary over a Redis control topic
+that every gateway subscribes to for its whole life - a gateway that only listened while
+holding a relevant socket would let a removed member keep reading.
+
+The live test is worth describing, because disabling revocation produced a result that
+explains the whole design. With it off, the removed member's socket **received the next
+message** while the REST path correctly returned 404. Every request-scoped check was still
+right; only the socket leaked. That is exactly the silent failure ADR-0007 warns about, and
+it is invisible to anything except watching the socket.
+
+**Ordering rules, mutation-tested rather than trusted.** Inverting the transfer to promote
+before demote fails on `club_memberships_one_owner` - the database refuses, which is the
+entire argument for enforcing that invariant as a constraint rather than in a handler. Also
+verified: an ownership transfer posts ONE system message rather than two (mechanically two
+role changes, socially one event, which is why transfer emits its own event type); switching
+`request` to `open` auto-approves everyone pending rather than stranding them with no
+approval step left in the product; and two admins racing on Approve produce exactly one
+membership, with exactly one of them believing they decided it.
+
+**Still deferred to Phase 2, and stated rather than implied.** The cascade currently reaches
+Eboard membership and resolves outstanding requests; race rosters and car-group assignments
+are two more statements in the same transaction once those tables exist. The remaining
+notification types are in the same position - each is one call into machinery that now
+exists.
+
+---
+
 ## 2026-07-29 - Phase 1: effects, notifications and push
 
 **The gate passes.** An announcement in club chat reaches a backgrounded phone as a push that
