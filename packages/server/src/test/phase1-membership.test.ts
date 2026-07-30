@@ -22,6 +22,7 @@ import {
   updateClub,
   transferOwnership,
 } from '../domain/membership.ts';
+import { renderNotification } from '@clubchat/shared';
 import { loadAccessContext } from '../policy/context.ts';
 import { drainOnce } from '../worker/drain.ts';
 import { RecordingPushSender } from '../push/sender.ts';
@@ -585,5 +586,66 @@ describe('editing the club', () => {
       sql`SELECT description FROM clubs WHERE id = ${club.clubId}`,
     );
     expect(afterClear.rows[0]?.description).toBeNull();
+  });
+});
+
+describe('the Eboard follows the role', () => {
+  /*
+   * Membership of Eboard & Council is not managed by hand in the normal case: it IS the club's
+   * admin tier, kept in step by `changeRole` in the same transaction as the role itself. Pinned
+   * here because the two could drift apart silently - a promotion that forgot the space leaves an
+   * admin who cannot see the admins' conversation, and a demotion that forgot it leaves an
+   * ex-admin reading it indefinitely, which is the direction that actually matters.
+   */
+  it('adds on promotion and removes on demotion, in step with the role', async () => {
+    const f = await setup();
+    const person = await makeUser('RolePerson');
+    await addMember(h.db, await ctxFor(f.ownerId), f.clubId, person);
+
+    const inEboard = async () => {
+      const rows = await h.db
+        .select()
+        .from(eboardMemberships)
+        .where(
+          and(eq(eboardMemberships.eboardId, f.eboardId), eq(eboardMemberships.userId, person)),
+        );
+      return rows.length === 1;
+    };
+
+    expect(await inEboard(), 'a plain member started out in the space').toBe(false);
+
+    await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, person, 'admin');
+    expect(await roleOf(f.clubId, person)).toBe('admin');
+    expect(await inEboard(), 'promotion did not add them to the space').toBe(true);
+
+    await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, person, 'member');
+    expect(await roleOf(f.clubId, person)).toBe('member');
+    expect(await inEboard(), 'demotion left them able to read the admins space').toBe(false);
+  });
+
+  it('names the actor and the space in what the demoted person is told', async () => {
+    const f = await setup();
+    const person = await makeUser('ToldPerson');
+    await addMember(h.db, await ctxFor(f.ownerId), f.clubId, person);
+    await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, person, 'admin');
+    await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, person, 'member');
+    await drainOnce(h.db, deps);
+
+    const rows = await h.db.execute<{ params: Record<string, unknown> }>(sql`
+      SELECT params FROM notifications
+       WHERE recipient_id = ${person} AND type = 'role_changed'
+       ORDER BY created_at DESC LIMIT 1
+    `);
+    const params = rows.rows[0]?.params;
+    expect(params, 'the demoted member was told nothing at all').toBeTruthy();
+
+    const rendered = renderNotification({
+      type: 'role_changed',
+      params: params as Record<string, unknown>,
+    });
+    // Who did it, and what it cost them. A demotion is somebody's decision, and losing a whole
+    // conversation is the part that gets noticed.
+    expect(rendered.body).toContain('Owner');
+    expect(rendered.body).toContain('Eboard & Council');
   });
 });

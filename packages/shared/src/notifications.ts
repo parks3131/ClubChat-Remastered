@@ -352,12 +352,21 @@ export function renderNotification(n: {
         body: `${p['actorName']} removed you from ${p['clubName']}`,
       };
     case 'role_changed':
+      /*
+       * The Eboard consequence is stated, not left to be discovered.
+       *
+       * A role change silently adds or removes the member from Eboard & Council, in the same
+       * transaction - see `changeRole`. Losing access to a private space is the part of a demotion
+       * somebody actually notices, and a notification that mentions only the role leaves them to
+       * work out on their own why a whole conversation vanished. Naming who did it matters for the
+       * same reason: a demotion is somebody's decision, not a system event.
+       */
       return {
         title: p['clubName']!,
         body:
           p['newRole'] === 'member'
-            ? `${p['actorName']} changed your role in ${p['clubName']} to member`
-            : `${p['actorName']} made you ${p['newRole'] === 'owner' ? 'the owner' : 'an admin'} of ${p['clubName']}`,
+            ? `${p['actorName']} changed your role in ${p['clubName']} to member, and removed you from Eboard & Council`
+            : `${p['actorName']} made you ${p['newRole'] === 'owner' ? 'the owner' : 'an admin'} of ${p['clubName']}, with access to Eboard & Council`,
       };
     case 'poll_created':
       return { title: p['clubName']!, body: `${p['actorName']} created a poll: ${p['question']}` };

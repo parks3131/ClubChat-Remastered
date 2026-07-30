@@ -385,7 +385,12 @@ export async function changeRole(
         await tx
           .insert(eboardMemberships)
           .values({ eboardId, userId })
-          .onConflictDoNothing();
+          // Named, never bare. An untargeted clause claims that EVERY current and future unique
+          // constraint on this table means "ignore this write" - failure mode 13, which cost a
+          // silently-swallowed car-group invariant once already.
+          .onConflictDoNothing({
+            target: [eboardMemberships.eboardId, eboardMemberships.userId],
+          });
       } else {
         await tx
           .delete(eboardMemberships)
