@@ -27,7 +27,10 @@ server, not in the database.
 
 **Two things to know before changing anything.** This is a *remaster*: v1 shipped and worked, on
 a different architecture, and everything in `PRD/` describes behaviour that already ran in
-production. The rebuild exists to move authorization and domain logic out of the database
+production. **v1 is at [github.com/parks3131/ClubChat](https://github.com/parks3131/ClubChat)** -
+read it to settle a question about *what the product does*, since `PRD/` was distilled from it and
+was verified against it table by table on 2026-07-30. Do not read it for *how to build* anything:
+its architecture is what this rebuild exists to replace. The rebuild exists to move authorization and domain logic out of the database
 ([ADR-0002](decisions/0002-application-server-not-database-as-backend.md)), not to rethink the
 product. And [TECH/14-engineering-pitfalls.md](TECH/14-engineering-pitfalls.md) is not
 background reading - every entry there cost at least one long debugging session, and several
