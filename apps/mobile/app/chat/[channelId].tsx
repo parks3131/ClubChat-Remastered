@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -9,18 +9,18 @@ import {
   Text,
   TextInput,
   View,
-} from 'react-native';
-import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
+} from "react-native";
+import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
 import {
   reactionEmoji,
   reactionSummary,
   SYSTEM_ACTOR_ID,
   type MessageEnvelope,
   type ReactionEmoji,
-} from '@clubchat/shared';
-import { useSession } from '../../src/chat-provider.tsx';
-import { channelApi, dmApi, type ChannelMeta } from '../../src/api.ts';
-import { DocumentBubble, PhotoBubble } from '../../src/media-bubble.tsx';
+} from "@clubchat/shared";
+import { useSession } from "../../src/chat-provider.tsx";
+import { channelApi, dmApi, type ChannelMeta } from "../../src/api.ts";
+import { DocumentBubble, PhotoBubble } from "../../src/media-bubble.tsx";
 import {
   pickDocument,
   pickPhoto,
@@ -29,19 +29,20 @@ import {
   UploadError,
   type PickedAttachment,
   type UploadKind,
-} from '../../src/upload.ts';
-import { QuickNav } from '../../src/nav.tsx';
-import { color, radius, space, type } from '../../src/theme.ts';
+} from "../../src/upload.ts";
+import { LinearGradient } from "expo-linear-gradient";
+import { QuickNav } from "../../src/nav.tsx";
+import { color, radius, space, type } from "../../src/theme.ts";
 
 type Row =
-  | { kind: 'message'; message: MessageEnvelope }
+  | { kind: "message"; message: MessageEnvelope }
   /** An optimistic row from the send outbox, not yet acked. */
   | {
-      kind: 'pending';
+      kind: "pending";
       clientMsgId: string;
       body: string;
       failed: boolean;
-      type: 'text' | 'photo' | 'document';
+      type: "text" | "photo" | "document";
       /** Renders the photo the sender just picked, before any round trip. */
       localUri?: string | undefined;
       documentName?: string | undefined;
@@ -49,17 +50,19 @@ type Row =
     };
 
 /** What the disabled composer says, per reason. */
-const DENIED_TEXT: Record<NonNullable<ChannelMeta['postDeniedReason']>, string> = {
+const DENIED_TEXT: Record<
+  NonNullable<ChannelMeta["postDeniedReason"]>,
+  string
+> = {
   // Reports the viewer's own action back to them, and offers the way out.
-  you_blocked_them: 'You blocked this person. Unblock them to send messages.',
+  you_blocked_them: "You blocked this person. Unblock them to send messages.",
   /*
    * Deliberately does not say which of "they blocked you" and "you no longer share a club"
    * happened. PRD/14 requires the composer to state a reason while keeping a block quiet to
    * the blocked party, and both hold only if the reason does not identify the cause.
    */
-  unavailable: 'You can no longer send messages in this conversation.',
+  unavailable: "You can no longer send messages in this conversation.",
 };
-
 
 /**
  * The header quick-nav entries for a group scope.
@@ -71,38 +74,76 @@ const DENIED_TEXT: Record<NonNullable<ChannelMeta['postDeniedReason']>, string> 
  * Every target is addressed by the SCOPE id, which is why the channel meta carries it.
  */
 function scopeLinks(
-  scope: 'club' | 'race' | 'eboard',
+  scope: "club" | "race" | "eboard",
   meta: { scopeId: string; clubId: string | null },
 ): Array<{ href: string; label: string }> {
-  if (scope === 'club') {
+  if (scope === "club") {
     return [
-      { href: `/clubs/${meta.scopeId}/members`, label: 'Members' },
-      { href: `/clubs/${meta.scopeId}/polls`, label: 'Polls' },
-      { href: `/clubs/${meta.scopeId}/routines`, label: 'Routines' },
-      { href: `/clubs/${meta.scopeId}/events`, label: 'Events' },
+      { href: `/clubs/${meta.scopeId}/members`, label: "Members" },
+      { href: `/clubs/${meta.scopeId}/polls`, label: "Polls" },
+      { href: `/clubs/${meta.scopeId}/routines`, label: "Routines" },
+      { href: `/clubs/${meta.scopeId}/events`, label: "Events" },
     ];
   }
-  if (scope === 'race') {
+  if (scope === "race") {
     return [
-      { href: `/races/${meta.scopeId}/roster`, label: 'Members' },
-      { href: `/races/${meta.scopeId}/meet`, label: 'Meet Info' },
-      { href: `/races/${meta.scopeId}/polls`, label: 'Polls' },
-      { href: `/races/${meta.scopeId}/car-groups`, label: 'Car Groups' },
+      { href: `/races/${meta.scopeId}/roster`, label: "Members" },
+      { href: `/races/${meta.scopeId}/meet`, label: "Meet Info" },
+      { href: `/races/${meta.scopeId}/polls`, label: "Polls" },
+      { href: `/races/${meta.scopeId}/car-groups`, label: "Car Groups" },
     ];
   }
   return [
-    { href: `/eboard/${meta.scopeId}/members`, label: 'Members' },
-    { href: `/eboard/${meta.scopeId}/meetings`, label: 'Meetings' },
-    { href: `/eboard/${meta.scopeId}/polls`, label: 'Polls' },
+    { href: `/eboard/${meta.scopeId}/members`, label: "Members" },
+    { href: `/eboard/${meta.scopeId}/meetings`, label: "Meetings" },
+    { href: `/eboard/${meta.scopeId}/polls`, label: "Polls" },
   ];
 }
 
+/**
+ * The bubble shell.
+ *
+ * > **Ported verbatim from v1's `ChatScreen`**, including the reason it is its own component: the
+ * > sent bubble is an Energetic Orange to rust diagonal gradient from the Stitch export, and every
+ * > other bubble is a plain tinted View. Isolating it means `renderItem` never switches element
+ * > types between a `View` and a `LinearGradient` mid-list, which is the kind of change that makes
+ * > a virtualised list drop its recycling.
+ *
+ * The asymmetric corners are v1's too: each bubble has one small corner where its tail would be.
+ */
+function BubbleContainer({
+  mine,
+  pending,
+  children,
+}: {
+  mine: boolean;
+  pending?: boolean;
+  children: React.ReactNode;
+}) {
+  if (mine) {
+    return (
+      <LinearGradient
+        colors={[color.accent, color.accentPressed]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[styles.bubble, styles.sent, pending === true && styles.pending]}
+      >
+        {children}
+      </LinearGradient>
+    );
+  }
+  return <View style={[styles.bubble, styles.received]}>{children}</View>;
+}
+
 export default function ChatScreen() {
-  const { channelId, around } = useLocalSearchParams<{ channelId: string; around?: string }>();
+  const { channelId, around } = useLocalSearchParams<{
+    channelId: string;
+    around?: string;
+  }>();
   const { authState, client, userId, revision, offline } = useSession();
   const router = useRouter();
   const [rows, setRows] = useState<Row[]>([]);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [meta, setMeta] = useState<ChannelMeta | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -137,16 +178,19 @@ export default function ChatScreen() {
     const pending: Row[] = [...client.outbox.values()]
       .filter((entry) => entry.channelId === channelId)
       .map((entry) => ({
-        kind: 'pending' as const,
+        kind: "pending" as const,
         clientMsgId: entry.clientMsgId,
         body: entry.body,
-        failed: entry.status === 'failed',
-        type: entry.type ?? 'text',
+        failed: entry.status === "failed",
+        type: entry.type ?? "text",
         localUri: entry.localUri,
         documentName: entry.documentName,
         documentSize: entry.documentSize,
       }));
-    setRows([...stored.map((message) => ({ kind: 'message' as const, message })), ...pending]);
+    setRows([
+      ...stored.map((message) => ({ kind: "message" as const, message })),
+      ...pending,
+    ]);
     setLoading(false);
   }, [client, channelId]);
 
@@ -189,7 +233,8 @@ export default function ChatScreen() {
    */
   useEffect(() => {
     const target = Number(around);
-    if (!client || !channelId || !Number.isInteger(target) || target <= 0) return;
+    if (!client || !channelId || !Number.isInteger(target) || target <= 0)
+      return;
 
     let alive = true;
     void (async () => {
@@ -201,7 +246,7 @@ export default function ChatScreen() {
       } catch {
         // Leave the tail on screen. A jump that cannot load is a worse outcome than a jump that
         // does not happen, and the notice below says which.
-        if (alive) setNotice('Could not open that message.');
+        if (alive) setNotice("Could not open that message.");
       } finally {
         if (alive) setJumpedTo(target);
       }
@@ -221,9 +266,15 @@ export default function ChatScreen() {
    */
   useEffect(() => {
     if (jumpedTo === null) return;
-    const index = rows.findIndex((row) => row.kind === 'message' && row.message.seq === jumpedTo);
+    const index = rows.findIndex(
+      (row) => row.kind === "message" && row.message.seq === jumpedTo,
+    );
     if (index < 0) return;
-    listRef.current?.scrollToIndex({ index, viewPosition: 0.5, animated: false });
+    listRef.current?.scrollToIndex({
+      index,
+      viewPosition: 0.5,
+      animated: false,
+    });
   }, [jumpedTo, rows]);
 
   // Opening a chat marks it read. That is the ONLY thing that clears its unread count -
@@ -231,24 +282,25 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!client || !channelId) return;
     const channel = client.channels.find((entry) => entry.id === channelId);
-    if (channel && channel.lastSeq > 0) client.markRead(channelId, channel.lastSeq);
+    if (channel && channel.lastSeq > 0)
+      client.markRead(channelId, channel.lastSeq);
   }, [client, channelId, revision]);
 
-  if (authState === 'checking') {
+  if (authState === "checking") {
     return (
       <View style={styles.centered}>
         <ActivityIndicator color={color.accent} />
       </View>
     );
   }
-  if (authState === 'signed-out') return <Redirect href="/sign-in" />;
+  if (authState === "signed-out") return <Redirect href="/sign-in" />;
 
   const canPost = meta === null ? true : meta.canPost;
 
   const send = async () => {
     const body = draft.trim();
     if (body.length === 0 || !client || !channelId || !canPost) return;
-    setDraft('');
+    setDraft("");
     try {
       await client.sendWithRetry(channelId, body);
     } catch {
@@ -274,7 +326,7 @@ export default function ChatScreen() {
     } catch {
       // A refusal here is a blocked DM participant or a deleted message. Say so rather than
       // leaving a pill that silently did not stick.
-      setNotice('Could not react to that message.');
+      setNotice("Could not react to that message.");
     }
     await refresh();
   };
@@ -286,7 +338,10 @@ export default function ChatScreen() {
    * retry from the outbox across a reconnect: the object is already durable and already
    * verified, so a retry re-sends an id rather than re-sending bytes.
    */
-  const attach = async (pick: () => Promise<PickedAttachment | null>, kind: UploadKind) => {
+  const attach = async (
+    pick: () => Promise<PickedAttachment | null>,
+    kind: UploadKind,
+  ) => {
     setAttachOpen(false);
     if (!client || !channelId || uploading) return;
 
@@ -297,7 +352,7 @@ export default function ChatScreen() {
       if (!picked) return;
 
       const uploaded = await uploadAttachment(channelId, picked, kind);
-      await client.sendWithRetry(channelId, '', {
+      await client.sendWithRetry(channelId, "", {
         type: kind,
         mediaId: uploaded.mediaId,
         localUri: uploaded.localUri,
@@ -310,7 +365,7 @@ export default function ChatScreen() {
       setNotice(
         error instanceof UploadError
           ? error.message
-          : 'The attachment could not be sent. Try again.',
+          : "The attachment could not be sent. Try again.",
       );
     } finally {
       setUploading(false);
@@ -335,8 +390,8 @@ export default function ChatScreen() {
    * and of an Eboard space, so a fallback pointing at the hub would bounce hub to chat to hub
    * forever on an entry with no history. A DM's parent is the message list.
    */
-  const parent = meta?.scope === 'dm' ? '/dm' : '/clubs';
-  const parentLabel = meta?.scope === 'dm' ? 'Messages' : 'Clubs';
+  const parent = meta?.scope === "dm" ? "/dm" : "/clubs";
+  const parentLabel = meta?.scope === "dm" ? "Messages" : "Clubs";
 
   const act = async (run: () => Promise<unknown>, message: string) => {
     setMenuOpen(false);
@@ -345,14 +400,14 @@ export default function ChatScreen() {
       setNotice(message);
       await loadMeta();
     } catch {
-      setNotice('That did not work. Try again.');
+      setNotice("That did not work. Try again.");
     }
   };
 
   return (
     <KeyboardAvoidingView
       style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       {/*
         Chat's own header. The back control ALWAYS renders and always has an explicit
@@ -369,7 +424,7 @@ export default function ChatScreen() {
           <Text style={styles.backLabel}>{parentLabel}</Text>
         </Pressable>
         <Text style={styles.headerTitle} numberOfLines={1}>
-          {meta?.name ?? 'Chat'}
+          {meta?.name ?? "Chat"}
         </Text>
         <Pressable
           onPress={() => setMenuOpen((open) => !open)}
@@ -394,11 +449,11 @@ export default function ChatScreen() {
       {meta !== null && (
         <QuickNav
           items={[
-            { href: `/channels/${channelId}/highlights`, label: 'Highlights' },
-            { href: `/channels/${channelId}/gallery`, label: 'Gallery' },
-            ...(meta.scope === 'dm'
+            { href: `/channels/${channelId}/highlights`, label: "Highlights" },
+            { href: `/channels/${channelId}/gallery`, label: "Gallery" },
+            ...(meta.scope === "dm"
               ? meta.peer !== null
-                ? [{ href: `/users/${meta.peer.userId}`, label: 'Profile' }]
+                ? [{ href: `/users/${meta.peer.userId}`, label: "Profile" }]
                 : []
               : scopeLinks(meta.scope, meta)),
           ]}
@@ -421,17 +476,25 @@ export default function ChatScreen() {
                   meta?.muted
                     ? dmApi.unmute(channelId!)
                     : dmApi.mute(channelId!),
-                meta?.muted ? 'Unmuted.' : 'Muted. You will still see unread counts.',
+                meta?.muted
+                  ? "Unmuted."
+                  : "Muted. You will still see unread counts.",
               )
             }
             accessibilityRole="button"
-            accessibilityLabel={meta?.muted ? 'Unmute this conversation' : 'Mute this conversation'}
+            accessibilityLabel={
+              meta?.muted
+                ? "Unmute this conversation"
+                : "Mute this conversation"
+            }
           >
             <Text style={styles.sheetLabel}>
-              {meta?.muted ? 'Unmute conversation' : 'Mute conversation'}
+              {meta?.muted ? "Unmute conversation" : "Mute conversation"}
             </Text>
             <Text style={styles.sheetHint}>
-              {meta?.muted ? 'Notifications on again' : 'No notifications, unread still counts'}
+              {meta?.muted
+                ? "Notifications on again"
+                : "No notifications, unread still counts"}
             </Text>
           </Pressable>
 
@@ -451,16 +514,25 @@ export default function ChatScreen() {
               }
               accessibilityRole="button"
               accessibilityLabel={
-                meta.peer.blockedByMe ? `Unblock ${meta.peer.name}` : `Block ${meta.peer.name}`
+                meta.peer.blockedByMe
+                  ? `Unblock ${meta.peer.name}`
+                  : `Block ${meta.peer.name}`
               }
             >
-              <Text style={[styles.sheetLabel, !meta.peer.blockedByMe && styles.destructive]}>
-                {meta.peer.blockedByMe ? `Unblock ${meta.peer.name}` : `Block ${meta.peer.name}`}
+              <Text
+                style={[
+                  styles.sheetLabel,
+                  !meta.peer.blockedByMe && styles.destructive,
+                ]}
+              >
+                {meta.peer.blockedByMe
+                  ? `Unblock ${meta.peer.name}`
+                  : `Block ${meta.peer.name}`}
               </Text>
               <Text style={styles.sheetHint}>
                 {meta.peer.blockedByMe
-                  ? 'You will both be able to send again'
-                  : 'Instant. Nobody reviews it, and they are not told'}
+                  ? "You will both be able to send again"
+                  : "Instant. Nobody reviews it, and they are not told"}
               </Text>
             </Pressable>
           )}
@@ -483,7 +555,9 @@ export default function ChatScreen() {
       */}
       {offline && (
         <View style={styles.offlineBanner}>
-          <Text style={styles.offlineText}>Offline. Showing saved messages.</Text>
+          <Text style={styles.offlineText}>
+            Offline. Showing saved messages.
+          </Text>
         </View>
       )}
 
@@ -509,7 +583,9 @@ export default function ChatScreen() {
           ref={listRef}
           data={rows}
           keyExtractor={(row) =>
-            row.kind === 'message' ? `m-${row.message.seq}` : `p-${row.clientMsgId}`
+            row.kind === "message"
+              ? `m-${row.message.seq}`
+              : `p-${row.clientMsgId}`
           }
           contentContainerStyle={styles.list}
           /*
@@ -518,7 +594,8 @@ export default function ChatScreen() {
             it.
           */
           onContentSizeChange={() => {
-            if (jumpedTo === null) listRef.current?.scrollToEnd({ animated: false });
+            if (jumpedTo === null)
+              listRef.current?.scrollToEnd({ animated: false });
           }}
           /*
             A row whose height has not been measured yet cannot be scrolled to, which is exactly the
@@ -527,7 +604,10 @@ export default function ChatScreen() {
             again once that render has measured it.
           */
           onScrollToIndexFailed={(info) => {
-            listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+            listRef.current?.scrollToOffset({
+              offset: info.averageItemLength * info.index,
+              animated: false,
+            });
             setTimeout(() => {
               if (jumpedTo !== null) {
                 listRef.current?.scrollToIndex({
@@ -541,24 +621,28 @@ export default function ChatScreen() {
           ListEmptyComponent={
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>No messages yet</Text>
-              <Text style={styles.emptyBody}>Say something to get started.</Text>
+              <Text style={styles.emptyBody}>
+                Say something to get started.
+              </Text>
             </View>
           }
           renderItem={({ item }) => {
-            if (item.kind === 'pending') {
+            if (item.kind === "pending") {
               return (
-                <View style={[styles.bubble, styles.sent, styles.pending]}>
-                  {item.type === 'photo' && (
+                <BubbleContainer mine pending>
+                  {item.type === "photo" && (
                     <PhotoBubble mediaId={null} localUri={item.localUri} mine />
                   )}
-                  {item.type === 'document' && (
+                  {item.type === "document" && (
                     <DocumentBubble
                       name={item.documentName ?? null}
                       size={item.documentSize ?? null}
                       mine
                     />
                   )}
-                  {item.body.length > 0 && <Text style={styles.sentText}>{item.body}</Text>}
+                  {item.body.length > 0 && (
+                    <Text style={styles.sentText}>{item.body}</Text>
+                  )}
                   {item.failed ? (
                     <Pressable
                       onPress={() => void retry(item.clientMsgId)}
@@ -570,7 +654,7 @@ export default function ChatScreen() {
                   ) : (
                     <Text style={styles.pendingLabel}>Sending</Text>
                   )}
-                </View>
+                </BubbleContainer>
               );
             }
 
@@ -614,33 +698,40 @@ export default function ChatScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={
                     mine
-                      ? 'Press and hold to react to your message'
-                      : 'Press and hold to react to or report this message'
+                      ? "Press and hold to react to your message"
+                      : "Press and hold to react to or report this message"
                   }
-                  style={[styles.bubble, mine ? styles.sent : styles.received]}
+                  // The gesture stays on the OUTERMOST element and the gradient sits inside it,
+                  // so the bubble's fill can be a LinearGradient without the pressable becoming
+                  // one - and without nesting a second pressable (failure mode 16).
+                  style={mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs}
                 >
-                  {message.type === 'photo' && message.mediaId !== null && (
-                    <PhotoBubble mediaId={message.mediaId} mine={mine} />
-                  )}
-                  {message.type === 'document' && (
-                    <DocumentBubble
-                      name={message.documentName}
-                      size={message.documentSize}
-                      mine={mine}
-                    />
-                  )}
-                  {/* A photo may carry a caption, and usually does not. */}
-                  {message.body !== null && message.body.length > 0 && (
-                    <Text style={mine ? styles.sentText : styles.receivedText}>
-                      {message.body}
+                  <BubbleContainer mine={mine}>
+                    {message.type === "photo" && message.mediaId !== null && (
+                      <PhotoBubble mediaId={message.mediaId} mine={mine} />
+                    )}
+                    {message.type === "document" && (
+                      <DocumentBubble
+                        name={message.documentName}
+                        size={message.documentSize}
+                        mine={mine}
+                      />
+                    )}
+                    {/* A photo may carry a caption, and usually does not. */}
+                    {message.body !== null && message.body.length > 0 && (
+                      <Text
+                        style={mine ? styles.sentText : styles.receivedText}
+                      >
+                        {message.body}
+                      </Text>
+                    )}
+                    <Text style={mine ? styles.sentMeta : styles.receivedMeta}>
+                      {new Date(message.createdAt).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
                     </Text>
-                  )}
-                  <Text style={mine ? styles.sentMeta : styles.receivedMeta}>
-                    {new Date(message.createdAt).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </Text>
+                  </BubbleContainer>
                 </Pressable>
 
                 {/*
@@ -652,7 +743,12 @@ export default function ChatScreen() {
                   const summary = reactionSummary(message.reactions, userId);
                   if (summary.length === 0) return null;
                   return (
-                    <View style={[styles.pillRow, mine ? styles.pillRowMine : styles.pillRowTheirs]}>
+                    <View
+                      style={[
+                        styles.pillRow,
+                        mine ? styles.pillRowMine : styles.pillRowTheirs,
+                      ]}
+                    >
                       {summary.map((entry) => (
                         <Pressable
                           key={entry.emoji}
@@ -666,7 +762,12 @@ export default function ChatScreen() {
                           }
                         >
                           <Text style={styles.pillEmoji}>{entry.emoji}</Text>
-                          <Text style={[styles.pillCount, entry.mine && styles.pillCountMine]}>
+                          <Text
+                            style={[
+                              styles.pillCount,
+                              entry.mine && styles.pillCountMine,
+                            ]}
+                          >
                             {entry.count}
                           </Text>
                         </Pressable>
@@ -675,59 +776,67 @@ export default function ChatScreen() {
                   );
                 })()}
 
-                {selected === message.seq && confirmingReport !== message.seq && (
-                  <View style={styles.actionSheet}>
-                    {/*
+                {selected === message.seq &&
+                  confirmingReport !== message.seq && (
+                    <View style={styles.actionSheet}>
+                      {/*
                       Six large tap targets, which is the whole reason the set is fixed rather
                       than a searchable grid: reacting should cost one tap.
                     */}
-                    <View style={styles.emojiRow}>
-                      {reactionEmoji.map((emoji) => (
-                        <Pressable
-                          key={emoji}
-                          style={styles.emojiButton}
-                          onPress={() => {
-                            setSelected(null);
-                            void react(message.seq, emoji);
-                          }}
-                          accessibilityRole="button"
-                          accessibilityLabel={`React with ${emoji}`}
-                        >
-                          <Text style={styles.emojiGlyph}>{emoji}</Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                    <View style={styles.reportActions}>
-                      <Pressable
-                        style={styles.secondaryButton}
-                        onPress={() => setSelected(null)}
-                        accessibilityRole="button"
-                        accessibilityLabel="Close message actions"
-                      >
-                        <Text style={styles.secondaryLabel}>Close</Text>
-                      </Pressable>
-                      {/* Nobody can report their own message, so it is not offered. */}
-                      {!mine && (
+                      <View style={styles.emojiRow}>
+                        {reactionEmoji.map((emoji) => (
+                          <Pressable
+                            key={emoji}
+                            style={styles.emojiButton}
+                            onPress={() => {
+                              setSelected(null);
+                              void react(message.seq, emoji);
+                            }}
+                            accessibilityRole="button"
+                            accessibilityLabel={`React with ${emoji}`}
+                          >
+                            <Text style={styles.emojiGlyph}>{emoji}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                      <View style={styles.reportActions}>
                         <Pressable
                           style={styles.secondaryButton}
-                          onPress={() => setConfirmingReport(message.seq)}
+                          onPress={() => setSelected(null)}
                           accessibilityRole="button"
-                          accessibilityLabel="Report this message"
+                          accessibilityLabel="Close message actions"
                         >
-                          <Text style={[styles.secondaryLabel, styles.destructive]}>Report</Text>
+                          <Text style={styles.secondaryLabel}>Close</Text>
                         </Pressable>
-                      )}
+                        {/* Nobody can report their own message, so it is not offered. */}
+                        {!mine && (
+                          <Pressable
+                            style={styles.secondaryButton}
+                            onPress={() => setConfirmingReport(message.seq)}
+                            accessibilityRole="button"
+                            accessibilityLabel="Report this message"
+                          >
+                            <Text
+                              style={[
+                                styles.secondaryLabel,
+                                styles.destructive,
+                              ]}
+                            >
+                              Report
+                            </Text>
+                          </Pressable>
+                        )}
+                      </View>
                     </View>
-                  </View>
-                )}
+                  )}
 
                 {confirmingReport === message.seq && (
                   <View style={styles.actionSheet}>
                     <Text style={styles.reportPrompt}>
-                      {meta?.scope === 'dm'
+                      {meta?.scope === "dm"
                         ? // No club admin ever sees the contents of a DM, so say where it goes.
-                          'Report this to ClubChat moderators?'
-                        : 'Report this to the admins of this space?'}
+                          "Report this to ClubChat moderators?"
+                        : "Report this to the admins of this space?"}
                     </Text>
                     <View style={styles.reportActions}>
                       <Pressable
@@ -751,11 +860,13 @@ export default function ChatScreen() {
                             .then((result) =>
                               setNotice(
                                 result.alreadyReported
-                                  ? 'You already reported this message.'
-                                  : 'Reported. The other person is not told.',
+                                  ? "You already reported this message."
+                                  : "Reported. The other person is not told.",
                               ),
                             )
-                            .catch(() => setNotice('Could not report that. Try again.'));
+                            .catch(() =>
+                              setNotice("Could not report that. Try again."),
+                            );
                         }}
                         accessibilityRole="button"
                         accessibilityLabel="Confirm report"
@@ -780,9 +891,19 @@ export default function ChatScreen() {
         <View style={styles.sheet}>
           {(
             [
-              ['Photos', 'Choose an image from your library', pickPhoto, 'photo'],
-              ['Camera', 'Take a photo now', takePhoto, 'photo'],
-              ['Document', 'Any file, shown with its name and size', pickDocument, 'document'],
+              [
+                "Photos",
+                "Choose an image from your library",
+                pickPhoto,
+                "photo",
+              ],
+              ["Camera", "Take a photo now", takePhoto, "photo"],
+              [
+                "Document",
+                "Any file, shown with its name and size",
+                pickDocument,
+                "document",
+              ],
             ] as const
           ).map(([label, hint, pick, kind]) => (
             <Pressable
@@ -818,7 +939,9 @@ export default function ChatScreen() {
             onPress={() => setAttachOpen((open) => !open)}
             disabled={uploading}
             accessibilityRole="button"
-            accessibilityLabel={uploading ? 'Uploading an attachment' : 'Attach a photo or file'}
+            accessibilityLabel={
+              uploading ? "Uploading an attachment" : "Attach a photo or file"
+            }
           >
             {uploading ? (
               <ActivityIndicator color={color.accent} />
@@ -837,7 +960,10 @@ export default function ChatScreen() {
             onSubmitEditing={() => void send()}
           />
           <Pressable
-            style={[styles.sendButton, draft.trim().length === 0 && styles.sendDisabled]}
+            style={[
+              styles.sendButton,
+              draft.trim().length === 0 && styles.sendDisabled,
+            ]}
             onPress={() => void send()}
             disabled={draft.trim().length === 0}
             accessibilityRole="button"
@@ -854,7 +980,7 @@ export default function ChatScreen() {
         */
         <View style={styles.composerDisabled}>
           <Text style={styles.composerDisabledText}>
-            {DENIED_TEXT[meta?.postDeniedReason ?? 'unavailable']}
+            {DENIED_TEXT[meta?.postDeniedReason ?? "unavailable"]}
           </Text>
         </View>
       )}
@@ -863,15 +989,21 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
-  /** The row a jump landed on. A left rule rather than a fill, so the bubble keeps its own colour. */
+  /**
+   * The row a jump landed on.
+   *
+   * v1's treatment: a brief tinted wash behind the whole row rather than a rule beside it, so the
+   * eye lands on the message itself. `secondaryContainer` at 50/255 alpha, which is v1's own value.
+   */
   jumpTarget: {
-    borderLeftWidth: 3,
-    borderLeftColor: color.accent,
-    backgroundColor: color.chrome,
-    borderRadius: radius.sm,
+    backgroundColor: color.secondaryContainer + "50",
+    borderRadius: radius.lg,
+    marginHorizontal: -space.sm,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.xs,
   },
   flex: { flex: 1, backgroundColor: color.appBackground },
-  centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   list: {
     padding: space.md,
     gap: space.sm,
@@ -879,43 +1011,63 @@ const styles = StyleSheet.create({
     // Anchor to the bottom so a short conversation sits just above the composer rather
     // than stranded at the top under a screen of empty space. With flexGrow alone the
     // content container fills the viewport and leaves the gap below the messages.
-    justifyContent: 'flex-end',
+    justifyContent: "flex-end",
   },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.sm },
+  empty: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: space.sm,
+  },
   emptyTitle: { ...type.title, color: color.textPrimary },
   emptyBody: { ...type.bodySmall, color: color.textSecondary },
-  bubble: {
-    maxWidth: '80%',
-    borderRadius: radius.md,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    gap: space.xs,
+  // v1's bubble metrics, verbatim: 82% max width, 12px padding, and one small corner per bubble
+  // where its tail would be. The sent bubble carries no backgroundColor because its fill is the
+  // gradient in BubbleContainer.
+  bubble: { padding: space.sm + 4, gap: space.xs },
+  bubbleWrapMine: { alignSelf: "flex-end", maxWidth: "82%" },
+  bubbleWrapTheirs: { alignSelf: "flex-start", maxWidth: "82%" },
+  sent: {
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    borderBottomLeftRadius: radius.xs,
+    borderBottomRightRadius: radius.lg,
   },
-  sent: { alignSelf: 'flex-end', backgroundColor: color.accent },
   received: {
-    alignSelf: 'flex-start',
-    backgroundColor: color.card,
+    backgroundColor: "rgba(255,255,255,0.9)",
     borderWidth: 1,
-    borderColor: color.divider,
+    borderColor: "rgba(0,0,0,0.05)",
+    borderTopLeftRadius: radius.xs,
+    borderTopRightRadius: radius.lg,
+    borderBottomLeftRadius: radius.lg,
+    borderBottomRightRadius: radius.lg,
   },
   pending: { opacity: 0.6 },
   pendingLabel: { ...type.label, color: color.onAccent },
-  failed: { ...type.label, color: color.onAccent, textDecorationLine: 'underline' },
-  sentText: { ...type.body, color: color.onAccent },
-  receivedText: { ...type.body, color: color.textPrimary },
+  failed: {
+    ...type.label,
+    color: color.onAccent,
+    textDecorationLine: "underline",
+  },
+  sentText: { ...type.body, fontSize: 15, color: color.onAccent },
+  receivedText: { ...type.body, fontSize: 15, color: color.textPrimary },
   sentMeta: { ...type.label, color: color.onAccent, opacity: 0.8 },
   receivedMeta: { ...type.label, color: color.textSecondary },
-  systemRow: { alignItems: 'center', paddingVertical: space.xs },
-  systemText: { ...type.bodySmall, color: color.textSecondary, textAlign: 'center' },
+  systemRow: { alignItems: "center", paddingVertical: space.xs },
+  systemText: {
+    ...type.bodySmall,
+    color: color.textSecondary,
+    textAlign: "center",
+  },
   tombstone: {
     ...type.bodySmall,
     color: color.textSecondary,
-    fontStyle: 'italic',
-    textAlign: 'center',
+    fontStyle: "italic",
+    textAlign: "center",
   },
   composer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
+    flexDirection: "row",
+    alignItems: "flex-end",
     gap: space.sm,
     padding: space.sm,
     backgroundColor: color.chrome,
@@ -927,9 +1079,13 @@ const styles = StyleSheet.create({
     backgroundColor: color.chrome,
     borderTopWidth: 1,
     borderTopColor: color.divider,
-    alignItems: 'center',
+    alignItems: "center",
   },
-  composerDisabledText: { ...type.bodySmall, color: color.textSecondary, textAlign: 'center' },
+  composerDisabledText: {
+    ...type.bodySmall,
+    color: color.textSecondary,
+    textAlign: "center",
+  },
   input: {
     flex: 1,
     maxHeight: 120,
@@ -953,19 +1109,28 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     backgroundColor: color.card,
     borderWidth: 1,
     borderColor: color.divider,
   },
   // Optically centred: the glyph's own line height sits high in the box.
-  attachLabel: { fontSize: 24, lineHeight: 28, color: color.accent, marginTop: -2 },
-  sendLabel: { ...type.label, color: color.onAccent, textTransform: 'uppercase' },
+  attachLabel: {
+    fontSize: 24,
+    lineHeight: 28,
+    color: color.accent,
+    marginTop: -2,
+  },
+  sendLabel: {
+    ...type.label,
+    color: color.onAccent,
+    textTransform: "uppercase",
+  },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     gap: space.md,
     paddingHorizontal: space.md,
     paddingVertical: space.sm,
@@ -973,17 +1138,26 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: color.divider,
   },
-  headerTitle: { ...type.headline, color: color.accent, flex: 1, textAlign: 'center' },
+  headerTitle: {
+    ...type.headline,
+    color: color.accent,
+    flex: 1,
+    textAlign: "center",
+  },
   // Matches the back control's optical width so the centred title stays on axis.
-  headerAction: { minWidth: 44, alignItems: 'flex-end' },
+  headerAction: { minWidth: 44, alignItems: "flex-end" },
   offlineBanner: {
     backgroundColor: color.fallback,
     paddingVertical: space.sm,
     paddingHorizontal: space.md,
-    alignItems: 'center',
+    alignItems: "center",
   },
-  offlineText: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
-  backLabel: { ...type.label, color: color.accent, textTransform: 'uppercase' },
+  offlineText: {
+    ...type.label,
+    color: color.textSecondary,
+    textTransform: "uppercase",
+  },
+  backLabel: { ...type.label, color: color.accent, textTransform: "uppercase" },
   sheet: {
     backgroundColor: color.card,
     borderBottomWidth: 1,
@@ -1004,10 +1178,14 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
     paddingHorizontal: space.md,
   },
-  noticeText: { ...type.bodySmall, color: color.textPrimary, textAlign: 'center' },
+  noticeText: {
+    ...type.bodySmall,
+    color: color.textPrimary,
+    textAlign: "center",
+  },
   actionSheet: {
-    alignSelf: 'flex-start',
-    maxWidth: '90%',
+    alignSelf: "flex-start",
+    maxWidth: "90%",
     backgroundColor: color.card,
     borderRadius: radius.sm,
     borderWidth: 1,
@@ -1016,24 +1194,33 @@ const styles = StyleSheet.create({
     gap: space.sm,
     marginTop: space.xs,
   },
-  emojiRow: { flexDirection: 'row', gap: space.xs, justifyContent: 'space-between' },
+  emojiRow: {
+    flexDirection: "row",
+    gap: space.xs,
+    justifyContent: "space-between",
+  },
   emojiButton: {
     // A generous target: this is the control the whole fixed-set decision exists to keep fast.
     minWidth: 44,
     minHeight: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     borderRadius: radius.pill,
     backgroundColor: color.appBackground,
   },
   emojiGlyph: { fontSize: 24, lineHeight: 30 },
-  pillRow: { flexDirection: 'row', gap: space.xs, flexWrap: 'wrap', marginTop: -space.xs },
+  pillRow: {
+    flexDirection: "row",
+    gap: space.xs,
+    flexWrap: "wrap",
+    marginTop: -space.xs,
+  },
   // Aligned under the bubble they belong to, on whichever side it sits.
-  pillRowMine: { alignSelf: 'flex-end' },
-  pillRowTheirs: { alignSelf: 'flex-start' },
+  pillRowMine: { alignSelf: "flex-end" },
+  pillRowTheirs: { alignSelf: "flex-start" },
   pill: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: space.xs,
     paddingHorizontal: space.sm,
     paddingVertical: space.xs,
@@ -1049,15 +1236,19 @@ const styles = StyleSheet.create({
   pillCount: { ...type.label, color: color.textSecondary },
   pillCountMine: { color: color.accent },
   reportPrompt: { ...type.bodySmall, color: color.textPrimary },
-  reportActions: { flexDirection: 'row', gap: space.sm },
+  reportActions: { flexDirection: "row", gap: space.sm },
   button: {
     flex: 1,
     backgroundColor: color.accent,
     borderRadius: radius.sm,
     paddingVertical: space.sm,
-    alignItems: 'center',
+    alignItems: "center",
   },
-  buttonLabel: { ...type.label, color: color.onAccent, textTransform: 'uppercase' },
+  buttonLabel: {
+    ...type.label,
+    color: color.onAccent,
+    textTransform: "uppercase",
+  },
   secondaryButton: {
     flex: 1,
     backgroundColor: color.card,
@@ -1065,7 +1256,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.divider,
     paddingVertical: space.sm,
-    alignItems: 'center',
+    alignItems: "center",
   },
-  secondaryLabel: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
+  secondaryLabel: {
+    ...type.label,
+    color: color.textSecondary,
+    textTransform: "uppercase",
+  },
 });
