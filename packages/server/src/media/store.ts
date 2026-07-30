@@ -53,6 +53,29 @@ export interface MediaStore {
     mime: string;
   }): Promise<void>;
 
+  /**
+   * A URL that reads an object directly from the store, for environments with no CDN.
+   *
+   * > **This exists because the custom `exp`/`sig` scheme is validated by the CDN edge, not by
+   * > the object store.** Production puts a signature-checking CDN in front of the bucket, and
+   * > the hour-aligned HMAC is what gives every viewer a byte-identical URL and therefore one
+   * > shared cache entry. Point that same URL straight at the bucket and it is just an
+   * > unauthenticated GET on private content, which is correctly refused with 403 - so
+   * > development, which has no CDN, needs the store to do the signing instead.
+   *
+   * `signingDateMs` is pinned by the caller rather than defaulted to now, and that is the whole
+   * reason this takes a date at all: a presigned URL embeds its signing timestamp, so signing
+   * with "now" produces a different URL on every request and destroys the cache-sharing property
+   * the alignment was designed for. Pinned to the hour, the URL is deterministic within the
+   * window exactly as the CDN scheme is.
+   */
+  presignDownload(input: {
+    bucket: string;
+    objectKey: string;
+    signingDateMs: number;
+    expiresInSeconds: number;
+  }): Promise<string>;
+
   /** Remove an object. Used by the nightly GC and nothing else. */
   remove(input: { bucket: string; objectKey: string }): Promise<void>;
 
@@ -199,6 +222,25 @@ export class S3MediaStore implements MediaStore {
     };
   }
 
+  async presignDownload(input: {
+    bucket: string;
+    objectKey: string;
+    signingDateMs: number;
+    expiresInSeconds: number;
+  }): Promise<string> {
+    const { client, lib, presign } = await this.sdk();
+    const command = new lib.GetObjectCommand({
+      Bucket: input.bucket,
+      Key: input.objectKey,
+    });
+    return presign.getSignedUrl(client, command, {
+      expiresIn: input.expiresInSeconds,
+      // The pinned date. Without it the SDK stamps `new Date()` into `X-Amz-Date` and every
+      // caller gets a different URL for the same bytes.
+      signingDate: new Date(input.signingDateMs),
+    });
+  }
+
   async head(input: { bucket: string; objectKey: string }): Promise<ObjectHead> {
     const { client, lib } = await this.sdk();
     try {
@@ -284,6 +326,17 @@ export class FakeMediaStore implements MediaStore {
       headers: { 'content-type': input.mime },
       expiresInSeconds: UPLOAD_URL_TTL_SECONDS,
     };
+  }
+
+  async presignDownload(input: {
+    bucket: string;
+    objectKey: string;
+    signingDateMs: number;
+    expiresInSeconds: number;
+  }): Promise<string> {
+    // Deterministic within a window, like the real one, so a test can assert two resolves in
+    // the same hour produce the identical string.
+    return `https://fake.invalid/${input.bucket}/${input.objectKey}?d=${input.signingDateMs}&e=${input.expiresInSeconds}`;
   }
 
   /** Stand in for the client's direct PUT. */

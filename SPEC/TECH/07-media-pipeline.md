@@ -75,3 +75,58 @@ GET /media/:id                     ← authenticated, authorized (same membershi
 | Debt 9 - no size or MIME limits | Enforced at upload-intent *and* re-verified at complete |
 | No image resizing; full-resolution originals served | Worker derives `thumb` (400px) and `display` (1600px) variants; chat renders `display`, gallery grid renders `thumb` |
 | Gallery signs an entire photo history in one unpaginated call | Gallery pages like anything else; URLs are stable so there is nothing to "sign in batches" |
+
+---
+
+## Who signs a download URL
+
+**Added while completing Phase 3, on discovering that the client could not render a photo at all.**
+
+The hour-aligned `exp`/`sig` pair is validated by **the CDN edge**, not by the object store. That
+is the production shape and it is what buys the debt-7 fix: one byte-identical URL per window,
+therefore one shared cache entry for all 300 members instead of 300 origin fetches.
+
+Point that same URL straight at a bucket with no CDN in front of it and the store has never heard
+of `exp` or `sig`, so it is simply an unauthenticated GET on private content - correctly refused
+with 403. Development has no CDN, so every photo in the app was unreachable while every server
+test passed, because the tests exercise the signing function rather than fetching the bytes.
+
+So the signing mode is explicit configuration, `MEDIA_URL_MODE`:
+
+| Mode | Who validates | Where |
+|---|---|---|
+| `cdn` (default) | A signature-checking CDN at the edge, against `exp`/`sig` | Production |
+| `presign` | The object store itself, against its own presigned GET | Development, and any deployment with no CDN |
+
+**The hour alignment survives both.** A store-presigned URL embeds its signing timestamp, so
+signing with "now" would produce a different URL per request and destroy the cache-sharing
+property. The signing date is therefore pinned to the **floor of the current hour** and the expiry
+carried as the distance from that floor to the aligned expiry - which makes the presigned URL
+byte-identical within the window exactly as the CDN one is. Asserted by resolving twice and
+comparing the strings.
+
+`cdn` is the default so that a missing value in production cannot silently start handing out
+store-signed URLs.
+
+## Reaching media from a client
+
+Two routes, one authorization:
+
+| Route | Answers | For |
+|---|---|---|
+| `GET /media/:id` | `302` to the signed URL, `private, max-age=600` | An `<img src>`, which sends no custom headers and follows the redirect itself |
+| `GET /media/:id/url` | `200` with `{url, expiresAt}`, `no-store` | A client that holds an `Authorization` header |
+
+Both call the same function and re-evaluate the same membership predicate on every request. The
+JSON sibling exists because **a 302 behind an `Authorization` header is unusable as an image
+source on the web**: `<img src>` cannot carry the header, and react-native-web renders every
+`Image` as an `<img>`, so the native path (`Image` with `{uri, headers}`) has no web equivalent.
+
+The cache headers differ deliberately. The redirect is hit on every render, so caching it
+privately is what stops a re-render re-authorizing. The JSON route is consumed by a client that
+already memoizes the resolved URL for the life of its window, so an HTTP cache in front of it
+saves nothing and costs something: a member who lost access would keep resolving successfully for
+up to ten more minutes.
+
+**A token in the query string is not an option** for either. Credentials never go in a URL, and
+the signature deliberately grants fetchability of an already-unguessable key rather than access.

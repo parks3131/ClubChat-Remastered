@@ -13,8 +13,18 @@
  *     on the ack path leaves a permanent, silent hole. See `decideGap`.
  */
 
-import { decideGap, type ChannelState, type MessageEnvelope } from '@clubchat/shared';
-import { InMemoryMessageStore, type MessageStore, type PendingSend } from './store.ts';
+import {
+  decideGap,
+  type ChannelState,
+  type MessageEnvelope,
+  type MessageReaction,
+} from '@clubchat/shared';
+import {
+  InMemoryMessageStore,
+  type MessagePatch,
+  type MessageStore,
+  type PendingSend,
+} from './store.ts';
 
 /** Minimal socket surface, so Node's `ws` and the RN/browser global both fit. */
 export interface SocketLike {
@@ -205,10 +215,20 @@ export class ChatClient {
             channelId,
             seq,
             senderId: this.userId ?? '',
-            type: 'text',
+            // The outbox knows what was sent. Hardcoding 'text' here stored a photo as a
+            // text message locally until the next sync overwrote it.
+            type: this.outbox.get(clientMsgId)?.type ?? 'text',
             body: this.outbox.get(clientMsgId)?.body ?? null,
             clientMsgId,
             pinned: false,
+            // A message we have only just sent cannot have been reacted to. Any reaction
+            // that lands afterwards arrives as its own msg.update.
+            reactions: [],
+            // From the outbox entry rather than the ack, which carries only ids and the seq.
+            // Without this a photo would render as an empty bubble until the next sync.
+            mediaId: this.outbox.get(clientMsgId)?.mediaId ?? null,
+            documentName: this.outbox.get(clientMsgId)?.documentName ?? null,
+            documentSize: this.outbox.get(clientMsgId)?.documentSize ?? null,
             deletedAt: null,
             createdAt: frame.d['createdAt'] as string,
           },
@@ -234,9 +254,36 @@ export class ChatClient {
         this.opts.onChange?.();
         break;
       }
+      /**
+       * A message that already exists changed: a pin, a tombstone, or a reaction.
+       *
+       * **Declared in the protocol from Phase 0 and ignored until reactions arrived.** It is
+       * deliberately NOT gap-checked: an update names an existing `seq` rather than extending
+       * the log, so it cannot create or reveal a hole, and running it through `decideGap`
+       * would make every reaction on an older message look like one.
+       *
+       * A lost update is self-healing because the frame carries the full reaction set rather
+       * than a delta - the next update, sync or history page brings the truth. That is the
+       * property that lets this path skip the ceremony `msg.new` needs.
+       */
+      case 'msg.update': {
+        const channelId = frame.d['channelId'] as string;
+        const seq = frame.d['seq'] as number;
+        const patch: MessagePatch = {};
+        // Only fields actually present. `deletedAt: null` means "not deleted" and must stay
+        // distinguishable from "this frame says nothing about deletion".
+        if ('pinned' in frame.d) patch.pinned = frame.d['pinned'] as boolean;
+        if ('reactions' in frame.d) patch.reactions = frame.d['reactions'] as MessageReaction[];
+        if ('deletedAt' in frame.d) patch.deletedAt = frame.d['deletedAt'] as string | null;
+
+        // Serialized per channel like message application, so an update and an arriving
+        // message cannot interleave a read-then-write on the same row.
+        await this.serialize(channelId, () => this.store.patch(channelId, seq, patch));
+        this.opts.onChange?.();
+        break;
+      }
       case 'subscribed':
       case 'pong':
-      case 'msg.update':
         break;
       default:
         this.log('unhandled frame type', frame.t);
@@ -301,13 +348,30 @@ export class ChatClient {
    * redelivered send hits the server's unique index and returns the original seq
    * instead of posting twice.
    */
-  enqueue(channelId: string, body: string, clientMsgId = crypto.randomUUID()): string {
+  enqueue(
+    channelId: string,
+    body: string,
+    opts: {
+      clientMsgId?: string;
+      type?: 'text' | 'photo' | 'document';
+      mediaId?: string;
+      localUri?: string;
+      documentName?: string;
+      documentSize?: number;
+    } = {},
+  ): string {
+    const clientMsgId = opts.clientMsgId ?? crypto.randomUUID();
     this.outbox.set(clientMsgId, {
       clientMsgId,
       channelId,
       body,
       attempts: 0,
       status: 'pending',
+      ...(opts.type ? { type: opts.type } : {}),
+      ...(opts.mediaId ? { mediaId: opts.mediaId } : {}),
+      ...(opts.localUri ? { localUri: opts.localUri } : {}),
+      ...(opts.documentName ? { documentName: opts.documentName } : {}),
+      ...(opts.documentSize !== undefined ? { documentSize: opts.documentSize } : {}),
     });
     this.opts.onChange?.();
     return clientMsgId;
@@ -328,8 +392,11 @@ export class ChatClient {
       d: {
         clientMsgId,
         channelId: pending.channelId,
-        type: 'text',
-        body: pending.body,
+        type: pending.type ?? 'text',
+        // A photo carries no body, and the wire schema rejects an empty string - so send
+        // null rather than '' when there is no caption.
+        body: pending.body.length > 0 ? pending.body : null,
+        ...(pending.mediaId ? { mediaId: pending.mediaId } : {}),
       },
     });
 
@@ -343,8 +410,18 @@ export class ChatClient {
    * attempts are exhausted the entry is marked failed and left in the outbox for the UI
    * to offer a retry against.
    */
-  async sendWithRetry(channelId: string, body: string): Promise<number> {
-    const clientMsgId = this.enqueue(channelId, body);
+  async sendWithRetry(
+    channelId: string,
+    body: string,
+    attachment: {
+      type?: 'text' | 'photo' | 'document';
+      mediaId?: string;
+      localUri?: string;
+      documentName?: string;
+      documentSize?: number;
+    } = {},
+  ): Promise<number> {
+    const clientMsgId = this.enqueue(channelId, body, attachment);
     const maxAttempts = this.opts.maxSendAttempts ?? 5;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {

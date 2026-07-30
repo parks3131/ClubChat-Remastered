@@ -42,7 +42,16 @@ below therefore describes a destination, not a stored string.
 | **Mentioned** | Someone @mentions a member | The mentioned member, **only if they can access that chat** | That chat | Inbox is opened |
 | **Car-group Incharge left** | A group's Incharge leaves or is removed | Every club Owner and Admin | That race's car groups | Inbox is opened |
 | **Chat caught up** | A member opens a chat that had unread messages | That member only | That chat | Recorded already-read, as history |
+| *(push only)* **Direct message** | Somebody sends a direct message | The other participant | That conversation | **Never a row.** Its inbox representation is the chat-unread row below |
 | *(live)* **Chat unread** | Unread messages exist in an accessible chat | That member | That chat | **Only by opening that chat** |
+
+**The direct-message row is the one exception to the two-kinds table above**, and it is worth
+being precise about. In club, race and Eboard chat an ordinary message notifies nobody: it is
+addressed to a room, and the room's unread count is the right granularity. A DM is the one scope
+where an ordinary message is inherently addressed to **one person**, so it buzzes - and muting a
+conversation would otherwise be a control over nothing. It still writes no row, because a row per
+message would flood the feed with exactly the per-message noise rule 8 rejects. See
+[ADR-0015](../decisions/0015-a-direct-message-pushes-without-an-inbox-row.md).
 
 **Behaviour rules**
 
@@ -70,6 +79,12 @@ below therefore describes a destination, not a stored string.
     just did - **except** the poll closing-soon reminder, which deliberately includes the
     creator, because they are exactly who needs to know it is about to close.
 11. **Pinning never notifies. Announcing always does.**
+12. **Muting a conversation silences its push and nothing else.** The unread count still accrues
+    and the badge still counts the conversation. Mute is not "mark as read" - conflating the two
+    would silently mark things read that nobody looked at. Muting applies to **every** scope, not
+    only to DMs.
 
-**Not built:** push notifications, email/SMS, per-type or per-club preferences, muting,
-grouping/collapsing. See [Roadmap and open questions](17-roadmap-and-open-questions.md).
+**Built since:** push notifications (Phase 1) and per-conversation muting (Phase 3.5).
+
+**Not built:** email/SMS, per-type or per-club preferences, grouping/collapsing. See
+[Roadmap and open questions](17-roadmap-and-open-questions.md).

@@ -28,6 +28,7 @@ const POLL = '22222222-2222-4222-8222-222222222222';
 const EVENT = '33333333-3333-4333-8333-333333333333';
 const MEETING = '44444444-4444-4444-8444-444444444444';
 const POST = '55555555-5555-4555-8555-555555555555';
+const DM = '66666666-6666-4666-8666-666666666666';
 
 /** A valid params object per type, for the exhaustive sweep below. */
 const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
@@ -143,11 +144,23 @@ const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
     channelName: 'Hillside',
     count: 7,
   },
+  dm_message: {
+    clubId: null,
+    channelId: CHANNEL,
+    conversationId: DM,
+    channelName: 'Riley',
+    seq: 12,
+    preview: 'can you pick me up on the way',
+    actorName: 'Riley',
+  },
 };
 
 describe('the catalogue is complete', () => {
-  it('declares 18 types, matching the PRD catalogue', () => {
-    expect(notificationTypes).toHaveLength(18);
+  it('declares 19 types: the PRD table plus the push-only dm_message', () => {
+    // PRD/12's catalogue lists 18. dm_message is the nineteenth and never appears in that
+    // table because it never becomes an inbox row - it exists so a direct message can buzz a
+    // phone, which is what makes muting a conversation mean anything. See ADR-0015.
+    expect(notificationTypes).toHaveLength(19);
   });
 
   it('has a params schema for every type', () => {
@@ -270,6 +283,25 @@ describe('targets', () => {
       channelId: CHANNEL,
       seq: 42,
     });
+  });
+
+  it('opens a DM at the first unread message rather than at one fixed seq', () => {
+    // Deliberately no seq. A DM push that deep-linked to the seq it was built from would land
+    // above anything that arrived in between; chat already opens on the first unread message,
+    // which is the behaviour wanted here.
+    expect(notificationTarget({ type: 'dm_message', params: fixtures.dm_message })).toEqual({
+      kind: 'chat',
+      channelId: CHANNEL,
+    });
+  });
+
+  it('titles a DM push with the sender and does not repeat them in the body', () => {
+    const rendered = renderNotification({ type: 'dm_message', params: fixtures.dm_message });
+    expect(rendered.title).toBe('Riley');
+    expect(rendered.body).toBe('can you pick me up on the way');
+    // In a one-to-one conversation the sender IS the title, so a "Riley:" prefix reads as a
+    // bug on a lock screen.
+    expect(rendered.body).not.toContain('Riley');
   });
 
   it('routes an approval by the scope it was for', () => {

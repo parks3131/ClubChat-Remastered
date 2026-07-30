@@ -21,6 +21,7 @@
 import { sql } from 'drizzle-orm';
 import { ADMIN_TIER, type NotificationType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
+import { channelAudienceById } from '../domain/channel-access.ts';
 
 export type AudienceRequest = {
   type: NotificationType;
@@ -66,11 +67,14 @@ async function gather(db: Db, request: AudienceRequest): Promise<string[]> {
   if (request.explicitRecipients) return [...request.explicitRecipients];
 
   switch (request.type) {
-    // Everyone who can read the channel.
+    // Everyone who can read the channel. For a dm that is exactly two people, and the actor
+    // is removed above - so a dm_message resolves to the single recipient without needing a
+    // scope-specific branch.
     case 'announcement':
     case 'chat_caught_up':
+    case 'dm_message':
       if (!request.channelId) return [];
-      return channelMembers(db, request.channelId);
+      return channelAudienceById(db, request.channelId);
 
     // The club's admin tier. BOTH admin and owner.
     case 'club_join_request':
@@ -108,20 +112,6 @@ async function gather(db: Db, request: AudienceRequest): Promise<string[]> {
     case 'meeting_created':
       return [];
   }
-}
-
-async function channelMembers(db: Db, channelId: string): Promise<string[]> {
-  // One query covering every scope, so a new scope is a branch here rather than a new
-  // call site somewhere else. Race reads the roster; it does NOT union in club admins.
-  const rows = await db.execute<{ user_id: string }>(sql`
-    WITH ch AS (SELECT scope, scope_id FROM channels WHERE id = ${channelId})
-    SELECT cm.user_id FROM club_memberships cm, ch
-     WHERE ch.scope = 'club' AND cm.club_id = ch.scope_id
-    UNION
-    SELECT em.user_id FROM eboard_memberships em, ch
-     WHERE ch.scope = 'eboard' AND em.eboard_id = ch.scope_id
-  `);
-  return rows.rows.map((r) => r.user_id);
 }
 
 async function clubMembers(db: Db, clubId: string): Promise<string[]> {

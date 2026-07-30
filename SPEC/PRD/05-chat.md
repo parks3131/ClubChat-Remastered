@@ -1,7 +1,9 @@
 # Chat
 
-**The centre of gravity.** One chat implementation serves club, race, and Eboard scopes with
-**total feature parity**; only the menus differ.
+**The centre of gravity.** One chat implementation serves club, race, Eboard **and direct-message**
+scopes with **total feature parity**; only the menus differ. Everything below applies to all four
+unless it names an exception, and the exceptions a DM carries are listed in
+[Direct messages](14-direct-messages.md) rather than duplicated here.
 
 **In scope**
 
@@ -10,7 +12,7 @@
 | Text messages | With @mention tagging and autocomplete |
 | Photo attachments | Library or camera |
 | Document attachments | Any file type, shown with filename and size |
-| Emoji reactions | Fixed set: 👍 ❤️ 😂 🔥 🎉 😮 |
+| Emoji reactions | Fixed set: 👍 ❤️ 😂 🔥 🎉 😮. **A full picker is requested and not built - see the open question below.** |
 | Announcements | Admin-only, visually distinct |
 | Pinning | Admin-only, with a floating dismissible pinned strip |
 | Highlights | Pinned / Announcements / Reports tabs over the same conversation |
@@ -25,12 +27,15 @@
 | Quick-nav | A header menu into that space's other features |
 
 **Out of scope:** threaded/quote replies, editing a sent message, typing indicators, read
-receipts, presence, voice notes, video calls, DMs, message search, and paging *newer* beyond
+receipts, presence, voice notes, video calls, message search, and paging *newer* beyond
 a jump window (chat only pages upward from the live tail).
+
+*(DMs were listed here as out of scope until 2026-07-28, when that position was reversed. See
+[ADR-0009](../decisions/0009-direct-messages-as-fourth-channel-scope.md).)*
 
 **Behaviour rules**
 
-1. **One chat implementation serves all three scopes.** Feature parity is total.
+1. **One chat implementation serves all four scopes.** Feature parity is total.
 2. **Chat loads the most recent ~40 messages** and pages further backward as the user scrolls
    up.
 3. **Chat opens positioned on the first unread message, with no visible scroll motion.** If
@@ -39,9 +44,12 @@ a jump window (chat only pages upward from the live tail).
    clears it.
 5. **Only an admin of that space can post an announcement or pin a message.** In race chat
    that means a club admin who is **also on the roster**; in Eboard chat every member
-   qualifies.
+   qualifies. **In a DM there are no admins, so announcements do not exist there - but pinning
+   does, for either participant.** See rule 6 for why those come apart.
 6. **A pin is separate from an announcement.** Pinning an ordinary message notifies nobody;
-   posting an announcement notifies everyone in that space.
+   posting an announcement notifies everyone in that space. That separation is what lets a DM
+   keep pinning while losing announcements: "no admins" removes pinning-as-*authority*, and a
+   pin is reference.
 7. **The pinned strip floats over the conversation and can be dismissed locally.** Dismissing
    does not unpin for anyone. Tapping a pinned notice jumps the conversation to that message
    and briefly highlights it.
@@ -52,7 +60,11 @@ a jump window (chat only pages upward from the live tail).
    pin state are cleared with it.
 10. **Anyone can report a message they did not send.** Reporting twice is a no-op. Reports
     surface only to admins, in a Reports tab in Highlights, where they can delete the message
-    or dismiss the report.
+    or dismiss the report. **In a DM there is no such admin**, so a DM report routes to a
+    platform moderation queue instead and no club admin ever sees it - see
+    [Direct messages](14-direct-messages.md) rule 7. Reporting is gated on being able to *read*
+    the conversation rather than on being able to post in it, so a member who has just blocked
+    somebody can still report what was said to them.
 11. **The composer's "+" opens an attach menu** with Photos, Camera, and Document always
     available, plus admin-gated create actions for whatever the scope supports (club: Poll,
     Event; race: Poll; Eboard: Poll, Meeting).
@@ -66,13 +78,21 @@ a jump window (chat only pages upward from the live tail).
 16. **Every chat has a Gallery**: every photo ever posted in that conversation, as a grid,
     tap-to-view full screen. Read-only; photos enter it only by being posted in chat.
 17. **@mention autocomplete offers only people who can access that chat** - club members in
-    club chat, roster members in race chat, Eboard members in Eboard chat.
+    club chat, roster members in race chat, Eboard members in Eboard chat, and the one other
+    participant in a DM.
+18. **A composer that is disabled says why.** A DM can become read-only without being deleted,
+    and an input that silently rejects reads as a broken app. The stated reason never
+    identifies whether a block or a lost shared club caused it - see
+    [Direct messages](14-direct-messages.md).
 
 **Highlights**
 
 A view of chat, not a feed of its own. Tabs: **Pinned**, **Announcements**, and (admins only)
 **Reports**. The list is view-only; jumping to a message in context is the pinned strip's
 job in chat.
+
+In a DM the Reports tab does not appear at all: there is no admin of the conversation to read
+it, and the reports it would contain belong to the platform moderation queue.
 
 **Edge cases**
 
@@ -88,13 +108,18 @@ job in chat.
 | Realtime message arrives while reading old history | It merges in, but the view is **not** yanked to the bottom |
 | No back history (deep link, refresh) | The back control falls back to that space's parent, **never** to a screen that would bounce back into chat |
 | Non-member opens a race/Eboard chat URL directly | Redirected out |
+| A participant opens a DM they can no longer write to | History readable, composer disabled with a reason that does not say which cause |
+| Non-participant opens a DM URL directly | Nothing back, including no confirmation that the conversation exists |
 
 **Acceptance criteria**
 
 - [ ] A message sent on one device appears on another in realtime without a refresh.
-- [ ] Photos and documents round-trip: upload, appear, and open when tapped.
+- [ ] Photos and documents round-trip: upload and appear. *(Opening full screen waits on the
+      viewer - see [Media and galleries](13-media-and-galleries.md).)*
 - [ ] A document bubble shows its filename and size.
 - [ ] Reactions toggle on and off and are visible to everyone.
+- [ ] A reaction added on one device appears on another in realtime, without a refresh.
+- [ ] Deleting a message clears its reactions for everyone.
 - [ ] An @mention notifies the mentioned member and renders highlighted.
 - [ ] The mention autocomplete lists only people who can access that chat.
 - [ ] Every photo posted appears in that chat's Gallery and opens full screen from it.
@@ -106,13 +131,41 @@ job in chat.
 - [ ] Scrolling to the top loads older messages without losing scroll position, and **does not fire spuriously on open**.
 - [ ] Deleting a message leaves a tombstone for every other member.
 - [ ] Reporting surfaces the message in the admin Reports tab; a second report by the same person changes nothing.
+- [ ] Reporting in a DM surfaces it to platform moderators and to no club admin.
 - [ ] Creating a poll from "+" posts a votable card, and voting on the card matches the full poll screen.
-- [ ] Race and Eboard chat behave identically to club chat for everything above.
+- [ ] Race, Eboard and direct-message chat behave identically to club chat for everything above, except the DM exceptions named in [Direct messages](14-direct-messages.md).
 
 **Rejected alternatives.** Reusing pinning to mean "important" (the club already faked
 announcements by pinning; making them distinct is the whole point). Notifying on every pin
 (pins are reference, not interruption). Hard delete (a message vanishing mid-conversation
 makes the replies unreadable). Auto-hiding reported messages (abusable by a single reporter
 in a small trusted group). Always opening at the bottom (explicit founder request: landing at
-the bottom means hunting upward for what you missed). A full emoji picker (fast tap targets
-beat completeness). Link-only poll cards (voting should be one tap from the conversation).
+the bottom means hunting upward for what you missed). A full emoji picker **instead of** fast
+tap targets (see the open question - the ask is now for one *in addition to* them, which is a
+different proposal). Link-only poll cards (voting should be one tap from the conversation).
+
+**Open question: the full emoji picker.**
+
+Requested explicitly on 2026-07-30: reactions should offer the whole emoji list from a popup,
+"like WhatsApp". Recorded here rather than half-built, and the fixed set shipped meanwhile.
+
+Note first that this is **not** a re-litigation of the rejected alternative above. That one was
+a full picker *replacing* the quick row, and the objection - fast tap targets beat completeness -
+still stands. WhatsApp does both: six quick taps, plus a "+" that opens the full grid. The ask is
+for the second thing, and the first is unaffected.
+
+What it costs, so the decision is made with the bill in hand:
+
+| | |
+|---|---|
+| **The set stops being closeable** | The emoji column carries a check constraint listing the six. Widening means dropping it, and that constraint is currently the only thing stopping arbitrary text reaching a column that renders directly into every client. Its replacement has to be real validation, not nothing. |
+| **Validating "is this an emoji" is genuinely hard** | Not a character class. Grapheme clusters, zero-width joiner sequences, skin-tone and gender modifiers, regional indicator pairs, variation selectors. Length in code points is not a bound, and a naive check either rejects legitimate emoji or admits arbitrary text with one emoji in front of it. |
+| **Normalisation becomes a correctness issue** | Two byte-different encodings of the same emoji must be one reaction, or the same emoji appears twice in a row with a count of one each. The primary key compares bytes. |
+| **The pill row stops being bounded** | Six emoji means at most six pills. Arbitrary emoji means a message can carry dozens, and the row needs collapsing, an overflow affordance, and a decision about which win the visible slots. |
+| **The picker itself is a real component** | Categories, search, recents, skin-tone selection, and a keyboard on a phone. It is the largest single piece of UI in the product so far. |
+
+None of that is an argument against it. It is an argument for it being its own change with its own
+tests, rather than a widened constant. The current shape is deliberately friendly to it: the emoji
+travels as a string end to end, one reaction per emoji per member per message needs no revisiting,
+and `reactionSummary` already renders an arbitrary set in a fixed order - so the fixed order is
+the only thing that has to become a different rule.

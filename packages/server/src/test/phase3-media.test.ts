@@ -15,7 +15,7 @@ import { eq, sql } from 'drizzle-orm';
 import { createClub } from '../domain/create-club.ts';
 import { addMember, changeRole } from '../domain/membership.ts';
 import { sendMessage } from '../domain/send-message.ts';
-import { getChannelRef } from '../domain/reads.ts';
+import { getChannelRef, readHistory, syncSince } from '../domain/reads.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { drainOnce } from '../worker/drain.ts';
 import { RecordingPushSender } from '../push/sender.ts';
@@ -131,6 +131,105 @@ async function uploadPhoto(
 }
 
 // ===========================================================================
+// The envelope carries the attachment
+// ===========================================================================
+
+describe('a media message reaches the client with its attachment on it', () => {
+  /**
+   * > **This is the gap that made the whole pipeline unreachable.** Phase 3 added `media_id`,
+   * > `document_name` and `document_size` to `messages` and never put them on the
+   * > `MessageEnvelope`, so a client receiving a photo knew only that `type` was `'photo'` -
+   * > with no id, and therefore no way to fetch the bytes. The upload half was complete and
+   * > the render half had nothing to render from.
+   */
+  it('puts the media id on a photo message, through history and sync alike', async () => {
+    const f = await setup();
+    const { media } = await uploadPhoto(f.ownerId, f.mainChannelId);
+    const channel = await getChannelRef(h.db, f.mainChannelId);
+
+    const sent = await sendMessage(h.db, await ctxFor(f.ownerId), channel!, {
+      channelId: f.mainChannelId,
+      clientMsgId: crypto.randomUUID(),
+      type: 'photo',
+      body: null,
+      mediaId: media!,
+    });
+    expect(sent.ok).toBe(true);
+
+    const history = await readHistory(h.db, f.mainChannelId);
+    const photo = history.find((m) => m.type === 'photo');
+    expect(photo?.mediaId, 'a photo with no media id cannot be rendered').toBe(media);
+    // A photo carries neither of the document fields.
+    expect(photo?.documentName).toBeNull();
+    expect(photo?.documentSize).toBeNull();
+
+    // The backlog path too, or a client that was offline comes back to an unrenderable photo.
+    const synced = await syncSince(h.db, f.mainChannelId, 0);
+    expect(synced.messages.find((m) => m.type === 'photo')?.mediaId).toBe(media);
+  });
+
+  it('puts the filename and size on a document message', async () => {
+    const f = await setup();
+    const bytes = 4096;
+    const intent = await createUploadIntent(h.db, store, config, await ctxFor(f.ownerId), {
+      kind: 'document',
+      mime: 'application/pdf',
+      bytes,
+      channelId: f.mainChannelId,
+      documentName: 'meet-schedule.pdf',
+    });
+    expect(intent.ok).toBe(true);
+    if (!intent.ok) return;
+
+    const row = await h.db
+      .select()
+      .from(mediaObjects)
+      .where(eq(mediaObjects.id, intent.mediaId))
+      .limit(1);
+    store.simulateUpload(
+      row[0]!.bucket,
+      row[0]!.objectKey,
+      new Uint8Array(bytes),
+      'application/pdf',
+    );
+    expect((await completeUpload(h.db, store, await ctxFor(f.ownerId), intent.mediaId)).ok).toBe(
+      true,
+    );
+
+    const channel = await getChannelRef(h.db, f.mainChannelId);
+    const sent = await sendMessage(h.db, await ctxFor(f.ownerId), channel!, {
+      channelId: f.mainChannelId,
+      clientMsgId: crypto.randomUUID(),
+      type: 'document',
+      body: null,
+      mediaId: intent.mediaId,
+    });
+    expect(sent.ok).toBe(true);
+
+    const document = (await readHistory(h.db, f.mainChannelId)).find((m) => m.type === 'document');
+    // PRD/05 lists a document bubble as showing its filename and size, so both have to travel.
+    expect(document?.mediaId).toBe(intent.mediaId);
+    expect(document?.documentName).toBe('meet-schedule.pdf');
+    expect(document?.documentSize).toBe(bytes);
+  });
+
+  it('leaves an ordinary text message with no attachment fields set', async () => {
+    const f = await setup();
+    const channel = await getChannelRef(h.db, f.mainChannelId);
+    await sendMessage(h.db, await ctxFor(f.ownerId), channel!, {
+      channelId: f.mainChannelId,
+      clientMsgId: crypto.randomUUID(),
+      body: 'just words',
+    });
+
+    const text = (await readHistory(h.db, f.mainChannelId)).find((m) => m.body === 'just words');
+    expect(text?.mediaId).toBeNull();
+    expect(text?.documentName).toBeNull();
+    expect(text?.documentSize).toBeNull();
+  });
+});
+
+// ===========================================================================
 // THE GATE: a private Eboard photo is provably unreachable without membership
 // ===========================================================================
 
@@ -156,7 +255,7 @@ describe('Phase 3 gate: a private Eboard photo is unreachable without membership
   it('an Eboard member CAN reach it', async () => {
     // The positive case first, so the denials below cannot pass by the object being broken.
     const { f, mediaId } = await eboardPhoto();
-    const result = await resolveMediaRedirect(h.db, config, await ctxFor(f.ownerId), mediaId);
+    const result = await resolveMediaRedirect(h.db, store, config, await ctxFor(f.ownerId), mediaId);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.url).toContain(config.cdnBaseUrl);
@@ -167,7 +266,7 @@ describe('Phase 3 gate: a private Eboard photo is unreachable without membership
 
   it('a plain club member CANNOT - they are not in the Eboard space', async () => {
     const { f, mediaId } = await eboardPhoto();
-    const result = await resolveMediaRedirect(h.db, config, await ctxFor(f.memberId), mediaId);
+    const result = await resolveMediaRedirect(h.db, store, config, await ctxFor(f.memberId), mediaId);
     expect(result.ok, 'a club member reached an Eboard photo').toBe(false);
     // not_found, never forbidden: confirming the object exists is itself a disclosure.
     if (!result.ok) expect(result.code).toBe('not_found');
@@ -185,13 +284,13 @@ describe('Phase 3 gate: a private Eboard photo is unreachable without membership
        WHERE eboard_id = ${f.eboardId}::uuid AND user_id = ${admin}::uuid
     `);
 
-    const result = await resolveMediaRedirect(h.db, config, await ctxFor(admin), mediaId);
+    const result = await resolveMediaRedirect(h.db, store, config, await ctxFor(admin), mediaId);
     expect(result.ok, 'a club admin outside the space reached an Eboard photo').toBe(false);
   });
 
   it('a complete outsider cannot', async () => {
     const { f, mediaId } = await eboardPhoto();
-    const result = await resolveMediaRedirect(h.db, config, await ctxFor(f.outsiderId), mediaId);
+    const result = await resolveMediaRedirect(h.db, store, config, await ctxFor(f.outsiderId), mediaId);
     expect(result.ok).toBe(false);
   });
 
@@ -640,7 +739,7 @@ describe('thumbnail derivation', () => {
     // than a broken one.
     const f = await setup();
     const { media } = await uploadPhoto(f.ownerId, f.mainChannelId);
-    const result = await resolveMediaRedirect(h.db, config, await ctxFor(f.ownerId), media!, {
+    const result = await resolveMediaRedirect(h.db, store, config, await ctxFor(f.ownerId), media!, {
       variant: 'thumb',
     });
     expect(result.ok).toBe(true);

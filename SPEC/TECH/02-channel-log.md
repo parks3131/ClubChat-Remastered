@@ -125,7 +125,8 @@ mentions, the gallery, the media pipeline, push fan-out and cursor-based suppres
 failure-mode guarantee in [Failure modes](11-failure-modes.md). That is the entire return on the channel abstraction, collected
 in one feature.
 
-Three things genuinely change.
+Four things genuinely change. **Built 2026-07-30; the count was three when this was written,
+and the fourth is the one the abstraction test could not see coming.**
 
 **1. `channels.club_id` becomes nullable.** Every other scope belongs to a club. A DM cannot,
 because two people who share two clubs would otherwise get two separate threads with the same
@@ -139,13 +140,35 @@ CHECK ((club_id IS NULL) = (scope = 'dm'))
 
 **2. Nobody is an admin in a DM.** `isChannelAdmin` is constant-false for the scope, which
 removes announcements (admin-gated), polls (creation is admin-gated), and role system messages.
-Pins stay - both participants may pin, and it costs nothing. This is precisely the "one admin
-predicate" the abstraction test predicted.
+That much is precisely the "one admin predicate" the abstraction test predicted, and it cost
+nothing.
 
-**3. Reporting has no destination.** In club, race and Eboard chat a report surfaces to that
+Pins stay, and **that did not come for free** - the sentence originally here said it did.
+`canPinInChannel` was an alias of `isChannelAdmin`, so leaving it alone removed pinning from the
+scope along with announcements, silently dropping a capability
+[Direct messages](../PRD/14-direct-messages.md) rule 4 grants explicitly. It is now its own
+predicate: participant in a DM, admin everywhere else.
+
+**3. Reading and posting stop being the same question.** This is the one the abstraction test did
+not anticipate at all. Every other scope answers both with one membership check. A DM participant
+can lose the right to **send** - blocked, or no shared club left - while keeping the right to
+**read**, because both of those make a thread read-only rather than deleting it. So
+`canPostInChannel`, which had also been an alias of the read predicate, became its own:
+
+```
+isChannelMember  - may read history, subscribe, see the gallery
+canPostInChannel - may send, upload, and attach
+```
+
+Every read path stays on the first and every write path moves to the second. Getting this
+backwards in either direction is a defect: aliasing post to read lets a blocked member send, and
+revoking membership to stop them hides history the PRD requires to stay visible.
+
+**4. Reporting has no destination.** In club, race and Eboard chat a report surfaces to that
 space's admins. A DM has no admins, so a report written the current way goes nowhere and is
 silently discarded. This is a defect, not an inconvenience, and [Authorization](05-authorization.md) defines where those reports
-go instead.
+go instead: a platform moderation queue, read by users carrying `is_platform_moderator`, with the
+content read narrowed to a window around the reported message and audit-logged.
 
 **Eligibility: participants must share at least one club.** This follows the privacy rule in [Cross-cutting UX](../PRD/16-cross-cutting-ux.md), which
 already restricts profile visibility to people who share a club, and it keeps the abuse surface
@@ -160,3 +183,6 @@ conversation the same way hard-deleting a message does ([Domain model](../PRD/01
 > people from it. A private one-to-one channel, with no admin party to it, no block, and no
 > report destination, is a different risk class. **Blocking and a report destination ship in the
 > same release as DMs, not after it.**
+>
+> *They did. Phase 3.5 delivered blocking, per-conversation mute and the platform moderation queue
+> in the same change as the scope itself.*

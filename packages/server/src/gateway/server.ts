@@ -80,14 +80,17 @@ export type Gateway = {
    *
    * Because access is checked at subscribe time and NOT rechecked per message, a live
    * subscription outlives the membership that justified it. Removing someone from a
-   * club, a race roster or the Eboard - or blocking them in a DM - must therefore
-   * force-unsubscribe their sockets, not merely delete the row. This is the one cost
-   * per-channel fan-out carries that per-user fan-out does not, and the failure is
-   * silent: a removed member keeps reading a channel they no longer belong to and
-   * nothing reports it.
+   * club, a race roster or the Eboard must therefore force-unsubscribe their sockets,
+   * not merely delete the row. This is the one cost per-channel fan-out carries that
+   * per-user fan-out does not, and the failure is silent: a removed member keeps reading
+   * a channel they no longer belong to and nothing reports it.
    *
-   * Phase 2 wires the membership cascade to call this. It exists now so that wiring is
-   * a call rather than a redesign.
+   * > **Blocking a member in a DM deliberately does NOT revoke anything**, which is the
+   * > opposite of what it looks like it should do. A block leaves history readable to both
+   * > parties by design (PRD/14 rule 6), so read access has not ended and the subscription is
+   * > still justified - and since neither party can now send, there are no new messages for it
+   * > to deliver. The same is true when a pair loses their last shared club: read-only, not
+   * > gone. Revoking there would break the requirement rather than enforce it.
    */
   revokeSubscriptions: (userId: string, channelIds: readonly string[]) => void;
 };
@@ -186,7 +189,15 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
 
     // In-process fan-out to sockets, which is cheap. The expensive part - authorizing
     // the recipient - already happened once, at subscribe time.
-    const frame: ServerFrame = { t: 'msg.new', d: published.envelope };
+    //
+    // Two kinds travel on this topic: a new message, and a change to one that already
+    // exists (a pin, a tombstone, a reaction). `kind` is absent on anything published by a
+    // process that predates updates, which is why the default is 'message' rather than a
+    // required tag - a rolling restart must not drop frames.
+    const frame: ServerFrame =
+      published.kind === 'update'
+        ? { t: 'msg.update', d: published.update }
+        : { t: 'msg.new', d: published.envelope };
     const encoded = JSON.stringify(frame);
     for (const socket of sockets) {
       if (socket.readyState === socket.OPEN) socket.send(encoded);

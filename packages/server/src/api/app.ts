@@ -36,6 +36,7 @@ import type { MediaStore } from '../media/store.ts';
 import {
   completeUpload,
   createUploadIntent,
+  hourAlignedExpiry,
   readGallery,
   resolveMediaRedirect,
   type MediaConfig,
@@ -52,7 +53,27 @@ import {
   setJoinPolicy,
   transferOwnership,
 } from '../domain/membership.ts';
-import { Platform } from '@clubchat/shared';
+import {
+  blockMember,
+  listBlocks,
+  listDmThreads,
+  muteChannel,
+  openDm,
+  readChannelMeta,
+  searchDmCandidates,
+  unblockMember,
+  unmuteChannel,
+} from '../domain/dm.ts';
+import {
+  dismissReport,
+  listChannelReports,
+  listDmReportQueue,
+  listModerationReads,
+  readReportedContext,
+  reportMessage,
+} from '../domain/moderation.ts';
+import { readReactions, toggleReaction } from '../domain/reactions.ts';
+import { Platform, ReactionEmoji } from '@clubchat/shared';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -76,6 +97,7 @@ function mediaConfigOf(config: Config): MediaConfig {
     privateBucket: config.S3_BUCKET_PRIVATE,
     signingSecret: config.MEDIA_SIGNING_SECRET,
     cdnBaseUrl: config.MEDIA_CDN_BASE_URL,
+    urlMode: config.MEDIA_URL_MODE,
   };
 }
 
@@ -459,6 +481,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
 
       const result = await resolveMediaRedirect(
         deps.db,
+        deps.mediaStore,
         media,
         request.access!,
         request.params.id,
@@ -473,6 +496,58 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         .redirect(result.url, 302);
     });
 
+    /**
+     * The same authorized hop, answering with JSON instead of a redirect.
+     *
+     * > **A 302 behind an `Authorization` header is unusable as an image source on the web.**
+     * > `<img src>` sends no custom headers, and react-native-web renders every `Image` as an
+     * > `<img>` - so the native path (`Image` with `{uri, headers}`, which follows the redirect
+     * > itself) has no web equivalent. Without this route, media is unreachable on the surface
+     * > this project develops and tests on.
+     *
+     * It grants nothing the redirect does not: same function, same predicate, evaluated on every
+     * request. What the client gets back is the same hour-aligned signed URL, which is
+     * **byte-identical for every viewer inside the window** - so resolving once and rendering
+     * from the result is exactly the CDN-cacheable path the alignment was designed for, rather
+     * than a way around it.
+     *
+     * The alternative - a token in the query string - is not available: credentials never go in
+     * a URL, and the signature deliberately grants fetchability of an unguessable key rather
+     * than access.
+     */
+    protectedRoutes.get<{ Params: { id: string } }>('/media/:id/url', async (request, reply) => {
+      const query = VariantQuery.safeParse(request.query);
+      if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+
+      const result = await resolveMediaRedirect(
+        deps.db,
+        deps.mediaStore,
+        media,
+        request.access!,
+        request.params.id,
+        { variant: query.data.variant },
+      );
+      if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+
+      /*
+       * `no-store`, unlike the redirect above, and the difference is deliberate.
+       *
+       * The redirect is consumed by an `<img src>` that hits it on every render, so caching it
+       * privately for ten minutes is what stops a re-render re-authorizing. This route is
+       * consumed by a client that **already memoizes** the resolved URL for the life of its
+       * hour-aligned window, so an HTTP cache in front of it saves nothing and costs something:
+       * a member who loses access would keep resolving successfully for up to ten more minutes.
+       *
+       * Found by a smoke test where a stale cached response outlived a change in signing mode,
+       * which is the same staleness wearing a less serious hat.
+       */
+      return reply.header('cache-control', 'no-store').send({
+        url: result.url,
+        // So a client can drop its memo when the window rolls rather than holding a dead URL.
+        expiresAt: new Date(hourAlignedExpiry(Date.now()) * 1000).toISOString(),
+      });
+    });
+
     const GalleryQuery = z.object({
       before: z.coerce.number().int().positive().optional(),
       limit: z.coerce.number().int().positive().max(200).optional(),
@@ -484,6 +559,291 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         const query = GalleryQuery.safeParse(request.query);
         if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
         const result = await readGallery(deps.db, request.access!, request.params.id, query.data);
+        if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+        return result;
+      },
+    );
+
+    // ---------------------------------------------------------------------
+    // Direct messages
+    // ---------------------------------------------------------------------
+
+    /**
+     * What to call this channel, and whether the composer is live.
+     *
+     * One endpoint for all four scopes rather than a DM-specific one, so the chat screen
+     * stays a single implementation - PRD/05 rule 1, which DMs must not fork.
+     */
+    protectedRoutes.get<{ Params: { id: string } }>('/channels/:id', async (request, reply) => {
+      const result = await readChannelMeta(deps.db, request.access!, request.params.id);
+      if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+      return result;
+    });
+
+    const CandidateQuery = z.object({
+      q: z.string().max(200).optional(),
+      limit: z.coerce.number().int().positive().max(100).optional(),
+    });
+
+    /**
+     * People this member may start a conversation with.
+     *
+     * A search over people they already share a club with, never a global user search
+     * (PRD/14 rule 1). Blocked members are absent in both directions.
+     */
+    protectedRoutes.get('/dm/candidates', async (request, reply) => {
+      const query = CandidateQuery.safeParse(request.query);
+      if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+      return {
+        candidates: await searchDmCandidates(deps.db, request.access!, {
+          query: query.data.q,
+          limit: query.data.limit,
+        }),
+      };
+    });
+
+    protectedRoutes.get('/dm/threads', async (request) => ({
+      threads: await listDmThreads(deps.db, request.access!),
+    }));
+
+    const OpenDmBody = z.object({ userId: z.string().uuid() });
+
+    /**
+     * Open, or re-open, a conversation.
+     *
+     * Idempotent - the same pair always gets the same thread, so the client can navigate
+     * straight here without asking whether one exists. Returns 404 for a person who does not
+     * exist, who shares no club, **or who has blocked the caller**, because a distinguishable
+     * refusal would make the block detectable and rule 6 hides it everywhere else.
+     */
+    protectedRoutes.post('/dm/threads', async (request, reply) => {
+      const body = OpenDmBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+
+      const result = await openDm(deps.db, request.access!, body.data.userId);
+      if (!result.ok) {
+        return reply
+          .code(result.code === 'invalid' ? 400 : 404)
+          .send({ error: result.code === 'invalid' ? 'invalid_body' : 'not_found' });
+      }
+      return reply.code(201).send(result);
+    });
+
+    // ---------------------------------------------------------------------
+    // Blocking, and mute
+    // ---------------------------------------------------------------------
+
+    protectedRoutes.get('/blocks', async (request) => ({
+      // Their own blocks only. "Who has blocked you" is never returned.
+      blocks: await listBlocks(deps.db, request.access!),
+    }));
+
+    const BlockBody = z.object({ userId: z.string().uuid() });
+
+    protectedRoutes.post('/blocks', async (request, reply) => {
+      const body = BlockBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+      const result = await blockMember(deps.db, request.access!, body.data.userId);
+      if (!result.ok) {
+        return reply
+          .code(result.code === 'invalid' ? 400 : 404)
+          .send({ error: result.code === 'invalid' ? 'invalid_body' : 'not_found' });
+      }
+      return reply.code(201).send(result);
+    });
+
+    protectedRoutes.delete<{ Params: { uid: string } }>('/blocks/:uid', async (request, reply) => {
+      const result = await unblockMember(deps.db, request.access!, request.params.uid);
+      if (!result.ok) return reply.code(400).send({ error: 'invalid_body' });
+      return result;
+    });
+
+    const MuteBody = z.object({
+      /** Absent means indefinitely. The row's existence is the mute. */
+      until: z.string().datetime().nullish(),
+    });
+
+    protectedRoutes.post<{ Params: { id: string } }>(
+      '/channels/:id/mute',
+      async (request, reply) => {
+        const body = MuteBody.safeParse(request.body ?? {});
+        if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+
+        const guard = await authorizeChannel(request, request.params.id);
+        if (!guard.ok) return reply.code(guard.code).send({ error: 'not_found' });
+
+        const result = await muteChannel(
+          deps.db,
+          request.access!,
+          guard.channel,
+          body.data.until ? new Date(body.data.until) : null,
+        );
+        if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+        return result;
+      },
+    );
+
+    protectedRoutes.delete<{ Params: { id: string } }>(
+      '/channels/:id/mute',
+      async (request, reply) => {
+        const guard = await authorizeChannel(request, request.params.id);
+        if (!guard.ok) return reply.code(guard.code).send({ error: 'not_found' });
+
+        const result = await unmuteChannel(deps.db, request.access!, guard.channel);
+        if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+        return result;
+      },
+    );
+
+    // ---------------------------------------------------------------------
+    // Reactions
+    // ---------------------------------------------------------------------
+
+    const ReactionBody = z.object({ emoji: ReactionEmoji });
+
+    /**
+     * Toggle a reaction.
+     *
+     * One endpoint for on and off, because "toggle" is the product behaviour and splitting it
+     * into add and remove would put the decision of which to call in the client - where it is a
+     * read-then-write across the network, and races with the other device the same member is
+     * holding.
+     *
+     * `ReactionEmoji` here returns a clean 400 for an emoji outside the set. It is not the
+     * enforcement: a check constraint on the column is, so no route and no second write path
+     * can put arbitrary text in a column that renders directly into every client.
+     */
+    protectedRoutes.post<{ Params: { id: string; seq: string } }>(
+      '/channels/:id/messages/:seq/reactions',
+      async (request, reply) => {
+        const seq = Number(request.params.seq);
+        if (!Number.isInteger(seq) || seq <= 0) {
+          return reply.code(400).send({ error: 'invalid_seq' });
+        }
+
+        const body = ReactionBody.safeParse(request.body);
+        if (!body.success) return reply.code(400).send({ error: 'invalid_emoji' });
+
+        const guard = await authorizeChannel(request, request.params.id);
+        if (!guard.ok) return reply.code(guard.code).send({ error: 'not_found' });
+
+        const result = await toggleReaction(
+          deps.db,
+          request.access!,
+          guard.channel,
+          seq,
+          body.data.emoji,
+        );
+        if (!result.ok) {
+          // 403 for a member who can read but not write here - a blocked DM participant. That
+          // is a real distinction rather than a leak: they can already see the message.
+          return reply.code(result.code === 'forbidden' ? 403 : 404).send({ error: result.code });
+        }
+        return result;
+      },
+    );
+
+    /** Who reacted, for the who-reacted sheet. No gate beyond reading the channel. */
+    protectedRoutes.get<{ Params: { id: string; seq: string } }>(
+      '/channels/:id/messages/:seq/reactions',
+      async (request, reply) => {
+        const seq = Number(request.params.seq);
+        if (!Number.isInteger(seq) || seq <= 0) {
+          return reply.code(400).send({ error: 'invalid_seq' });
+        }
+
+        const guard = await authorizeChannel(request, request.params.id);
+        if (!guard.ok) return reply.code(guard.code).send({ error: 'not_found' });
+
+        const result = await readReactions(deps.db, guard.channel, seq);
+        if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+        return result;
+      },
+    );
+
+    // ---------------------------------------------------------------------
+    // Reports, and the platform moderation queue
+    // ---------------------------------------------------------------------
+
+    protectedRoutes.post<{ Params: { id: string; seq: string } }>(
+      '/channels/:id/messages/:seq/report',
+      async (request, reply) => {
+        const seq = Number(request.params.seq);
+        if (!Number.isInteger(seq) || seq <= 0) {
+          return reply.code(400).send({ error: 'invalid_seq' });
+        }
+
+        const guard = await authorizeChannel(request, request.params.id);
+        if (!guard.ok) return reply.code(guard.code).send({ error: 'not_found' });
+
+        const result = await reportMessage(deps.db, request.access!, guard.channel, seq);
+        if (!result.ok) {
+          return reply.code(result.code === 'forbidden' ? 403 : 404).send({ error: result.code });
+        }
+        return reply.code(201).send(result);
+      },
+    );
+
+    /**
+     * The Reports tab for one space.
+     *
+     * `not_found` for a dm channel even to a platform moderator: the queue is a separate
+     * endpoint, so this one cannot become a way to read a private conversation by channel id.
+     */
+    protectedRoutes.get<{ Params: { id: string } }>(
+      '/channels/:id/reports',
+      async (request, reply) => {
+        const channel = await getChannelRef(deps.db, request.params.id);
+        if (!channel) return reply.code(404).send({ error: 'not_found' });
+
+        const result = await listChannelReports(deps.db, request.access!, channel, {
+          includeDismissed: (request.query as { all?: string }).all === 'true',
+        });
+        if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+        return result;
+      },
+    );
+
+    /**
+     * The DM report queue. Platform moderators only, and metadata only.
+     *
+     * A club admin gets 404 here even for a conversation between two of their own members:
+     * **no club admin ever sees the contents of a DM** (PRD/14 rule 7).
+     */
+    protectedRoutes.get('/moderation/dm-reports', async (request, reply) => {
+      const result = await listDmReportQueue(deps.db, request.access!, {
+        includeDismissed: (request.query as { all?: string }).all === 'true',
+      });
+      if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+      return result;
+    });
+
+    /**
+     * The reported message and its immediate context.
+     *
+     * The single, audit-logged door to DM content. The window is fixed by
+     * `MODERATION_CONTEXT_RADIUS` and there is deliberately no parameter to widen it.
+     */
+    protectedRoutes.get<{ Params: { id: string } }>(
+      '/moderation/reports/:id/context',
+      async (request, reply) => {
+        const result = await readReportedContext(deps.db, request.access!, request.params.id);
+        if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+        return result;
+      },
+    );
+
+    /** A moderator's own audit trail. */
+    protectedRoutes.get('/moderation/reads', async (request, reply) => {
+      const result = await listModerationReads(deps.db, request.access!);
+      if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+      return result;
+    });
+
+    protectedRoutes.post<{ Params: { id: string } }>(
+      '/moderation/reports/:id/dismiss',
+      async (request, reply) => {
+        const result = await dismissReport(deps.db, request.access!, request.params.id);
         if (!result.ok) return reply.code(404).send({ error: 'not_found' });
         return result;
       },

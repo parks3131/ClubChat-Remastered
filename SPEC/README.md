@@ -106,6 +106,9 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0012](decisions/0012-no-receipts-presence-or-typing-indicators.md) | Ship only a `sent` acknowledgement |
 | [0013](decisions/0013-notifications-store-type-and-params.md) | Store notifications as a type plus params, not a rendered body and route |
 | [0014](decisions/0014-channels-reference-their-scope-one-way.md) | A channel references its scope, and the scope never references the channel |
+| [0015](decisions/0015-a-direct-message-pushes-without-an-inbox-row.md) | A direct message pushes, and writes no inbox row |
+| [0016](decisions/0016-thread-writability-is-evaluated-never-stored.md) | A thread's writability is evaluated, never stored |
+| [0017](decisions/0017-reactions-travel-on-the-message-envelope.md) | Reactions travel on the message envelope, and updates carry full sets |
 
 ## Templates
 

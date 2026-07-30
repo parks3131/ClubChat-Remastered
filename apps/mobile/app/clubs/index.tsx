@@ -195,6 +195,18 @@ export default function ClubsScreen() {
         </View>
       ) : (
         <View style={styles.footer}>
+          {/*
+            Additive, and positioned as such. Group chat is the product, so Messages is a
+            secondary control below the club list rather than a peer of it.
+          */}
+          <Pressable
+            style={styles.secondaryButton}
+            onPress={() => router.push('/dm')}
+            accessibilityRole="button"
+            accessibilityLabel="Open your direct messages"
+          >
+            <Text style={styles.secondaryLabel}>Messages</Text>
+          </Pressable>
           <Pressable
             style={styles.button}
             onPress={() => setCreating(true)}

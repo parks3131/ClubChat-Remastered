@@ -13,7 +13,7 @@
  */
 
 import { Redis } from 'ioredis';
-import type { MessageEnvelope } from '@clubchat/shared';
+import type { MessageEnvelope, MsgUpdate } from '@clubchat/shared';
 
 /**
  * The fan-out topic.
@@ -42,11 +42,28 @@ export const REGISTRY_TTL_SECONDS = 90;
 export const HEARTBEAT_INTERVAL_MS = 30_000;
 export const REAPER_TIMEOUT_MS = 90_000;
 
-export type Published = {
-  channelId: string;
-  seq: number;
-  envelope: MessageEnvelope;
-};
+/**
+ * What travels on a channel topic.
+ *
+ * A discriminated union, because two different things happen to a channel: a new message
+ * arrives, and an existing message changes. Before reactions there was only the first, and
+ * the payload was an unlabelled envelope - so the tag is `kind`, defaulted at the reader for
+ * anything published by an older process during a rolling restart.
+ */
+export type Published =
+  | {
+      kind?: 'message';
+      channelId: string;
+      seq: number;
+      envelope: MessageEnvelope;
+    }
+  | {
+      kind: 'update';
+      channelId: string;
+      seq: number;
+      /** Only the fields that changed. See `MsgUpdate` for why reactions are a full set. */
+      update: MsgUpdate;
+    };
 
 /**
  * The revocation control topic.
@@ -164,7 +181,23 @@ export async function publishToChannel(
   channelId: string,
   envelope: MessageEnvelope,
 ): Promise<void> {
-  const payload: Published = { channelId, seq: envelope.seq, envelope };
+  const payload: Published = { kind: 'message', channelId, seq: envelope.seq, envelope };
+  await redis.publish(channelTopic(channelId), JSON.stringify(payload));
+}
+
+/**
+ * Publish a change to a message that already exists: a pin, a tombstone, a reaction.
+ *
+ * Same topic as new messages, so a gateway holding a subscriber for this channel already
+ * receives it and no second subscription is needed. The gateway forwards it as `msg.update`,
+ * which was declared in the protocol from Phase 0 and had no producer until now.
+ */
+export async function publishUpdate(
+  redis: Redis,
+  channelId: string,
+  update: MsgUpdate,
+): Promise<void> {
+  const payload: Published = { kind: 'update', channelId, seq: update.seq, update };
   await redis.publish(channelTopic(channelId), JSON.stringify(payload));
 }
 

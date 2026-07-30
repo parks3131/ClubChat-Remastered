@@ -479,4 +479,148 @@ SELECT pg_temp.assert_rejected(
     ('11110000-1111-4111-8111-111111111111', '11111111-1111-4111-8111-111111111111'),
     ('11110000-1111-4111-8111-111111111111', '11111111-1111-4111-8111-111111111111')$$);
 
+-- ---------------------------------------------------------------------------
+-- Reactions: the fixed emoji set, enforced by the database
+-- ---------------------------------------------------------------------------
+
+-- The whole point of the check constraint. A handler that forgot to validate, or a second
+-- write path that never knew it had to, cannot put arbitrary text in this column - which
+-- matters because the column renders directly into every client.
+SELECT pg_temp.assert_rejected(
+  'reactions - an emoji outside the fixed set',
+  $$INSERT INTO message_reactions (message_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🦄' FROM messages LIMIT 1$$);
+
+SELECT pg_temp.assert_rejected(
+  'reactions - arbitrary text in the emoji column',
+  $$INSERT INTO message_reactions (message_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', 'lgtm' FROM messages LIMIT 1$$);
+
+SELECT pg_temp.assert_accepted(
+  'reactions - one of the six is allowed',
+  $$INSERT INTO message_reactions (message_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🔥' FROM messages LIMIT 1$$);
+
+-- A member may add several DIFFERENT emoji to one message. The primary key includes the
+-- emoji precisely so this is allowed while the same one twice is not.
+SELECT pg_temp.assert_accepted(
+  'reactions - a second, different emoji from the same member',
+  $$INSERT INTO message_reactions (message_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🎉' FROM messages LIMIT 1$$);
+
+SELECT pg_temp.assert_rejected(
+  'reactions - the same emoji twice from the same member',
+  $$INSERT INTO message_reactions (message_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🔥' FROM messages LIMIT 1$$);
+
+-- ---------------------------------------------------------------------------
+-- Phase 3.5: direct messages, blocking, reports
+-- ---------------------------------------------------------------------------
+
+INSERT INTO users (id, full_name, email) VALUES
+  ('33333333-3333-4333-8333-333333333333', 'Carol', 'carol@test.invalid');
+
+-- Alice (1111) < Bob (2222) < Carol (3333) as uuids, which is what makes the canonical
+-- ordering assertions below readable.
+INSERT INTO dm_conversations (id, user_a, user_b) VALUES
+  ('d1d1d1d1-d1d1-4d1d-8d1d-d1d1d1d1d1d1',
+   '11111111-1111-4111-8111-111111111111',
+   '22222222-2222-4222-8222-222222222222');
+
+INSERT INTO channels (id, club_id, scope, scope_id) VALUES
+  ('c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1', NULL, 'dm',
+   'd1d1d1d1-d1d1-4d1d-8d1d-d1d1d1d1d1d1');
+
+INSERT INTO messages (id, channel_id, seq, sender_id, type, body, client_msg_id) VALUES
+  ('e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1e1',
+   'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1', 1,
+   '11111111-1111-4111-8111-111111111111', 'text', 'can you drive saturday',
+   'f1f1f1f1-f1f1-4f1f-8f1f-f1f1f1f1f1f1');
+
+-- PRD/14 rule 2: exactly one thread per pair of people, ever. The reverse ordering is the
+-- case that matters - two people racing to open a thread with each other would otherwise get
+-- one row each, and UNIQUE (user_a, user_b) would happily allow both.
+SELECT pg_temp.assert_rejected(
+  'dm conversations - the same pair stored in reverse order',
+  $$INSERT INTO dm_conversations (user_a, user_b)
+    VALUES ('22222222-2222-4222-8222-222222222222',
+            '11111111-1111-4111-8111-111111111111')$$);
+
+SELECT pg_temp.assert_rejected(
+  'dm conversations - the same pair twice',
+  $$INSERT INTO dm_conversations (user_a, user_b)
+    VALUES ('11111111-1111-4111-8111-111111111111',
+            '22222222-2222-4222-8222-222222222222')$$);
+
+SELECT pg_temp.assert_rejected(
+  'dm conversations - a conversation with oneself',
+  $$INSERT INTO dm_conversations (user_a, user_b)
+    VALUES ('11111111-1111-4111-8111-111111111111',
+            '11111111-1111-4111-8111-111111111111')$$);
+
+SELECT pg_temp.assert_accepted(
+  'dm conversations - a different pair, canonically ordered',
+  $$INSERT INTO dm_conversations (user_a, user_b)
+    VALUES ('11111111-1111-4111-8111-111111111111',
+            '33333333-3333-4333-8333-333333333333')$$);
+
+SELECT pg_temp.assert_rejected(
+  'member blocks - blocking yourself',
+  $$INSERT INTO member_blocks (blocker_id, blocked_id)
+    VALUES ('11111111-1111-4111-8111-111111111111',
+            '11111111-1111-4111-8111-111111111111')$$);
+
+INSERT INTO member_blocks (blocker_id, blocked_id) VALUES
+  ('11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222');
+
+SELECT pg_temp.assert_rejected(
+  'member blocks - the same block twice',
+  $$INSERT INTO member_blocks (blocker_id, blocked_id)
+    VALUES ('11111111-1111-4111-8111-111111111111',
+            '22222222-2222-4222-8222-222222222222')$$);
+
+-- A block is stored one-directionally and EVALUATED symmetrically, so a mutual block is two
+-- rows and must remain representable. A unique constraint on the unordered pair would look
+-- tidier and would wrongly reject this.
+SELECT pg_temp.assert_accepted(
+  'member blocks - the reverse block is a separate row',
+  $$INSERT INTO member_blocks (blocker_id, blocked_id)
+    VALUES ('22222222-2222-4222-8222-222222222222',
+            '11111111-1111-4111-8111-111111111111')$$);
+
+INSERT INTO message_reports (message_id, reporter_id) VALUES
+  ('e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1e1', '22222222-2222-4222-8222-222222222222');
+
+-- PRD/05 rule 10: reporting twice is a no-op. Enforced by the key, not by the handler, so a
+-- double tap cannot produce two queue entries.
+SELECT pg_temp.assert_rejected(
+  'message reports - the same reporter reporting the same message twice',
+  $$INSERT INTO message_reports (message_id, reporter_id)
+    VALUES ('e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1e1',
+            '22222222-2222-4222-8222-222222222222')$$);
+
+SELECT pg_temp.assert_accepted(
+  'message reports - a second person reporting the same message is a separate report',
+  $$INSERT INTO message_reports (message_id, reporter_id)
+    VALUES ('e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1e1',
+            '33333333-3333-4333-8333-333333333333')$$);
+
+-- The audit log's window has to be a window. An inverted one would record a read that could
+-- not have happened, which makes the log useless as evidence.
+SELECT pg_temp.assert_rejected(
+  'moderation reads - an inverted context window',
+  $$INSERT INTO moderation_reads
+      (moderator_id, message_id, channel_id, from_seq, to_seq)
+    VALUES ('33333333-3333-4333-8333-333333333333',
+            'e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1e1',
+            'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1', 10, 4)$$);
+
+SELECT pg_temp.assert_accepted(
+  'moderation reads - a single-message window is still a window',
+  $$INSERT INTO moderation_reads
+      (moderator_id, message_id, channel_id, from_seq, to_seq)
+    VALUES ('33333333-3333-4333-8333-333333333333',
+            'e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1e1',
+            'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1', 1, 1)$$);
+
 ROLLBACK;

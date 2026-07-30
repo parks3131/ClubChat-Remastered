@@ -10,6 +10,7 @@ import {
   ChannelScope,
   ChannelState,
   MessageEnvelope,
+  MessageReaction,
   MessageType,
   Platform,
   Uuid,
@@ -125,12 +126,30 @@ export const MsgErr = z.object({
   code: z.enum(msgErrCodes),
 });
 
+/**
+ * A change to a message that already exists.
+ *
+ * > **Carries the FULL reaction set, never a delta.**
+ * >
+ * > A delta (`{emoji, userId, added}`) is smaller and wrong for this transport. Messages
+ * > have `seq` to detect a lost or reordered frame; a reaction delta has no sequence of
+ * > its own, so one dropped frame leaves a client permanently disagreeing about who
+ * > reacted, with nothing to detect it - the same class of silent divergence the gap rule
+ * > exists to prevent for messages. A full set is idempotent, self-healing on the next
+ * > update, and needs no ordering guarantee at all.
+ *
+ * Every field is optional because one update may change only one of them. `pinned` and
+ * `deletedAt` were declared here from Phase 0 and no frame carried them until reactions
+ * arrived and gave the mechanism its first user.
+ */
 export const MsgUpdate = z.object({
   channelId: Uuid,
   seq: z.number().int().positive(),
   pinned: z.boolean().optional(),
+  reactions: z.array(MessageReaction).optional(),
   deletedAt: z.string().datetime().nullable().optional(),
 });
+export type MsgUpdate = z.infer<typeof MsgUpdate>;
 
 export const ServerFrame = z.discriminatedUnion('t', [
   z.object({ t: z.literal('auth.ok'), id: z.string().optional(), d: AuthOk }),
@@ -182,4 +201,4 @@ export function decideGap(arrivingSeq: number, localMaxSeq: number): GapDecision
   return { action: 'append', syncAfter: true };
 }
 
-export { ChannelScope, ChannelState, MessageEnvelope };
+export { ChannelScope, ChannelState, MessageEnvelope, MessageReaction };

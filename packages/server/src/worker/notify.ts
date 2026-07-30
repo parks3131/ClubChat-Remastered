@@ -19,7 +19,41 @@ import {
 import type { Db } from '../db/client.ts';
 import { notifications } from '../db/schema.ts';
 
+/**
+ * How many notification kinds one outbox event may produce.
+ *
+ * > **Every idempotency key is `eventId * NOTIFICATION_SLOTS + slot`, and that is not a
+ * > formality - the previous scheme collided with itself.**
+ * >
+ * > Most handlers produce exactly one notification and keyed on the raw `event.id`. The
+ * > message handler produces up to three, and keyed the second one as `event.id * 2 + 1`.
+ * > Those sequences overlap in both directions: a mention on event 3 keys as 7, and so does an
+ * > announcement on event 7; and once any handler multiplies, its keys land on other handlers'
+ * > raw ids too. Both `notifications_idempotency` and the `push_deliveries` ledger are on
+ * > `(outbox_event_id, recipient/device)`, so a collision reads as "already handled" and
+ * > silently drops a real notification and a real push, with nothing reporting it.
+ * >
+ * > Banding every event into its own block of slots makes the mapping injective by
+ * > construction, which is the only version of this that cannot be got wrong by adding a
+ * > fourth kind later. Found while adding the third one.
+ *
+ * Synthetic keys - the poll closing-soon reminder and the chat-caught-up row - stay **negative**
+ * and are deliberately not banded: real outbox ids are a positive bigserial, so the two spaces
+ * cannot meet whatever the multiplier is.
+ */
+export const NOTIFICATION_SLOTS = 4;
+
+/**
+ * The idempotency key for one kind of notification from one event.
+ *
+ * Slot 0 is the only or primary notification of an event, 1 is a mention, 2 is a direct
+ * message. Slot 3 is spare, so the next kind is a constant rather than another re-keying.
+ */
+export const notificationKey = (outboxEventId: number, slot: 0 | 1 | 2 | 3 = 0): number =>
+  outboxEventId * NOTIFICATION_SLOTS + slot;
+
 export type WriteNotificationsInput<K extends NotificationType = NotificationType> = {
+  /** Always through `notificationKey`, never a raw outbox id. See above. */
   outboxEventId: number;
   type: K;
   params: NotificationParams[K];

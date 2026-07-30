@@ -15,11 +15,14 @@ import { z } from 'zod';
 import { ChannelScope, ClubRole, Uuid } from './domain.ts';
 
 /**
- * The 18 types from the catalogue.
+ * The 19 types.
  *
  * Phase 1 emits the subset whose triggering feature exists. The rest are declared now
  * because the renderer is exhaustive over this union - adding a type is then a compile
  * error everywhere it must be handled, rather than a silently unrendered row.
+ *
+ * PRD/12's table lists 18. The nineteenth, `dm_message`, is **push-only** and is the one type
+ * that never becomes a row in anybody's inbox - see its entry below and ADR-0015.
  */
 export const notificationTypes = [
   // Join requests. These three are special: they never clear by opening the inbox.
@@ -43,6 +46,19 @@ export const notificationTypes = [
   // Chat.
   'announcement',
   'mentioned',
+  /**
+   * A direct message arrived. **Push only - never written to the inbox.**
+   *
+   * An ordinary message in club, race or Eboard chat produces no discrete notification at
+   * all: its unread count is derived from the log. A DM is the one scope where an ordinary
+   * message is inherently addressed to one person, so it has to buzz - and PRD/14's mute rule
+   * ("no push notifications, unread count still accrues") is meaningless unless it does.
+   *
+   * It still writes no row, because the inbox representation of an unread DM is the same
+   * computed chat-unread row every other scope gets. A row per message would flood the feed
+   * and contradict "computed on read, never stored". See ADR-0015.
+   */
+  'dm_message',
   // Housekeeping.
   'car_group_incharge_left',
   'chat_caught_up',
@@ -127,6 +143,23 @@ export const notificationParams = {
     .object({
       clubId: Uuid.nullable(),
       channelId: Uuid,
+      channelName: z.string(),
+      seq: z.number().int().positive(),
+      preview: z.string(),
+    })
+    .merge(actor),
+
+  /**
+   * `clubId` is fixed at null rather than nullable, and that is the type-level statement of
+   * the rule: a DM belongs to no club, ever, because two people who share two clubs must get
+   * one thread. `channelName` is the sender's name - a conversation has no name of its own,
+   * only two people, and the recipient is always the other one.
+   */
+  dm_message: z
+    .object({
+      clubId: z.null(),
+      channelId: Uuid,
+      conversationId: Uuid,
       channelName: z.string(),
       seq: z.number().int().positive(),
       preview: z.string(),
@@ -257,6 +290,12 @@ export function notificationTarget(n: {
     case 'mentioned':
       return { kind: 'chat', channelId: p['channelId']!, seq: p['seq']! };
 
+    // Deliberately WITHOUT a seq. Tapping a DM push should open the conversation on the first
+    // unread message, which is what chat already does on its own; pinning the deep link to one
+    // seq would land past anything that arrived after the push was built.
+    case 'dm_message':
+      return { kind: 'chat', channelId: p['channelId']! };
+
     case 'car_group_incharge_left':
       return { kind: 'race_car_groups', raceId: p['raceId']! };
     case 'chat_caught_up':
@@ -339,6 +378,11 @@ export function renderNotification(n: {
         title: p['channelName']!,
         body: `${p['actorName']} mentioned you: ${p['preview']}`,
       };
+    // The title is the sender's name and the body is what they said, with no "X said:" prefix -
+    // in a one-to-one conversation the sender is already the title, so repeating them reads as
+    // a bug on a lock screen.
+    case 'dm_message':
+      return { title: p['actorName']!, body: p['preview']! };
     case 'car_group_incharge_left':
       return {
         title: p['raceName']!,

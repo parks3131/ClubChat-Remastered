@@ -321,3 +321,41 @@ that records how to recognise the class._
    `metro.config.js` `assetExts`, and a fallback around a static import is not a safety net.**
    Note the shape of the symptom: a screen that spins forever, which is exactly the failure
    `SPEC/PRD/03` warns about and which reads as a crash to whoever is holding the phone.
+
+9. **A hand-copied SQL predicate does not diverge loudly. It diverges silently, and every copy
+   stays individually correct.** Symptom: none, for a whole phase. Race chat existed, had
+   messages in it, and was invisible in the channel list, the unread counts, the badge and the
+   notification audience - because "which channels can this user reach" had been written out four
+   times and Phase 2 added races to none of them. Each copy was self-consistent, so no type error
+   and no failing test existed to find. **Rule: the second time you write a `WHERE` clause,
+   extract it before you add a case to it.** How to recognise the class: a new domain concept
+   ships, and the question "what else asks this same question?" has more than one answer. Grep for
+   the join, not for the feature - the copies will not mention the feature they are missing.
+
+10. **A predicate exported as an alias of another is invisible to any audit that counts
+    predicates.** Symptom: none yet - caught while adding a fourth channel scope, one step before
+    it would have silently removed a documented capability. `canPostInChannel` was
+    `isChannelMember` and `canPinInChannel` was `isChannelAdmin`, so a scope where posting and
+    reading differ, or where pinning is not an admin power, has nowhere to put the difference.
+    Reading the policy module counts five distinct capabilities and finds three definitions.
+    **Rule: when a capability has its own name in the spec, give it its own predicate, even if the
+    body is one word.** An alias is a claim that two things will never diverge, and the cost of
+    being wrong is a permission that silently changes for a scope nobody re-read.
+
+11. **A subsystem can be complete on both sides and still be unreachable, because nothing joins
+    them.** Symptom: the media pipeline passed every server test - presigned upload, size
+    re-verification, thumbnail derivation, an authorization hop proved four ways - and no photo
+    could be sent or displayed by the app. Two joins were missing: the message envelope never
+    carried `media_id`, so a client receiving a photo had no way to find the bytes; and the signed
+    URL is validated by a CDN that development does not have, so fetching it returned 403. **Rule:
+    a feature is not verified until the bytes make the whole trip in the running app.** How to
+    recognise the class: the tests exercise each end against a fixture, and no test crosses the
+    middle. A green suite over a pipeline is evidence about the pieces, not about the pipe.
+
+12. **A nested pressable is invalid HTML on web and swallows the outer gesture on native.**
+    Symptom: React reporting `<button> cannot contain a nested <button>` and warning of a
+    hydration error, from a photo bubble rendered inside the message bubble's own long-press
+    target. **Rule: only the outermost element in a row owns the gesture** - inner content is a
+    `View`, and any tap behaviour it wants belongs to the enclosing pressable. Caught by reading
+    the browser console during a smoke test, which is the only place it surfaces: it typechecks,
+    it renders, and it looks right.

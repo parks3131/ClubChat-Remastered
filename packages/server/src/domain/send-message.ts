@@ -10,8 +10,15 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { MessageEnvelope, MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
-import { mediaObjects, messageMentions, messages, outbox } from '../db/schema.ts';
+import {
+  mediaObjects,
+  messageMentions,
+  messageReactions,
+  messages,
+  outbox,
+} from '../db/schema.ts';
 import { appendMessage, type AppendMessageResult } from './append-message.ts';
+import { channelAudience } from './channel-access.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
   canAnnounceInChannel,
@@ -157,36 +164,6 @@ async function filterReachableMentions(
   return [...new Set(candidates)].filter((id) => allowed.has(id));
 }
 
-/**
- * Everyone who can read a channel.
- *
- * The single definition of "who is in this conversation", used by mention filtering and
- * by the notification audience. Race deliberately reads the roster and never unions in
- * club admins: chat access requires a roster row, so unioning admins would notify people
- * about a channel they cannot open.
- */
-export async function channelAudience(db: Db, channel: ChannelRef): Promise<string[]> {
-  switch (channel.scope) {
-    case 'club': {
-      const rows = await db.execute<{ user_id: string }>(
-        sql`SELECT user_id FROM club_memberships WHERE club_id = ${channel.scopeId}`,
-      );
-      return rows.rows.map((r) => r.user_id);
-    }
-    case 'eboard': {
-      const rows = await db.execute<{ user_id: string }>(
-        sql`SELECT user_id FROM eboard_memberships WHERE eboard_id = ${channel.scopeId}`,
-      );
-      return rows.rows.map((r) => r.user_id);
-    }
-    case 'race':
-    case 'dm':
-      // Phase 2 and Phase 3.5 add the tables. Returning empty denies rather than
-      // over-notifying, which is the safe direction.
-      return [];
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Moderation, and the column-level authority trap
 // ---------------------------------------------------------------------------
@@ -213,6 +190,10 @@ function toEnvelope(row: typeof messages.$inferSelect): MessageEnvelope {
     body: row.body,
     clientMsgId: row.clientMsgId,
     pinned: row.pinned,
+    reactions: [],
+    mediaId: row.mediaId,
+    documentName: row.documentName,
+    documentSize: row.documentSize,
     deletedAt: row.deletedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };
@@ -260,6 +241,17 @@ export async function setPinned(
 
   const row = updated[0];
   if (!row) return { ok: false, code: 'not_found' };
+
+  // Everyone with the chat open must see the pinned strip appear, so the change is published
+  // as an update rather than only being visible on the next refresh. Written to the outbox
+  // rather than published here, so the API process does not need Redis and the effect is
+  // retried if the worker is down.
+  await db.insert(outbox).values({
+    partitionKey: channel.id,
+    eventType: 'message.pinned',
+    payload: { channelId: channel.id, seq, pinned },
+  });
+
   return { ok: true, message: toEnvelope(row) };
 }
 
@@ -298,6 +290,11 @@ export async function softDeleteMessage(
     // Mentions go too: a deleted message must not keep a notification pointing at it
     // claiming someone was mentioned in text that no longer exists.
     await tx.delete(messageMentions).where(eq(messageMentions.messageId, existing.id));
+
+    // And reactions, which PRD/05 rule 9 requires alongside the pin state. Six people
+    // having laughed at text nobody can read any more is not information, and leaving them
+    // would mean a tombstone that still carries a verdict on its own content.
+    await tx.delete(messageReactions).where(eq(messageReactions.messageId, existing.id));
 
     await tx.insert(outbox).values({
       partitionKey: channel.id,

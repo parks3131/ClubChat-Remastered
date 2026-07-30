@@ -89,6 +89,12 @@ function toEnvelope(row: typeof messages.$inferSelect): MessageEnvelope {
     body: row.body,
     clientMsgId: row.clientMsgId,
     pinned: row.pinned,
+    // A message that has just been appended cannot have been reacted to yet. Not a
+    // shortcut: there is no window in which it could have been.
+    reactions: [],
+    mediaId: row.mediaId,
+    documentName: row.documentName,
+    documentSize: row.documentSize,
     deletedAt: row.deletedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };

@@ -35,8 +35,15 @@ This is the most-misunderstood part of the model, and it is deliberate.
 | **Club admin → race polls** | Creating or even seeing a race poll requires being on the race roster **and** being an admin. |
 | **Club admin → Eboard membership** | Admin-tier membership **does** grant Eboard membership - automatically, and it is revoked automatically on demotion. But an admin who chooses to leave the Eboard space must request or be re-added; admin status alone does not re-admit them. |
 | **Race roster → parent club** | Race membership is always a subset of club membership. Leaving the club removes every race and Eboard row for that club. |
+| **Club admin → a member's DMs** | Nothing. A direct message belongs to no club, so no club role reaches it: not its history, not its gallery, not even confirmation that a conversation exists. A report raised in one goes to platform moderators, never to a club admin. |
+| **Platform moderator → anything else** | Nothing. `is_platform_moderator` grants exactly one capability - reading DM reports and the narrow, logged window around a reported message. It is not a tier above Owner and confers no club, race or Eboard access at all. |
 
 ### Consolidated permission matrix
+
+Four tables here - Club, Club content, Race, Eboard - and **a fifth in
+[Direct messages](14-direct-messages.md)**, which lives there because its columns are
+participants rather than roles and it would not fit this shape. All five are covered cell by cell,
+in both directions, by the permission-matrix test suite.
 
 #### Club
 

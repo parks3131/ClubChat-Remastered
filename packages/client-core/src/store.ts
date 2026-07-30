@@ -8,15 +8,44 @@
  * over both, so it is written once against this interface and exercised by both.
  */
 
-import type { MessageEnvelope } from '@clubchat/shared';
+import type { MessageEnvelope, MessageReaction } from '@clubchat/shared';
 
 export type PendingSend = {
   clientMsgId: string;
   channelId: string;
   body: string;
+  /**
+   * The kind of message. Defaults to text at the call site rather than here, so a caller
+   * attaching media has to say so.
+   */
+  type?: 'text' | 'photo' | 'document';
+  /**
+   * An object already uploaded AND completed, for a photo or document send.
+   *
+   * The upload finishes before the message is enqueued, deliberately: the send is retried
+   * from the outbox across reconnects, and re-uploading bytes on every retry would be both
+   * slow and wrong - the object is already durable and already verified.
+   */
+  mediaId?: string;
+  /** For rendering the optimistic bubble before the ack arrives. */
+  localUri?: string;
+  documentName?: string;
+  documentSize?: number;
   /** Attempts so far. Surfaced so the UI can show "failed" after enough of them. */
   attempts: number;
   status: 'pending' | 'failed';
+};
+
+/**
+ * The fields a `msg.update` frame can change on a message already held locally.
+ *
+ * Deliberately a narrow subset rather than a partial envelope: an update must never be able
+ * to rewrite a message's body, sender or seq. Those are the log, and the log is append-only.
+ */
+export type MessagePatch = {
+  pinned?: boolean;
+  reactions?: MessageReaction[];
+  deletedAt?: string | null;
 };
 
 export interface MessageStore {
@@ -24,6 +53,15 @@ export interface MessageStore {
   localMaxSeq(channelId: string): Promise<number>;
   /** Insert or replace by (channelId, seq). Must be idempotent. */
   upsert(messages: readonly MessageEnvelope[]): Promise<void>;
+  /**
+   * Apply a change to a message already held. A no-op if that seq is not held.
+   *
+   * A no-op rather than an insert, deliberately: a pin or a reaction on a message the client
+   * has never seen is not enough information to render it, and inventing a row with an empty
+   * body would put a blank bubble in the conversation. The next sync or history page brings
+   * the message and its current reactions together.
+   */
+  patch(channelId: string, seq: number, patch: MessagePatch): Promise<void>;
   /** Oldest-first, for rendering. */
   list(channelId: string): Promise<MessageEnvelope[]>;
   /** Every seq held for a channel, ascending. For gap auditing. */
@@ -53,6 +91,15 @@ export class InMemoryMessageStore implements MessageStore {
     for (const message of messages) {
       this.channel(message.channelId).set(message.seq, message);
     }
+  }
+
+  async patch(channelId: string, seq: number, patch: MessagePatch): Promise<void> {
+    const existing = this.byChannel.get(channelId)?.get(seq);
+    if (!existing) return;
+    // Spread the patch rather than assigning each field, so a key absent from the frame
+    // leaves the current value alone. `deletedAt: null` is a legitimate value meaning "not
+    // deleted", which is why absence and null have to stay distinguishable.
+    this.channel(channelId).set(seq, { ...existing, ...patch });
   }
 
   async list(channelId: string): Promise<MessageEnvelope[]> {

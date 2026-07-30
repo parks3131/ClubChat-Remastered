@@ -85,10 +85,37 @@ messages              id, channel_id, seq, sender_id NOT NULL, type, body, media
                       INDEX (channel_id, seq) WHERE pinned           ← Highlights, unbounded
                       INDEX (channel_id, seq) WHERE type='announcement'
                       INDEX (channel_id, seq) WHERE media_id IS NOT NULL   ← Gallery
-message_reactions     message_id, user_id, emoji     PK (message_id, user_id, emoji)
+message_reactions     message_id, user_id, emoji, created_at
+                      PK (message_id, user_id, emoji)
+                      CHECK (emoji IN ('👍','❤️','😂','🔥','🎉','😮'))
+                      INDEX (message_id)
+                      -- The PK is the behaviour: several DIFFERENT emoji from one member,
+                      -- never the same one twice. "Reactions toggle on and off" is then a
+                      -- keyed delete-or-insert rather than a read-then-write, so two fast
+                      -- taps cannot leave a double row.
+                      -- The CHECK is what makes the fixed six-emoji set a fact about the
+                      -- data rather than a rule a handler remembers - the column renders
+                      -- directly into every client. If the set ever widens to a full
+                      -- picker, dropping this is the first task of that migration, which
+                      -- forces whoever does it to confront validating arbitrary Unicode.
+                      -- NO maintained count column, unlike poll_options.vote_count: that
+                      -- one exists because vote counts are public while voter identity is
+                      -- gated. Reactions are public both ways, so a count is derivable.
+                      -- Built in Phase 3.5. Specified here from Phase 0 and unbuilt until
+                      -- then, which is also why nothing cleared them on soft delete.
 message_mentions      message_id, user_id
-message_reports       message_id, reporter_id, created_at, dismissed_at
-                      UNIQUE (message_id, reporter_id)               ← reporting twice is a no-op
+message_reports       message_id, reporter_id, created_at, dismissed_at, dismissed_by
+                      PK (message_id, reporter_id)                   ← reporting twice is a no-op
+                      INDEX (created_at DESC) WHERE dismissed_at IS NULL
+                      -- The PK *is* the rule, rather than a separate UNIQUE: both
+                      -- columns are NOT NULL so there is no NULL for Postgres to
+                      -- treat as distinct and let a second report through.
+                      -- One table, TWO readers, selected by the reported message's
+                      -- channel scope: club/race/eboard reports go to that space's
+                      -- admins, dm reports go to platform moderators. Nothing about
+                      -- the row differs. See [Authorization](05-authorization.md).
+                      -- Arrived in Phase 3.5, with the scope that needed the second
+                      -- reader; it was specified here from Phase 0 and unbuilt until then.
 read_cursors          user_id, channel_id, last_read_seq, updated_at  PK (user_id, channel_id)
 ```
 
@@ -207,6 +234,11 @@ news_reactions        post_id, user_id, emoji
 ### Direct messages and member safety
 ```
 dm_conversations      id, user_a, user_b, created_at
+                      -- NO read_only_at and NO blocked_at. Whether a thread can be
+                      -- written to is EVALUATED from club_memberships and member_blocks,
+                      -- never stored: nothing owns the moment a pair stops sharing a
+                      -- club, four write paths would each have to recompute it, and the
+                      -- join path would have to CLEAR it. See ADR-0016.
                       -- NO channel_id, per ADR-0014: the channel references the
                       -- conversation as (scope='dm', scope_id=<conversation>).
                       CHECK (user_a < user_b)      -- canonical order, enforced by the DB
@@ -215,14 +247,37 @@ dm_conversations      id, user_a, user_b, created_at
                       -- (alice,bob) and (bob,alice) cannot both exist. Without it the
                       -- UNIQUE is useless and two threads race into being.
 
-blocks                blocker_id, blocked_id, created_at   PK (blocker_id, blocked_id)
+member_blocks         blocker_id, blocked_id, created_at   PK (blocker_id, blocked_id)
                       CHECK (blocker_id <> blocked_id)
-                      -- stored one-directionally, EVALUATED symmetrically. See [Authorization](05-authorization.md).
+                      INDEX (blocked_id)            -- "who has blocked me" is as hot
+                                                    -- as "who have I blocked", and the
+                                                    -- PK only serves the second
+                      -- member_blocks, not blocks: users.signin_blocked_at records the
+                      -- unrelated fact that an account cannot sign in, and an
+                      -- unqualified "blocked" is ambiguous between the two. Same
+                      -- reasoning this file already applies to signin_blocked_at.
+                      -- Stored one-directionally, EVALUATED symmetrically. See [Authorization](05-authorization.md).
+                      -- A mutual block is TWO rows and must stay representable, which
+                      -- is why there is no unique constraint on the unordered pair.
 
 channel_mutes         user_id, channel_id, muted_until NULL  PK (user_id, channel_id)
                       -- NULL muted_until means muted indefinitely.
                       -- Read by the push audience function ([Message flows](03-message-flows.md)); applies to every
-                      -- scope, not just dm.
+                      -- scope, not just dm. Written for the first time in Phase 3.5;
+                      -- the table has existed since Phase 1 so mute had somewhere to
+                      -- live once the audience function did.
+
+moderation_reads      id, moderator_id, message_id, channel_id, from_seq, to_seq, created_at
+                      CHECK (from_seq <= to_seq)
+                      INDEX (moderator_id, created_at DESC)
+                      -- The audit log [Authorization](05-authorization.md) requires: a platform moderator may
+                      -- read the reported message and its immediate context, and that
+                      -- read is logged. Records the window actually SERVED, not the one
+                      -- requested, so a widened window shows up here rather than being
+                      -- invisible. Append-only, and deliberately not covered by any
+                      -- retention job: in a product that will include minors, the record
+                      -- of who looked at what is the last thing to prune.
+                      -- moderator_id is ON DELETE RESTRICT for the same reason.
 ```
 
 ### Infrastructure
@@ -232,6 +287,17 @@ media_objects         id, owner_type, owner_id, bucket, object_key, mime, bytes,
 notifications         id, recipient_id, actor_id NULL, club_id NULL, type, params jsonb,
                       outbox_event_id, read_at, created_at
                       UNIQUE (outbox_event_id, recipient_id)       ← at-least-once safety
+                      -- outbox_event_id is NOT a raw outbox id. One event can produce
+                      -- more than one KIND of notification (an announcement that also
+                      -- mentions somebody), so the key is eventId * 4 + slot, which
+                      -- bands each event into its own block. The previous scheme -
+                      -- raw id for one kind and id*2+1 for another - overlapped: a
+                      -- mention on event 3 and an announcement on event 7 both key as
+                      -- 7, and the second is silently dropped as already delivered.
+                      -- The push_deliveries ledger uses the same keys, so a collision
+                      -- swallowed a real push too. Found in Phase 3.5 while adding a
+                      -- third kind. Synthetic keys stay NEGATIVE and unbanded, since
+                      -- real outbox ids are a positive bigserial.
                       -- NO body and NO target column, deliberately. Both the display
                       -- text and the navigation target are derived at READ time from
                       -- (type, params). A stored route string left approvals

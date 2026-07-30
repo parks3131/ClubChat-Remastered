@@ -34,3 +34,15 @@ club, race, or account leaves the object). No file size or MIME-type limits on a
 image resizing - full-resolution originals are uploaded and displayed. The gallery signs a
 channel's entire photo history in one call and is unpaginated by design. Two devices still
 hold different signed URLs for the same object, so N viewers is still N origin downloads.
+
+---
+
+**Built as of 2026-07-30.** Attaching a photo or a document from chat, end to end: the composer's
+"+" menu, the pickers, the presigned upload, thumbnail derivation, and photo and document bubbles
+that render through the authorized hop. A document bubble shows its filename and size.
+
+**Not built yet.** The **Gallery grid** and the **full-screen viewer**. The server endpoint behind
+the grid has existed since Phase 3 and is paginated; what is missing is the two screens. Until the
+viewer exists, tapping a photo does nothing - deliberately nothing rather than a nested control,
+because a photo bubble sits inside the message bubble's own long-press target and a second
+pressable there is invalid on web and swallows the outer gesture on native.

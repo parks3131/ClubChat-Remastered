@@ -14,6 +14,27 @@ import { sql } from 'drizzle-orm';
 import type { ClubRole } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 
+/**
+ * One direct-message thread, from the viewer's side.
+ *
+ * `sharesClub` is resolved here rather than at the predicate, because "do these two people
+ * still share a club" is a join and a predicate must stay a pure function. It is also NOT
+ * stored on the conversation: club membership changes constantly, so a stored copy would need
+ * a job to maintain and would be wrong between runs. See ADR-0016.
+ */
+export type DmThread = {
+  readonly conversationId: string;
+  /** The person on the other side. There are exactly two participants, ever. */
+  readonly otherUserId: string;
+  /**
+   * Still share at least one club, so the thread is writable.
+   *
+   * False means read-only, not gone: history stays readable, which is what PRD/14 rule 3
+   * requires and is consistent with a message never being hard-deleted.
+   */
+  readonly sharesClub: boolean;
+};
+
 export type AccessContext = {
   readonly userId: string;
   /** Club id -> this user's role in it. Absent means not a member. */
@@ -23,58 +44,127 @@ export type AccessContext = {
   /**
    * Race ids this user holds a roster row for.
    *
-   * Phase 0 has no races table, so this is always empty and every race predicate
-   * denies. That is the safe direction and no race channel can exist yet. Phase 2
-   * populates it. The predicates are written against the set rather than against a
-   * club-admin check on purpose: race membership is the SOLE source of truth for
-   * race access, and substituting an admin check was wrong in five separate places
-   * in v1.
+   * The predicates are written against the set rather than against a club-admin check
+   * on purpose: race membership is the SOLE source of truth for race access, and
+   * substituting an admin check was wrong in five separate places in v1.
    */
   readonly raceRoster: ReadonlySet<string>;
   /**
-   * DM threads this user participates in, and users blocked in either direction.
-   * Phase 3.5 populates both. Empty here, so DM predicates deny.
+   * Conversation id -> that thread's state. `has()` is participation; `get()` carries the
+   * peer and whether the thread is still writable.
    */
-  readonly dmThreads: ReadonlySet<string>;
+  readonly dmThreads: ReadonlyMap<string, DmThread>;
+  /**
+   * Users blocked in EITHER direction - blocked by this user, or blocking them.
+   *
+   * Deliberately symmetric. A block is stored one-directionally (`blocker -> blocked`) but
+   * evaluated both ways: neither party can message the other and neither appears in the
+   * other's DM search. A one-directional read would let the blocked user keep opening the
+   * thread and sending into a void, which is worse for them than a clean refusal.
+   */
   readonly blockedEither: ReadonlySet<string>;
+  /**
+   * Gates the DM report queue, and nothing else.
+   *
+   * Not a role in any club and not a tier above Owner: it grants exactly one capability,
+   * reading reports raised in conversations that have no admin party to them.
+   */
+  readonly isPlatformModerator: boolean;
 };
 
-type MembershipRow = { kind: string; id: string; role: string | null };
+type ContextRow = {
+  kind: string;
+  id: string;
+  detail: string | null;
+  flag: boolean | null;
+};
 
 /**
  * Load everything the predicates need for one user, in one round trip.
  *
- * Note the explicit `::text` casts on the literals and on the NULL. Engineering
- * pitfall 6: a bare literal inside a UNION audience query aborts the whole statement
- * on type-inference grounds, and that broke race announcements twice in v1. The cast
- * is cheap and the failure it prevents is total.
+ * Note the explicit `::text` casts on every id and on both NULLs. Two separate reasons, and
+ * both are load-bearing:
+ *
+ *  1. Engineering pitfall 6: a bare literal inside a UNION audience query aborts the whole
+ *     statement on type-inference grounds, and that broke race announcements twice in v1.
+ *  2. **The branches must agree on column types.** The membership branches select `uuid`
+ *     columns while the dm branch selects a `CASE` expression; Postgres will not implicitly
+ *     match `uuid` against `text` across a UNION, so leaving one uncast fails the entire
+ *     statement rather than that branch. Found by running it, not by reading it.
  */
 export async function loadAccessContext(db: Db, userId: string): Promise<AccessContext> {
-  const rows = await db.execute<MembershipRow>(sql`
-    SELECT 'club'::text AS kind, club_id AS id, role::text AS role
+  const rows = await db.execute<ContextRow>(sql`
+    SELECT 'club'::text AS kind, club_id::text AS id, role::text AS detail,
+           NULL::boolean AS flag
       FROM club_memberships
      WHERE user_id = ${userId}
     UNION ALL
-    SELECT 'eboard'::text AS kind, eboard_id AS id, NULL::text AS role
+    SELECT 'eboard'::text AS kind, eboard_id::text AS id, NULL::text AS detail,
+           NULL::boolean AS flag
       FROM eboard_memberships
      WHERE user_id = ${userId}
     UNION ALL
-    SELECT 'race'::text AS kind, race_id AS id, NULL::text AS role
+    SELECT 'race'::text AS kind, race_id::text AS id, NULL::text AS detail,
+           NULL::boolean AS flag
       FROM race_memberships
      WHERE user_id = ${userId}
+    UNION ALL
+    SELECT 'dm'::text AS kind,
+           d.id::text AS id,
+           (CASE WHEN d.user_a = ${userId} THEN d.user_b ELSE d.user_a END)::text AS detail,
+           -- Writability, resolved per thread. EXISTS rather than a count: whether they
+           -- share three clubs or one makes no difference to the answer.
+           EXISTS (
+             SELECT 1
+               FROM club_memberships mine
+               JOIN club_memberships theirs ON theirs.club_id = mine.club_id
+              WHERE mine.user_id = ${userId}
+                AND theirs.user_id =
+                    CASE WHEN d.user_a = ${userId} THEN d.user_b ELSE d.user_a END
+           ) AS flag
+      FROM dm_conversations d
+     WHERE d.user_a = ${userId} OR d.user_b = ${userId}
+    UNION ALL
+    -- Read in both directions and collapsed to "the other person", because every predicate
+    -- that consults a block treats the two directions identically.
+    SELECT 'block'::text AS kind,
+           (CASE WHEN b.blocker_id = ${userId} THEN b.blocked_id ELSE b.blocker_id END)::text
+             AS id,
+           NULL::text AS detail,
+           NULL::boolean AS flag
+      FROM member_blocks b
+     WHERE b.blocker_id = ${userId} OR b.blocked_id = ${userId}
+    UNION ALL
+    SELECT 'moderator'::text AS kind, u.id::text AS id, NULL::text AS detail,
+           NULL::boolean AS flag
+      FROM users u
+     WHERE u.id = ${userId} AND u.is_platform_moderator
   `);
 
   const clubRole = new Map<string, ClubRole>();
   const eboardMember = new Set<string>();
   const raceRoster = new Set<string>();
+  const dmThreads = new Map<string, DmThread>();
+  const blockedEither = new Set<string>();
+  let isPlatformModerator = false;
 
   for (const row of rows.rows) {
-    if (row.kind === 'club' && row.role !== null) {
-      clubRole.set(row.id, row.role as ClubRole);
+    if (row.kind === 'club' && row.detail !== null) {
+      clubRole.set(row.id, row.detail as ClubRole);
     } else if (row.kind === 'eboard') {
       eboardMember.add(row.id);
     } else if (row.kind === 'race') {
       raceRoster.add(row.id);
+    } else if (row.kind === 'dm' && row.detail !== null) {
+      dmThreads.set(row.id, {
+        conversationId: row.id,
+        otherUserId: row.detail,
+        sharesClub: row.flag === true,
+      });
+    } else if (row.kind === 'block') {
+      blockedEither.add(row.id);
+    } else if (row.kind === 'moderator') {
+      isPlatformModerator = true;
     }
   }
 
@@ -83,10 +173,9 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
     clubRole,
     eboardMember,
     raceRoster,
-    // Phase 3.5 populates both. Empty means every DM predicate denies, which is the safe
-    // direction while no DM can exist.
-    dmThreads: new Set(),
-    blockedEither: new Set(),
+    dmThreads,
+    blockedEither,
+    isPlatformModerator,
   };
 }
 
@@ -96,15 +185,31 @@ export function accessContextOf(init: {
   clubRole?: Iterable<readonly [string, ClubRole]>;
   eboardMember?: Iterable<string>;
   raceRoster?: Iterable<string>;
-  dmThreads?: Iterable<string>;
+  /**
+   * Threads, given as the peer plus writability. Defaults `sharesClub` to true, because a
+   * thread that exists at all was opened by two people who shared a club, and the read-only
+   * case is the exception a test should have to state.
+   */
+  dmThreads?: Iterable<{ conversationId: string; otherUserId: string; sharesClub?: boolean }>;
   blockedEither?: Iterable<string>;
+  isPlatformModerator?: boolean;
 }): AccessContext {
+  const dmThreads = new Map<string, DmThread>();
+  for (const thread of init.dmThreads ?? []) {
+    dmThreads.set(thread.conversationId, {
+      conversationId: thread.conversationId,
+      otherUserId: thread.otherUserId,
+      sharesClub: thread.sharesClub ?? true,
+    });
+  }
+
   return {
     userId: init.userId,
     clubRole: new Map(init.clubRole ?? []),
     eboardMember: new Set(init.eboardMember ?? []),
     raceRoster: new Set(init.raceRoster ?? []),
-    dmThreads: new Set(init.dmThreads ?? []),
+    dmThreads,
     blockedEither: new Set(init.blockedEither ?? []),
+    isPlatformModerator: init.isPlatformModerator ?? false,
   };
 }

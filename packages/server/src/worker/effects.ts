@@ -18,9 +18,10 @@ import { SYSTEM_ACTOR_ID } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { users } from '../db/schema.ts';
 import { appendMessage, deriveClientMsgId } from '../domain/append-message.ts';
-import { publishToChannel, publishRevocation } from '../bus/redis.ts';
+import { publishToChannel, publishRevocation, publishUpdate } from '../bus/redis.ts';
+import { reactionsForMessages } from '../domain/reactions.ts';
 import { resolveAudience } from './audience.ts';
-import { writeNotifications } from './notify.ts';
+import { notificationKey, writeNotifications } from './notify.ts';
 import { dispatchPush, PUSH_DEFERRAL_MS } from '../push/dispatch.ts';
 import type { PushSender } from '../push/sender.ts';
 import type { MediaStore } from '../media/store.ts';
@@ -150,11 +151,10 @@ const onClubCreated: EffectHandler = async (event, deps) => {
 /**
  * A message was created.
  *
- * A no-op in Phase 0, and deliberately still routed through the outbox rather than
- * omitted. Phase 1 attaches notification fan-out and push dispatch here, which is
- * where the audience rules and the read-cursor suppression will live. The event
- * existing now means that work is an added handler rather than a change to the send
- * path.
+ * Three kinds of notification can come out of one message, and each is gated separately:
+ * announcements (everyone in the space), mentions (the named people), and direct messages (the
+ * other participant). A message can be more than one of them, which is why each carries its
+ * own idempotency slot.
  */
 const onMessageCreated: EffectHandler = async (event, deps) => {
   const channelId = String(event.payload['channelId'] ?? event.partitionKey);
@@ -169,13 +169,21 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
   const isAnnouncement = type === 'announcement';
   const mentioned = await mentionedUsers(deps.db, channelId, seq);
 
-  if (!isAnnouncement && mentioned.length === 0) return;
-
+  // The channel is loaded before the early return, because a direct message notifies its
+  // recipient whatever its type is - and whether this is a DM is a property of the channel.
   const context = await channelContext(deps.db, channelId);
   if (!context) {
     deps.log('warn', 'message.created for a channel that no longer exists', { channelId });
     return;
   }
+
+  // A DM is the one scope where an ordinary message notifies anyone. Everywhere else an
+  // ordinary text produces no discrete notification and no push: its unread count comes from
+  // the log. A system message is excluded - a DM has none, but the worker's own writes must
+  // never be able to buzz a phone.
+  const isDirectMessage = context.scope === 'dm' && type !== 'system';
+
+  if (!isAnnouncement && !isDirectMessage && mentioned.length === 0) return;
 
   const actorName = await displayName(deps.db, senderId);
   const preview = String(event.payload['preview'] ?? '').slice(0, 140);
@@ -198,7 +206,7 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
     };
 
     const { created } = await writeNotifications(deps.db, {
-      outboxEventId: event.id,
+      outboxEventId: notificationKey(event.id, 0),
       type: 'announcement',
       params,
       recipients,
@@ -217,7 +225,7 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
     // idempotent, and a redelivery after a crash between the two must still push.
     schedule(deps, async () => {
       const outcome = await dispatchPush(deps.db, deps.push, {
-        outboxEventId: event.id,
+        outboxEventId: notificationKey(event.id, 0),
         type: 'announcement',
         params,
         recipients,
@@ -225,6 +233,51 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
         seq,
       });
       deps.log('info', 'announcement push dispatched', { eventId: event.id, ...outcome });
+    });
+  }
+
+  if (isDirectMessage) {
+    // Exactly one recipient: the audience of a dm channel is its two participants and
+    // `resolveAudience` removes the actor. **Blocking does not remove the other one** - the
+    // block prevented the send in the first place, so a message that exists here was
+    // authorized when it was written, and its recipient is entitled to know about it.
+    const recipients = await resolveAudience(deps.db, {
+      type: 'dm_message',
+      actorId: senderId,
+      clubId: null,
+      channelId,
+    });
+
+    const params = {
+      // Always null. A DM belongs to no club, and the params schema says `z.null()` rather
+      // than nullable so a handler that invented one fails the write.
+      clubId: null,
+      channelId,
+      conversationId: context.scopeId,
+      // The sender's name, not the channel's: a conversation has no name of its own, and the
+      // recipient is always the other participant.
+      channelName: actorName,
+      seq,
+      preview,
+      actorName,
+    };
+
+    // **No notification row.** The inbox representation of an unread DM is the same computed
+    // chat-unread row every other scope gets, so writing one per message would both flood the
+    // feed and contradict "computed on read, never stored". Push only. See ADR-0015.
+    schedule(deps, async () => {
+      const outcome = await dispatchPush(deps.db, deps.push, {
+        outboxEventId: notificationKey(event.id, 2),
+        type: 'dm_message',
+        params,
+        recipients,
+        // Both suppressions apply here and neither is DM-specific: the read cursor silences a
+        // recipient who is already looking at the conversation, and a mute silences the buzz
+        // while the unread count keeps climbing.
+        channelId,
+        seq,
+      });
+      deps.log('info', 'direct message push dispatched', { eventId: event.id, ...outcome });
     });
   }
 
@@ -249,9 +302,10 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
     });
 
     await writeNotifications(deps.db, {
-      // Offset so a message that is BOTH an announcement and a mention does not have its
-      // two notifications collide on the idempotency key.
-      outboxEventId: event.id * 2 + 1,
+      // Its own slot, so a message that is BOTH an announcement and a mention does not have
+      // its two notifications collide on the idempotency key - and, since the slots are
+      // disjoint per event, cannot collide with a different event's either.
+      outboxEventId: notificationKey(event.id, 1),
       type: 'mentioned',
       params,
       recipients,
@@ -261,7 +315,7 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
 
     schedule(deps, async () => {
       const outcome = await dispatchPush(deps.db, deps.push, {
-        outboxEventId: event.id * 2 + 1,
+        outboxEventId: notificationKey(event.id, 1),
         type: 'mentioned',
         params,
         recipients,
@@ -293,21 +347,36 @@ async function mentionedUsers(db: Db, channelId: string, seq: number): Promise<s
 async function channelContext(
   db: Db,
   channelId: string,
-): Promise<{ clubId: string | null; name: string } | null> {
+): Promise<{ clubId: string | null; scope: string; scopeId: string; name: string } | null> {
   const rows = await db.execute<{
     club_id: string | null;
+    scope: string;
+    scope_id: string;
     name: string | null;
   }>(sql`
     SELECT c.club_id,
-           COALESCE(e.name, cl.name) AS name
+           c.scope,
+           c.scope_id::text AS scope_id,
+           -- Most specific first. A race and an Eboard channel both carry a club_id, so
+           -- putting the club ahead of them titled every race chat with the club's name.
+           COALESCE(r.name, e.name, cl.name) AS name
       FROM channels c
       LEFT JOIN clubs cl ON cl.id = c.club_id
       LEFT JOIN eboard_channels e ON c.scope = 'eboard' AND e.id = c.scope_id
+      LEFT JOIN races r ON c.scope = 'race' AND r.id = c.scope_id
      WHERE c.id = ${channelId}
   `);
   const row = rows.rows[0];
   if (!row) return null;
-  return { clubId: row.club_id, name: row.name ?? 'ClubChat' };
+  // A dm has no name of its own, only two people. The caller substitutes the sender's name,
+  // which is what the recipient wants to see and needs no per-recipient query, since a
+  // conversation has exactly one other participant.
+  return {
+    clubId: row.club_id,
+    scope: row.scope,
+    scopeId: row.scope_id,
+    name: row.name ?? 'ClubChat',
+  };
 }
 
 async function displayName(db: Db, userId: string): Promise<string> {
@@ -366,7 +435,7 @@ const onMemberJoined: EffectHandler = async (event, deps) => {
   // the approval path suppresses it - which is why `via` is on the event at all.
   if (via === 'added' && actorId) {
     await writeNotifications(deps.db, {
-      outboxEventId: event.id,
+      outboxEventId: notificationKey(event.id),
       type: 'member_added',
       params: {
         clubId,
@@ -400,7 +469,7 @@ const onJoinRequested: EffectHandler = async (event, deps) => {
   });
 
   await writeNotifications(deps.db, {
-    outboxEventId: event.id,
+    outboxEventId: notificationKey(event.id),
     type: 'club_join_request',
     params: {
       clubId,
@@ -442,7 +511,7 @@ const onJoinDecided: EffectHandler = async (event, deps) => {
   }
 
   await writeNotifications(deps.db, {
-    outboxEventId: event.id,
+    outboxEventId: notificationKey(event.id),
     type: approved ? 'request_approved' : 'request_denied',
     params: {
       clubId,
@@ -481,7 +550,7 @@ const onRoleChanged: EffectHandler = async (event, deps) => {
   });
 
   await writeNotifications(deps.db, {
-    outboxEventId: event.id,
+    outboxEventId: notificationKey(event.id),
     type: 'role_changed',
     params: { clubId, clubName: club.name, actorName, newRole },
     recipients: [userId],
@@ -516,7 +585,7 @@ const onOwnershipTransferred: EffectHandler = async (event, deps) => {
   });
 
   await writeNotifications(deps.db, {
-    outboxEventId: event.id,
+    outboxEventId: notificationKey(event.id),
     type: 'role_changed',
     params: { clubId, clubName: club.name, actorName: fromName, newRole: 'owner' },
     recipients: [toUserId],
@@ -556,7 +625,7 @@ function makeDepartureHandler(reason: 'removed' | 'left'): EffectHandler {
 
       if (reason === 'removed' && actorId) {
         await writeNotifications(deps.db, {
-          outboxEventId: event.id,
+          outboxEventId: notificationKey(event.id),
           type: 'member_removed',
           params: { clubId, clubName: club.name, actorName: actorName ?? 'An admin' },
           recipients: [userId],
@@ -672,7 +741,7 @@ function makeCreationHandler(config: {
 
     if (recipients.length > 0) {
       await writeNotifications(deps.db, {
-        outboxEventId: event.id,
+        outboxEventId: notificationKey(event.id),
         type: config.notificationType,
         params: params as never,
         recipients,
@@ -682,7 +751,7 @@ function makeCreationHandler(config: {
 
       schedule(deps, async () => {
         const outcome = await dispatchPush(deps.db, deps.push, {
-          outboxEventId: event.id,
+          outboxEventId: notificationKey(event.id),
           type: config.notificationType,
           params,
           recipients,
@@ -775,7 +844,7 @@ const onInchargeLeft: EffectHandler = async (event, deps) => {
   });
 
   await writeNotifications(deps.db, {
-    outboxEventId: event.id,
+    outboxEventId: notificationKey(event.id),
     type: 'car_group_incharge_left',
     params: {
       clubId,
@@ -807,7 +876,7 @@ const onRaceMembershipDecided: EffectHandler = async (event, deps) => {
   const raceName = raceRows.rows[0]?.name ?? 'the race';
 
   await writeNotifications(deps.db, {
-    outboxEventId: event.id,
+    outboxEventId: notificationKey(event.id),
     type: approved ? 'request_approved' : 'request_denied',
     params: {
       clubId,
@@ -905,10 +974,66 @@ function makeCardRemover(
 export const handlers: Record<string, EffectHandler> = {
   'club.created': onClubCreated,
   'message.created': onMessageCreated,
+  /**
+   * A message was soft-deleted.
+   *
+   * **Notifies nobody** - a deletion is not an event anyone should be interrupted for - but it
+   * IS published, so every open client replaces the bubble with a tombstone rather than
+   * showing text that no longer exists until the next refresh. PRD/05 rule 9 says the
+   * tombstone is what *every other member* sees.
+   */
   'message.deleted': async (event, deps) => {
-    // The tombstone is already in the log and the client learns of it by sync. Nothing to
-    // notify: a deletion is not an event anyone should be interrupted for.
-    deps.log('info', 'message.deleted', { eventId: event.id });
+    const channelId = String(event.payload['channelId'] ?? event.partitionKey);
+    const seq = Number(event.payload['seq']);
+    await publishUpdate(deps.redis, channelId, {
+      channelId,
+      seq,
+      // Reactions were cleared with the message, so the update carries the empty set
+      // explicitly rather than leaving clients holding the old pills.
+      reactions: [],
+      pinned: false,
+      deletedAt: new Date().toISOString(),
+    });
+    deps.log('info', 'message.deleted published', { eventId: event.id, channelId, seq });
+  },
+
+  /** A pin or unpin. Notifies nobody: pins are reference, not interruption. */
+  'message.pinned': async (event, deps) => {
+    const channelId = String(event.payload['channelId'] ?? event.partitionKey);
+    const seq = Number(event.payload['seq']);
+    await publishUpdate(deps.redis, channelId, {
+      channelId,
+      seq,
+      pinned: event.payload['pinned'] === true,
+    });
+    deps.log('info', 'message.pinned published', { eventId: event.id, channelId, seq });
+  },
+
+  /**
+   * A reaction was toggled.
+   *
+   * Re-reads the set at publish time rather than trusting the payload, which makes the handler
+   * idempotent for free: a redelivered event republishes the current truth instead of an older
+   * snapshot. That is the property the full-set-not-delta choice buys - there is no ordering to
+   * get wrong, because the last publish to arrive is correct whichever one it was.
+   */
+  'message.reacted': async (event, deps) => {
+    const channelId = String(event.payload['channelId'] ?? event.partitionKey);
+    const messageId = String(event.payload['messageId'] ?? '');
+    const seq = Number(event.payload['seq']);
+    if (!messageId) {
+      deps.log('warn', 'message.reacted with no messageId', { eventId: event.id });
+      return;
+    }
+
+    const reactions = (await reactionsForMessages(deps.db, [messageId])).get(messageId) ?? [];
+    await publishUpdate(deps.redis, channelId, { channelId, seq, reactions });
+    deps.log('info', 'message.reacted published', {
+      eventId: event.id,
+      channelId,
+      seq,
+      emoji: reactions.length,
+    });
   },
   'club.member_joined': onMemberJoined,
   'club.join_requested': onJoinRequested,
@@ -947,7 +1072,7 @@ export const handlers: Record<string, EffectHandler> = {
       clubId,
     });
     await writeNotifications(deps.db, {
-      outboxEventId: event.id,
+      outboxEventId: notificationKey(event.id),
       type: 'race_join_request',
       params: {
         clubId,

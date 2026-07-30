@@ -7,6 +7,425 @@ Newest first.
 
 ---
 
+## 2026-07-30 - Completing Phase 3: attachments actually reachable from the app
+
+Phase 3's two gate conditions were met back when it shipped - a private Eboard photo provably
+unreachable without membership, chat readable in airplane mode - and the phase was **not
+finished**: the client could neither attach a photo nor render one. Closed now, before starting
+Phase 4. Suite total 531, `db:prove` at 62, all green.
+
+What was missing turned out to be considerably more than a picker.
+
+### The envelope carried no media at all
+
+Phase 3 added `media_id`, `document_name` and `document_size` to `messages` and never put them on
+the `MessageEnvelope`. So a client receiving a photo knew only that its `type` was `'photo'` - no
+id, and therefore no way to fetch the bytes. The upload half and the render half were each
+unreachable from the other, and every server test passed because each end was exercised against a
+fixture and nothing crossed the middle.
+
+Now on the envelope, populated at every construction site, persisted in the local SQLite cache, and
+carried through the send outbox so an optimistic bubble renders the photo the sender just picked
+rather than an empty square. The ack path needed two fixes of its own: it fabricated
+`type: 'text'` for every send, so a photo was stored locally as a text message until the next
+sync overwrote it, and it had no way to know the attachment - both now read from the outbox entry.
+
+### The signed URL only works behind a CDN
+
+The bigger one. The hour-aligned `exp`/`sig` scheme is validated by **the CDN edge**, not by the
+object store - that is what buys debt 7's fix, one byte-identical URL per window and therefore one
+shared cache entry instead of N origin fetches. Point that same URL straight at a bucket with no
+CDN in front of it and the store has never heard of `exp` or `sig`, so it is an unauthenticated GET
+on private content, correctly refused with 403.
+
+Development has no CDN. So **every photo in the app was unreachable while every server test
+passed**, because the tests exercise the signing function rather than fetching the bytes. Found by
+loading the app and seeing "Photo unavailable", then curling the URL the API handed out.
+
+Now explicit configuration - `MEDIA_URL_MODE` of `cdn` (default, production) or `presign` - with
+the object store signing when nothing else will. **The hour alignment survives both modes**, which
+took one non-obvious step: a presigned URL embeds its signing timestamp, so signing with "now"
+produces a different URL per request and destroys the cache-sharing property. The signing date is
+pinned to the **floor of the current hour** and the expiry carried as the distance from that floor
+to the aligned expiry, which makes the presigned URL byte-identical within the window exactly as
+the CDN one is. Verified by resolving twice and comparing the strings, and by confirming an
+unsigned GET is still 403.
+
+### A 302 behind an Authorization header cannot be an image source
+
+`GET /media/:id` answers with a redirect and requires a header. `<img src>` sends no custom
+headers, and react-native-web renders every `Image` as an `<img>` - so the native path (`Image`
+with `{uri, headers}`, which follows the redirect itself) has no web equivalent, and media was
+unreachable on the surface this project develops and tests on.
+
+Hence a JSON sibling, `GET /media/:id/url`, same function and same predicate re-evaluated on every
+request. It grants nothing the redirect does not; it just answers in a shape a header-bearing
+client can use. A token in the query string was not an option: credentials never go in a URL.
+
+Their cache headers differ deliberately, and that came out of a false alarm worth recording. The
+first browser test after switching signing modes still failed, and the cause was **my own
+`max-age=600`** serving a JSON response from before the restart. Harmless in itself, but it made
+the point: the client already memoizes the resolved URL for the life of its window, so an HTTP
+cache in front of that route saves nothing and costs something - a member who lost access would
+keep resolving successfully for up to ten more minutes. The JSON route is now `no-store`. The
+redirect keeps `private, max-age=600`, because an `<img src>` hits it on every render with no memo
+in front of it.
+
+### Two defects found by actually running it
+
+**A corrupt test fixture, which proved the retry path.** My first hand-built PNG was invalid, and
+`sharp` refused it with `vipspng: libpng read error`. The worker retried five times and parked the
+event, exactly as designed - so the fixture was the bug and the pipeline's failure handling was the
+evidence. A properly CRC'd 64x64 PNG then derived thumb and display webp variants on the first
+attempt. The corrupt one is still in the conversation showing "Photo unavailable", which is the
+honest failure state doing its job.
+
+**Nested pressables.** The document bubble rendered a `Pressable` inside the message bubble's own
+`Pressable`, which is a `<button>` inside a `<button>` - invalid HTML that React reports as a
+hydration error, and on native would swallow the outer long-press that reacts and reports. Caught
+by reading the browser console, which is the only place it surfaces: it typechecks, it renders and
+it looks right. Both media bubbles are now plain `View`s, and any tap behaviour they grow belongs
+to the enclosing bubble.
+
+### Verification
+
+Everything below is against the running app and real MinIO, not a fake:
+
+- **Intent, presigned PUT, complete** for a 7,858-byte PNG: 200 on the PUT, and complete HEADed the
+  object and confirmed the byte count.
+- **Real derivation**: `sharp` produced `.thumb.webp` and `.display.webp`, and `?variant=thumb`
+  resolves to the derived key rather than falling back to the original.
+- **Uploaded from the UI's own picker**, twice - a photo through "+ → Photos" and a text document
+  through "+ → Document" - both landing `ready` with variants where applicable, both owned by their
+  message so the nightly GC can find them, and both rendering: the photo in its bubble, the
+  document as "meet-schedule.txt / 54 B".
+- **Zero console errors** after the nested-pressable fix.
+- The store-signed URL is byte-identical across two resolves in the same window, and the same
+  object unsigned is still 403.
+
+### Not done
+
+The **Gallery grid** and the **full-screen viewer** - `PRD/13`'s remaining client surface. The
+server endpoint behind the grid has been complete and paginated since Phase 3. Until the viewer
+exists, tapping a photo does nothing, deliberately rather than via a nested control. Recorded in
+`PRD/13` and in `PRD/05`'s acceptance list rather than left implied.
+
+Verified on **web only**. There is no simulator in this environment, and the upload path resolves
+bytes through `fetch`, which reads a `blob:` URI on web and a `file:` URI in React Native - one
+path rather than an unverified platform branch, but the native side is untested.
+
+---
+
+## 2026-07-30 - Message reactions, and three gaps they uncovered
+
+Requested directly after Phase 3.5 closed, from the "not done" list: reactions had been specified
+since Phase 0 - in scope in `PRD/05`, a `message_reactions` table in `TECH/09` - and never built,
+which made `PRD/14` rule 5's promise that reactions work identically in a DM true only vacuously.
+Built with the fixed six-emoji set. 15 new server tests, 5 new client tests, 5 new constraint
+assertions. Suite total 528, all green, `db:prove` at 62 and exit 0.
+
+### The full emoji picker
+
+The request came with a caveat: the founder wants the whole emoji list from a popup, "like
+WhatsApp", not the fixed six - and, in the same breath, "note it down for now, do it with fixed
+emoji". So the fixed set shipped and the picker is recorded.
+
+Worth being precise about, because `PRD/05` lists "a full emoji picker" under **rejected**
+alternatives, so this looks like re-litigating a settled decision. It is not. The rejected
+alternative was a picker *replacing* the quick row, and its objection - fast tap targets beat
+completeness - still stands. WhatsApp ships both: six quick taps plus a "+" into the full grid.
+The ask is for the second thing and leaves the first alone, which makes it a new proposal rather
+than a reversal. Recorded in `PRD/05` as a costed open question: the closeable set becomes
+uncloseable, "is this string an emoji" is genuinely hard (grapheme clusters, ZWJ sequences,
+skin-tone and regional-indicator pairs, variation selectors), byte-different encodings of one
+emoji must normalise to one reaction or the same emoji appears twice with a count of one each, and
+the pill row stops being bounded at six.
+
+The current shape is deliberately friendly to it. The emoji is a string end to end, one reaction
+per emoji per member per message needs no revisiting, and `reactionSummary` already renders an
+arbitrary set - so the fixed order is the only rule that has to change.
+
+**The check constraint is the interesting decision.** Enforcing "one of six" in the database means
+widening the set starts with a migration that drops it. That is the point rather than the cost: a
+handler-only rule would let the picker ship with no validation at all and nobody would notice,
+whereas dropping a constraint forces whoever does it to confront what replaces it, at exactly the
+moment they should.
+
+### Reactions ride on the envelope, and updates carry full sets
+
+Two design questions, and they interact. ADR-0017 records both.
+
+**Where reactions live on the way to a client.** On the `MessageEnvelope`, not behind their own
+endpoint. A separate fetch would need its own sync path, its own cache and its own offline story,
+all parallel to the ones messages already have - and Phase 3's gate was chat being readable in
+airplane mode, so reactions that vanished there would be a half-feature. The local SQLite cache
+stores them as a JSON column on the message row.
+
+**What a change frame carries.** The full set for that message, never a delta. A delta is the
+smaller and more obvious payload, and it is wrong here for a reason that is a property of the
+transport rather than of reactions: messages can afford delta-shaped delivery because they carry
+`seq`, and the gap rule turns a lost or reordered frame into a detected hole and a sync. **A
+reaction delta has no sequence of its own.** One dropped frame would leave a client permanently
+believing the wrong people reacted, with nothing able to detect it - the exact class of silent
+divergence the channel log exists to prevent, reintroduced through a side door. A full set is
+idempotent and self-healing, so the worker's handler re-reads the set at publish time and a
+redelivered event republishes current truth rather than an old snapshot.
+
+`userIds` travels rather than a count, which is what lets one viewer-agnostic publish serve
+everybody: each client derives its own "did I react" through `reactionSummary`. Publishing
+`{emoji, count}` would have needed a second per-viewer request per message to render pills, which
+is the same shape as the media problem ADR-0007 exists to avoid.
+
+### Three gaps that had nothing to do with reactions
+
+**1. `msg.update` had no producer at all.** The frame was declared in `TECH/10` from Phase 0 with
+`pinned` and `deleted_at`, nothing ever sent one, and the client's handler was literally
+`case 'msg.update': break;`. So **a pin and a soft delete never reached an open client** - both
+were visible only after a refresh, despite `PRD/05` rule 7 describing the pinned strip appearing
+and rule 9 describing a tombstone every other member sees. Reactions gave the mechanism its first
+user; pins and deletes now travel on it too, and the reactions suite asserts a pin publishes.
+
+**2. Nothing cleared reactions on soft delete.** `PRD/05` rule 9 has required it since Phase 0
+alongside pin state. Vacuously satisfied while reactions did not exist, and a real defect the
+instant they did - a tombstone that still carried six laughing reactions is a verdict on content
+nobody can read. The delete path now clears them and the published update carries the empty set
+explicitly, so clients drop the pills rather than holding them until a refresh.
+
+**3. The local SQLite cache had no migration path.** `CREATE TABLE IF NOT EXISTS` does nothing to
+a table that already exists, so any device carrying an earlier build would have failed every write
+the moment the new column was referenced - the client equivalent of an unapplied migration, with
+no numbered migrations to notice it. The store now migrates additively, driven by
+`PRAGMA table_info` rather than a stored version number, so a database in any prior state
+converges including one a half-finished earlier run left behind.
+
+### The predicate that was not an alias, on purpose
+
+`canReactInChannel` is `canPostInChannel` and is still its own named predicate, one phase after
+AGENTS.md failure mode 10 was written about exactly this. Reacting is a write into the conversation
+that everyone can see, so a blocked DM participant may read a message and may not react to it -
+`PRD/14`'s matrix groups "React, attach media, mention" on one row for that reason. The body being
+one call is not an argument for aliasing it; an alias is a claim that two capabilities will never
+diverge, and the last two times that claim was made in this codebase it turned out to be false.
+
+### Verification
+
+**The toggle is a keyed delete-or-insert, not a read-then-write.** A read-then-write passes every
+single-tap test and leaves a double row under two fast taps, so the suite fires two concurrent
+toggles of the same emoji and asserts at most one row survives - the primary key is the backstop
+and the statement order is the design.
+
+**Live, in the running app**, with the services restarted onto the new code:
+
+- Long-pressing a message opened the sheet with all six emoji and a Report action, anchored to the
+  right bubble. Tapping 🔥 rendered a pill labelled "Remove your 🔥 reaction, 1 total".
+- Bob then reacted from the server side, and **Alice's open browser updated with no refresh** -
+  🔥 went 1 to 2 while still reading "Remove your", and a new 🎉 pill appeared reading "React
+  with", which is `reactionSummary` deriving `mine` differently per pill from one payload. That is
+  the first time a `msg.update` frame has travelled end to end in this project.
+- The pills rendered in canonical order (🔥 then 🎉) rather than insertion order, so the row does
+  not reshuffle as counts change.
+- Tapping the pill again removed only Alice's reaction: the label flipped to "React with 🔥, 1
+  total" and the database held Bob's two rows and none of hers.
+- An emoji outside the set returned 400 at the route, and `db:prove` confirms the column rejects
+  both `🦄` and the plain text `lgtm`.
+
+**Not done, still.** The Expo client cannot attach a photo in any scope - server pipeline and
+gallery endpoint complete since Phase 3, picker UI unbuilt. Rate limiting on reactions is Phase
+4's with the rest, and `TECH/05` already listed reactions among the endpoints v1 left unthrottled.
+
+---
+
+## 2026-07-30 - Phase 3.5: direct messages, blocking, mute and the moderation queue
+
+**All three clauses of the gate are met, proved in the suite and again in the running app.** A
+blocked member can neither open a thread nor send into an existing one, in either direction; a DM
+report reaches platform moderators and reaches no club admin; a muted conversation produces no
+push while its unread count keeps climbing. 33 new tests in the phase suite, 44 new cells in the
+permission matrix, 11 new constraint assertions. Suite total 507, all green, plus `db:prove` at 57
+assertions and exit 0.
+
+### The abstraction test held, and its estimate was wrong
+
+`PRD/01` sets the test for a fourth channel scope: one membership predicate, one admin predicate,
+one poll-access predicate, one notification-audience branch, thin screens. The important half held
+completely - **chat was not forked**, and sequencing, sync, cursors, unread counts, the send
+outbox, mentions, the gallery, the media pipeline and push fan-out all carried over untouched.
+
+The predicate count did not. It was five, not two, and both extras were places the estimate's own
+wording would have produced a defect:
+
+- **`canPostInChannel` was an alias of `isChannelMember`.** In every existing scope, reading and
+  posting are one question. A DM makes them two: a participant loses the right to send when
+  blocked, or when the pair's last shared club goes, and **both leave history fully readable**.
+  Leaving posting aliased to reading lets a blocked member send. Revoking membership to stop them
+  hides history that `PRD/14` rules 3 and 6 require to stay visible. There was no third option; the
+  predicate had to split.
+- **`canPinInChannel` was an alias of `isChannelAdmin`.** `PRD/14` rule 4 says a DM has no admins
+  *and* that either participant may pin a message for reference. Both are true only because
+  `PRD/05` rule 6 already separates a pin from an announcement: "no admins" removes
+  pinning-as-*authority*. Left aliased, the scope would have silently lost a documented
+  capability, and nothing would have reported it - `isChannelAdmin` returning false looks correct
+  at every call site.
+
+The narrow lesson, now in `AGENTS.md` as failure mode 10: **an alias is invisible to an audit that
+counts predicates.** The abstraction test counts predicates whose scope branch changes, and it
+cannot count one that does not exist yet because it is currently spelled as another one.
+
+### A requirement collision, again
+
+`PRD/12` is explicit that an ordinary message notifies nobody - no row, and the unread count is
+computed from the log. Its 18-type catalogue contains nothing for "somebody messaged you". `PRD/14`
+rule 8 then says a muted conversation produces no push while the unread count still accrues, and
+`TECH/16` makes that the exit gate.
+
+Read across unchanged, a DM pushes nothing, so muting one is a control over nothing and the gate is
+unfalsifiable. Read the other way, every DM writes an inbox row per message, flooding the feed with
+exactly the per-message noise the computed-unread design exists to remove.
+
+Both documents were right about their own scope. What neither said is that "an ordinary message
+notifies nobody" is a statement about **rooms**, and a DM is not a room - it is the one scope where
+a message is inherently addressed to one person, which is the whole reason the feature exists
+rather than leaving those exchanges in SMS. So the catalogue gains a nineteenth type, `dm_message`,
+which is **push-only and never becomes a row**: ADR-0015. Its params fix `clubId` at `z.null()`
+rather than nullable, so a handler that invented a club for a DM fails the write, and its target
+deliberately carries no `seq` - chat already opens on the first unread message, and pinning the
+deep link to the seq the push was built from lands above anything that arrived since.
+
+### Two defects in code shipped earlier, neither of them about DMs
+
+**1. The race scope was never wired into four of the five places it belongs.** "Which channels can
+this user reach" had been written out by hand four times - `listAccessibleChannels`, the
+chat-unread rows, the badge count, and the notification audience - and Phase 2 shipped races with
+real chat channels while updating **none** of them. A race member's chat appeared in no channel
+list, produced no unread count and no badge, and an announcement in race chat notified nobody. The
+worst property of it: every copy was individually self-consistent, so there was no type error and
+no failing test to find. Found only because this phase had to add a `dm` branch to the same four
+places, and adding it four times was obviously the same mistake a second time.
+
+There is now one `channel-access.ts` holding the predicate and its inverse, and the display-name
+COALESCE that goes with them - which turned up a third instance of the same class: a race and an
+Eboard channel both carry a `club_id`, so putting the club first in the COALESCE titled every race
+chat with the club's name.
+
+**2. Notification idempotency keys could collide across handlers.** Most events produce one
+notification and keyed on the raw outbox id. The message handler produces two and keyed the second
+on `event.id * 2 + 1`. Those sequences overlap - a mention on event 3 and an announcement on event
+7 both key as 7 - and since both `notifications_idempotency` and the `push_deliveries` ledger key
+on `(outbox_event_id, recipient/device)`, a collision reads as "already handled" and silently drops
+a real notification **and** a real push. Adding a third kind made it unavoidable to notice. Every
+key is now `notificationKey(eventId, slot)` = `eventId * 4 + slot`, which bands each event into its
+own block and is injective by construction rather than by arithmetic luck. Synthetic keys stay
+negative and unbanded, since real outbox ids are a positive bigserial and the two spaces cannot
+meet.
+
+### Decisions worth their own record
+
+**Writability is evaluated, never stored (ADR-0016).** The obvious schema is
+`dm_conversations.read_only_at`, set when a pair's last shared club goes away. It is wrong for the
+same reason `polls.is_closed` was wrong: nothing owns that moment. It happens when either person
+leaves any club, is removed from any club, or has a club deleted under them, and it *un-happens*
+when either joins a club the other is in - so four write paths would each have to recompute it for
+every thread the member holds, and the join path would have to clear it. A stored flag is wrong
+between maintenance runs by construction. It is now an `EXISTS` resolved once per context load, and
+the suite asserts the round trip: leave the club, watch the thread go read-only for both parties,
+re-join, watch it become writable with nothing backfilled.
+
+**The blocking-visibility open question, resolved without disclosing the block.** `PRD/14` asks
+whether blocking should be reciprocal-visible or silent, while its own edge-case table requires a
+disabled composer to state its reason. Those looked contradictory. They are not, because the reason
+does not have to identify the cause: the blocker sees "You blocked this person. Unblock them to
+send messages"; the blocked party and someone who has merely lost the last shared club see the same
+sentence as each other, word for word. `postDeniedReason` therefore has two values and not three,
+and the asymmetric "did *I* block them" fact is read in the metadata query rather than added to the
+access context - so it can never reach a predicate, where symmetry is load-bearing.
+
+**Every refusal from `openDm` is `not_found`.** Nonexistent, ineligible and blocked are
+indistinguishable from outside, because a distinguishable code makes a block detectable by anyone
+willing to call the endpoint. Asserted by comparing the blocked refusal against a stranger's, for
+equality, rather than by checking each is a 404.
+
+**`member_blocks`, not `blocks`.** `TECH/09` specified the shorter name; the same file already
+argues that an unqualified "blocked" is ambiguous in this schema, because `users.signin_blocked_at`
+means something entirely different. Applied that reasoning to the new table and corrected the spec.
+
+### The moderation queue, and what a moderator can actually see
+
+`TECH/05` grants a platform moderator the reported message and its immediate context, and requires
+the read to be audit-logged. Implementing that raised a question the rule does not answer: does the
+**queue listing** carry message bodies?
+
+It cannot. If it did, either every refresh of the list writes a log row per report, or content is
+read with no log at all - the second silently defeats the rule and the first fills the log with
+noise until nobody reads it. So the queue is metadata (who reported what, and when), and
+`readReportedContext` is the single logged door to content: five messages either side, a window the
+caller has no parameter to widen, and a `moderation_reads` row written in the same transaction as
+the read. There is also no door at all without a report - the context read resolves through
+`message_reports`, so a moderator cannot reach a conversation nobody complained about.
+
+In a group scope the same endpoint writes no log row, deliberately: an admin can already read every
+message in their own space by scrolling, so logging that read would only dilute the log that
+matters.
+
+### Verification
+
+**The gate, all three clauses, in the running app** - API, gateway and worker restarted onto the
+current code, two real accounts sharing a club, Chrome driving one side and the gateway driving the
+other:
+
+- Alice found Bob in the new-message search and **did not** find a real user who shares no club
+  with her: "Nobody found", which is the eligibility rule rather than an empty database.
+- Bob's reply arrived in Alice's open chat with no refresh, at seq 2.
+- After Alice blocked Bob: **both** sends refused with `forbidden` over the gateway and the message
+  count stayed at 2; Bob's `openDm` against Alice returned exactly the 404 a stranger returns; Alice
+  vanished from Bob's search; both still read the full history; Bob's composer said the neutral
+  sentence and Alice's said hers, with `blockedByMe` false for Bob and true for Alice.
+- Alice's block list showed Bob. **Bob's showed nothing**, which is the half that matters.
+- Alice reported Bob's message through the UI - while being the blocker, which is the case that
+  proves reporting is gated on reading rather than posting. The strip said "Report this to ClubChat
+  moderators?", not "the admins of this space".
+- **Carol, a club admin of the club both participants are in and not a participant, got 404 from
+  all five paths**: the DM queue, the reports tab on that channel, the context read, the message
+  history, and the channel metadata.
+- The moderator's context read returned seqs 1-7 around the reported seq 2, clamped at the start of
+  the log, and wrote the audit row with the window actually served.
+- Mute: the unmuted control push reached the real Expo transport (which rejected the fake token and
+  invalidated the device - proof the request genuinely left the process rather than being stubbed).
+  After muting, the worker reported `suppressedByMute: 1, pushed: 0` and the unread count went 3 to
+  4. Unmuting restored the push.
+
+**Two mutation checks** on the blocking clause, both asserting the mutant says yes where the real
+predicate says no: dropping the block check from `canPostInDm`, and reading the block set
+one-directionally the way a naive loader would. The second is the more useful of the two, because a
+one-directional block passes every test written from the blocker's point of view.
+
+**A UI defect found by the smoke test and fixed.** `/dm` rendered a back control when reached from
+Clubs and **none at all** when its URL was entered directly, because the navigator only renders its
+own back button when history exists. That is exactly the class `PRD/15` rules 3 and 4 warn about,
+and the rule needed sharpening: declaring an explicit *parent* is not enough for a screen using the
+shared header, it has to declare an explicit *control*. Fixed with a `headerLeft`, and then fixed
+again a minute later - the label sat flush against the viewport edge with no gutter until it got the
+screen's own horizontal padding. Verified on web only; there is no simulator in this environment,
+which is worth saying plainly given the standing rule about verifying cross-platform work on each
+platform separately.
+
+Blocking deliberately **does not** revoke gateway subscriptions, which is the opposite of what the
+gateway's own comment anticipated. Read access survives a block by design, so the subscription is
+still justified - and since neither party can send, there is nothing left for it to deliver.
+Comment corrected rather than code changed.
+
+### Not done
+
+The Expo client still cannot attach a photo, in any scope. Server pipeline and gallery endpoint
+have been complete and tested since Phase 3; there is no picker UI, so DMs inherit exactly as much
+photo support as club chat has, which is none at the client. The per-sender,
+per-new-conversation rate limit `TECH/05` calls for is Phase 4's, with every other rate limit; what
+bounds the surface meanwhile is that a thread can only be opened with somebody the sender already
+shares a club with. Message reactions remain unbuilt in every scope - `TECH/09` specifies
+`message_reactions` and `PRD/05` lists them in scope, and neither has ever been implemented, so
+`PRD/14` rule 5's promise that reactions work identically in a DM is true only vacuously.
+
+---
+
 ## 2026-07-30 - Phase 3: media and offline
 
 **Both halves of the gate are met.** A private Eboard photo is provably unreachable without

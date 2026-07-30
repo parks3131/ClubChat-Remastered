@@ -55,6 +55,10 @@ function envelope(seq: number, overrides: Partial<MessageEnvelope> = {}): Messag
     body: `message ${seq}`,
     clientMsgId: crypto.randomUUID(),
     pinned: false,
+    reactions: [],
+    mediaId: null,
+    documentName: null,
+    documentSize: null,
     deletedAt: null,
     createdAt: new Date(2026, 0, 1, 0, 0, seq).toISOString(),
     ...overrides,
@@ -273,6 +277,93 @@ describe('the send outbox', () => {
     await expect(attempt).rejects.toThrow('rate_limited');
     // Still queued, so the UI can offer a retry. A send must fail VISIBLY.
     expect(client.outbox.get(clientMsgId)?.clientMsgId).toBe(clientMsgId);
+  });
+});
+
+describe('msg.update, the frame that had no producer until reactions', () => {
+  it('applies reactions to a message already held', async () => {
+    const { client, socket } = await setup();
+    socket.deliver({ t: 'msg.new', d: envelope(1) });
+    await vi.waitFor(async () => expect(await client.store.seqs(CHANNEL)).toEqual([1]));
+
+    socket.deliver({
+      t: 'msg.update',
+      d: { channelId: CHANNEL, seq: 1, reactions: [{ emoji: '\u{1F525}', userIds: ['u-1', 'u-2'] }] },
+    });
+
+    await vi.waitFor(async () => {
+      const held = await client.store.list(CHANNEL);
+      expect(held[0]?.reactions).toEqual([{ emoji: '\u{1F525}', userIds: ['u-1', 'u-2'] }]);
+    });
+  });
+
+  it('leaves fields the frame does not mention alone', async () => {
+    const { client, socket } = await setup();
+    socket.deliver({ t: 'msg.new', d: envelope(1, { pinned: true, body: 'keep me' }) });
+    await vi.waitFor(async () => expect(await client.store.seqs(CHANNEL)).toEqual([1]));
+
+    // Only reactions. A patch that assigned every field would silently unpin this message and
+    // blank its body, which is why the handler builds the patch from keys actually present.
+    socket.deliver({
+      t: 'msg.update',
+      d: { channelId: CHANNEL, seq: 1, reactions: [{ emoji: '\u{1F44D}', userIds: ['u-1'] }] },
+    });
+
+    await vi.waitFor(async () => {
+      const held = (await client.store.list(CHANNEL))[0];
+      expect(held?.reactions).toHaveLength(1);
+      expect(held?.pinned, 'pinned must survive a reactions-only update').toBe(true);
+      expect(held?.body).toBe('keep me');
+      expect(held?.deletedAt).toBeNull();
+    });
+  });
+
+  it('applies a tombstone, distinguishing an absent field from an explicit null', async () => {
+    const { client, socket } = await setup();
+    socket.deliver({ t: 'msg.new', d: envelope(1, { pinned: true }) });
+    await vi.waitFor(async () => expect(await client.store.seqs(CHANNEL)).toEqual([1]));
+
+    const deletedAt = new Date(2026, 5, 1).toISOString();
+    socket.deliver({
+      t: 'msg.update',
+      d: { channelId: CHANNEL, seq: 1, deletedAt, pinned: false, reactions: [] },
+    });
+
+    await vi.waitFor(async () => {
+      const held = (await client.store.list(CHANNEL))[0];
+      expect(held?.deletedAt).toBe(deletedAt);
+      expect(held?.pinned).toBe(false);
+    });
+  });
+
+  it('is a no-op for a seq this client has never seen, rather than inventing a row', async () => {
+    const { client, socket, syncCalls } = await setup();
+
+    // A reaction on a message we have not paged back to. Inventing a row would put a blank
+    // bubble in the conversation; running it through the gap rule would spuriously sync.
+    socket.deliver({
+      t: 'msg.update',
+      d: { channelId: CHANNEL, seq: 99, reactions: [{ emoji: '\u{1F525}', userIds: ['u-1'] }] },
+    });
+
+    await vi.waitFor(() => expect(true).toBe(true));
+    expect(await client.store.seqs(CHANNEL)).toEqual([]);
+    expect(syncCalls, 'an update must not trigger gap detection').toHaveLength(0);
+  });
+
+  it('does not let an update masquerade as a new message and extend the log', async () => {
+    const { client, socket } = await setup();
+    socket.deliver({ t: 'msg.new', d: envelope(1) });
+    await vi.waitFor(async () => expect(await client.store.seqs(CHANNEL)).toEqual([1]));
+
+    socket.deliver({ t: 'msg.update', d: { channelId: CHANNEL, seq: 1, pinned: true } });
+    await vi.waitFor(async () => {
+      expect((await client.store.list(CHANNEL))[0]?.pinned).toBe(true);
+    });
+
+    // Still exactly one message. An update names an existing seq; it never adds one.
+    expect(await client.store.seqs(CHANNEL)).toEqual([1]);
+    expect(await client.store.localMaxSeq(CHANNEL)).toBe(1);
   });
 });
 

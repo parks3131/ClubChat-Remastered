@@ -50,9 +50,26 @@ multiple times and are restated as invariants:
 2. **Race audiences are roster members only, never roster ∪ club admins.** Since chat access
    itself requires a roster row, unioning in admins notifies people about a channel they
    cannot open.
+3. **"Who can read this channel" is defined once, and covers every scope.** Added in Phase 3.5,
+   after this rule was learned the hard way: the audience function, the accessible-channel list,
+   the chat-unread rows and the badge each carried a hand-written copy of the membership join,
+   and Phase 2 shipped races without updating **any** of them. A race member's chat therefore
+   appeared in no channel list, contributed no unread count and no badge, and an announcement in
+   race chat notified nobody. Four self-consistent copies, one missing branch each, and no test
+   could see it. There is now one definition and a fifth scope is a branch in it.
+4. **A DM audience is its two participants, and blocking does not remove either.** A block
+   prevents new messages, so a message that exists was authorized when it was written and its
+   recipient is entitled to know about it. The actor is excluded as everywhere else, which leaves
+   exactly one recipient without needing a scope-specific branch.
 
 Also: **an approval must not produce both "your request was approved" and "you were added".**
 The approval path suppresses the membership-added notification for that transaction.
+
+And: **one event can produce more than one kind of notification**, so an idempotency key derived
+from the outbox id alone is not enough. An announcement that also mentions somebody, in a DM that
+also pushes, is three kinds from one event. The key is `eventId * 4 + slot`; see
+[Notifications and push](06-notifications-and-push.md) for what the previous scheme collided
+with.
 
 ### The one scheduled job
 

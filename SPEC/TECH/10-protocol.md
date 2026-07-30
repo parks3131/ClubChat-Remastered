@@ -23,8 +23,8 @@ Envelope: `{ "t": <type>, "id": <correlation id>, "d": <payload> }`
 | `auth.err` | `{ code }` | Socket closed. |
 | `msg.ack` | `{ client_msg_id, message_id, seq, created_at }` | **Gap-checked exactly like `msg.new`** - a skipped `seq` here leaves a permanent hole. See [Client architecture](08-client-architecture.md). |
 | `msg.err` | `{ client_msg_id, code }` | `rate_limited`, `forbidden`, `channel_gone`, `malformed`, `media_not_ready` |
-| `msg.new` | full message envelope incl. `seq` | Append if `seq == local_max + 1`, else sync. |
-| `msg.update` | `{ channel_id, seq, pinned?, deleted_at?, reactions? }` | |
+| `msg.new` | full message envelope incl. `seq` and `reactions` | Append if `seq == local_max + 1`, else sync. Reactions ride on the envelope so they survive offline with the message ([ADR-0017](../decisions/0017-reactions-travel-on-the-message-envelope.md)). |
+| `msg.update` | `{ channel_id, seq, pinned?, deleted_at?, reactions? }` | **Reactions are the FULL set, never a delta.** Only the fields that changed are present, and an absent field is distinct from an explicit `null`. Declared from Phase 0 and had no producer at all until reactions arrived in Phase 3.5 - pins and tombstones now travel on it too. Deliberately **not** gap-checked: an update names an existing `seq` rather than extending the log, so it can neither create nor reveal a hole. See [ADR-0017](../decisions/0017-reactions-travel-on-the-message-envelope.md). |
 | `notif.new` | `{ notification }` | Drives the badge live. |
 | `pong` | `{}` | |
 
@@ -38,6 +38,22 @@ GET    /sync?channels[]={id}:{since_seq}     ← the reconnect / foreground path
 GET    /channels/:id/messages?before={seq}&limit=40
 GET    /channels/:id/messages?around={seq}   ← jump-to-message window
 GET    /channels/:id/pinned | /announcements | /reports | /gallery
+GET    /channels/:id                         ← title, canPost + why not, muted, peer
+GET    /media/:id                            ← 302 to the signed URL, for an <img src>
+GET    /media/:id/url                        ← the same hop as JSON, for a header-bearing client
+POST   /channels/:id/messages/:seq/reactions ← toggle; returns the FULL resulting set
+GET    /channels/:id/messages/:seq/reactions ← who reacted
+POST   /channels/:id/messages/:seq/report
+POST   /channels/:id/mute | DELETE           ← per-conversation, every scope
+
+GET    /dm/threads | /dm/candidates?q=       ← no global user search
+POST   /dm/threads                           ← open or re-open; idempotent per pair
+GET    /blocks | POST /blocks | DELETE /blocks/:uid
+
+GET    /moderation/dm-reports                ← platform moderators only, metadata only
+GET    /moderation/reports/:id/context       ← the narrow, audit-logged read
+POST   /moderation/reports/:id/dismiss
+GET    /moderation/reads                     ← a moderator's own audit trail
 
 GET    /clubs/search?q=                      ← safe projection, non-members only
 POST   /clubs · GET/PATCH/DELETE /clubs/:id

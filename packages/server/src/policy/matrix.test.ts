@@ -21,12 +21,20 @@ import {
   canAccessPoll,
   canAnnounceInChannel,
   canBeInCarGroup,
+  canBlock,
   canCreateMeeting,
   canCreatePoll,
   canDeleteClub,
   canDeleteMessage,
   canEditClub,
   canLeaveClub,
+  canMuteChannel,
+  canOpenDm,
+  canReadReports,
+  canReportMessage,
+  dmThreadWith,
+  isChannelMember,
+  sharesAClub,
   canManageCarGroups,
   canManageClubContent,
   canManageEboardMembers,
@@ -66,6 +74,7 @@ const MEMBER = 'u-member';
 const OUTSIDER = 'u-outsider';
 
 const race: RaceRef = { id: RACE, clubId: CLUB };
+const clubChannel: ChannelRef = { id: 'ch-club', scope: 'club', clubId: CLUB, scopeId: CLUB };
 const raceChannel: ChannelRef = { id: 'ch-race', scope: 'race', clubId: CLUB, scopeId: RACE };
 const eboardChannel: ChannelRef = {
   id: 'ch-eboard',
@@ -615,6 +624,233 @@ describe('PRD/02 matrix: Eboard and Council', () => {
 });
 
 // ===========================================================================
+// PRD/14 - "Direct messages"
+// ===========================================================================
+
+/**
+ * The fourth matrix, added with the fourth scope.
+ *
+ * Two of its rows are the ones that could not be expressed through `isChannelAdmin` and so
+ * needed predicates of their own - **pinning**, which PRD/14 grants to both participants in a
+ * space that has no admins, and **posting**, which a participant can lose while keeping the
+ * right to read. Both are the cells to read carefully here.
+ *
+ * `blocked` is a fourth actor for the same reason the race matrix needed `rosteredManager`:
+ * several cells read "unless blocked" and there is no way to state that with three columns.
+ */
+const DM = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+const PEER = 'u-peer';
+
+const dmChannel: ChannelRef = { id: 'ch-dm', scope: 'dm', clubId: null, scopeId: DM };
+
+const dmActors = {
+  participant: accessContextOf({
+    userId: MEMBER,
+    clubRole: [[CLUB, 'member']],
+    dmThreads: [{ conversationId: DM, otherUserId: PEER }],
+  }),
+  otherParticipant: accessContextOf({
+    userId: PEER,
+    clubRole: [[CLUB, 'member']],
+    dmThreads: [{ conversationId: DM, otherUserId: MEMBER }],
+  }),
+  /** A participant who has blocked, or been blocked by, the other one. */
+  blocked: accessContextOf({
+    userId: MEMBER,
+    clubRole: [[CLUB, 'member']],
+    dmThreads: [{ conversationId: DM, otherUserId: PEER }],
+    blockedEither: [PEER],
+  }),
+  /** In no club at all, which is the only way to be "anyone else" to a conversation. */
+  outsider: accessContextOf({ userId: OUTSIDER }),
+};
+
+type DmActor = keyof typeof dmActors;
+
+type DmRow = {
+  action: string;
+  run: (c: AccessContext) => boolean;
+  participant: boolean;
+  otherParticipant: boolean;
+  blocked: boolean;
+  outsider: boolean;
+};
+
+/**
+ * The peer as a block candidate, with `hasThreadWith` derived from the ACTOR rather than
+ * hardcoded.
+ *
+ * Hardcoding it to true was wrong and the matrix caught it: "do I already hold a thread with
+ * this person" is a fact about the actor's own context, so a fixed `true` made an outsider look
+ * like somebody with a conversation to protect. This is also exactly how the real caller
+ * composes it.
+ */
+const peerCandidateFor = (c: AccessContext) => ({
+  userId: PEER,
+  clubIds: [CLUB],
+  hasThreadWith: dmThreadWith(c, PEER) !== undefined,
+});
+
+const dmMatrix: DmRow[] = [
+  {
+    action: 'Read the conversation',
+    run: (c) => isChannelMember(c, dmChannel),
+    participant: true,
+    otherParticipant: true,
+    // The cell that makes blocking read-only rather than a deletion. History stays visible.
+    blocked: true,
+    outsider: false,
+  },
+  {
+    action: 'Post a message',
+    run: (c) => canPostInChannel(c, dmChannel),
+    participant: true,
+    otherParticipant: true,
+    // THE CELL THAT MATTERS. Read is true and post is false for the same actor, which is why
+    // canPostInChannel could not stay an alias of isChannelMember.
+    blocked: false,
+    outsider: false,
+  },
+  {
+    action: 'Pin a message',
+    run: (c) => canPinInChannel(c, dmChannel),
+    // THE OTHER CELL THAT MATTERS. A DM has no admins and both participants may still pin, so
+    // this is not isChannelAdmin.
+    participant: true,
+    otherParticipant: true,
+    blocked: true,
+    outsider: false,
+  },
+  {
+    action: 'Post an announcement or create a poll',
+    run: (c) => canAnnounceInChannel(c, dmChannel),
+    participant: false,
+    otherParticipant: false,
+    blocked: false,
+    outsider: false,
+  },
+  {
+    action: 'Delete own message',
+    run: (c) => canDeleteMessage(c, dmChannel, { senderId: c.userId }),
+    participant: true,
+    otherParticipant: true,
+    blocked: true,
+    outsider: false,
+  },
+  {
+    // The row that differs from every other scope: nobody deletes anybody else's message in a
+    // DM, because the admin who would hold that power in club chat does not exist here.
+    action: "Delete the other participant's message",
+    run: (c) => canDeleteMessage(c, dmChannel, { senderId: 'somebody-else' }),
+    participant: false,
+    otherParticipant: false,
+    blocked: false,
+    outsider: false,
+  },
+  {
+    action: "Report the other participant's message",
+    run: (c) => canReportMessage(c, dmChannel, { senderId: 'somebody-else' }),
+    participant: true,
+    otherParticipant: true,
+    // Gated on reading rather than on posting, deliberately: a member who has just blocked
+    // somebody must still be able to report what was said to them.
+    blocked: true,
+    outsider: false,
+  },
+  {
+    action: 'Report own message',
+    run: (c) => canReportMessage(c, dmChannel, { senderId: c.userId }),
+    participant: false,
+    otherParticipant: false,
+    blocked: false,
+    outsider: false,
+  },
+  {
+    action: 'Mute the conversation',
+    run: (c) => canMuteChannel(c, dmChannel),
+    participant: true,
+    otherParticipant: true,
+    blocked: true,
+    outsider: false,
+  },
+  {
+    action: 'Block the other participant',
+    run: (c) => canBlock(c, peerCandidateFor(c)),
+    participant: true,
+    // Blocking the person whose id this actor holds would be blocking themselves.
+    otherParticipant: false,
+    // Already blocked, and re-blocking is a no-op rather than a refusal.
+    blocked: true,
+    // The PRD's dash: an outsider shares no club and holds no thread, so there is nobody to
+    // block.
+    outsider: false,
+  },
+  {
+    action: 'Read the reports raised in this conversation',
+    run: (c) => canReadReports(c, dmChannel),
+    // Nobody in the conversation, either. A DM report goes to platform moderators, and being
+    // a participant is not that.
+    participant: false,
+    otherParticipant: false,
+    blocked: false,
+    outsider: false,
+  },
+];
+
+const DM_ACTORS: DmActor[] = ['participant', 'otherParticipant', 'blocked', 'outsider'];
+
+describe('PRD/14 matrix: Direct messages', () => {
+  for (const row of dmMatrix) {
+    for (const actor of DM_ACTORS) {
+      const expected = row[actor];
+      it(`${row.action}: ${actor} -> ${expected ? 'allow' : 'deny'}`, () => {
+        expect(row.run(dmActors[actor])).toBe(expected);
+      });
+    }
+  }
+
+  it('covers every row of the spec table', () => {
+    expect(dmMatrix).toHaveLength(11);
+  });
+
+  it('grants report-reading to a platform moderator and to nobody else', () => {
+    const moderator = accessContextOf({ userId: 'u-mod', isPlatformModerator: true });
+    expect(canReadReports(moderator, dmChannel)).toBe(true);
+    // And it buys them nothing in a club, a race or an Eboard space. It is one capability,
+    // not a tier above Owner.
+    expect(canReadReports(moderator, clubChannel)).toBe(false);
+    expect(canReadReports(moderator, raceChannel)).toBe(false);
+    expect(canReadReports(moderator, eboardChannel)).toBe(false);
+    expect(isChannelMember(moderator, dmChannel)).toBe(false);
+    // The converse: a club admin reads their own space's reports and never a DM's.
+    const admin = accessContextOf({ userId: ADMIN, clubRole: [[CLUB, 'admin']] });
+    expect(canReadReports(admin, clubChannel)).toBe(true);
+    expect(canReadReports(admin, dmChannel)).toBe(false);
+  });
+
+  it('makes eligibility a shared club, and blocking symmetric within it', () => {
+    const inClub = { userId: PEER, clubIds: [CLUB] };
+    const elsewhere = { userId: 'u-far', clubIds: ['other-club'] };
+
+    expect(canOpenDm(dmActors.participant, inClub)).toBe(true);
+    // No global user search: sharing no club is the same as not existing.
+    expect(canOpenDm(dmActors.participant, elsewhere)).toBe(false);
+    // Blocked in EITHER direction, from one symmetric set. The blocked party's context looks
+    // identical to the blocker's here, which is the entire point.
+    expect(canOpenDm(dmActors.blocked, inClub)).toBe(false);
+    expect(sharesAClub(dmActors.participant, inClub)).toBe(true);
+    expect(sharesAClub(dmActors.outsider, inClub)).toBe(false);
+  });
+
+  it('a thread in one conversation grants nothing in another', () => {
+    const other: ChannelRef = { id: 'ch-dm2', scope: 'dm', clubId: null, scopeId: 'other-dm' };
+    expect(isChannelMember(dmActors.participant, dmChannel)).toBe(true);
+    expect(isChannelMember(dmActors.participant, other)).toBe(false);
+    expect(canPostInChannel(dmActors.participant, other)).toBe(false);
+  });
+});
+
+// ===========================================================================
 // Poll voter visibility
 // ===========================================================================
 
@@ -656,15 +892,19 @@ describe('poll voter visibility', () => {
 // ===========================================================================
 
 describe('the gate itself', () => {
-  it('covers all four spec tables, with both directions asserted in every cell', () => {
+  it('covers all five spec tables, with both directions asserted in every cell', () => {
     // PRD/02 has four table sections: Club, Club content, Race, and Eboard. The Club table
-    // (14 rows) is covered in policy.test.ts from Phase 0.
+    // (14 rows) is covered in policy.test.ts from Phase 0. PRD/14 adds the fifth, for the
+    // fourth scope.
     const cells =
-      contentMatrix.length * 3 + raceMatrix.length * RACE_ACTORS.length + eboardMatrix.length * 4;
+      contentMatrix.length * 3 +
+      raceMatrix.length * RACE_ACTORS.length +
+      eboardMatrix.length * 4 +
+      dmMatrix.length * DM_ACTORS.length;
     // A guard against the suite quietly shrinking: deleting a row or an actor column fails
     // here rather than silently reducing coverage.
-    expect(cells).toBe(7 * 3 + 14 * 5 + 10 * 4);
-    expect(cells).toBe(131);
+    expect(cells).toBe(7 * 3 + 14 * 5 + 10 * 4 + 11 * 4);
+    expect(cells).toBe(175);
   });
 
   it('asserts at least one deny in every matrix', () => {
@@ -673,6 +913,17 @@ describe('the gate itself', () => {
     expect(contentMatrix.some((r) => !r.owner || !r.admin || !r.member)).toBe(true);
     expect(raceMatrix.some((r) => !r.manager || !r.raceMember)).toBe(true);
     expect(eboardMatrix.some((r) => !r.eboardMember || !r.adminOutside)).toBe(true);
+    expect(dmMatrix.some((r) => !r.participant || !r.blocked)).toBe(true);
+  });
+
+  it('asserts read and post diverging somewhere, which is the fourth scope cost', () => {
+    // If no row has read true and post false, the DM matrix is not exercising the one
+    // structural change the scope forced - and `canPostInChannel` could quietly go back to
+    // being an alias without a single test noticing.
+    const read = dmMatrix.find((r) => r.action === 'Read the conversation');
+    const post = dmMatrix.find((r) => r.action === 'Post a message');
+    expect(read?.blocked).toBe(true);
+    expect(post?.blocked).toBe(false);
   });
 });
 

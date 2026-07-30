@@ -580,6 +580,52 @@ export const channelMutes = pgTable(
 );
 
 /**
+ * Reactions on a chat message.
+ *
+ * `PK (message_id, user_id, emoji)` is the whole behaviour: a member may add several
+ * different emoji to one message, and cannot add the same one twice. "Reactions toggle on
+ * and off" is then a delete-or-insert against that key rather than a read-then-write, so
+ * two fast taps cannot leave a double row.
+ *
+ * > **No maintained count column, unlike `poll_options.vote_count`.** That column exists
+ * > because vote *counts* are public while voter *identity* is gated, so the count cannot
+ * > be derived from rows the viewer may not read. Reactions are visible to everyone, so
+ * > the count is just `count(*)` over rows the viewer can already see, and a maintained
+ * > copy would be a second source of truth for no gain.
+ *
+ * The check constraint is what makes the fixed six-emoji set a fact about the data rather
+ * than a rule a handler remembers. See `reactionEmoji` in the shared package: if the set is
+ * ever widened to a full picker, dropping this constraint is the first task of that
+ * migration, which forces whoever does it to confront validating arbitrary Unicode at
+ * exactly the moment they should.
+ */
+export const messageReactions = pgTable(
+  'message_reactions',
+  {
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => messages.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    emoji: text('emoji').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.messageId, t.userId, t.emoji] }),
+    check(
+      'message_reactions_emoji_valid',
+      // The six from SPEC/PRD/05, and nothing else. Kept in the same order as the shared
+      // constant so a reader can diff the two by eye.
+      sql`emoji in ('👍', '❤️', '😂', '🔥', '🎉', '😮')`,
+    ),
+    // Reading a page of history loads every reaction for those messages at once, so the
+    // access path is by message.
+    index('message_reactions_by_message').on(t.messageId),
+  ],
+);
+
+/**
  * Mentions.
  *
  * A mention notifies the mentioned member individually, and **only if they can actually
@@ -1042,6 +1088,162 @@ export const newsReactions = pgTable(
     emoji: text('emoji').notNull(),
   },
   (t) => [primaryKey({ columns: [t.postId, t.userId, t.emoji] })],
+);
+
+// ---------------------------------------------------------------------------
+// Direct messages and member safety  (Phase 3.5)
+// ---------------------------------------------------------------------------
+
+/**
+ * A one-to-one conversation.
+ *
+ * > **The CHECK is what makes the UNIQUE mean anything.**
+ * >
+ * > `UNIQUE (user_a, user_b)` alone permits both `(alice, bob)` and `(bob, alice)`, so two
+ * > people racing to open a thread with each other would get two threads - breaking
+ * > PRD/14 rule 2, "exactly one thread per pair of people, ever". The check forces every
+ * > writer to sort the pair first, which collapses both orderings onto one row and makes the
+ * > unique index the real constraint rather than a decoration.
+ *
+ * **No `channel_id`**, per ADR-0014: the channel references the conversation as
+ * `(scope='dm', scope_id=<conversation>)`, which `UNIQUE (scope, scope_id)` already makes
+ * unambiguous. That ADR names this table explicitly as the one that must not reacquire the
+ * column when direct messages arrived.
+ *
+ * There is deliberately no `read_only_at` or `blocked_at` column. Both writability and
+ * blocking are evaluated at read time from `club_memberships` and `member_blocks`, because a
+ * stored copy needs a job to maintain it and drifts the moment someone joins or leaves a
+ * club. See ADR-0016.
+ */
+export const dmConversations = pgTable(
+  'dm_conversations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userA: uuid('user_a')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    userB: uuid('user_b')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('dm_conversations_pair').on(t.userA, t.userB),
+    check('dm_conversations_canonical_order', sql`user_a < user_b`),
+    // Finding a person's threads is `user_a = me OR user_b = me`, and an OR across two
+    // columns cannot use one composite index. The unique constraint above covers user_a as
+    // its leading column, so only the other half needs an index of its own.
+    index('dm_conversations_by_user_b').on(t.userB),
+  ],
+);
+
+/**
+ * A member-to-member block.
+ *
+ * `member_blocks`, not `blocks`: this table's own neighbour `users.signin_blocked_at` records
+ * the unrelated fact that an account cannot sign in, and an unqualified "blocked" is ambiguous
+ * between the two. TECH/09 named it `blocks`; the qualified name is the same reasoning that
+ * file already applies to `signin_blocked_at`, so the spec is corrected rather than followed.
+ *
+ * > **Stored one-directionally, evaluated symmetrically.**
+ * >
+ * > One row means `blocker -> blocked`, but every predicate reads it in both directions:
+ * > neither party can message the other and neither appears in the other's DM search. A
+ * > one-directional read would let the blocked user keep opening the thread and sending into a
+ * > void, which is worse for them than a clean refusal. See TECH/05.
+ *
+ * Blocking does NOT delete the conversation and does not hide history - both parties keep
+ * reading what was already said (PRD/14 rule 6). Only new messages stop.
+ */
+export const memberBlocks = pgTable(
+  'member_blocks',
+  {
+    blockerId: uuid('blocker_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    blockedId: uuid('blocked_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.blockerId, t.blockedId] }),
+    check('member_blocks_not_self', sql`blocker_id <> blocked_id`),
+    // The symmetric half of the evaluation: "who has blocked me" is as hot a lookup as "who
+    // have I blocked", and the primary key only serves the second.
+    index('member_blocks_by_blocked').on(t.blockedId),
+  ],
+);
+
+/**
+ * A reported message.
+ *
+ * One table, two readers, selected by the reported message's channel scope: club, race and
+ * Eboard reports go to that space's admins in the Highlights Reports tab, and **dm reports go
+ * to platform moderators** because a DM has no admin party to it. Nothing about the row
+ * differs; only who may read it. See TECH/05.
+ *
+ * The primary key IS the "reporting twice is a no-op" rule (PRD/05 rule 10). Both columns are
+ * NOT NULL, so there is no NULL for Postgres to treat as distinct and let a second report
+ * through.
+ */
+export const messageReports = pgTable(
+  'message_reports',
+  {
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => messages.id, { onDelete: 'cascade' }),
+    reporterId: uuid('reporter_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Set when an admin or moderator has dealt with it. Kept, never deleted. */
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+    dismissedBy: uuid('dismissed_by').references(() => users.id, { onDelete: 'set null' }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.messageId, t.reporterId] }),
+    // Both queues read open reports newest-first, so the index is partial on exactly those.
+    index('message_reports_open')
+      .on(t.createdAt.desc())
+      .where(sql`dismissed_at is null`),
+  ],
+);
+
+/**
+ * Every time a platform moderator read into a private conversation.
+ *
+ * > **Moderation is not a licence to browse private conversations.** TECH/05 grants a
+ * > moderator the reported message and its immediate context and nothing else, and requires
+ * > that read to be audit-logged. This table is that log, and it is append-only: the window
+ * > actually served is recorded, not the window requested, so a widened window shows up here
+ * > rather than being invisible.
+ *
+ * Not gated by any retention job. In a product that will include minors, the record of who
+ * looked at what is the last thing to prune.
+ */
+export const moderationReads = pgTable(
+  'moderation_reads',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    moderatorId: uuid('moderator_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    /** The message that was reported, which is the centre of the window. */
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => messages.id, { onDelete: 'cascade' }),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => channels.id, { onDelete: 'cascade' }),
+    fromSeq: integer('from_seq').notNull(),
+    toSeq: integer('to_seq').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check('moderation_reads_window_ordered', sql`from_seq <= to_seq`),
+    index('moderation_reads_by_moderator').on(t.moderatorId, t.createdAt.desc()),
+  ],
 );
 
 // ---------------------------------------------------------------------------

@@ -24,8 +24,10 @@ type AccessContext = {
   clubRole: Map<ClubId, 'owner' | 'admin' | 'member'>
   raceRoster: Set<RaceId>
   eboardMember: Set<EboardId>
-  dmThreads: Set<DmId>            // threads this user is a participant in
+  // Per thread: the peer, and whether the pair still shares a club. NOT a bare Set - see below.
+  dmThreads: Map<DmId, { otherUserId: UserId; sharesClub: boolean }>
   blockedEither: Set<UserId>      // blocked BY me, or blocking me - symmetric on purpose
+  isPlatformModerator: boolean    // gates the DM report queue and nothing else
 }
 
 const isClubMember  = (ctx, club) => ctx.clubRole.has(club)
@@ -41,11 +43,20 @@ const canAccessPoll = (ctx, poll) => …scope switch…
 // direct messages
 const isDmParticipant = (ctx, dm) => ctx.dmThreads.has(dm)
 const isBlocked       = (ctx, other) => ctx.blockedEither.has(other)
-const sharesAClub     = (ctx, other) => …intersection of club membership…
-const canOpenDm       = (ctx, other) => sharesAClub(ctx, other) && !isBlocked(ctx, other)
-const canPostInDm     = (ctx, dm) => isDmParticipant(ctx, dm)
-                                  && !isBlocked(ctx, dm.otherParticipant)
+const sharesAClub     = (ctx, other) => other.clubIds.some(c => ctx.clubRole.has(c))
+const canOpenDm       = (ctx, other) => other.userId !== ctx.userId
+                                     && sharesAClub(ctx, other) && !isBlocked(ctx, other.userId)
+const canPostInDm     = (ctx, dm) => { const t = ctx.dmThreads.get(dm)
+                                       return !!t && t.sharesClub && !isBlocked(ctx, t.otherUserId) }
 const isChannelAdmin  = (ctx, ch) => ch.scope === 'dm' ? false : …existing…
+
+// The two that could NOT be expressed through isChannelAdmin, plus the report reader.
+const canPostInChannel = (ctx, ch) => isChannelMember(ctx, ch)
+                                   && (ch.scope !== 'dm' || canPostInDm(ctx, ch.scopeId))
+const canPinInChannel  = (ctx, ch) => ch.scope === 'dm'
+                                    ? isDmParticipant(ctx, ch.scopeId) : isChannelAdmin(ctx, ch)
+const canReadReports   = (ctx, ch) => ch.scope === 'dm'
+                                    ? ctx.isPlatformModerator : isChannelAdmin(ctx, ch)
 ```
 
 **`blockedEither` is deliberately symmetric.** A block is stored one-directionally
@@ -54,9 +65,39 @@ other, and neither appears in the other's DM-eligible search. A one-directional 
 the blocked user keep opening the thread and sending into a void, which is worse than a clean
 refusal for both.
 
-**`isChannelAdmin` returning false for `dm` is the whole of the "one admin predicate" cost.**
-Announcements, polls and admin-only pins fall out automatically, because every one of them is
-already gated on that single predicate rather than on a per-scope branch.
+**`dmThreads` is a Map rather than a Set, and `sharesClub` is resolved at load time.** Whether a
+pair still shares a club is a join, and a predicate must stay a pure function. It is deliberately
+not stored on the conversation, because a stored copy needs a job to maintain and is wrong between
+runs ([ADR-0016](../decisions/0016-thread-writability-is-evaluated-never-stored.md)).
+
+### The two predicates that were aliases, and had to stop being
+
+> **Corrected 2026-07-30, while building Phase 3.5.** This section previously said
+> `isChannelAdmin` returning false for `dm` was "the whole of the one admin predicate cost", and
+> gave `canPostInDm` only participation and a block check. Both were wrong, and each would have
+> shipped a defect.
+
+**`canPostInChannel` was an alias of `isChannelMember`.** In club, race and Eboard chat, reading
+and posting are one question with one answer. A DM makes them two: a participant loses the right
+to send when blocked ([Direct messages](../PRD/14-direct-messages.md) rule 6) or when the pair's
+last shared club goes (rule 3), and **both leave history fully readable**. Leaving posting aliased
+to the read predicate would have let a blocked member send; taking membership away instead would
+have hidden history the PRD requires to stay visible.
+
+**`canPinInChannel` was an alias of `isChannelAdmin`.** [Direct messages](../PRD/14-direct-messages.md)
+rule 4 says a DM has no admins *and* that either participant may pin an ordinary message for
+reference. Both hold only because [Chat](../PRD/05-chat.md) rule 6 already separates a pin from an
+announcement: what "no admins" removes is pinning-as-*authority*. Announcements stay gated on
+`isChannelAdmin` and vanish from the scope; pinning does not.
+
+**What `isChannelAdmin` returning false does still buy, for free:** announcements and poll
+creation. Both were already gated on that one predicate and neither needed a scope branch, so that
+half of the original claim held exactly as written.
+
+The general lesson is worth keeping: **an alias is invisible until a scope needs the two sides to
+differ.** [Domain model](../PRD/01-domain-model.md)'s abstraction test counts predicates whose
+scope branch changes, and it cannot count a predicate that does not exist yet because it is
+currently spelled as another one.
 
 Properties that the old build could not have:
 
@@ -125,6 +166,23 @@ Two rules that follow, and both matter for a product including minors:
 1. **A platform moderator can read the reported message and its immediate context, and nothing
    else.** Moderation is not a licence to browse private conversations. The read is scoped to a
    window around the reported `seq` and is itself audit-logged.
+
+   Built as **five messages either side**, in a `moderation_reads` table that records the window
+   actually served rather than the one requested. Two consequences that fell out of implementing
+   it, both worth stating because they are not obvious from the rule:
+
+   - **The queue listing carries no message bodies.** If it did, either every refresh would have
+     to write a log row per report, or content would be read with no log at all - the second
+     silently defeats this rule and the first fills the log with noise. So the list is metadata
+     (who reported what, and when) and the context read is the single logged door to content.
+   - **There is no door at all without a report.** The context read resolves through
+     `message_reports`, so a moderator cannot reach a conversation nobody complained about.
+   - **The audit row and the read commit together.** A log written afterwards can be skipped by a
+     failure between the two; one written beforehand records reads that never happened.
+
+   In a group scope the same endpoint writes no log row, deliberately: an admin can already read
+   every message in their own space by scrolling, so logging a read that conveys nothing new would
+   only dilute the log that matters.
 2. **[Chat](../PRD/05-chat.md) rule 10 - "reporting twice is a no-op" - still holds**, via the existing
    `UNIQUE (message_id, reporter_id)`. Nothing about the DM path relaxes it.
 
@@ -143,6 +201,11 @@ club chat, where a spammer is visible to the whole club and removable by an admi
 abuse pattern is one sender opening many threads, each individually under the per-sender limit.
 So DMs additionally carry a **per-sender, per-new-conversation** limit: opening a thread with
 someone who has never replied is throttled far harder than continuing an existing exchange.
+
+> **Not built in Phase 3.5. Deferred to Phase 4 with every other rate limit**, and named here so
+> it is not mistaken for done. What bounds the surface meanwhile is eligibility: a thread can only
+> be opened with somebody the sender already shares a club with, so the reachable set is club
+> membership rather than the user table, and blocking is instant and self-service.
 
 ---
 

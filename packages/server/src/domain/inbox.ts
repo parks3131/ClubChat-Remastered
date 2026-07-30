@@ -25,6 +25,11 @@ import {
 } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { advanceReadCursor } from './reads.ts';
+import {
+  accessibleChannelPredicate,
+  channelDisplayName,
+  channelNameJoins,
+} from './channel-access.ts';
 
 /**
  * Normalise a timestamp coming back from raw SQL.
@@ -160,7 +165,7 @@ async function chatUnreadRows(db: Db, userId: string): Promise<InboxRow[]> {
     last_at: string;
   }>(sql`
     SELECT c.id AS channel_id,
-           COALESCE(e.name, cl.name, 'ClubChat') AS channel_name,
+           ${channelDisplayName()} AS channel_name,
            c.last_seq - COALESCE(rc.last_read_seq, 0) AS unread,
            COALESCE(
              (SELECT m.created_at FROM messages m
@@ -168,15 +173,9 @@ async function chatUnreadRows(db: Db, userId: string): Promise<InboxRow[]> {
              c.created_at
            ) AS last_at
       FROM channels c
-      LEFT JOIN clubs cl ON cl.id = c.club_id
-      LEFT JOIN eboard_channels e ON c.scope = 'eboard' AND e.id = c.scope_id
+      ${channelNameJoins(userId)}
       LEFT JOIN read_cursors rc ON rc.channel_id = c.id AND rc.user_id = ${userId}
-     WHERE (
-             (c.scope = 'club'
-               AND c.club_id IN (SELECT club_id FROM club_memberships WHERE user_id = ${userId}))
-          OR (c.scope = 'eboard'
-               AND c.scope_id IN (SELECT eboard_id FROM eboard_memberships WHERE user_id = ${userId}))
-           )
+     WHERE ${accessibleChannelPredicate(userId)}
        AND c.last_seq > COALESCE(rc.last_read_seq, 0)
   `);
 
@@ -207,12 +206,7 @@ export async function badgeCount(db: Db, userId: string): Promise<number> {
       (SELECT COUNT(*)
          FROM channels c
          LEFT JOIN read_cursors rc ON rc.channel_id = c.id AND rc.user_id = ${userId}
-        WHERE (
-                (c.scope = 'club'
-                  AND c.club_id IN (SELECT club_id FROM club_memberships WHERE user_id = ${userId}))
-             OR (c.scope = 'eboard'
-                  AND c.scope_id IN (SELECT eboard_id FROM eboard_memberships WHERE user_id = ${userId}))
-              )
+        WHERE ${accessibleChannelPredicate(userId)}
           AND c.last_seq > COALESCE(rc.last_read_seq, 0))
       AS total
   `);
@@ -303,11 +297,10 @@ export async function openChat(
   }>(sql`
     SELECT c.last_seq,
            COALESCE(rc.last_read_seq, 0) AS last_read_seq,
-           COALESCE(e.name, cl.name, 'ClubChat') AS channel_name,
+           ${channelDisplayName()} AS channel_name,
            c.club_id
       FROM channels c
-      LEFT JOIN clubs cl ON cl.id = c.club_id
-      LEFT JOIN eboard_channels e ON c.scope = 'eboard' AND e.id = c.scope_id
+      ${channelNameJoins(userId)}
       LEFT JOIN read_cursors rc ON rc.channel_id = c.id AND rc.user_id = ${userId}
      WHERE c.id = ${channelId}
   `);

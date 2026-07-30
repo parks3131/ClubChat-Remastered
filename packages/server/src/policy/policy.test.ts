@@ -43,6 +43,8 @@ const OWNER = 'u-owner';
 const ADMIN = 'u-admin';
 const MEMBER = 'u-member';
 const OUTSIDER = 'u-outsider';
+/** The other side of the DM. There are exactly two participants, ever. */
+const PEER = 'u-peer';
 
 type ActorName = 'owner' | 'admin' | 'member' | 'nonMember';
 
@@ -312,29 +314,33 @@ describe('channel abstraction holds across scopes', () => {
     const participant = accessContextOf({
       userId: MEMBER,
       clubRole: [[CLUB, 'member']],
-      dmThreads: [DM],
+      dmThreads: [{ conversationId: DM, otherUserId: PEER }],
     });
 
     expect(isChannelMember(participant, dmChannel)).toBe(true);
     expect(canPostInChannel(participant, dmChannel)).toBe(true);
-    // ADR-0009: isChannelAdmin constant-false for the scope is the ENTIRE cost of
-    // the admin model. Announcements and admin-gated pins fall out automatically.
+    // ADR-0009: isChannelAdmin constant-false for the scope is what removes announcements
+    // and poll creation automatically, since both were already gated on it.
     expect(isChannelAdmin(participant, dmChannel)).toBe(false);
     expect(canAnnounceInChannel(participant, dmChannel)).toBe(false);
+    // Pinning is the exception, and had to become its own predicate: PRD/14 rule 4 says a
+    // DM has no admins AND that either participant may pin for reference. Leaving pinning
+    // aliased to isChannelAdmin silently dropped that.
+    expect(canPinInChannel(participant, dmChannel)).toBe(true);
   });
 
   it('neither DM participant can delete the other message, but each can delete their own', () => {
     const participant = accessContextOf({
       userId: MEMBER,
       clubRole: [[CLUB, 'member']],
-      dmThreads: [DM],
+      dmThreads: [{ conversationId: DM, otherUserId: PEER }],
     });
 
     expect(canDeleteMessage(participant, dmChannel, { senderId: MEMBER })).toBe(true);
     // The row that differs from every other scope. The admin who would hold this
     // power in club chat does not exist here, so moderation is blocking plus
     // reporting rather than deletion.
-    expect(canDeleteMessage(participant, dmChannel, { senderId: OUTSIDER })).toBe(false);
+    expect(canDeleteMessage(participant, dmChannel, { senderId: PEER })).toBe(false);
   });
 
   it('a sender can always delete their own message in any scope', () => {
@@ -352,7 +358,11 @@ describe('channel abstraction holds across scopes', () => {
       ],
       [
         'dm',
-        accessContextOf({ userId: MEMBER, clubRole: [[CLUB, 'member']], dmThreads: [DM] }),
+        accessContextOf({
+          userId: MEMBER,
+          clubRole: [[CLUB, 'member']],
+          dmThreads: [{ conversationId: DM, otherUserId: PEER }],
+        }),
         dmChannel,
       ],
     ];

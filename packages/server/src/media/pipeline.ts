@@ -21,7 +21,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { mediaObjects, outbox } from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
-import { isChannelMember, type ChannelRef } from '../policy/predicates.ts';
+import { canPostInChannel, isChannelMember, type ChannelRef } from '../policy/predicates.ts';
 import { getChannelRef } from '../domain/reads.ts';
 import {
   DOCUMENT_MIME_ALLOWLIST,
@@ -42,6 +42,8 @@ export type MediaConfig = {
   privateBucket: string;
   signingSecret: string;
   cdnBaseUrl: string;
+  /** See `MEDIA_URL_MODE` in config. Defaults to the production shape. */
+  urlMode?: 'cdn' | 'presign';
 };
 
 export type MediaKind = 'photo' | 'document' | 'avatar';
@@ -103,8 +105,12 @@ export async function createUploadIntent(
   } else {
     if (!input.channelId) return { ok: false, code: 'not_found' };
     channel = await getChannelRef(db, input.channelId);
-    // The SAME check that protects the messages. Not a similar one.
-    if (!channel || !isChannelMember(ctx, channel)) return { ok: false, code: 'not_found' };
+    // `canPostInChannel`, not `isChannelMember`: an upload exists in order to be sent, so the
+    // gate has to be the send's gate. The two were the same predicate until DMs arrived, and
+    // reading is now the weaker of the pair - a blocked participant can still read the
+    // conversation, and letting them presign an upload they can never attach would leave
+    // pending objects for the GC and imply a send that will be refused.
+    if (!channel || !canPostInChannel(ctx, channel)) return { ok: false, code: 'not_found' };
     bucket = config.privateBucket;
   }
 
@@ -230,6 +236,25 @@ export function hourAlignedExpiry(nowMs: number): number {
   return Math.floor((ceilToHour + HOUR) / 1000);
 }
 
+/**
+ * The same hour-aligned window, expressed for a store-signed URL.
+ *
+ * `signingDate` is the **floor** of the current hour rather than the expiry, for two reasons: a
+ * signature dated in the future is not yet valid, and the floor is the value every caller inside
+ * the window agrees on. `expiresIn` then carries the distance from that floor to the aligned
+ * expiry, so the resulting URL is byte-identical for everyone in the window - the same property
+ * the CDN scheme gets from `exp` alone.
+ */
+export function hourAlignedSigningWindow(nowMs: number): {
+  signingDateMs: number;
+  expiresInSeconds: number;
+} {
+  const HOUR = 3_600_000;
+  const floor = Math.floor(nowMs / HOUR) * HOUR;
+  const expiryMs = hourAlignedExpiry(nowMs) * 1000;
+  return { signingDateMs: floor, expiresInSeconds: Math.round((expiryMs - floor) / 1000) };
+}
+
 function sign(secret: string, objectKey: string, exp: number): string {
   return createHmac('sha256', secret).update(`${objectKey}:${exp}`).digest('base64url');
 }
@@ -288,6 +313,7 @@ export type MediaRedirect = {
  */
 export async function resolveMediaRedirect(
   db: Db,
+  store: MediaStore,
   config: MediaConfig,
   ctx: AccessContext,
   mediaId: string,
@@ -315,11 +341,22 @@ export async function resolveMediaRedirect(
   // have run, and a missing thumbnail must degrade to a slower image rather than a broken one.
   const objectKey = requested === 'original' ? media.objectKey : (variants[requested] ?? media.objectKey);
 
-  return {
-    ok: true,
-    url: signedMediaUrl(config, objectKey, opts.nowMs ?? Date.now()),
-    cacheControl: 'private, max-age=600',
-  };
+  const nowMs = opts.nowMs ?? Date.now();
+  // Whoever is going to serve the bytes has to be the one whose signature they carry.
+  const url =
+    config.urlMode === 'presign'
+      ? await (async () => {
+          const window = hourAlignedSigningWindow(nowMs);
+          return store.presignDownload({
+            bucket: media.bucket,
+            objectKey,
+            signingDateMs: window.signingDateMs,
+            expiresInSeconds: window.expiresInSeconds,
+          });
+        })()
+      : signedMediaUrl(config, objectKey, nowMs);
+
+  return { ok: true, url, cacheControl: 'private, max-age=600' };
 }
 
 // ---------------------------------------------------------------------------

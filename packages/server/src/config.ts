@@ -33,6 +33,21 @@ const Env = z.object({
   // the other.
   MEDIA_SIGNING_SECRET: z.string().min(16),
   MEDIA_CDN_BASE_URL: z.string().url(),
+  /**
+   * Who signs a download URL.
+   *
+   * `cdn` - the production shape. A signature-validating CDN fronts the bucket and checks the
+   * hour-aligned `exp`/`sig` pair at the edge, which is what makes one cache entry serve every
+   * viewer (roadmap debt 7).
+   *
+   * `presign` - no CDN in front of the bucket, so the object store signs instead. Development
+   * runs this way against MinIO: the custom HMAC means nothing to the store, so pointing that
+   * URL at it is an unauthenticated GET on private content and is correctly refused.
+   *
+   * Defaults to `cdn` so a missing value in production cannot silently start handing out
+   * store-signed URLs.
+   */
+  MEDIA_URL_MODE: z.enum(['cdn', 'presign']).default('cdn'),
 });
 
 export type Config = z.infer<typeof Env>;

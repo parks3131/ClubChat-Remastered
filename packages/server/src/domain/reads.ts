@@ -12,6 +12,8 @@ import type { ChannelState, MessageEnvelope, MessageType } from '@clubchat/share
 import type { Db } from '../db/client.ts';
 import { channels, messages } from '../db/schema.ts';
 import type { ChannelRef } from '../policy/predicates.ts';
+import { accessibleChannelPredicate } from './channel-access.ts';
+import { reactionsForMessages } from './reactions.ts';
 
 /** The page size chat opens with, then pages backward from. */
 export const HISTORY_PAGE_SIZE = 40;
@@ -31,6 +33,12 @@ function toEnvelope(row: MessageRow): MessageEnvelope {
     body: row.body,
     clientMsgId: row.clientMsgId,
     pinned: row.pinned,
+    // Filled in by `withReactions` for reads that return more than one row, so the whole
+    // page costs one extra query rather than one per message.
+    reactions: [],
+    mediaId: row.mediaId,
+    documentName: row.documentName,
+    documentSize: row.documentSize,
     deletedAt: row.deletedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };
@@ -56,9 +64,9 @@ export async function getChannelRef(db: Db, channelId: string): Promise<ChannelR
  * own local max. That is what makes reconnect reconciliation exact rather than
  * heuristic.
  *
- * One query, not one per channel. Race and DM scopes are absent because Phase 0 has
- * no tables for them; adding each is one more branch in the WHERE clause, which is
- * exactly the cost the channel abstraction predicts.
+ * One query, not one per channel, and the access predicate comes from `channel-access.ts`
+ * rather than being written here. It used to be written here, and it was one of the four
+ * hand-written copies that all missed the race scope.
  */
 export async function listAccessibleChannels(db: Db, userId: string): Promise<ChannelState[]> {
   const result = await db.execute<{
@@ -77,10 +85,7 @@ export async function listAccessibleChannels(db: Db, userId: string): Promise<Ch
       LEFT JOIN read_cursors rc
              ON rc.channel_id = c.id
             AND rc.user_id = ${userId}
-     WHERE (c.scope = 'club'
-            AND c.club_id IN (SELECT club_id FROM club_memberships WHERE user_id = ${userId}))
-        OR (c.scope = 'eboard'
-            AND c.scope_id IN (SELECT eboard_id FROM eboard_memberships WHERE user_id = ${userId}))
+     WHERE ${accessibleChannelPredicate(userId)}
      ORDER BY c.created_at
   `);
 
@@ -119,7 +124,29 @@ export async function readHistory(
     .orderBy(desc(messages.seq))
     .limit(limit);
 
-  return rows.reverse().map(toEnvelope);
+  return withReactions(db, rows.reverse().map(toEnvelope));
+}
+
+/**
+ * Attach reactions to a page of envelopes.
+ *
+ * One query for the whole page. Reactions ride along on the envelope rather than being
+ * fetched separately so they survive airplane mode with the messages they belong to, which
+ * is the entire argument of ADR-0017 - and this is the function that makes it cost one
+ * round trip instead of one per message.
+ */
+async function withReactions(db: Db, envelopes: MessageEnvelope[]): Promise<MessageEnvelope[]> {
+  if (envelopes.length === 0) return envelopes;
+  const byMessage = await reactionsForMessages(
+    db,
+    envelopes.map((envelope) => envelope.id),
+  );
+  // Only rewrite the envelopes that actually have reactions, so the common case allocates
+  // nothing beyond the lookup.
+  return envelopes.map((envelope) => {
+    const reactions = byMessage.get(envelope.id);
+    return reactions === undefined ? envelope : { ...envelope, reactions };
+  });
 }
 
 /**
@@ -145,7 +172,10 @@ export async function syncSince(
 
   const hasMore = rows.length > limit;
   return {
-    messages: rows.slice(0, limit).map(toEnvelope),
+    // Reactions travel with the backlog too. A client that has been offline for a week must
+    // come back to the conversation as it stands, not to messages with their reactions
+    // stripped off and no way to notice.
+    messages: await withReactions(db, rows.slice(0, limit).map(toEnvelope)),
     hasMore,
   };
 }
