@@ -5,6 +5,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -31,6 +32,7 @@ import {
   type UploadKind,
 } from "../../src/upload.ts";
 import { LinearGradient } from "expo-linear-gradient";
+import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { Avatar } from "../../src/ui.tsx";
 import { QuickNav } from "../../src/nav.tsx";
@@ -100,6 +102,19 @@ function scopeLinks(
     { href: `/eboard/${meta.scopeId}/meetings`, label: "Meetings" },
     { href: `/eboard/${meta.scopeId}/polls`, label: "Polls" },
   ];
+}
+
+/**
+ * One line describing a pinned message, for the notice strip.
+ *
+ * A pinned photo or document has no body to show, and an empty notice is worse than none: the
+ * strip's whole job is to say what is being kept in view.
+ */
+function pinnedPreview(message: MessageEnvelope): string {
+  if (message.deletedAt !== null) return "This message was deleted";
+  if (message.type === "photo") return "Photo";
+  if (message.type === "document") return message.documentName ?? "Document";
+  return message.body ?? "";
 }
 
 /**
@@ -173,6 +188,16 @@ export default function ChatScreen() {
    * which is what makes it a jump rather than a mode.
    */
   const [jumpedTo, setJumpedTo] = useState<number | null>(null);
+  /**
+   * Pins the reader has waved away, by seq.
+   *
+   * Local and deliberately not persisted: dismissing is "I have read this notice", not "unpin
+   * this for everybody", and it lasts as long as the screen does. Unpinning is a separate,
+   * authorized action that lives in the message's own sheet.
+   */
+  const [dismissedPins, setDismissedPins] = useState<ReadonlySet<number>>(
+    new Set(),
+  );
 
   const refresh = useCallback(async () => {
     if (!client || !channelId) return;
@@ -199,6 +224,19 @@ export default function ChatScreen() {
   useEffect(() => {
     void refresh();
   }, [refresh, revision]);
+
+  // Newest first, so the most recent notice is the one already in view rather than the one you
+  // have to scroll the strip sideways to reach. A tombstone is dropped outright: a deleted
+  // message is not worth keeping pinned above the conversation.
+  const pinnedRows = rows
+    .flatMap((row) => (row.kind === "message" ? [row.message] : []))
+    .filter(
+      (message) =>
+        message.pinned &&
+        message.deletedAt === null &&
+        !dismissedPins.has(message.seq),
+    )
+    .reverse();
 
   /**
    * Load the channel's title and whether the composer is live.
@@ -416,18 +454,34 @@ export default function ChatScreen() {
         target: a control that only appears when history exists is a bug, because direct
         URL entry and page refresh leave no history on any screen.
       */}
-      <View style={styles.header}>
+      <BlurView intensity={80} tint="light" style={styles.header}>
         <Pressable
           onPress={() => router.replace(parent)}
           accessibilityRole="button"
           accessibilityLabel={`Back to ${parentLabel}`}
           hitSlop={space.sm}
+          style={styles.backButton}
         >
-          <Text style={styles.backLabel}>{parentLabel}</Text>
+          <MaterialIcons
+            name="arrow-back"
+            size={20}
+            color={color.textPrimary}
+          />
         </Pressable>
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          {meta?.name ?? "Chat"}
-        </Text>
+        {/*
+          The channel's own identity, not just its name: v1 pairs the avatar with a two-line
+          column so a chat opened from a notification says what you are looking at without
+          needing the screen behind it.
+        */}
+        <Avatar name={meta?.name ?? "Chat"} size={36} />
+        <View style={styles.headerTitleColumn}>
+          <Text style={styles.headerTitle} numberOfLines={1}>
+            {meta?.name ?? "Chat"}
+          </Text>
+          <Text style={styles.headerSubtitle} numberOfLines={1}>
+            {offline ? "Reconnecting" : "ClubChat"}
+          </Text>
+        </View>
         <Pressable
           onPress={() => setMenuOpen((open) => !open)}
           accessibilityRole="button"
@@ -435,9 +489,13 @@ export default function ChatScreen() {
           hitSlop={space.sm}
           style={styles.headerAction}
         >
-          <Text style={styles.backLabel}>More</Text>
+          <MaterialIcons
+            name="more-horiz"
+            size={20}
+            color={color.textPrimary}
+          />
         </Pressable>
-      </View>
+      </BlurView>
 
       {/*
         The header quick-nav.
@@ -460,6 +518,67 @@ export default function ChatScreen() {
               : scopeLinks(meta.scope, meta)),
           ]}
         />
+      )}
+
+      {/*
+        v1's floating pinned strip.
+
+        The point of a pin is that it stays reachable without scrolling, and Highlights alone does
+        not do that: it is a screen you have to go to. Horizontal, because a channel can carry
+        several notices and stacking them would eat the conversation.
+      */}
+      {pinnedRows.length > 0 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.pinnedStrip}
+          contentContainerStyle={styles.pinnedStripContent}
+        >
+          {pinnedRows.map((message) => (
+            <BlurView
+              key={message.seq}
+              intensity={60}
+              tint="light"
+              style={styles.pinnedCard}
+            >
+              <Pressable
+                style={styles.pinnedCardBody}
+                onPress={() => setJumpedTo(message.seq)}
+                accessibilityRole="button"
+                accessibilityLabel="Jump to this pinned message"
+              >
+                <View style={styles.pinnedIcon}>
+                  <MaterialIcons
+                    name="push-pin"
+                    size={16}
+                    color={color.accent}
+                  />
+                </View>
+                <View style={styles.pinnedTextColumn}>
+                  <Text style={styles.pinnedLabel}>Notice</Text>
+                  <Text style={styles.pinnedText} numberOfLines={1}>
+                    {pinnedPreview(message)}
+                  </Text>
+                </View>
+              </Pressable>
+              <Pressable
+                onPress={() =>
+                  setDismissedPins((prev) => new Set(prev).add(message.seq))
+                }
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss this notice"
+                hitSlop={space.sm}
+                style={styles.pinnedDismiss}
+              >
+                <MaterialIcons
+                  name="close"
+                  size={16}
+                  color={color.textSecondary}
+                />
+              </Pressable>
+            </BlurView>
+          ))}
+        </ScrollView>
       )}
 
       {/*
@@ -1226,25 +1345,87 @@ const styles = StyleSheet.create({
     color: color.onAccent,
     textTransform: "uppercase",
   },
+  /**
+   * v1's glass header.
+   *
+   * The blur is the point: it is what separates chat from the flat chrome every other screen
+   * uses, and v1 leans on it hard. Kept IN FLOW rather than absolutely positioned as v1 has it -
+   * v1's list is inverted, so its content padding falls at the visual top for free, and getting
+   * the same effect here would mean padding the list and the quick-nav around a floating element
+   * for a difference visible only while scrolling.
+   *
+   * `backgroundColor` still carries the chrome tint, because react-native-web renders BlurView as
+   * a plain View: without it this reads as a transparent strip on the surface it develops on.
+   */
   header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: space.md,
+    gap: space.sm,
     paddingHorizontal: space.md,
     paddingVertical: space.sm,
     backgroundColor: color.chrome,
     borderBottomWidth: 1,
-    borderBottomColor: color.divider,
+    borderBottomColor: "rgba(0,0,0,0.05)",
   },
-  headerTitle: {
-    ...type.headline,
-    color: color.accent,
+  /** v1's circular back control: 36px, a faint wash, and an icon rather than a word. */
+  backButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.05)",
+  },
+  headerTitleColumn: { flex: 1, minWidth: 0 },
+  headerTitle: { ...type.headerTitle, color: color.textPrimary },
+  /** 9px, v1's value. Doubles as the connection state, which chat is the one screen to care. */
+  headerSubtitle: { ...type.label, fontSize: 9, color: color.textSecondary },
+  headerAction: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.05)",
+  },
+  /** v1's pinned notice strip. `flexGrow: 0` keeps the row from claiming the list's height. */
+  pinnedStrip: {
+    flexGrow: 0,
+    paddingHorizontal: space.md,
+    paddingTop: space.sm,
+  },
+  pinnedStripContent: { gap: space.sm, alignItems: "center" },
+  pinnedCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    width: 300,
+    borderRadius: radius.lg,
+    padding: space.sm + 4,
+    borderWidth: 1,
+    // v1's value: the accent at 15% alpha, so the card reads as a notice without shouting.
+    borderColor: "rgba(255,77,0,0.15)",
+    backgroundColor: color.card,
+    overflow: "hidden",
+  },
+  pinnedCardBody: {
     flex: 1,
-    textAlign: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
   },
-  // Matches the back control's optical width so the centred title stays on axis.
-  headerAction: { minWidth: 44, alignItems: "flex-end" },
+  pinnedIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.sm,
+    backgroundColor: "rgba(255,77,0,0.1)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pinnedTextColumn: { flex: 1 },
+  pinnedLabel: { ...type.label, fontSize: 9, color: color.accent },
+  pinnedText: { ...type.body, fontSize: 12, color: color.textPrimary },
+  pinnedDismiss: { padding: space.xs },
   offlineBanner: {
     backgroundColor: color.fallback,
     paddingVertical: space.sm,
@@ -1256,7 +1437,6 @@ const styles = StyleSheet.create({
     color: color.textSecondary,
     textTransform: "uppercase",
   },
-  backLabel: { ...type.label, color: color.accent, textTransform: "uppercase" },
   sheet: {
     backgroundColor: color.card,
     borderBottomWidth: 1,
