@@ -41,7 +41,7 @@ Deleting the underlying object removes its card.
 
 ### Notification fan-out
 
-Every notification in [4.10](#410-notifications) is written server-side, on the data change,
+Every notification in [Notifications](../PRD/12-notifications.md) is written server-side, on the data change,
 with its audience computed per the scope rules. Two audience rules have each been fixed
 multiple times and are restated as invariants:
 
@@ -57,10 +57,11 @@ The approval path suppresses the membership-added notification for that transact
 ### The one scheduled job
 
 **Poll closing-soon** is the only notification with no data change to hang on - nothing
-changes when a deadline gets within 10 minutes. A job runs every minute, selects polls that
-are open, have a deadline within the next 10 minutes, and have not been flagged yet, fans out
-to the poll's full audience **including the creator**, and stamps them as notified so it fires
-**at most once per poll, ever**.
+changes when a deadline gets within 10 minutes. A job runs **every 30 seconds** (the cadence
+is specified once, in [Effects engine](04-effects-engine.md); this file previously said "every
+minute" and the two disagreed), selects polls that are open, have a deadline within the next 10
+minutes, and have not been flagged yet, fans out to the poll's full audience **including the
+creator**, and stamps them as notified so it fires **at most once per poll, ever**.
 
 Everything else about deadlines is computed live: "is this poll closed" is evaluated at read
 time as `closed_manually OR deadline_passed`. **There is no job that closes polls.**

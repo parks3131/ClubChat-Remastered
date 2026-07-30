@@ -17,7 +17,7 @@ So we invert the storage model:
 | Per-recipient copy | Yes - one inbox row per recipient | **No - one row per message, ever** |
 | Delivery model | Fan-out on write to N inboxes | **Fan-out on write of a wake signal; fan-out on read from the log** |
 | "What did I miss?" | Replay my undelivered inbox | **`SELECT … WHERE seq > my_cursor`** |
-| Deletion | On delivery | Soft delete with tombstone, never removed (`Old.md` invariant 7) |
+| Deletion | On delivery | Soft delete with tombstone, never removed ([Domain model](../PRD/01-domain-model.md) invariant 7) |
 
 ### Sequence numbers
 
@@ -52,16 +52,16 @@ COMMIT;
   irrelevant; across channels there is none.
 - **Not global.** `seq` is meaningful only within its channel. Never compare across channels.
 
-This one column is `Old.md` debt item 3, and it makes the following free:
+This one column is [Roadmap](../PRD/17-roadmap-and-open-questions.md) debt item 3, and it makes the following free:
 
 | Problem in the old build | Solution with `seq` |
 |---|---|
-| "What did I miss after backgrounding?" ([Media pipeline](07-media-pipeline.md), unfixed, silent message loss) | `GET /channels/:id/sync?since=<seq>` |
-| Paging backward without losing scroll position ([Media pipeline](07-media-pipeline.md)) | `WHERE seq < $cursor ORDER BY seq DESC LIMIT 40` |
-| Open on the first unread message ([Connection layer](01-connection-layer.md) rule 3) | `first_unread = read_cursor + 1`, fetch a window around it |
-| Unread count, computed not stored ([Authorization](05-authorization.md) perf) | `channel.last_seq − cursor.last_read_seq` - O(1), no row scan |
-| Jump-to-message window ([Connection layer](01-connection-layer.md) edge case) | `WHERE seq BETWEEN $target−20 AND $target+20` |
-| Highlights silently losing pins past the loaded window ([Client architecture](08-client-architecture.md) debt 6) | Server-side `WHERE pinned` over the whole channel, not a client slice |
+| "What did I miss after backgrounding?" ([Engineering pitfalls](14-engineering-pitfalls.md) 25, unfixed, silent message loss) | `GET /channels/:id/sync?since=<seq>` |
+| Paging backward without losing scroll position ([Engineering pitfalls](14-engineering-pitfalls.md) 9) | `WHERE seq < $cursor ORDER BY seq DESC LIMIT 40` |
+| Open on the first unread message ([Chat](../PRD/05-chat.md) rule 3) | `first_unread = read_cursor + 1`, fetch a window around it |
+| Unread count, computed not stored ([Cross-cutting UX](../PRD/16-cross-cutting-ux.md) performance) | `channel.last_seq − cursor.last_read_seq` - O(1), no row scan |
+| Jump-to-message window ([Chat](../PRD/05-chat.md) edge case) | `WHERE seq BETWEEN $target−20 AND $target+20` |
+| Highlights silently losing pins past the loaded window ([Roadmap](../PRD/17-roadmap-and-open-questions.md) debt 6) | Server-side `WHERE pinned` over the whole channel, not a client slice |
 | Ordering by timestamp with clock skew | Order by `seq`. Timestamps are for display only. |
 
 ### Read cursors
@@ -85,7 +85,7 @@ UNIQUE (channel_id, sender_id, client_msg_id)
 ```
 
 A retry after a flaky network hits the unique index; the handler returns the existing row's
-`seq` instead of erroring. This is `Old.md` debt item 4, and it is what makes the client's send
+`seq` instead of erroring. This is [Roadmap](../PRD/17-roadmap-and-open-questions.md) debt item 4, and it is what makes the client's send
 outbox safe to retry aggressively.
 
 ### Acknowledgement protocol - narrowed on purpose
@@ -147,11 +147,11 @@ space's admins. A DM has no admins, so a report written the current way goes now
 silently discarded. This is a defect, not an inconvenience, and [Authorization](05-authorization.md) defines where those reports
 go instead.
 
-**Eligibility: participants must share at least one club.** This follows `Old.md` [Authorization](05-authorization.md), which
+**Eligibility: participants must share at least one club.** This follows the privacy rule in [Cross-cutting UX](../PRD/16-cross-cutting-ux.md), which
 already restricts profile visibility to people who share a club, and it keeps the abuse surface
 bounded by club membership rather than by the whole user table. Losing the last shared club does
 **not** delete the thread - it becomes read-only, since deleting history would tear holes in a
-conversation the same way hard-deleting a message does (`Old.md` invariant 7).
+conversation the same way hard-deleting a message does ([Domain model](../PRD/01-domain-model.md) invariant 7).
 
 > **DMs change the safety requirements of the product, and this is the most important sentence
 > in this section.** [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) currently lists "block or mute between members" as *important,

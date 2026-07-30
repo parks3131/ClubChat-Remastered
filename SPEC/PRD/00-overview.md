@@ -66,7 +66,7 @@ history.
 > every conversation is scoped to a club, a race, or an Eboard. They are now **in scope for the
 > remaster** as a fourth channel scope, restricted to members who share a club. **Group chat
 > remains the main feature; DMs are additive and must never become the centre of gravity.** See
-> [4.12](#412-direct-messages). The reversal carries an obligation: it moves member blocking
+> [Direct messages](14-direct-messages.md). The reversal carries an obligation: it moves member blocking
 > and a report destination from "important, not blocking" into the same release as the feature.
 
 ### Platforms

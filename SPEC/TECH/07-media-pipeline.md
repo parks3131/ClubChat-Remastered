@@ -12,7 +12,7 @@
 ```
 POST /media/upload-intent { kind, mime, size, scope }
   → authorize the scope (same predicate that protects the messages)
-  → validate mime allowlist + size cap        ← fixes Old.md debt 9
+  → validate mime allowlist + size cap        ← fixes Roadmap debt 9
   → insert media_objects (status='pending')
   → 200 { media_id, upload_url (presigned PUT, 5 min), max_bytes }
 
@@ -55,7 +55,7 @@ GET /media/:id                     ← authenticated, authorized (same membershi
 
 ### Also fixed here
 
-| `Old.md` gap | Fix |
+| v1 gap | Fix |
 |---|---|
 | Debt 8 - nothing ever deleted from storage | `media_objects` has an owner reference; deleting the owner enqueues `media.orphaned`; nightly GC job |
 | Debt 9 - no size or MIME limits | Enforced at upload-intent *and* re-verified at complete |

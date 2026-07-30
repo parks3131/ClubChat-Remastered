@@ -8,7 +8,7 @@ Today these leave the app entirely and happen over text message, which means the
 to the product and the context is lost.
 
 **Positioning, and the guardrail.** **Group chat is the product. DMs are additive.** The bet in
-[section 1](#1-the-product-in-one-page) is that a club's coordination becomes *more* structured,
+[Overview](00-overview.md) is that a club's coordination becomes *more* structured,
 not that ClubChat becomes a general messenger. Any DM feature request that would pull activity
 out of club, race, or Eboard chat and into private threads is working against the product, and
 should be refused on those grounds.

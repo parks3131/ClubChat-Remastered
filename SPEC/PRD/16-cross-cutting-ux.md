@@ -48,7 +48,8 @@ These are product requirements, not polish. Several were shipped bugs first.
 
 The current build is **online-only**: no cache, no queued sends, no optimistic send. Sending
 offline fails **visibly**. This is a known limitation, not a decision - a club coordinating at
-a race venue with poor signal is exactly the failure case. See section 11.
+a race venue with poor signal is exactly the failure case. See
+[Roadmap and open questions](17-roadmap-and-open-questions.md).
 
 ### Accessibility
 
@@ -56,7 +57,8 @@ a race venue with poor signal is exactly the failure case. See section 11.
 accessibility labels exist; every icon-only control (attach button, pin and announce toggles,
 per-message overflow, race pin control, jump-to-latest) is effectively invisible to a screen
 reader. Contrast, dynamic type, touch-target sizes, and reduced motion are all unverified.
-**The remaster should not repeat this** - see section 11.
+**The remaster should not repeat this** - see
+[Roadmap and open questions](17-roadmap-and-open-questions.md).
 
 ### Verification standard
 

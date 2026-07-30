@@ -1,7 +1,7 @@
 # Client architecture
 
 Keep Expo + Expo Router. The screen map, navigation rules and design system in [Screen map](../PRD/15-screen-map.md) and
-[Notifications and push](06-notifications-and-push.md) are all still correct and represent real shipped work - the remaster is a backend and
+[Design system](13-design-system.md) are all still correct and represent real shipped work - the remaster is a backend and
 data-flow change, not a UI rewrite.
 
 Four things are new:
@@ -28,7 +28,7 @@ keeps its rule that a failed send fails *visibly*.
 
 ### 3. Sync engine - the fix for silent message loss
 
-`Old.md` [Media pipeline](07-media-pipeline.md) is the most dangerous open bug in the old build: *"A phone that backgrounds and
+[Engineering pitfalls](14-engineering-pitfalls.md) 25 is the most dangerous open bug in the old build: *"A phone that backgrounds and
 resumes can permanently miss messages with no error and no indication."*
 
 ```

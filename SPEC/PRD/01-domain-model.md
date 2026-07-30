@@ -51,7 +51,7 @@ abstraction has been broken.
 > removes announcements and polls for free), one nullable column, and thin screen wrappers.
 > Sequencing, sync, cursors, unread counts, pins, reactions, gallery, media and push fan-out all
 > carried over untouched. The one thing the rule did **not** anticipate is that a scope with no
-> admins has nowhere to send a report - see [4.12](#412-direct-messages).
+> admins has nowhere to send a report - see [Direct messages](14-direct-messages.md).
 
 ### Entity notes
 

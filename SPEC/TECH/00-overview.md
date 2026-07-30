@@ -2,20 +2,21 @@
 
 ## Why the architecture is changing
 
-The previous build's defects were not random. Read `Old.md` section 10 as a list and a single
+The previous build's defects were not random. Read
+[Engineering pitfalls](14-engineering-pitfalls.md) as a list and a single
 cause appears in almost every entry: **the database was the application server**.
 
-| Symptom (from `Old.md`) | Root cause |
+| Symptom (from v1) | Root cause |
 |---|---|
-| Create-and-return needs a read rule covering the row you just created ([Media pipeline](07-media-pipeline.md)) | Authorization expressed as row-level predicates instead of a function call |
-| A read rule must never re-query its own table ([Media pipeline](07-media-pipeline.md)) | Same |
-| "Admin" checks must include Owner - shipped wrong **four** times ([Media pipeline](07-media-pipeline.md)) | The predicate was copy-pasted per policy instead of existing once |
-| Row-level rules cannot do column-level authority ([Media pipeline](07-media-pipeline.md)) | Same |
-| Ordering matters in bootstrap triggers ([Media pipeline](07-media-pipeline.md)) | Domain effects implemented as DB triggers, so ordering is implicit and untestable |
-| Unfiltered subscriptions: every user receives every row ([Client architecture](08-client-architecture.md) debt 2) | Realtime bound to table changes, not to domain events with an audience |
-| Realtime has no replay after disconnect; a backgrounded phone silently loses messages ([Media pipeline](07-media-pipeline.md)) | No sequence numbers, so "what did I miss" is unanswerable |
-| Retries can double-post ([Client architecture](08-client-architecture.md) debt 4) | No client-generated idempotency key |
-| No push notifications at all ([Client architecture](08-client-architecture.md), "the single biggest functional gap") | No server to fan out from |
+| Create-and-return needs a read rule covering the row you just created ([Engineering pitfalls](14-engineering-pitfalls.md) 1) | Authorization expressed as row-level predicates instead of a function call |
+| A read rule must never re-query its own table ([Engineering pitfalls](14-engineering-pitfalls.md) 2) | Same |
+| "Admin" checks must include Owner - shipped wrong **four** times ([Engineering pitfalls](14-engineering-pitfalls.md) 3) | The predicate was copy-pasted per policy instead of existing once |
+| Row-level rules cannot do column-level authority ([Engineering pitfalls](14-engineering-pitfalls.md) 4) | Same |
+| Ordering matters in bootstrap triggers ([Engineering pitfalls](14-engineering-pitfalls.md) 7) | Domain effects implemented as DB triggers, so ordering is implicit and untestable |
+| Unfiltered subscriptions: every user receives every row ([Roadmap](../PRD/17-roadmap-and-open-questions.md) debt 2) | Realtime bound to table changes, not to domain events with an audience |
+| Realtime has no replay after disconnect; a backgrounded phone silently loses messages ([Engineering pitfalls](14-engineering-pitfalls.md) 25) | No sequence numbers, so "what did I miss" is unanswerable |
+| Retries can double-post ([Roadmap](../PRD/17-roadmap-and-open-questions.md) debt 4) | No client-generated idempotency key |
+| No push notifications at all ([Roadmap](../PRD/17-roadmap-and-open-questions.md), "the single biggest functional gap") | No server to fan out from |
 
 Every one of those is fixed by the same move: **put a real application server in the middle**,
 and give the message log a monotonic sequence number.

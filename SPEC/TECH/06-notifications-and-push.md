@@ -1,6 +1,6 @@
 # Notifications and push
 
-`Old.md` calls push "the single biggest functional gap", and notes that everything a push
+[Roadmap](../PRD/17-roadmap-and-open-questions.md) calls push "the single biggest functional gap", and notes that everything a push
 payload needs already exists: each notification carries a fully rendered body and a target
 route. So push is a *transport* added to a fan-out that is already specified.
 
@@ -12,7 +12,7 @@ route. So push is a *transport* added to a fan-out that is already specified.
 | Clears | Opening the inbox (most types) | Only by opening that chat |
 
 Both survive as specified in [Notifications](../PRD/12-notifications.md), including the two exceptions: chat-unread rows and
-the three pending join-request types are **not** cleared by opening the inbox. ([Connection layer](01-connection-layer.md) rule 4 -
+the three pending join-request types are **not** cleared by opening the inbox. ([Notifications](../PRD/12-notifications.md) rule 4 -
 "the founder lost real join requests this way".)
 
 ### Push pipeline
@@ -48,8 +48,8 @@ also gives web push, so all three platforms use one path.
 Rules carried from [Notifications](../PRD/12-notifications.md) and enforced in the audience function:
 
 - Audience always respects access - a race poll notifies roster members only, never
-  roster ∪ club admins ([Message flows](03-message-flows.md) invariant 2).
-- Admin-tier filters match **both** `admin` and `owner` ([Message flows](03-message-flows.md) invariant 1).
+  roster ∪ club admins ([Server event catalogue](12-server-event-catalogue.md) invariant 2).
+- Admin-tier filters match **both** `admin` and `owner` ([Server event catalogue](12-server-event-catalogue.md) invariant 1).
 - Creation notifications exclude the actor - except poll closing-soon, which includes them.
 - Pinning notifies nobody; announcing notifies everyone in that chat.
 - An approval suppresses the "you were added" notification for the same transaction.

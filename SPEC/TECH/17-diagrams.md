@@ -1,6 +1,6 @@
 # ClubChat - Architecture Diagrams
 
-Visual annex to `ARCHITECTURE.md`. Same rule applies: where a diagram disagrees with the repo,
+Visual annex to the rest of [`SPEC/TECH/`](.). Same rule applies: where a diagram disagrees with the repo,
 the repo is right and the diagram is the bug. Fix it in the same change.
 
 Diagrams are Mermaid so they render on GitHub and in most editors, and so a change to the
@@ -102,20 +102,21 @@ it. Both are stated in those nodes' labels instead.
 
 ## 2. How this differs from the reference drawing
 
-Every row here is argued in `ARCHITECTURE.md` §12. This table is the index, not the argument.
+Every row here is argued in an ADR under [`SPEC/decisions/`](../decisions/). This table is the
+index, not the argument.
 
 | Reference drawing | ClubChat | Why |
 |---|---|---|
-| Message Queue - Message Storage Service - Message Database, as three components | **Postgres holds the channel log and the outbox; Kafka sits downstream of the outbox** | The outbox is the transactional boundary, because a queue cannot be atomic with the domain write. Kafka then adds durable replay and independent consumers. Not on the send path. §7.4 |
-| Per-recipient one-to-one messaging as the primary feature | **Group chat is primary; DMs are a fourth channel scope** | Reversed from a v1 non-goal. Restricted to members who share a club, and obliged to ship with blocking and a report destination. §5.6 |
-| Chat Servers own routing *and* business logic | **Gateway** holds sockets only; **API** holds all logic; **Worker** holds all effects | A gateway can be killed at any instant with zero data loss. That property is load-bearing. §3 |
-| User Connection Cache gates delivery *and* notification | **Redis registry routes publishes only** | Liveness is not proof of receipt. A dead phone keeps a registry entry alive and would silently swallow every push in that window. Suppression is the read cursor. §6.2 |
-| Per-user pub/sub channels, one publish per recipient | **Per-channel topics**, one publish per message | Authorizes once at subscribe instead of once per message per recipient. Cost per message is independent of channel size. §4 |
-| Per-recipient inbox, delete on delivery | **Durable channel log with a monotonic `seq`**, plus per-user read cursors | Durable history is the product. "Deliver what you missed" and "page through history" become the same query. §5 |
-| Presence Service | **Deleted** | Presence, typing indicators and read receipts are all out of scope in `Old.md` §4.3. The registry that remains is internal routing only. |
-| Notification Service for offline users | **Worker fans out per device**, suppressed by read cursor after an 8s deferral | Push was the single biggest functional gap in v1. It is designed into the fan-out rather than bolted on. §9 |
-| sent / delivered / read, tracked per recipient | **`sent` only** | Receipts are out of scope, and they were the largest write amplification in the reference design. §5 |
-| Blob Storage to CDN, presigned both ways | **Same for upload. Download goes through an authorized redirect** to an hour-aligned signed URL | Private media must never sit on a guessable URL, and a URL that changes per fetch guarantees a cache miss at every layer. §10 |
+| Message Queue - Message Storage Service - Message Database, as three components | **Postgres holds the channel log and the outbox; Kafka sits downstream of the outbox** | The outbox is the transactional boundary, because a queue cannot be atomic with the domain write. Kafka then adds durable replay and independent consumers. Not on the send path. [Effects engine](04-effects-engine.md) |
+| Per-recipient one-to-one messaging as the primary feature | **Group chat is primary; DMs are a fourth channel scope** | Reversed from a v1 non-goal. Restricted to members who share a club, and obliged to ship with blocking and a report destination. [Channel log](02-channel-log.md) |
+| Chat Servers own routing *and* business logic | **Gateway** holds sockets only; **API** holds all logic; **Worker** holds all effects | A gateway can be killed at any instant with zero data loss. That property is load-bearing. [Overview](00-overview.md) |
+| User Connection Cache gates delivery *and* notification | **Redis registry routes publishes only** | Liveness is not proof of receipt. A dead phone keeps a registry entry alive and would silently swallow every push in that window. Suppression is the read cursor. [Message flows](03-message-flows.md) |
+| Per-user pub/sub channels, one publish per recipient | **Per-channel topics**, one publish per message | Authorizes once at subscribe instead of once per message per recipient. Cost per message is independent of channel size. [Connection layer](01-connection-layer.md) |
+| Per-recipient inbox, delete on delivery | **Durable channel log with a monotonic `seq`**, plus per-user read cursors | Durable history is the product. "Deliver what you missed" and "page through history" become the same query. [Channel log](02-channel-log.md) |
+| Presence Service | **Deleted** | Presence, typing indicators and read receipts are all out of scope in [Chat](../PRD/05-chat.md). The registry that remains is internal routing only. |
+| Notification Service for offline users | **Worker fans out per device**, suppressed by read cursor after an 8s deferral | Push was the single biggest functional gap in v1. It is designed into the fan-out rather than bolted on. [Notifications and push](06-notifications-and-push.md) |
+| sent / delivered / read, tracked per recipient | **`sent` only** | Receipts are out of scope, and they were the largest write amplification in the reference design. [Channel log](02-channel-log.md) |
+| Blob Storage to CDN, presigned both ways | **Same for upload. Download goes through an authorized redirect** to an hour-aligned signed URL | Private media must never sit on a guessable URL, and a URL that changes per fetch guarantees a cache miss at every layer. [Media pipeline](07-media-pipeline.md) |
 
 ---
 
@@ -187,7 +188,8 @@ push to someone actively looking at the message.
 
 ## 5. Reconnect and foreground sync
 
-This is the fix for `Old.md` §10.25, the silent message loss that had no fix in v1.
+This is the fix for [Engineering pitfalls](14-engineering-pitfalls.md) 25, the silent message loss
+that had no fix in v1.
 
 ```mermaid
 sequenceDiagram
@@ -247,7 +249,8 @@ flowchart TB
     style OURS fill:#152620,stroke:#3ddc97,stroke-width:2px,color:#6ee7b7
 ```
 
-`Old.md` debt item 2 records the cost of the left-hand shape in the v1 build: with 200
+[Roadmap](../PRD/17-roadmap-and-open-questions.md) debt item 2 records the cost of the left-hand
+shape in the v1 build: with 200
 concurrent users, one message insert cost roughly 200 authorizations, 200 billed messages, and
 200 full refetches.
 
@@ -255,7 +258,8 @@ concurrent users, one message insert cost roughly 200 authorizations, 200 billed
 
 ## 7. Failure behaviour
 
-What each component's death does. The full table with recovery detail is `ARCHITECTURE.md` §13.
+What each component's death does. The full table with recovery detail is
+[Failure modes](11-failure-modes.md).
 
 ```mermaid
 flowchart LR

@@ -17,7 +17,7 @@
 | **Offline** | At minimum read-only cached chat; ideally a send outbox with optimistic messages. A club at a race venue with poor signal is the real failure case |
 | **Test coverage** | Today: date/formatting and calendar-feed logic only. **The permission matrix is verified by hand.** The remaster should have automated permission tests |
 | **Muting and notification preferences** | Everything fans out to everyone eligible, with no member control |
-| ~~**Block or mute between members**~~ | **No longer deferrable.** Promoted out of this list on 2026-07-28: with direct messages in scope, blocking, conversation mute, and a report destination ship in the same release as DMs. A private one-to-one channel with no admin party to it, no block, and nowhere for a report to go, is a materially different risk class in a product that will include minors. See [4.12](#412-direct-messages) |
+| ~~**Block or mute between members**~~ | **No longer deferrable.** Promoted out of this list on 2026-07-28: with direct messages in scope, blocking, conversation mute, and a report destination ship in the same release as DMs. A private one-to-one channel with no admin party to it, no block, and nowhere for a report to go, is a materially different risk class in a product that will include minors. See [Direct messages](14-direct-messages.md) |
 | **Over-the-air updates** | Every fix currently needs a full store release |
 
 ### Architectural debt worth designing away

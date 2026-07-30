@@ -64,4 +64,4 @@ One cross-club inbox answering "what did I miss, and what needs me".
 11. **Pinning never notifies. Announcing always does.**
 
 **Not built:** push notifications, email/SMS, per-type or per-club preferences, muting,
-grouping/collapsing. See [section 11](#11-known-gaps-and-what-the-remaster-should-fix).
+grouping/collapsing. See [Roadmap and open questions](17-roadmap-and-open-questions.md).

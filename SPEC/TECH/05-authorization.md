@@ -14,7 +14,7 @@ What changes is *where* it is enforced.
 
 ### One policy module
 
-The predicate catalogue from `Old.md` [Effects engine](04-effects-engine.md) stops being row-level SQL policies and becomes pure
+The predicate catalogue in the requirements below stops being row-level SQL policies and becomes pure
 functions over a loaded access context:
 
 ```ts
@@ -60,15 +60,15 @@ already gated on that single predicate rather than on a per-scope branch.
 
 Properties that the old build could not have:
 
-1. **`isClubAdmin` exists exactly once.** The "admin must also mean owner" bug (`Old.md` [Media pipeline](07-media-pipeline.md),
+1. **`isClubAdmin` exists exactly once.** The "admin must also mean owner" bug ([Engineering pitfalls](14-engineering-pitfalls.md) 3,
    shipped **four** times, plus a fifth in a helper) becomes structurally impossible - there is
    one definition and one test for it.
-2. **No recursion trap.** `Old.md` [Media pipeline](07-media-pipeline.md) ("a read rule must never call a helper that re-queries
+2. **No recursion trap.** [Engineering pitfalls](14-engineering-pitfalls.md) 2 ("a read rule must never call a helper that re-queries
    the same table") was an artifact of policies evaluating inside queries. Functions over a
    pre-loaded context cannot recurse into a policy.
-3. **No create-and-read-back trap.** `Old.md` [Media pipeline](07-media-pipeline.md) - the repo's longest debugging session -
+3. **No create-and-read-back trap.** [Engineering pitfalls](14-engineering-pitfalls.md) 1 - the repo's longest debugging session -
    disappears entirely. The handler authorized the write; it may obviously return what it wrote.
-4. **Column-level authority is trivial.** `Old.md` [Media pipeline](07-media-pipeline.md) needed a separate before-write trigger
+4. **Column-level authority is trivial.** [Engineering pitfalls](14-engineering-pitfalls.md) 4 needed a separate before-write trigger
    to stop a member pinning their own message and retro-flipping it into an announcement. Here
    it is an `if` in the update handler.
 5. **The permission matrix becomes a test file.** [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) records that the matrix is
@@ -134,7 +134,7 @@ a moderator.
 
 ### Rate limiting
 
-`Old.md` [Effects engine](04-effects-engine.md): token bucket, burst 30, refill 1/sec per sender, enforced before the insert.
+Requirement 12 below: token bucket, burst 30, refill 1/sec per sender, enforced before the insert.
 Preserved, moved to the gateway (Redis `INCR` + TTL), and **extended to the endpoints the old
 build left unthrottled**: reports, reactions, join requests, media presign requests.
 

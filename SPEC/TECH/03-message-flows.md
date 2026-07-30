@@ -35,7 +35,7 @@ Notes:
 - **The ack is sent the instant the transaction commits**, before any fan-out. Perceived send
   latency is one round trip plus one Postgres commit.
 - The published payload carries `{channel_id, seq}` plus the full envelope. Gateways forward the
-  envelope directly - recipients do not re-fetch. (`Old.md` [Media pipeline](07-media-pipeline.md) says *don't diff realtime
+  envelope directly - recipients do not re-fetch. ([Engineering pitfalls](14-engineering-pitfalls.md) 24 says *don't diff realtime
   payloads into local state* - that lesson was about reconciling insert/update/delete events
   against a paginated list. With gapless `seq` the client can append safely: if the arriving
   `seq` is exactly `local_max + 1`, append; if it is greater, a gap exists → call sync. That is
@@ -72,7 +72,7 @@ correctness requirement, not a preference:
   message. Nothing else is proof.
 - A live socket is *not* proof of anything. A phone that dies, loses signal, or is force-quit
   leaves a registry entry alive until its TTL expires. Gating push on that entry means every
-  message in that window is silently swallowed - in the subsystem `Old.md` calls the single
+  message in that window is silently swallowed - in the subsystem [Roadmap](../PRD/17-roadmap-and-open-questions.md) calls the single
   biggest functional gap. **Liveness may only ever accelerate delivery; it may never suppress
   it.**
 - It degrades correctly under the failure modes [Failure modes](11-failure-modes.md) already requires. Wipe Redis and push still

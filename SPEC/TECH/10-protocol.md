@@ -63,4 +63,4 @@ POST   /devices                              ← register push token
 ```
 
 Every mutation returns the created/updated resource - legal and trivial now, and the direct
-counter-example to `Old.md` [Media pipeline](07-media-pipeline.md).
+counter-example to [Engineering pitfalls](14-engineering-pitfalls.md) 1.
