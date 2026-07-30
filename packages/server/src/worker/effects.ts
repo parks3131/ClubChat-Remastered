@@ -595,6 +595,240 @@ const onClubDeleted: EffectHandler = async (event, deps) => {
   });
 };
 
+/**
+ * A generic "content was created" effect.
+ *
+ * Races, events, meetings, news posts and polls all resolve to the same three steps: work out
+ * the audience, write the rows, schedule the push. Sharing one function keeps the audience
+ * rules in one place rather than repeated five times with five chances to omit the
+ * exclude-the-actor rule.
+ *
+ * Routines are deliberately absent from every call site: creating a workout notifies nobody
+ * and posts nothing.
+ */
+function makeCreationHandler(config: {
+  notificationType:
+    | 'race_created'
+    | 'event_created'
+    | 'meeting_created'
+    | 'news_post_created'
+    | 'poll_created';
+  buildParams: (
+    event: OutboxEvent,
+    ctx: { clubName: string; actorName: string },
+  ) => Record<string, unknown>;
+  /** Where the chat card goes, if this creation posts one. */
+  cardChannel?: (event: OutboxEvent, db: Db) => Promise<string | null>;
+  cardBody?: (event: OutboxEvent, ctx: { actorName: string }) => string;
+  /** Overrides the default club-wide audience, for scoped things. */
+  audience?: (event: OutboxEvent, db: Db) => Promise<string[]>;
+}): EffectHandler {
+  return async (event, deps) => {
+    const clubId = String(event.payload['clubId']);
+    const actorId = (event.payload['actorId'] as string | null) ?? null;
+
+    const club = await clubContext(deps.db, clubId);
+    if (!club) return;
+
+    const actorName = actorId ? await displayName(deps.db, actorId) : 'Someone';
+    const params = config.buildParams(event, { clubName: club.name, actorName });
+
+    const recipients = config.audience
+      ? // Scoped audiences still exclude the actor, which is why the result goes through
+        // resolveAudience rather than being used directly.
+        await resolveAudience(deps.db, {
+          type: config.notificationType,
+          actorId,
+          clubId,
+          explicitRecipients: await config.audience(event, deps.db),
+        })
+      : await resolveAudience(deps.db, {
+          type: config.notificationType,
+          actorId,
+          clubId,
+        });
+
+    if (recipients.length > 0) {
+      await writeNotifications(deps.db, {
+        outboxEventId: event.id,
+        type: config.notificationType,
+        params: params as never,
+        recipients,
+        actorId,
+        clubId,
+      });
+
+      schedule(deps, async () => {
+        const outcome = await dispatchPush(deps.db, deps.push, {
+          outboxEventId: event.id,
+          type: config.notificationType,
+          params,
+          recipients,
+        });
+        deps.log('info', `${config.notificationType} push dispatched`, {
+          eventId: event.id,
+          ...outcome,
+        });
+      });
+    }
+
+    // The card, if this creation posts one. Produced here rather than at the call site so it
+    // appears whether the object was created from its own screen or from chat's "+" menu.
+    if (config.cardChannel && config.cardBody) {
+      const channelId = await config.cardChannel(event, deps.db);
+      if (channelId) {
+        await postSystemMessage(deps, {
+          channelId,
+          body: config.cardBody(event, { actorName }),
+          eventId: event.id,
+          scope: 'card',
+        });
+      }
+    }
+  };
+}
+
+/** The channel a poll's card belongs in: its own scope's channel. */
+async function pollCardChannel(event: OutboxEvent, db: Db): Promise<string | null> {
+  const scope = String(event.payload['scope']);
+  const scopeId = String(event.payload['scopeId']);
+  const rows = await db.execute<{ id: string }>(sql`
+    SELECT id FROM channels WHERE scope = ${scope} AND scope_id = ${scopeId}::uuid
+  `);
+  return rows.rows[0]?.id ?? null;
+}
+
+/** Roster members of a race. NEVER unioned with club admins. */
+async function raceRosterAudience(event: OutboxEvent, db: Db): Promise<string[]> {
+  const raceId = String(event.payload['raceId'] ?? event.payload['scopeId']);
+  const rows = await db.execute<{ user_id: string }>(
+    sql`SELECT user_id FROM race_memberships WHERE race_id = ${raceId}::uuid`,
+  );
+  return rows.rows.map((r) => r.user_id);
+}
+
+/** Members of an Eboard space. */
+async function eboardAudience(event: OutboxEvent, db: Db): Promise<string[]> {
+  const eboardId = String(event.payload['eboardId'] ?? event.payload['scopeId']);
+  const rows = await db.execute<{ user_id: string }>(
+    sql`SELECT user_id FROM eboard_memberships WHERE eboard_id = ${eboardId}::uuid`,
+  );
+  return rows.rows.map((r) => r.user_id);
+}
+
+/** A poll's audience, by scope. The race branch is roster members only. */
+async function pollScopeAudience(event: OutboxEvent, db: Db): Promise<string[]> {
+  const scope = String(event.payload['scope']);
+  if (scope === 'race') return raceRosterAudience(event, db);
+  if (scope === 'eboard') return eboardAudience(event, db);
+  const rows = await db.execute<{ user_id: string }>(
+    sql`SELECT user_id FROM club_memberships WHERE club_id = ${String(event.payload['clubId'])}`,
+  );
+  return rows.rows.map((r) => r.user_id);
+}
+
+/**
+ * A car group lost its Incharge.
+ *
+ * Notifies every club ADMIN - both admin and owner - that the group needs a new one. A plain
+ * member leaving their car raises no event at all, so reaching this handler already means the
+ * departing person was the Incharge.
+ */
+const onInchargeLeft: EffectHandler = async (event, deps) => {
+  const clubId = String(event.payload['clubId']);
+  const club = await clubContext(deps.db, clubId);
+  if (!club) return;
+
+  const raceRows = await deps.db.execute<{ name: string }>(
+    sql`SELECT name FROM races WHERE id = ${String(event.payload['raceId'])}::uuid`,
+  );
+
+  const recipients = await resolveAudience(deps.db, {
+    type: 'car_group_incharge_left',
+    // No actor to exclude: the notification is about somebody's departure, and an admin who
+    // happens to be that person still needs to know the group needs covering.
+    actorId: null,
+    clubId,
+  });
+
+  await writeNotifications(deps.db, {
+    outboxEventId: event.id,
+    type: 'car_group_incharge_left',
+    params: {
+      clubId,
+      clubName: club.name,
+      raceId: String(event.payload['raceId']),
+      raceName: raceRows.rows[0]?.name ?? 'the race',
+      groupNumber: Number(event.payload['groupNumber'] ?? 0),
+      departedName: await displayName(deps.db, String(event.payload['userId'])),
+    },
+    recipients,
+    actorId: null,
+    clubId,
+  });
+};
+
+/** Someone gained race access. Force-unsubscribe on departure is the mirror of this. */
+const onRaceMembershipDecided: EffectHandler = async (event, deps) => {
+  const clubId = String(event.payload['clubId']);
+  const approved = event.payload['approved'] === true;
+  const userId = String(event.payload['userId']);
+  const actorId = event.payload['actorId'] as string | null;
+
+  const club = await clubContext(deps.db, clubId);
+  if (!club) return;
+
+  const raceRows = await deps.db.execute<{ name: string }>(
+    sql`SELECT name FROM races WHERE id = ${String(event.payload['raceId'])}::uuid`,
+  );
+  const raceName = raceRows.rows[0]?.name ?? 'the race';
+
+  await writeNotifications(deps.db, {
+    outboxEventId: event.id,
+    type: approved ? 'request_approved' : 'request_denied',
+    params: {
+      clubId,
+      clubName: club.name,
+      actorName: actorId ? await displayName(deps.db, actorId) : 'An admin',
+      scope: 'race',
+      scopeName: raceName,
+      ...(approved ? { scopeId: String(event.payload['raceId']) } : {}),
+    } as never,
+    recipients: [userId],
+    actorId,
+    clubId,
+  });
+};
+
+/**
+ * Someone left or was removed from a race.
+ *
+ * Drops their subscription to that race's channel specifically. Their club membership is
+ * untouched, so a blanket club-wide revocation would wrongly cut them out of club chat.
+ */
+const onRaceMemberDeparted: EffectHandler = async (event, deps) => {
+  const raceId = String(event.payload['raceId']);
+  const userId = String(event.payload['userId']);
+
+  const rows = await deps.db.execute<{ id: string }>(
+    sql`SELECT id FROM channels WHERE scope = 'race' AND scope_id = ${raceId}::uuid`,
+  );
+  const channelIds = rows.rows.map((r) => r.id);
+  if (channelIds.length === 0) return;
+
+  await publishRevocation(deps.redis, { userId, channelIds });
+  deps.log('info', 'revoked race subscriptions', { userId, raceId });
+};
+
+/** A race was deleted. Its channel is gone, so every roster member's socket must drop it. */
+const onRaceDeleted: EffectHandler = async (event, deps) => {
+  const channelIds = (event.payload['channelIds'] as string[] | undefined) ?? [];
+  const memberIds = (event.payload['memberIds'] as string[] | undefined) ?? [];
+  for (const userId of memberIds) {
+    if (channelIds.length > 0) await publishRevocation(deps.redis, { userId, channelIds });
+  }
+};
+
 export const handlers: Record<string, EffectHandler> = {
   'club.created': onClubCreated,
   'message.created': onMessageCreated,
@@ -611,6 +845,133 @@ export const handlers: Record<string, EffectHandler> = {
   'club.member_removed': makeDepartureHandler('removed'),
   'club.member_left': makeDepartureHandler('left'),
   'club.deleted': onClubDeleted,
+
+  // Phase 2. Each is one call into machinery that already existed.
+  'race.created': makeCreationHandler({
+    notificationType: 'race_created',
+    buildParams: (event, ctx) => ({
+      clubId: String(event.payload['clubId']),
+      clubName: ctx.clubName,
+      actorName: ctx.actorName,
+      raceId: String(event.payload['raceId']),
+      raceName: String(event.payload['raceName']),
+    }),
+    cardChannel: async (event) => String(event.payload['mainChannelId'] ?? '') || null,
+    cardBody: (event, ctx) => `${ctx.actorName} created ${String(event.payload['raceName'])}`,
+  }),
+  'race.join_requested': async (event, deps) => {
+    const clubId = String(event.payload['clubId']);
+    const club = await clubContext(deps.db, clubId);
+    if (!club) return;
+    const raceRows = await deps.db.execute<{ name: string }>(
+      sql`SELECT name FROM races WHERE id = ${String(event.payload['raceId'])}::uuid`,
+    );
+    // The club's admin tier decides race requests, so they are the audience - not the
+    // race roster, who have no say in it.
+    const recipients = await resolveAudience(deps.db, {
+      type: 'race_join_request',
+      actorId: String(event.payload['userId']),
+      clubId,
+    });
+    await writeNotifications(deps.db, {
+      outboxEventId: event.id,
+      type: 'race_join_request',
+      params: {
+        clubId,
+        clubName: club.name,
+        raceId: String(event.payload['raceId']),
+        raceName: raceRows.rows[0]?.name ?? 'a race',
+        requesterName: await displayName(deps.db, String(event.payload['userId'])),
+        requesterId: String(event.payload['userId']),
+      },
+      recipients,
+      actorId: String(event.payload['userId']),
+      clubId,
+    });
+  },
+  'race.membership_decided': onRaceMembershipDecided,
+  'race.member_departed': onRaceMemberDeparted,
+  'race.deleted': onRaceDeleted,
+  'race.incharge_left': onInchargeLeft,
+
+  'event.created': makeCreationHandler({
+    notificationType: 'event_created',
+    buildParams: (event, ctx) => ({
+      clubId: String(event.payload['clubId']),
+      clubName: ctx.clubName,
+      actorName: ctx.actorName,
+      eventId: String(event.payload['eventId']),
+      title: String(event.payload['title']),
+    }),
+    cardChannel: async (_event, db) => {
+      const rows = await db.execute<{ id: string }>(sql`
+        SELECT id FROM channels
+         WHERE club_id = ${String(_event.payload['clubId'])} AND scope = 'club'
+      `);
+      return rows.rows[0]?.id ?? null;
+    },
+    cardBody: (event, ctx) => `${ctx.actorName} added an event: ${String(event.payload['title'])}`,
+  }),
+  'event.deleted': async (event, deps) => {
+    // The card goes with the object, rather than leaving a dead link in the conversation.
+    deps.log('info', 'event.deleted - card removal pending Phase 3 card linkage', {
+      eventId: event.id,
+    });
+  },
+
+  'meeting.created': makeCreationHandler({
+    notificationType: 'meeting_created',
+    audience: eboardAudience,
+    buildParams: (event, ctx) => ({
+      clubId: String(event.payload['clubId']),
+      clubName: ctx.clubName,
+      actorName: ctx.actorName,
+      eboardId: String(event.payload['eboardId']),
+      meetingId: String(event.payload['meetingId']),
+      title: String(event.payload['title']),
+    }),
+    cardChannel: async (event, db) => {
+      const rows = await db.execute<{ id: string }>(sql`
+        SELECT id FROM channels
+         WHERE scope = 'eboard' AND scope_id = ${String(event.payload['eboardId'])}::uuid
+      `);
+      return rows.rows[0]?.id ?? null;
+    },
+    cardBody: (event, ctx) => `${ctx.actorName} scheduled ${String(event.payload['title'])}`,
+  }),
+  'meeting.deleted': async (event, deps) => {
+    deps.log('info', 'meeting.deleted', { eventId: event.id });
+  },
+
+  'news.created': makeCreationHandler({
+    notificationType: 'news_post_created',
+    buildParams: (event, ctx) => ({
+      clubId: String(event.payload['clubId']),
+      clubName: ctx.clubName,
+      actorName: ctx.actorName,
+      postId: String(event.payload['postId']),
+    }),
+    // News deliberately posts NO chat card: discussion belongs in chat, but the post itself
+    // lives on the club's front page.
+  }),
+
+  'poll.created': makeCreationHandler({
+    notificationType: 'poll_created',
+    audience: pollScopeAudience,
+    buildParams: (event, ctx) => ({
+      clubId: String(event.payload['clubId']),
+      clubName: ctx.clubName,
+      actorName: ctx.actorName,
+      pollId: String(event.payload['pollId']),
+      question: String(event.payload['question']),
+    }),
+    cardChannel: pollCardChannel,
+    cardBody: (event, ctx) =>
+      `${ctx.actorName} created a poll: ${String(event.payload['question'])}`,
+  }),
+  'poll.deleted': async (event, deps) => {
+    deps.log('info', 'poll.deleted', { eventId: event.id });
+  },
 };
 
 export async function dispatch(event: OutboxEvent, deps: EffectDeps): Promise<void> {

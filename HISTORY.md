@@ -7,6 +7,83 @@ Newest first.
 
 ---
 
+## 2026-07-29 - Phase 2 (part 2): the command handlers
+
+Races, polls, meetings, calendar, routines and news now have working commands on top of the
+schema and authorization that part 1 delivered. 383 tests green, 46 constraint assertions, all
+three server processes boot with the scheduler running alongside the drain.
+
+### What the tests pin that the matrix cannot
+
+The permission matrix covers authorization as pure functions. These needed a real database:
+
+**The Incharge asymmetry**, which is the subtlest rule in the phase. If a group's Incharge
+leaves, the Incharge is cleared and every club admin is notified that the group needs a new
+one - while the rest of the group is untouched and the group is not dissolved. **A plain member
+leaving their car is a non-event and notifies nobody.** Mutation-tested in both directions:
+making every departure notify fails exactly the silence test, and making none notify fails
+exactly the alert test. One test each, no collateral, so the asymmetry is pinned rather than
+half-pinned.
+
+**Vote moving.** On a single-choice poll, tapping a different option moves the vote rather than
+adding a second - verified as one vote total on the new option, not two. On a multi-select poll
+the same gesture adds. The database guarantees the moving part via the composite-FK trick from
+part 1, so the handler deletes explicitly rather than relying on an upsert that would race.
+
+**Closed at read time.** A poll created already past its deadline reads as closed and refuses a
+vote, with nobody having closed it. And the scheduled job **does not close polls** - there is a
+test asserting a poll with a live deadline is still open after a tick, because a job that
+flipped a boolean would become a second source of truth for something a comparison answers.
+
+**The closing-soon reminder includes the creator.** That is the single exception to "creation
+notifications exclude the actor", and `resolveAudience` knows it from the notification type
+rather than from a flag passed at the call site, so the exception lives in one place. Fires once
+per poll ever - the second tick sends nothing.
+
+**Private polls leak counts but not identity.** A non-creator sees the count, sees their own
+vote, and gets `null` for voters - which is deliberately distinguishable from an empty list.
+
+**The routine silence.** Seven workouts authored in one sitting produce zero notifications and
+zero chat cards. The mechanism is the absence of an outbox write, not a flag.
+
+**The completed cascade.** Leaving a club now removes race roster rows and car assignments for
+**all** races in it, not just upcoming ones, and clears any Incharge the departing member held.
+Part 1 left that as a marked comment; it is now four statements in the same transaction.
+
+### A judgement call worth recording
+
+When someone leaves the whole club while holding an Incharge, the Incharge is cleared but **no
+"group needs a new Incharge" notification fires**. Leaving a club is a bigger event than
+vacating a car seat, and firing one notification per affected group on top of "X left the club"
+would bury the thing admins actually need to see. The groups show as having no Incharge, which
+the car-groups screen states plainly. Noted here because it is a deliberate difference from the
+single-group departure path, not an inconsistency.
+
+### Bugs found while building
+
+1. **`listPolls` passed `clubId: ''` to the access predicate**, so club-scoped polls would
+   never have listed - the club branch checks membership against that id. Caught by reading the
+   call rather than by a test, which would not have existed yet. Also restructured: the
+   predicate is now checked once before the query rather than per row, since access to a poll
+   depends only on its scope and every poll in one scope is visible to the same people.
+
+2. **Six test failures that were fixture leaks, not product bugs.** Adding a club member
+   legitimately notifies them, and adding a race member legitimately notifies them - and the
+   fixtures drained those effects without clearing them, so every test inherited extra rows and
+   the "notifies nobody" assertions looked broken. Fixed with one `settleFixture` helper rather
+   than by loosening the assertions, because an unfiltered "no notifications at all" check is
+   the stronger form: a filtered query cannot catch a notification sent to the wrong person.
+
+### Still open
+
+Routes for the Phase 2 commands are not wired into the API yet - the handlers and their tests
+exist, and exposing them is mechanical. The Expo client has no screens for any of this. Card
+removal on delete (`event.deleted`, `poll.deleted`, `meeting.deleted`) logs rather than removing
+the chat card, which needs the `linked_*_id` columns on messages that the data model specifies
+and Phase 0 did not create.
+
+---
+
 ## 2026-07-29 - Phase 2 (part 1): the domain schema and the permission-matrix gate
 
 **The Phase 2 gate is met.** `TECH/16` gates this phase on the permission-matrix suite

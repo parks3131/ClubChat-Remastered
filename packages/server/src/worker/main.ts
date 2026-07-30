@@ -7,6 +7,7 @@ import { loadConfig } from '../config.ts';
 import { createDb, createPool } from '../db/client.ts';
 import { createRedis } from '../bus/redis.ts';
 import { startDrainLoop } from './drain.ts';
+import { startScheduler } from './scheduled.ts';
 import type { EffectDeps } from './effects.ts';
 import { ExpoPushSender } from '../push/sender.ts';
 
@@ -38,5 +39,12 @@ const shutdown = async (signal: string) => {
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
 
-logger.info('worker started, draining outbox');
-await startDrainLoop(db, deps, { signal: controller.signal });
+logger.info('worker started, draining outbox and running the scheduler');
+
+// Two loops, deliberately independent. The drain reacts to writes; the scheduler is
+// timer-driven because poll closing-soon is the one effect with no data change to hang on. A
+// slow drain must not delay a deadline reminder, and vice versa.
+await Promise.all([
+  startDrainLoop(db, deps, { signal: controller.signal }),
+  startScheduler(db, deps, { signal: controller.signal }),
+]);

@@ -503,7 +503,38 @@ async function cascadeOut(
         );
     }
 
-    // Phase 2: race_memberships and car_group_members for every race in this club go here.
+    // Every race in the club, not just upcoming ones. Car groups first, because the
+    // Incharge check reads the group before the membership row is gone.
+    //
+    // The Incharge consequence is deliberately NOT raised here: leaving the club is a
+    // bigger event than vacating a car seat, and firing a "group needs a new Incharge"
+    // notification per affected group on top of "X left the club" would bury the thing
+    // admins actually need to see. The groups are left without an Incharge, which the
+    // car-groups screen shows plainly.
+    await tx.execute(sql`
+      DELETE FROM car_group_members
+       WHERE user_id = ${input.userId}
+         AND race_id IN (SELECT id FROM races WHERE club_id = ${input.clubId})
+    `);
+
+    await tx.execute(sql`
+      UPDATE car_groups SET incharge_user_id = NULL
+       WHERE incharge_user_id = ${input.userId}
+         AND race_id IN (SELECT id FROM races WHERE club_id = ${input.clubId})
+    `);
+
+    await tx.execute(sql`
+      DELETE FROM race_memberships
+       WHERE user_id = ${input.userId}
+         AND race_id IN (SELECT id FROM races WHERE club_id = ${input.clubId})
+    `);
+
+    await tx.execute(sql`
+      DELETE FROM race_join_requests
+       WHERE user_id = ${input.userId}
+         AND status = 'pending'
+         AND race_id IN (SELECT id FROM races WHERE club_id = ${input.clubId})
+    `);
 
     await tx
       .delete(clubMemberships)
