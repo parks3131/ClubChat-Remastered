@@ -64,7 +64,27 @@ would have nothing to call. Two further gaps found the same way, both outside Ph
 - **`eboard_join_requests` is not in the schema at all**, though [Data model](09-data-model.md)
   specifies it and [Eboard and Council](../PRD/10-eboard-and-council.md) depends on it. An admin
   who leaves the Eboard space must request or be re-added, and there is nowhere to record the
-  request. That is a domain gap rather than a delivery one - the only one found so far.
+  request. That is a domain gap rather than a delivery one - and it is **the only one**, see below.
+
+### Checked against v1, 2026-07-30
+
+The v1 repository was read directly rather than trusted through the PRD's distillation of it.
+v1 shipped **77 screens and 83 migrations**; every one of its 29 tables maps onto a remaster table,
+under a different name where the remaster chose a better one (`profiles` to `users`,
+`channel_reads` to `read_cursors`, `club_posts` to `news_posts`, `eboard_meetings` to `meetings`,
+`race_car_groups` to `car_groups`). `rate_limits` is the one deliberate non-mapping: it moved to
+Redis at the gateway.
+
+**Exactly one v1 table has no remaster counterpart** - `eboard_channel_join_requests`, the gap
+above, found independently before the comparison and confirmed by it.
+
+The remaster additionally carries eleven tables v1 never had: `dm_conversations`, `member_blocks`,
+`moderation_reads`, `media_objects`, `devices`, `push_deliveries`, `channel_mutes`, `outbox`, and
+the three better-auth tables.
+
+**So the data model is a faithful superset of the shipped product, plus one omission.** The gap
+between the two builds is not features or schema. It is the delivery layer - routes and screens -
+and the two phases that were never started.
 
 That happened because Phase 2's exit gate was *"the permission-matrix test suite covers every cell
 of the three matrices"* - a test suite, which a domain layer can satisfy on its own. Every other
