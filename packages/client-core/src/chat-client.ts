@@ -63,6 +63,14 @@ export class ChatClient {
   readonly outbox = new Map<string, PendingSend>();
   channels: ChannelState[] = [];
   userId: string | null = null;
+  /**
+   * This user's own display name, handed over at auth.
+   *
+   * Held so an acked message can be attributed immediately. Without it a sender's own bubbles
+   * render nameless - and, once the UI draws an avatar from the initial, as a "?" - until a
+   * sync replaces the locally built envelope with the server's.
+   */
+  displayName: string | null = null;
 
   private socket: SocketLike | null = null;
   private readonly waiters = new Map<string, AckWaiter>();
@@ -188,6 +196,7 @@ export class ChatClient {
     switch (frame.t) {
       case 'auth.ok': {
         this.userId = frame.d['userId'] as string;
+        this.displayName = (frame.d['displayName'] as string | null | undefined) ?? null;
         this.channels = frame.d['channels'] as ChannelState[];
         this.authResolved?.();
         this.opts.onChange?.();
@@ -215,10 +224,11 @@ export class ChatClient {
             channelId,
             seq,
             senderId: this.userId ?? '',
-            // Null on purpose: this is the sender's OWN message, acked before any read, and a
-            // sender does not need telling who they are. The server's copy carries the name and
-            // overwrites this on the next sync.
-            senderName: null,
+            // The name learned at auth, not one carried on the ack. The ack repeats per message
+            // and the name cannot change mid-connection, so putting it there would be paying for
+            // the same string on every send. Null only before auth completes, which cannot happen
+            // here: an ack arrives on an authenticated socket.
+            senderName: this.displayName,
             // The outbox knows what was sent. Hardcoding 'text' here stored a photo as a
             // text message locally until the next sync overwrote it.
             type: this.outbox.get(clientMsgId)?.type ?? 'text',

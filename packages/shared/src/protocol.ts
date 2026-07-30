@@ -81,6 +81,13 @@ export type ClientFrame = z.infer<typeof ClientFrame>;
 export const AuthOk = z.object({
   sessionId: z.string(),
   userId: Uuid,
+  /**
+   * The connecting user's own display name.
+   *
+   * Sent once here rather than on every `msg.ack`, because it cannot change for the life of the
+   * connection. The client needs it to attribute its own messages the instant they are acked.
+   */
+  displayName: z.string().nullable(),
   serverTime: z.string().datetime(),
   channels: z.array(ChannelState),
 });

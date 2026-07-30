@@ -31,6 +31,8 @@ import {
   type UploadKind,
 } from "../../src/upload.ts";
 import { LinearGradient } from "expo-linear-gradient";
+import { MaterialIcons } from "@expo/vector-icons";
+import { Avatar } from "../../src/ui.tsx";
 import { QuickNav } from "../../src/nav.tsx";
 import { color, radius, space, type } from "../../src/theme.ts";
 
@@ -629,32 +631,49 @@ export default function ChatScreen() {
           renderItem={({ item }) => {
             if (item.kind === "pending") {
               return (
-                <BubbleContainer mine pending>
-                  {item.type === "photo" && (
-                    <PhotoBubble mediaId={null} localUri={item.localUri} mine />
-                  )}
-                  {item.type === "document" && (
-                    <DocumentBubble
-                      name={item.documentName ?? null}
-                      size={item.documentSize ?? null}
-                      mine
-                    />
-                  )}
-                  {item.body.length > 0 && (
-                    <Text style={styles.sentText}>{item.body}</Text>
-                  )}
-                  {item.failed ? (
-                    <Pressable
-                      onPress={() => void retry(item.clientMsgId)}
-                      accessibilityRole="button"
-                      accessibilityLabel="Retry sending this message"
-                    >
-                      <Text style={styles.failed}>Failed. Tap to retry</Text>
-                    </Pressable>
-                  ) : (
-                    <Text style={styles.pendingLabel}>Sending</Text>
-                  )}
-                </BubbleContainer>
+                <View style={[styles.messageRow, styles.messageRowMine]}>
+                  {/*
+                    A spacer the exact width of an avatar, not an avatar. The client knows its own
+                    user id but not its own name, so there is no initial to draw; leaving the slot
+                    empty instead would let the bubble jump 40px left the moment the ack arrives
+                    and the real avatar takes the space.
+                  */}
+                  <View style={styles.avatarSpacer} />
+                  <View style={styles.bubbleWrapMine}>
+                    <BubbleContainer mine pending>
+                      {item.type === "photo" && (
+                        <PhotoBubble
+                          mediaId={null}
+                          localUri={item.localUri}
+                          mine
+                        />
+                      )}
+                      {item.type === "document" && (
+                        <DocumentBubble
+                          name={item.documentName ?? null}
+                          size={item.documentSize ?? null}
+                          mine
+                        />
+                      )}
+                      {item.body.length > 0 && (
+                        <Text style={styles.sentText}>{item.body}</Text>
+                      )}
+                      {item.failed ? (
+                        <Pressable
+                          onPress={() => void retry(item.clientMsgId)}
+                          accessibilityRole="button"
+                          accessibilityLabel="Retry sending this message"
+                        >
+                          <Text style={styles.failed}>
+                            Failed. Tap to retry
+                          </Text>
+                        </Pressable>
+                      ) : (
+                        <Text style={styles.pendingLabel}>Sending</Text>
+                      )}
+                    </BubbleContainer>
+                  </View>
+                </View>
               );
             }
 
@@ -685,7 +704,27 @@ export default function ChatScreen() {
             // neighbours, which is most of the value of jumping.
             const isJumpTarget = jumpedTo === message.seq;
             return (
-              <View style={isJumpTarget ? styles.jumpTarget : undefined}>
+              <View
+                style={[
+                  styles.messageRow,
+                  mine && styles.messageRowMine,
+                  isJumpTarget && styles.jumpTarget,
+                ]}
+              >
+                {/*
+                  v1's arrangement: the avatar sits beside the bubble on BOTH sides, and the row
+                  right-aligns for your own messages rather than mirroring - so the avatar stays
+                  on the left of the bubble either way. Tappable, because a name in a busy channel
+                  is only useful if you can get from it to the person.
+                */}
+                <Pressable
+                  onPress={() => router.push(`/users/${message.senderId}`)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open ${message.senderName ?? "this member"}'s profile`}
+                  hitSlop={space.xs}
+                >
+                  <Avatar name={message.senderName ?? "?"} size={32} />
+                </Pressable>
                 <Pressable
                   // Long press, not a visible button: reporting is rare and a tap target on
                   // every bubble would be noise. Own messages are excluded because nobody can
@@ -708,15 +747,33 @@ export default function ChatScreen() {
                 >
                   <BubbleContainer mine={mine}>
                     {/*
-                      Attribution on received bubbles only. Your own messages are already
-                      identified by the side they sit on and the accent fill, so a name on
-                      them would be noise; a group chat without one leaves you guessing who
-                      is talking. Null when the sender's row is gone, or when the message was
-                      cached before this column existed - it renders unattributed rather
-                      than blank-labelled, and the next sync fills it in.
+                      v1's bubble header: the name on BOTH sides, dimmed on your own, with the
+                      pin marker beside it. Attribution on your own messages is not redundant
+                      here - the avatar sits on the left of every bubble, so a nameless own
+                      bubble would be the only unlabelled thing on screen.
+
+                      Null when the message was cached before this column existed. It renders
+                      unattributed rather than blank-labelled, and the next sync fills it in.
                     */}
-                    {!mine && message.senderName !== null && (
-                      <Text style={styles.senderName}>{message.senderName}</Text>
+                    {(message.senderName !== null || message.pinned) && (
+                      <View style={styles.bubbleHeader}>
+                        {message.senderName !== null && (
+                          <Text
+                            style={
+                              mine ? styles.senderNameMine : styles.senderName
+                            }
+                          >
+                            {message.senderName}
+                          </Text>
+                        )}
+                        {message.pinned && (
+                          <MaterialIcons
+                            name="push-pin"
+                            size={12}
+                            color={mine ? color.onAccent : color.accent}
+                          />
+                        )}
+                      </View>
                     )}
                     {message.type === "photo" && message.mediaId !== null && (
                       <PhotoBubble mediaId={message.mediaId} mine={mine} />
@@ -1036,10 +1093,39 @@ const styles = StyleSheet.create({
   // where its tail would be. The sent bubble carries no backgroundColor because its fill is the
   // gradient in BubbleContainer.
   bubble: { padding: space.sm + 4, gap: space.xs },
+  /**
+   * v1's message row: avatar and bubble side by side, bottom-aligned so the avatar sits level
+   * with the last line of a multi-line bubble rather than floating beside its first.
+   *
+   * `messageRowMine` only sets `justifyContent`. It deliberately does NOT reverse the direction,
+   * so your own avatar stays to the left of your own bubble and the pair moves right as a unit -
+   * v1's arrangement, and the reason the bubble wrappers below no longer need `alignSelf`.
+   */
+  messageRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: space.sm,
+    marginBottom: space.xs,
+  },
+  messageRowMine: { justifyContent: "flex-end" },
+  avatarSpacer: { width: 32, height: 32 },
   /** v1's treatment: 10px Inter in the accent colour, above the body. */
   senderName: { ...type.label, fontSize: 10, color: color.accent },
-  bubbleWrapMine: { alignSelf: "flex-end", maxWidth: "82%" },
-  bubbleWrapTheirs: { alignSelf: "flex-start", maxWidth: "82%" },
+  /** The same label on your own bubble, over the accent fill rather than under it. */
+  senderNameMine: {
+    ...type.label,
+    fontSize: 10,
+    color: color.onAccent,
+    opacity: 0.85,
+  },
+  bubbleHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.xs,
+    marginBottom: space.xs,
+  },
+  bubbleWrapMine: { maxWidth: "82%" },
+  bubbleWrapTheirs: { maxWidth: "82%" },
   sent: {
     borderTopLeftRadius: radius.lg,
     borderTopRightRadius: radius.lg,

@@ -37,6 +37,16 @@ export type DmThread = {
 
 export type AccessContext = {
   readonly userId: string;
+  /**
+   * This user's own display name.
+   *
+   * Carried so a client can attribute its OWN messages without asking. The alternative was
+   * putting the name on every send acknowledgement, which repeats a string that cannot change
+   * mid-connection once per message; handing it over once at auth costs one field.
+   *
+   * Null only if the row vanished between authentication and this read.
+   */
+  readonly displayName: string | null;
   /** Club id -> this user's role in it. Absent means not a member. */
   readonly clubRole: ReadonlyMap<string, ClubRole>;
   /** Eboard ids this user is a member of. */
@@ -158,6 +168,15 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
            NULL::boolean AS flag
       FROM users u
      WHERE u.id = ${userId} AND u.signin_blocked_at IS NOT NULL
+    UNION ALL
+    -- Unlike every branch above, this one is not a presence row: it always matches, and the
+    -- name rides in the detail column. Loaded here because the context is already reading this
+    -- row, so the alternative is a second round trip for one string that every caller which
+    -- renders a name would then have to make on its own.
+    SELECT 'display_name'::text AS kind, u.id::text AS id, u.full_name AS detail,
+           NULL::boolean AS flag
+      FROM users u
+     WHERE u.id = ${userId}
   `);
 
   const clubRole = new Map<string, ClubRole>();
@@ -167,6 +186,7 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
   const blockedEither = new Set<string>();
   let isPlatformModerator = false;
   let signinBlocked = false;
+  let displayName: string | null = null;
 
   for (const row of rows.rows) {
     if (row.kind === 'club' && row.detail !== null) {
@@ -187,11 +207,14 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
       isPlatformModerator = true;
     } else if (row.kind === 'signin_blocked') {
       signinBlocked = true;
+    } else if (row.kind === 'display_name') {
+      displayName = row.detail;
     }
   }
 
   return {
     userId,
+    displayName,
     clubRole,
     eboardMember,
     raceRoster,
@@ -217,6 +240,7 @@ export function accessContextOf(init: {
   blockedEither?: Iterable<string>;
   isPlatformModerator?: boolean;
   signinBlocked?: boolean;
+  displayName?: string | null;
 }): AccessContext {
   const dmThreads = new Map<string, DmThread>();
   for (const thread of init.dmThreads ?? []) {
@@ -229,6 +253,7 @@ export function accessContextOf(init: {
 
   return {
     userId: init.userId,
+    displayName: init.displayName ?? null,
     clubRole: new Map(init.clubRole ?? []),
     eboardMember: new Set(init.eboardMember ?? []),
     raceRoster: new Set(init.raceRoster ?? []),

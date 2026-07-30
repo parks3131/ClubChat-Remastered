@@ -52,12 +52,30 @@ CREATE TABLE IF NOT EXISTS messages (
  * abort the rest. The cache is disposable - worst case it is rebuilt by a sync - but a store
  * that throws on every write is not a degraded cache, it is a broken app.
  */
-const MIGRATIONS: ReadonlyArray<{ column: string; statement: string }> = [
-  { column: 'reactions', statement: `ALTER TABLE messages ADD COLUMN reactions TEXT NOT NULL DEFAULT '[]'` },
-  { column: 'media_id', statement: `ALTER TABLE messages ADD COLUMN media_id TEXT` },
-  { column: 'document_name', statement: `ALTER TABLE messages ADD COLUMN document_name TEXT` },
-  { column: 'document_size', statement: `ALTER TABLE messages ADD COLUMN document_size INTEGER` },
-  { column: 'sender_name', statement: `ALTER TABLE messages ADD COLUMN sender_name TEXT` },
+const MIGRATIONS: ReadonlyArray<{ column: string; statements: readonly string[] }> = [
+  { column: 'reactions', statements: [`ALTER TABLE messages ADD COLUMN reactions TEXT NOT NULL DEFAULT '[]'`] },
+  { column: 'media_id', statements: [`ALTER TABLE messages ADD COLUMN media_id TEXT`] },
+  { column: 'document_name', statements: [`ALTER TABLE messages ADD COLUMN document_name TEXT`] },
+  { column: 'document_size', statements: [`ALTER TABLE messages ADD COLUMN document_size INTEGER`] },
+  {
+    column: 'sender_name',
+    statements: [
+      `ALTER TABLE messages ADD COLUMN sender_name TEXT`,
+      /*
+       * And discard what is cached, which is the only way those rows ever get a name.
+       *
+       * `syncChannel` pulls strictly ABOVE the local max seq, so a message already held is never
+       * fetched again - an added column stays null on every existing row for as long as the row
+       * survives. Emptying the table drops the local max to zero, which turns the next sync into
+       * a full backfill that writes the name in.
+       *
+       * Safe because this cache is disposable and the server holds the only durable copy. It
+       * costs one refetch, once, on the build that adds the column. The pending send outbox is
+       * NOT touched: it lives in memory, not here, so nothing unsent is at risk.
+       */
+      `DELETE FROM messages`,
+    ],
+  },
 ];
 
 async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
@@ -69,7 +87,9 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
   // there, which is why each step carries the column it adds.
   for (const migration of MIGRATIONS) {
     if (held.has(migration.column)) continue;
-    await db.execAsync(migration.statement);
+    for (const statement of migration.statements) {
+      await db.execAsync(statement);
+    }
   }
 }
 

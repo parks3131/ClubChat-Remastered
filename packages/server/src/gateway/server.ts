@@ -224,7 +224,8 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
     // happen here too rather than only at sign-in. Through the access context and the
     // policy module, because the version that read `session.user.signinBlockedAt` directly
     // was asking for a property better-auth does not return, and never fired.
-    if (!isSessionUsable(await loadAccessContext(deps.db, session.user.id))) {
+    const access = await loadAccessContext(deps.db, session.user.id);
+    if (!isSessionUsable(access)) {
       send(state.socket, { t: 'auth.err', d: { code: 'signin_blocked' } }, correlationId);
       state.socket.close();
       return;
@@ -251,6 +252,10 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
         d: {
           sessionId: state.sessionId,
           userId: state.userId,
+          // Handed over once per connection so the client can attribute its own messages the
+          // moment they are acked, rather than rendering them anonymously until a sync brings
+          // the server's copy back. See AccessContext.displayName.
+          displayName: access.displayName,
           serverTime: new Date().toISOString(),
           channels,
         },
