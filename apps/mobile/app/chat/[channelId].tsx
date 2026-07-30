@@ -82,29 +82,35 @@ const DENIED_TEXT: Record<
 function scopeLinks(
   scope: "club" | "race" | "eboard",
   meta: { scopeId: string; clubId: string | null },
-): Array<{ href: string; label: string }> {
+): Array<{ href: string; label: string; icon: MaterialIconName }> {
   if (scope === "club") {
     return [
-      { href: `/clubs/${meta.scopeId}/members`, label: "Members" },
-      { href: `/clubs/${meta.scopeId}/polls`, label: "Polls" },
-      { href: `/clubs/${meta.scopeId}/routines`, label: "Routines" },
-      { href: `/clubs/${meta.scopeId}/events`, label: "Events" },
+      { href: `/clubs/${meta.scopeId}/members`, label: "Members", icon: "group" },
+      { href: `/clubs/${meta.scopeId}/polls`, label: "Poll", icon: "how-to-vote" },
+      { href: `/clubs/${meta.scopeId}/routines`, label: "Routines", icon: "fitness-center" },
+      { href: `/clubs/${meta.scopeId}/events`, label: "Events", icon: "event" },
     ];
   }
   if (scope === "race") {
     return [
-      { href: `/races/${meta.scopeId}/roster`, label: "Members" },
-      { href: `/races/${meta.scopeId}/meet`, label: "Meet Info" },
-      { href: `/races/${meta.scopeId}/polls`, label: "Polls" },
-      { href: `/races/${meta.scopeId}/car-groups`, label: "Car Groups" },
+      { href: `/races/${meta.scopeId}/roster`, label: "Members", icon: "group" },
+      { href: `/races/${meta.scopeId}/meet`, label: "Meet Information", icon: "info" },
+      { href: `/races/${meta.scopeId}/polls`, label: "Polls", icon: "how-to-vote" },
+      {
+        href: `/races/${meta.scopeId}/car-groups`,
+        label: "Car Assignments & Groups",
+        icon: "directions-car",
+      },
     ];
   }
   return [
-    { href: `/eboard/${meta.scopeId}/members`, label: "Members" },
-    { href: `/eboard/${meta.scopeId}/meetings`, label: "Meetings" },
-    { href: `/eboard/${meta.scopeId}/polls`, label: "Polls" },
+    { href: `/eboard/${meta.scopeId}/members`, label: "Members", icon: "group" },
+    { href: `/eboard/${meta.scopeId}/meetings`, label: "Meetings", icon: "groups" },
+    { href: `/eboard/${meta.scopeId}/polls`, label: "Polls", icon: "how-to-vote" },
   ];
 }
+
+type MaterialIconName = React.ComponentProps<typeof MaterialIcons>["name"];
 
 /**
  * The create actions the "+" menu offers, by scope.
@@ -120,21 +126,24 @@ function scopeLinks(
  */
 function createActions(meta: ChannelMeta): Array<{
   label: string;
-  hint: string;
   href: string;
+  icon: MaterialIconName;
+  tint: string;
 }> {
   switch (meta.scope) {
     case "club":
       return [
         {
           label: "Poll",
-          hint: "Ask everyone here a question",
           href: `/clubs/${meta.scopeId}/polls?create=1`,
+          icon: "how-to-vote",
+          tint: color.inverseSurface,
         },
         {
           label: "Event",
-          hint: "Put something on the club calendar",
           href: `/clubs/${meta.scopeId}/events?create=1`,
+          icon: "event",
+          tint: color.error,
         },
       ];
     case "race":
@@ -142,21 +151,24 @@ function createActions(meta: ChannelMeta): Array<{
       return [
         {
           label: "Poll",
-          hint: "Ask this roster a question",
           href: `/races/${meta.scopeId}/polls?create=1`,
+          icon: "how-to-vote",
+          tint: color.inverseSurface,
         },
       ];
     case "eboard":
       return [
         {
           label: "Poll",
-          hint: "Ask the board a question",
           href: `/eboard/${meta.scopeId}/polls?create=1`,
+          icon: "how-to-vote",
+          tint: color.inverseSurface,
         },
         {
           label: "Meeting",
-          hint: "Schedule a board meeting",
           href: `/eboard/${meta.scopeId}/meetings?create=1`,
+          icon: "groups",
+          tint: color.error,
         },
       ];
     case "dm":
@@ -253,6 +265,8 @@ export default function ChatScreen() {
   const [asAnnouncement, setAsAnnouncement] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
+  /** The grid dropdown of this conversation's other screens. */
+  const [gridOpen, setGridOpen] = useState(false);
   /** True while bytes are in flight, so the "+" cannot start a second upload. */
   const [uploading, setUploading] = useState(false);
   const listRef = useRef<FlatList<Row>>(null);
@@ -658,42 +672,80 @@ export default function ChatScreen() {
             {meta === null ? "" : offline ? "Reconnecting" : "ClubChat"}
           </Text>
         </View>
-        <Pressable
-          onPress={() => setMenuOpen((open) => !open)}
-          accessibilityRole="button"
-          accessibilityLabel="Conversation options"
-          hitSlop={space.sm}
-          style={styles.headerAction}
-        >
-          <MaterialIcons
-            name="more-horiz"
-            size={20}
-            color={color.textPrimary}
-          />
-        </Pressable>
+        {/*
+          Highlights is a filled pill and everything else hides behind the grid, which is v1's
+          weighting: Highlights is the one destination somebody reaches for repeatedly, and the
+          rest are occasional. A DM has neither - it gets the options sheet instead, because mute
+          and block are the only things hanging off a conversation with no club around it.
+        */}
+        {meta !== null && meta.scope !== "dm" && (
+          <>
+            <Pressable
+              onPress={() => router.push(`/channels/${channelId}/highlights`)}
+              accessibilityRole="button"
+              accessibilityLabel="Highlights"
+              style={styles.highlightsPill}
+            >
+              <MaterialIcons name="bolt" size={16} color={color.onAccent} />
+              <Text style={styles.highlightsPillLabel}>Highlights</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setGridOpen((open) => !open)}
+              accessibilityRole="button"
+              accessibilityLabel="This conversation's screens"
+              hitSlop={space.sm}
+              style={styles.headerAction}
+            >
+              <MaterialIcons name="grid-view" size={18} color={color.textPrimary} />
+            </Pressable>
+          </>
+        )}
+        {meta?.scope === "dm" && (
+          <Pressable
+            onPress={() => setMenuOpen((open) => !open)}
+            accessibilityRole="button"
+            accessibilityLabel="Conversation options"
+            hitSlop={space.sm}
+            style={styles.headerAction}
+          >
+            <MaterialIcons name="more-horiz" size={20} color={color.textPrimary} />
+          </Pressable>
+        )}
       </BlurView>
 
       {/*
-        The header quick-nav.
-        
-        `PRD/15` hangs everything else off chat's header, because chat is the home screen of a race
-        and of an Eboard space - so Highlights, Members and the Gallery have no other entry point in
-        those scopes. Built from the channel's own scope rather than forked per scope: a DM gets
-        Gallery and the profile card and nothing club-shaped, which is the same list minus the
-        entries that have no meaning there.
+        The grid dropdown: where this conversation's other screens live.
+
+        Anchored under the header rather than shown as a permanent strip, because these are places
+        you go occasionally and a row of six chips above every conversation spends the screen's
+        most valuable space on navigation.
       */}
-      {meta !== null && (
-        <QuickNav
-          items={[
-            { href: `/channels/${channelId}/highlights`, label: "Highlights" },
-            { href: `/channels/${channelId}/gallery`, label: "Gallery" },
-            ...(meta.scope === "dm"
-              ? meta.peer !== null
-                ? [{ href: `/users/${meta.peer.userId}`, label: "Profile" }]
-                : []
-              : scopeLinks(meta.scope, meta)),
-          ]}
-        />
+      {gridOpen && meta !== null && meta.scope !== "dm" && (
+        <>
+          <Pressable
+            style={styles.gridScrim}
+            onPress={() => setGridOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+          />
+          <View style={styles.gridMenu}>
+            {scopeLinks(meta.scope, meta).map((item) => (
+              <Pressable
+                key={item.href}
+                style={styles.gridRow}
+                onPress={() => {
+                  setGridOpen(false);
+                  router.push(item.href);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={item.label}
+              >
+                <MaterialIcons name={item.icon} size={18} color={color.accent} />
+                <Text style={styles.gridRowLabel}>{item.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </>
       )}
 
       {/*
@@ -1335,33 +1387,35 @@ export default function ChatScreen() {
         scope, rather than three role rules restated in the client.
       */}
       {attachOpen && canPost && (
-        <View style={styles.sheet}>
+        <View style={styles.attachGrid}>
+          {/*
+            v1's grid of circular tiles, not a list of rows. Each is one tap and the icons carry
+            the recognition, which is what makes "+" feel like a menu of things you can send
+            rather than a settings list.
+
+            Photos, Camera and Document are for anybody who can post. The create actions below
+            them are gated on `canAnnounce` - one channel-admin question the server already
+            resolves per scope - and on what the scope actually HAS. The two are independent:
+            Event is club-only and Meeting is Eboard-only, and neither absence is a permission.
+          */}
           {(
             [
-              [
-                "Photos",
-                "Choose an image from your library",
-                pickPhoto,
-                "photo",
-              ],
-              ["Camera", "Take a photo now", takePhoto, "photo"],
-              [
-                "Document",
-                "Any file, shown with its name and size",
-                pickDocument,
-                "document",
-              ],
+              ["Photos", "photo-library", color.accent, pickPhoto, "photo"],
+              ["Camera", "photo-camera", color.secondary, takePhoto, "photo"],
+              ["Document", "insert-drive-file", color.tertiary, pickDocument, "document"],
             ] as const
-          ).map(([label, hint, pick, kind]) => (
+          ).map(([label, icon, tint, pick, kind]) => (
             <Pressable
               key={label}
-              style={styles.sheetRow}
+              style={styles.attachTile}
               onPress={() => void attach(pick, kind)}
               accessibilityRole="button"
               accessibilityLabel={label}
             >
-              <Text style={styles.sheetLabel}>{label}</Text>
-              <Text style={styles.sheetHint}>{hint}</Text>
+              <View style={[styles.attachTileIcon, { backgroundColor: tint }]}>
+                <MaterialIcons name={icon} size={24} color={color.onAccent} />
+              </View>
+              <Text style={styles.attachTileLabel}>{label}</Text>
             </Pressable>
           ))}
 
@@ -1370,7 +1424,7 @@ export default function ChatScreen() {
             createActions(meta).map((action) => (
               <Pressable
                 key={action.label}
-                style={styles.sheetRow}
+                style={styles.attachTile}
                 onPress={() => {
                   setAttachOpen(false);
                   router.push(action.href);
@@ -1378,19 +1432,12 @@ export default function ChatScreen() {
                 accessibilityRole="button"
                 accessibilityLabel={action.label}
               >
-                <Text style={styles.sheetLabel}>{action.label}</Text>
-                <Text style={styles.sheetHint}>{action.hint}</Text>
+                <View style={[styles.attachTileIcon, { backgroundColor: action.tint }]}>
+                  <MaterialIcons name={action.icon} size={24} color={color.onAccent} />
+                </View>
+                <Text style={styles.attachTileLabel}>{action.label}</Text>
               </Pressable>
             ))}
-
-          <Pressable
-            style={styles.sheetRow}
-            onPress={() => setAttachOpen(false)}
-            accessibilityRole="button"
-            accessibilityLabel="Close the attach menu"
-          >
-            <Text style={styles.sheetLabel}>Close</Text>
-          </Pressable>
         </View>
       )}
 
@@ -1718,6 +1765,58 @@ const styles = StyleSheet.create({
   headerTitle: { ...type.headerTitle, color: color.accent },
   /** 9px, v1's value. Doubles as the connection state, which chat is the one screen to care. */
   headerSubtitle: { ...type.label, fontSize: 9, color: color.textSecondary },
+  attachGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: space.md,
+    padding: space.md,
+    backgroundColor: color.chrome,
+    borderTopWidth: 1,
+    borderTopColor: color.divider,
+  },
+  attachTile: { alignItems: 'center', gap: space.xs, width: 72 },
+  attachTileIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachTileLabel: { ...type.bodySmall, color: color.textPrimary },
+
+  highlightsPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    backgroundColor: color.accent,
+    borderRadius: radius.pill,
+    paddingHorizontal: space.sm + 4,
+    paddingVertical: space.xs + 2,
+  },
+  highlightsPillLabel: { ...type.label, color: color.onAccent, textTransform: 'none' },
+
+  // Full-bleed, so a tap anywhere outside the card closes it.
+  gridScrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 60 },
+  gridMenu: {
+    position: 'absolute',
+    right: space.md,
+    zIndex: 61,
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    paddingVertical: space.sm,
+    minWidth: 220,
+  },
+  gridRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm + 2,
+  },
+  gridRowLabel: { ...type.body, color: color.textPrimary },
+
   headerAction: {
     width: 36,
     height: 36,
