@@ -44,12 +44,21 @@ export function DataScreen<T>({
   children,
   empty,
   isEmpty,
+  errorMessage,
 }: {
   load: Loaded<T>;
   children: (data: T) => ReactNode;
   /** Shown instead of `children` when the loaded data is empty. Always tells the truth. */
   empty?: ReactNode;
   isEmpty?: (data: T) => boolean;
+  /**
+   * The failure line, when this screen has a better one than the raw error.
+   *
+   * "Couldn't load notifications." beats a propagated HTTP message: it names what failed in the
+   * reader's terms. The raw error is still the fallback, because a screen that has not thought
+   * about its failure text should not silently show nothing.
+   */
+  errorMessage?: string;
 }) {
   if (load.state === 'loading' && load.data === null) {
     return (
@@ -62,7 +71,9 @@ export function DataScreen<T>({
   if (load.state === 'error' && load.data === null) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.emptyTitle}>{load.error?.message ?? 'Something went wrong'}</Text>
+        <Text style={styles.emptyTitle}>
+          {errorMessage ?? load.error?.message ?? 'Something went wrong'}
+        </Text>
         <Action label="Retry" onPress={load.reload} />
       </View>
     );
@@ -173,6 +184,7 @@ export function Field({
 export function Row({
   title,
   subtitle,
+  body,
   href,
   onPress,
   left,
@@ -182,6 +194,14 @@ export function Row({
 }: {
   title: string;
   subtitle?: string;
+  /**
+   * The row's whole middle, when a title-and-subtitle pair is the wrong shape for it.
+   *
+   * A notification is one sentence with emphasis inside it - "**48 unread** messages in **Track
+   * Club** chat" - not a heading over a detail line. Forcing that into `title` would either lose
+   * the mixed weight or put the timestamp somewhere it does not belong.
+   */
+  body?: ReactNode;
   href?: string;
   onPress?: () => void;
   /** Leading content, typically an `Avatar` or an icon well. */
@@ -196,13 +216,17 @@ export function Row({
   // being decoration a caller opts into.
   const navigable = href !== undefined || onPress !== undefined;
 
-  const body = (
+  const content = (
     <View style={[styles.row, highlighted && styles.rowHighlighted]}>
       {/* A plain View for the same reason `right` is - the row owns the gesture. */}
       {left !== undefined && <View>{left}</View>}
       <View style={styles.rowMain}>
-        <Text style={styles.rowTitle}>{title}</Text>
-        {subtitle !== undefined && <Text style={styles.rowMeta}>{subtitle}</Text>}
+        {body ?? (
+          <>
+            <Text style={styles.rowTitle}>{title}</Text>
+            {subtitle !== undefined && <Text style={styles.rowMeta}>{subtitle}</Text>}
+          </>
+        )}
       </View>
       {/*
         A plain View, never a nested Pressable. A pressable inside a pressable is a <button>
@@ -227,7 +251,7 @@ export function Row({
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel ?? title}
       >
-        <Pressable>{body}</Pressable>
+        <Pressable>{content}</Pressable>
       </Link>
     );
   }
@@ -238,7 +262,7 @@ export function Row({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? title}
     >
-      {body}
+      {content}
     </Pressable>
   );
 }

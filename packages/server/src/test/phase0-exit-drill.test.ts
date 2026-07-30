@@ -20,7 +20,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
-import { count, eq } from 'drizzle-orm';
+import { count, eq, sql } from 'drizzle-orm';
 import { ChatClient, findGaps, type SocketLike } from '@clubchat/client-core';
 import { createAuth, type Auth } from '../auth.ts';
 import type { Config } from '../config.ts';
@@ -30,6 +30,8 @@ import { RecordingPushSender } from '../push/sender.ts';
 import { FakeMediaStore } from '../media/store.ts';
 import { buildApp } from '../api/app.ts';
 import { createGateway, type Gateway } from '../gateway/server.ts';
+import { addMember } from '../domain/membership.ts';
+import { loadAccessContext } from '../policy/context.ts';
 import { createClub } from '../domain/create-club.ts';
 import { drainOnce } from '../worker/drain.ts';
 import { clubMemberships, messages } from '../db/schema.ts';
@@ -146,6 +148,68 @@ afterAll(async () => {
   await app?.close().catch(() => undefined);
   await pg?.stop().catch(() => undefined);
   await redisFixture?.stop().catch(() => undefined);
+});
+
+describe('the read frame the app actually sends', () => {
+  /*
+   * A reachability test, not a behaviour test.
+   *
+   * `openChat` already had a unit test proving it writes the "caught up on N messages" history
+   * row - and it passed for four phases while not one such row existed in any database, because
+   * the gateway's `msg.read` handler called the lower-level cursor advance underneath it and
+   * nothing else ever called `openChat` outside its own test. Failure mode 11: both ends
+   * complete, nothing joining them, and a green suite over the gap.
+   *
+   * So this drives the REAL client through the REAL gateway and then looks in the table. It is
+   * the only shape that can fail when the handler is rewired to something that merely moves the
+   * cursor, which is exactly the regression worth guarding.
+   */
+  it('writes the caught-up history row, through a live socket', async () => {
+    const alice = await signUp('ReadFrameAlice');
+    const bob = await signUp('ReadFrameBob');
+
+    const club = await createClub(db, {
+      name: 'Read Frame Club',
+      sport: 'running',
+      creatorId: alice.userId,
+    });
+    await addMember(db, await loadAccessContext(db, alice.userId), club.clubId, bob.userId);
+
+    // Alice says three things. Bob has not read any of them.
+    const aliceClient = makeClient(alice.token, 'web');
+    await aliceClient.connect();
+    for (const body of ['one', 'two', 'three']) {
+      await aliceClient.sendWithRetry(club.mainChannelId, body);
+    }
+
+    // Bob opens the chat, which is a `msg.read` frame and nothing else.
+    const bobClient = makeClient(bob.token, 'ios');
+    await bobClient.connect();
+    bobClient.markRead(club.mainChannelId, 3);
+
+    // The frame is fire-and-forget, so wait for the write rather than assuming it landed.
+    let rows = 0;
+    for (let attempt = 0; attempt < 40 && rows === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const found = await db.execute<{ n: number }>(sql`
+        SELECT COUNT(*)::int AS n FROM notifications
+         WHERE recipient_id = ${bob.userId} AND type = 'chat_caught_up'
+      `);
+      rows = Number(found.rows[0]?.n ?? 0);
+    }
+
+    expect(rows, 'opening a chat over the socket recorded no caught-up row').toBe(1);
+
+    // And it is history rather than an alert: already read, so it never touches the badge.
+    const unread = await db.execute<{ n: number }>(sql`
+      SELECT COUNT(*)::int AS n FROM notifications
+       WHERE recipient_id = ${bob.userId} AND type = 'chat_caught_up' AND read_at IS NULL
+    `);
+    expect(Number(unread.rows[0]?.n)).toBe(0);
+
+    await aliceClient.close();
+    await bobClient.close();
+  }, 30_000);
 });
 
 describe('Phase 0 exit drill', () => {

@@ -50,12 +50,22 @@ function TabIcon({ name, focused }: { name: keyof typeof TAB_ICON; focused: bool
   );
 }
 
-/** The notification count, as a badge on its own destination. */
-function BadgedLabel({ label, focused }: { label: string; focused: boolean }) {
+/**
+ * The notification count, as a badge on the tab's ICON.
+ *
+ * **A count of things, not of messages.** Each unread notification counts one, and each chat with
+ * any unread counts one however many messages are in it - so a chat with 48 unread adds 1 here and
+ * its row says 48. A badge of 200 because somebody sent 200 messages is noise; a badge of 1 because
+ * one conversation needs attention is information. The server computes it that way; this only
+ * draws it.
+ *
+ * Absent at zero rather than showing "0", and capped at 99+.
+ */
+function BadgedIcon({ focused }: { focused: boolean }) {
   const count = useBadge();
   return (
-    <View style={styles.badgedWrap}>
-      <TabLabel label={label} focused={focused} />
+    <View>
+      <TabIcon name="notifications" focused={focused} />
       {count > 0 && (
         <View style={styles.badge} accessibilityLabel={`${count} unread notifications`}>
           <Text style={styles.badgeLabel}>{count > 99 ? '99+' : count}</Text>
@@ -163,8 +173,8 @@ export default function TabsLayout() {
         name="notifications"
         options={{
           title: 'Notifications',
-          tabBarIcon: ({ focused }) => <TabIcon name="notifications" focused={focused} />,
-          tabBarLabel: ({ focused }) => <BadgedLabel label="Notifications" focused={focused} />,
+          tabBarIcon: ({ focused }) => <BadgedIcon focused={focused} />,
+          tabBarLabel: ({ focused }) => <TabLabel label="Notifications" focused={focused} />,
         }}
       />
       <Tabs.Screen
@@ -182,8 +192,11 @@ export default function TabsLayout() {
 const styles = StyleSheet.create({
   tabLabel: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
   tabLabelActive: { color: color.accent },
-  badgedWrap: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
+  // Top-right of the icon, overlapping it slightly, which is where a badge is read for.
   badge: {
+    position: 'absolute',
+    top: -4,
+    left: 14,
     minWidth: 18,
     height: 18,
     borderRadius: radius.pill,

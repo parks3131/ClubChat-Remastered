@@ -29,7 +29,8 @@ import type { Auth } from '../auth.ts';
 import { resolveSessionFromToken } from '../auth.ts';
 import { ChannelGoneError } from '../domain/append-message.ts';
 import { sendMessage } from '../domain/send-message.ts';
-import { advanceReadCursor, getChannelRef, listAccessibleChannels } from '../domain/reads.ts';
+import { getChannelRef, listAccessibleChannels } from '../domain/reads.ts';
+import { openChat } from '../domain/inbox.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { isChannelMember, isSessionUsable } from '../policy/predicates.ts';
 import {
@@ -463,12 +464,20 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
               await handleSend(state, frame.d, frame.id);
               break;
             case 'msg.read':
-              await advanceReadCursor(
-                deps.db,
-                state.userId!,
-                frame.d.channelId,
-                frame.d.upToSeq,
-              );
+              /*
+               * `openChat`, not a bare cursor advance.
+               *
+               * Both move the cursor, and only this one also writes the "Caught up on N messages"
+               * history row - which is the record that replaces a chat-unread row in the inbox
+               * once the chat has actually been opened. `PRD/12` rule 7 requires it, and until
+               * 2026-07-30 not a single one had ever been written: `openChat` was complete,
+               * tested, and reached from nowhere but its own tests, because this handler called
+               * the lower-level function underneath it. Failure mode 11.
+               *
+               * It is idempotent on `(outbox_event_id, recipient_id)`, so the repeated reads a
+               * chat screen sends while somebody scrolls cannot produce a row per frame.
+               */
+              await openChat(deps.db, state.userId!, frame.d.channelId);
               break;
             case 'ping':
               if (state.userId) void registry.heartbeat(state.userId);

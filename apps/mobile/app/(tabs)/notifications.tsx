@@ -34,8 +34,8 @@
  * Rules 2 and 3 are the ones that get "simplified" away by anybody who reads only rule 1.
  */
 
-import { useCallback } from 'react';
-import { FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Redirect, useFocusEffect } from 'expo-router';
 import type { NotificationTarget } from '@clubchat/shared';
@@ -44,7 +44,7 @@ import type { InboxRow } from '../../src/api-types.ts';
 import { useSession } from '../../src/chat-provider.tsx';
 import { timeAgo } from '../../src/dates.ts';
 import { color, radius, space, type } from '../../src/theme.ts';
-import { DataScreen, EmptyState, Row } from '../../src/ui.tsx';
+import { DataScreen, Row } from '../../src/ui.tsx';
 import { useLoad } from '../../src/use-load.ts';
 
 /**
@@ -128,6 +128,38 @@ export default function NotificationsScreen() {
   const load = useLoad(() => inboxApi.page(), [revision]);
 
   /*
+   * Older pages, held beside the first one.
+   *
+   * Kept in their own state rather than merged into `load`, so a live refresh of page one
+   * cannot collapse the list back to twenty rows underneath somebody who has scrolled. Chat-unread
+   * rows are never paginated - they all arrive with the first page, however many chats there are,
+   * and an older page never contains one.
+   */
+  const [older, setOlder] = useState<InboxRow[]>([]);
+  const [olderCursor, setOlderCursor] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [exhausted, setExhausted] = useState(false);
+
+  const cursor = load.data?.nextCursor ?? null;
+  const lastCursor = olderCursor ?? cursor;
+
+  const loadOlder = async () => {
+    if (loadingOlder || exhausted || lastCursor === null) return;
+    setLoadingOlder(true);
+    try {
+      const page = await inboxApi.page(lastCursor);
+      setOlder((current) => [...current, ...page.rows]);
+      setOlderCursor(page.nextCursor);
+      if (page.nextCursor === null) setExhausted(true);
+    } catch {
+      // Silent: the pages already loaded stay, and the next scroll retries. A failed page is
+      // not worth an error state over content the reader has not asked for yet.
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
+  /*
    * Mark the inbox read when LEAVING, not on arrival.
    *
    * `useFocusEffect`'s cleanup runs on blur, which is the whole point: the rows stay tinted for as
@@ -155,14 +187,13 @@ export default function NotificationsScreen() {
     <View style={styles.flex}>
       <DataScreen
         load={load}
-        isEmpty={(data) => data.rows.length === 0}
-        empty={
-          <EmptyState title="Nothing new" body="Mentions, announcements and requests land here." />
-        }
+        isEmpty={(data) => data.rows.length === 0 && older.length === 0}
+        errorMessage="Couldn't load notifications."
+        empty={<Text style={styles.empty}>You're all caught up.</Text>}
       >
         {(data) => (
           <FlatList<InboxRow>
-            data={data.rows}
+            data={[...data.rows, ...older]}
             keyExtractor={(row) => `${row.kind}:${row.id}`}
             contentContainerStyle={styles.list}
             refreshControl={
@@ -171,6 +202,19 @@ export default function NotificationsScreen() {
                 onRefresh={load.reload}
                 tintColor={color.accent}
               />
+            }
+            /*
+              Paging is silent: no page numbers, and deliberately NO end-of-history footer.
+              Nothing in this feed expires, so there is no "that's everything" to announce -
+              the list simply keeps going, and a footer claiming an end would be a lie about a
+              feed that reaches back to the day the account was created.
+            */
+            onEndReachedThreshold={0.5}
+            onEndReached={() => void loadOlder()}
+            ListFooterComponent={
+              loadingOlder ? (
+                <ActivityIndicator color={color.accent} style={styles.footerSpinner} />
+              ) : null
             }
             renderItem={({ item }) => <InboxRowView row={item} />}
           />
@@ -209,18 +253,30 @@ function InboxRowView({ row }: { row: InboxRow }) {
 
   if (row.kind === 'chat_unread') {
     /*
-     * Always unread. This row exists only while the count is above zero, and the count comes down
-     * by opening that chat. Reading it as read here would be the screen claiming 48 messages were
-     * read because somebody glanced at a list.
+     * Always drawn unread, and there is no read variant of this row at all. It exists only while
+     * the count is above zero, and the count comes down by opening that chat. When it is opened
+     * this row stops existing and a "Caught up on N messages" record takes its place in the same
+     * list - the two must never appear at once.
      */
     return (
       <Row
-        title={`${row.count} unread in ${row.channelName}`}
-        subtitle={timeAgo(row.createdAt)}
+        title=""
         highlighted
         left={<IconWell icon="chat-bubble" unread />}
         {...(href ? { href } : {})}
-        accessibilityLabel={`${row.count} unread messages in ${row.channelName}. Open the chat`}
+        accessibilityLabel={`${row.count} unread messages in ${row.channelName} chat. Open it`}
+        body={
+          <>
+            {/* The count and the chat's name carry the weight; the joining words do not. */}
+            <Text style={styles.body}>
+              <Text style={styles.bodyStrong}>{row.count} unread</Text>
+              {' messages in '}
+              <Text style={styles.bodyStrong}>{row.channelName}</Text>
+              {' chat'}
+            </Text>
+            <Text style={styles.time}>{timeAgo(row.createdAt)}</Text>
+          </>
+        }
         right={<View style={styles.dot} accessibilityElementsHidden importantForAccessibility="no" />}
       />
     );
@@ -230,26 +286,30 @@ function InboxRowView({ row }: { row: InboxRow }) {
 
   return (
     <Row
-      title={row.title}
-      subtitle={`${row.body}  ·  ${timeAgo(row.createdAt)}`}
+      title=""
       highlighted={unread}
       left={<IconWell icon={ICON_BY_TYPE[row.type] ?? 'notifications'} unread={unread} />}
       {...(href ? { href } : {})}
-      accessibilityLabel={`${unread ? 'Unread. ' : ''}${row.title}. ${row.body}${
-        href ? '. Open' : ''
-      }`}
-      right={
+      accessibilityLabel={`${unread ? 'Unread. ' : ''}${row.body}${href ? '. Open' : ''}`}
+      body={
         <>
-          {/* A decided request stays in the feed, tagged - history rather than a pending action. */}
-          {row.decision !== undefined && (
-            <Text style={[styles.decision, row.decision === 'denied' && styles.decisionDenied]}>
-              {row.decision === 'approved' ? 'Approved' : 'Denied'}
-            </Text>
-          )}
-          {unread && (
-            <View style={styles.dot} accessibilityElementsHidden importantForAccessibility="no" />
-          )}
+          <Text style={[styles.body, unread && styles.bodyUnread]}>{row.body}</Text>
+          <View style={styles.metaRow}>
+            <Text style={styles.time}>{timeAgo(row.createdAt)}</Text>
+            {/* A decided request stays in the feed, tagged - history rather than a pending
+                action - and is read, so it wears the plain style with the tag beside its time. */}
+            {row.decision !== undefined && (
+              <Text style={[styles.decision, row.decision === 'denied' && styles.decisionDenied]}>
+                {row.decision === 'approved' ? 'Approved' : 'Denied'}
+              </Text>
+            )}
+          </View>
         </>
+      }
+      right={
+        unread ? (
+          <View style={styles.dot} accessibilityElementsHidden importantForAccessibility="no" />
+        ) : undefined
       }
     />
   );
@@ -258,6 +318,21 @@ function InboxRowView({ row }: { row: InboxRow }) {
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
   list: { padding: space.md, gap: space.sm },
+  empty: {
+    ...type.body,
+    color: color.textSecondary,
+    textAlign: 'center',
+    marginTop: 40,
+  },
+  footerSpinner: { marginVertical: space.md },
+
+  // Archivo Narrow 14: the body IS the notification, so it carries the reading weight.
+  body: { ...type.bodySmall, color: color.textSecondary },
+  bodyUnread: { color: color.textPrimary },
+  bodyStrong: { fontFamily: 'Inter_600SemiBold' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.xs },
+  // Not uppercase: "2h ago" is prose, and the label token's letterspacing makes it shout.
+  time: { ...type.label, fontSize: 11, color: color.border, textTransform: 'none' },
 
   well: {
     width: 40,
@@ -274,6 +349,7 @@ const styles = StyleSheet.create({
   decision: {
     ...type.label,
     fontSize: 10,
+    textTransform: 'none',
     color: color.onAccentSoft,
     backgroundColor: color.accentSoft,
     borderRadius: radius.pill,
