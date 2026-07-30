@@ -225,6 +225,52 @@ export const eboardMemberships = pgTable(
   (t) => [primaryKey({ columns: [t.eboardId, t.userId] })],
 );
 
+/**
+ * Requests to rejoin the Eboard space.
+ *
+ * > **The path that in normal operation nobody uses**, and the reason it still has to exist.
+ * > Promotion to admin auto-joins and demotion auto-removes, so membership tracks the admin
+ * > tier by itself. What it cannot handle is an admin who **deliberately left** the space and
+ * > later wants back in: they are still admin-tier, so no promotion will re-add them, and
+ * > PRD/10 rule 5 says only existing members may add anybody - which they are not.
+ * >
+ * > Without this table that person has no route back in at all except another member noticing.
+ *
+ * Added in Phase 3.75a. It was specified in TECH/09 and depended on by PRD/10 from the start,
+ * was the only one of v1's 29 tables with no remaster counterpart, and had simply never been
+ * built - a domain gap rather than a delivery one.
+ *
+ * Deliberately shaped exactly like `race_join_requests` and `club_join_requests`, down to the
+ * partial unique index: three tables answering the same question should not answer it in three
+ * shapes. `decided_by` is `set null` for the same reason theirs are - a decision outlives the
+ * account that made it.
+ */
+export const eboardJoinRequests = pgTable(
+  'eboard_join_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eboardId: uuid('eboard_id')
+      .notNull()
+      .references(() => eboardChannels.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('pending'),
+    decidedBy: uuid('decided_by').references(() => users.id, { onDelete: 'set null' }),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Scoped to pending, so a denied request can be re-filed. A plain UNIQUE would
+    // permanently bar anyone who was ever turned down.
+    uniqueIndex('eboard_join_requests_one_pending')
+      .on(t.eboardId, t.userId)
+      .where(sql`status = 'pending'`),
+    check('eboard_join_requests_status_valid', sql`status in ('pending', 'approved', 'denied')`),
+    index('eboard_join_requests_by_eboard').on(t.eboardId, t.status),
+  ],
+);
+
 // ---------------------------------------------------------------------------
 // The channel abstraction - one concept, four scopes
 // ---------------------------------------------------------------------------
@@ -1087,7 +1133,20 @@ export const newsReactions = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     emoji: text('emoji').notNull(),
   },
-  (t) => [primaryKey({ columns: [t.postId, t.userId, t.emoji] })],
+  (t) => [
+    primaryKey({ columns: [t.postId, t.userId, t.emoji] }),
+    check(
+      'news_reactions_emoji_valid',
+      // SPEC/PRD/06 rule 4: "Reactions use the same emoji set as chat." The set therefore has
+      // to be constrained in the same way and in the same order as `message_reactions` above.
+      //
+      // Added in Phase 3.75a, when the news routes were built: the column had been plain text
+      // since Phase 2, so the rule was true only because nothing could write to it yet. The
+      // moment a route existed, "the same set as chat" would have been enforced on one table
+      // and merely intended on the other - and this one renders straight into every client.
+      sql`emoji in ('👍', '❤️', '😂', '🔥', '🎉', '😮')`,
+    ),
+  ],
 );
 
 // ---------------------------------------------------------------------------

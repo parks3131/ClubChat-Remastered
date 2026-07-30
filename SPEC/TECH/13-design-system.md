@@ -17,17 +17,35 @@ System". The remaster may restyle, but these structural rules should survive.
 6. **Consistent headers** across every club-scoped screen, including a working back control
    on screens reached by deep link.
 
-### Current tokens (for reference)
+### Current tokens
+
+The **"Kinetic Performance System"**, extracted verbatim from the Stitch export's
+`kinetic_performance_system/DESIGN.md` frontmatter and shipped in v1 as `constants/theme.ts`.
+**This is the palette that ran in production**, which is why it is the source of truth here.
 
 | Category | Values |
 |---|---|
-| Accent | `#ff4d00` "Energetic Orange" - every accent: header titles, FABs, active tab, links, back arrows, pins, primary buttons |
-| Surfaces | App background `#f7f9fb`; cards `#ffffff`; **every header and the tab bar** `#f2f4f6`; dividers/fallbacks in the `#ecee…`-`#e0e3…` ramp |
+| Accent | `#ff4d00` "Energetic Orange" - every accent: header titles, FABs, active tab, links, back arrows, pins, primary buttons. Container `#d43f00` |
+| Surfaces | App background `#f7f9fb`; cards `#ffffff`; **every header and the tab bar** `#f2f4f6`; raised `#eceef0`; fallback `#e0e3e5` |
 | Text | Primary `#191c1e`; secondary/muted `#5c4037` |
-| Semantic | Secondary/poll badges `#565e74` family; practice/tertiary `#005daa` family; error and the notification badge `#ba1a1a` family |
+| Semantic | Secondary/poll badges `#565e74` family; practice/tertiary `#005daa` family; error and the notification badge `#ba1a1a` family; outline `#916f65`, hairline `#e6beb2` |
 | Radii | 4 / 8 (default) / 12 / 16 / 24 / pill. Avatars use an explicit half-width radius |
 | Spacing | 4 micro / 16 gutter and screen padding / 8 tight stack / 24 section / 48 empty-state top |
-| Type | Anton for display and **every header title**; Archivo Narrow for body and numeric emphasis; Inter SemiBold, uppercase, letterspaced, for labels/badges/buttons |
+| Type | Anton for display and **every header title** (48 / 32 / 28 / 20); Archivo Narrow for body (16/26) and numeric emphasis (24 bold); Inter SemiBold 12, letterspaced 0.6, for labels/badges/buttons |
+| Icons | MaterialIcons from `@expo/vector-icons`. The four destinations are `groups`, `calendar-month`, `notifications`, `person` |
+
+> **`primary` is `#ff4d00`, not DESIGN.md's `#aa3000`** - an explicit founder preference applied
+> app-wide. Every other token is untouched. Worth knowing before somebody "fixes" it back.
+
+> **A correction, 2026-07-30.** This table was briefly rewritten to a **warm peach** ramp read live
+> from the current Stitch project, on the assumption that the live project was authoritative and
+> this table had drifted from it. It was the other way round: the table came from v1's shipped
+> theme, and **the Stitch project has moved on since v1 shipped**. The values above were restored
+> from `constants/theme.ts` in the v1 repository.
+>
+> The general rule, since more designs will arrive: **v1 is ground truth for what the product looks
+> like, because it is the thing that actually ran.** A live design tool is a working document. Read
+> it for screens the product does not have yet, not to settle what the shipped ones look like.
 
 ### Signature treatments
 
@@ -42,3 +60,20 @@ System". The remaster may restyle, but these structural rules should survive.
 
 **Light mode only** today; there is no dark palette. The token module is a flat named export
 specifically so a dark variant can be swapped in without touching call sites.
+
+### Where the Stitch designs go further than the product, and what was decided
+
+The Stitch project carries 67 screens, several of which show things the product does not have. All
+four were settled on 2026-07-30, and all four the same way: **take the visual language, not the
+implied features.**
+
+| The design shows | Decision |
+|---|---|
+| Stat tiles - "MILES LOGGED 42.1K / Goal: 50K", "MEMBERS 1,248 / +12% this month" | **Dropped.** Member count is real; per-member mileage, season goals and growth-over-time exist nowhere in the schema or the PRD. Building them is a domain expansion, not a re-skin |
+| A **Message Search** screen | **Stays deferred.** [Roadmap](../PRD/17-roadmap-and-open-questions.md) lists message search under "deliberately deferred (do not fix)", and a design being ahead of the spec does not un-defer it |
+| An **Appearance & Dark Mode** screen | **Light only for now.** The flat token module is already the seam, so adding dark later is a token change plus a preference rather than a re-verification of every screen in two modes |
+| A **hero cover image** per club | **Skipped.** Clubs carry no media at all today; adding one is a schema change, an upload surface, and a default for every existing club |
+
+The rule these share is worth stating on its own, because more designs will arrive: **a design is a
+specification of appearance, not of scope.** Where one implies data the product does not hold, the
+gap gets recorded here and raised, never quietly invented in a component.

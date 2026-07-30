@@ -1,0 +1,15 @@
+/**
+ * The club-scoped calendar.
+ *
+ * The same component as the Calendar destination, given a club id. Design-system rule 5: one
+ * implementation, so a fix to the month grid or the Upcoming/Past split lands in both at once.
+ * The club version does not tag rows with the club name, because every row is that club.
+ */
+
+import { useLocalSearchParams } from 'expo-router';
+import { CalendarView } from '../../(tabs)/calendar.tsx';
+
+export default function ClubCalendarScreen() {
+  const { clubId } = useLocalSearchParams<{ clubId: string }>();
+  return <CalendarView clubId={clubId} />;
+}

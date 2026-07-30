@@ -28,16 +28,32 @@ Envelope: `{ "t": <type>, "id": <correlation id>, "d": <payload> }`
 | `notif.new` | `{ notification }` | Drives the badge live. |
 | `pong` | `{}` | |
 
-### REST (sketch)
+### REST
+
+> **Built, not sketched, as of Phase 3.75a.** Every line below exists and is exercised by a
+> route-level test. Where the shape differs from the original sketch the reason is stated inline;
+> the two systematic ones are worth reading first:
+>
+> 1. **No route accepts a `clubId` alongside a scope id.** The owning club is resolved
+>    server-side, because a two-part authorization check cannot tell whether its two arguments
+>    describe the same thing. See [Authorization](05-authorization.md).
+> 2. **Every `:id` and `:uid` is a UUID, enforced by one hook** rather than per route. A
+>    malformed id is a 404, not a 500.
 
 ```
-POST   /auth/register | /auth/login | /auth/refresh | /auth/logout
-DELETE /me                                   ← anonymize + block future sign-in
+POST   /api/auth/*                           ← better-auth handles sign-up/in/out
+GET    /me                                   ← the caller's id and club roles
+GET    /users/:id                            ← profile card; dob withheld from everyone but its owner
+PATCH  /me/profile                           ← self only; there is deliberately no PATCH /users/:id
+DELETE /me                                   ← anonymize + block future sign-in; 409 while they own a club
 
 GET    /sync?channels[]={id}:{since_seq}     ← the reconnect / foreground path
 GET    /channels/:id/messages?before={seq}&limit=40
-GET    /channels/:id/messages?around={seq}   ← jump-to-message window
-GET    /channels/:id/pinned | /announcements | /reports | /gallery
+GET    /channels/:id/messages/around?around={seq}&radius=20   ← jump-to-message window
+GET    /channels/:id/pinned | /announcements ← Highlights; whole channel, never a loaded window
+GET    /channels/:id/reports | /gallery
+POST   /channels/:id/messages/:seq/pinned    ← admin of the space; NEVER carries a type change
+DELETE /channels/:id/messages/:seq           ← soft delete: sender or space admin
 GET    /channels/:id                         ← title, canPost + why not, muted, peer
 GET    /media/:id                            ← 302 to the signed URL, for an <img src>
 GET    /media/:id/url                        ← the same hop as JSON, for a header-bearing client
@@ -55,23 +71,60 @@ GET    /moderation/reports/:id/context       ← the narrow, audit-logged read
 POST   /moderation/reports/:id/dismiss
 GET    /moderation/reads                     ← a moderator's own audit trail
 
-GET    /clubs/search?q=                      ← safe projection, non-members only
-POST   /clubs · GET/PATCH/DELETE /clubs/:id
+GET    /clubs/search?q=                      ← safe projection, non-members only, no paging
+POST   /clubs · GET/PATCH/DELETE /clubs/:id  ← GET withholds the invite token from non-admins
+GET    /clubs/:id/members                    ← roster; pendingRequests null for a non-admin
+POST   /clubs/:id/members/seen               ← clears that club's join-request rows
 POST   /clubs/:id/join | /join-requests/:id/approve | /deny
 POST   /invites/:token/redeem                ← the only invite path; no typed-code entry
 POST   /clubs/:id/invite-token/rotate        ← admin; invalidates every outstanding link
 POST   /clubs/:id/members · PATCH /members/:uid/role · DELETE /members/:uid
 POST   /clubs/:id/transfer-ownership
 
-POST   /clubs/:id/races · GET/PATCH/DELETE /races/:id
-POST   /races/:id/join-requests · /members · /pin
-POST   /races/:id/car-groups · /car-groups/:id/members · PATCH /incharge
+GET    /clubs/:id/races?q=                   ← every race in the club; viewer state per row
+POST   /clubs/:id/races                      ← admin; name and date only
+GET    /races/:id                            ← preview, manager hub and member race, one read
+DELETE /races/:id
+PATCH  /races/:id/meet-information            ← all five fields, one form; absent clears
+POST   /races/:id/pin                        ← personal; body { pinned }
+GET    /races/:id/members                    ← roster; pendingRequests null for a non-manager
+POST   /races/:id/members · DELETE /races/:id/members/:uid
+POST   /races/:id/members/seen               ← clears that race's join-request rows
+POST   /races/:id/join-requests
+POST   /race-join-requests/:id/approve | /deny
+GET    /races/:id/car-groups                 ← groups, Incharge tags, and who is unassigned
+POST   /races/:id/car-groups                 ← auto-numbered; no name in the request
+POST   /car-groups/:id/members · PATCH /car-groups/:id/incharge
+DELETE /races/:id/car-group-members/:uid     ← keyed by race: one group per person per race
 
-GET    /clubs/:id/eboard · POST /eboard/:id/members · /meetings
+GET    /eboards/:id                          ← the landing state and the space, one read
+GET    /eboards/:id/members                  ← members only; a club admin outside gets nothing
+POST   /eboards/:id/members/seen
+POST   /eboards/:id/join-requests             ← the rejoin path for an admin who left
+POST   /eboard-join-requests/:id/approve | /deny   ← existing members ONLY, never any club admin
+POST   /eboards/:id/members                  ← existing members; target must be admin-tier
+DELETE /eboards/:id/members/:uid             ← leaving is free; removing is Owner-only
 
-POST   /polls · POST /polls/:id/votes · POST /polls/:id/close | /reopen
-POST   /clubs/:id/events | /routines | /news
-GET    /calendar?club=:id                    ← merged feed; omit club for cross-club
+GET    /eboards/:id/meetings?when=upcoming|past
+POST   /eboards/:id/meetings                 ← any member of the space
+GET    /meetings/:id · PATCH · DELETE        ← creator only for the last two
+
+POST   /clubs/:id/polls · /races/:id/polls · /eboards/:id/polls
+GET    /clubs/:id/polls · /races/:id/polls · /eboards/:id/polls
+GET    /polls/:id                            ← counts public, voters gated, own vote always shown
+POST   /poll-options/:id/vote                ← cast, move or withdraw; addressed by OPTION
+POST   /polls/:id/closed                     ← body { closed }; the creator only, in every scope
+DELETE /polls/:id
+
+POST   /clubs/:id/events · DELETE /events/:id
+POST   /clubs/:id/workouts · DELETE /workouts/:id
+GET    /clubs/:id/routines?monday=YYYY-MM-DD ← the Monday is required, never guessed
+GET    /clubs/:id/news · POST /clubs/:id/news
+GET    /news/:id · PATCH · DELETE            ← any club admin, not only the author
+POST   /news/:id/reactions                   ← the same emoji set as chat, constrained in the column
+
+GET    /calendar?club=:id&when=upcoming|past|all   ← merged feed; omit club for cross-club
+GET    /calendar/markers?club=:id&year=&month=     ← the month grid; polls excluded
 
 POST   /media/upload-intent · POST /media/:id/complete
 GET    /media/:id[?variant=thumb|display]   ← authorized redirect, hour-aligned signature

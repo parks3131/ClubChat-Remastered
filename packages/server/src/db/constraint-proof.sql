@@ -223,6 +223,42 @@ SELECT pg_temp.assert_rejected(
   $$INSERT INTO eboard_channels (club_id)
     VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')$$);
 
+-- Rejoin requests, added in Phase 3.75a. Shaped exactly like the club and race request tables,
+-- so the same three properties are proved here: one pending row per person, a denied request can
+-- be re-filed, and an invented status cannot be stored.
+SELECT pg_temp.assert_accepted(
+  'eboard requests - a first pending request',
+  $$INSERT INTO eboard_join_requests (eboard_id, user_id)
+    VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            '22222222-2222-4222-8222-222222222222')$$);
+
+SELECT pg_temp.assert_rejected(
+  'eboard requests - a second pending request from the same person',
+  $$INSERT INTO eboard_join_requests (eboard_id, user_id)
+    VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            '22222222-2222-4222-8222-222222222222')$$);
+
+SELECT pg_temp.assert_rejected(
+  'eboard requests - an invented status',
+  $$INSERT INTO eboard_join_requests (eboard_id, user_id, status)
+    VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            '33333333-3333-4333-8333-333333333333', 'maybe')$$);
+
+-- The partial index is scoped to pending precisely so this works: somebody turned down once is
+-- not barred forever.
+SELECT pg_temp.assert_accepted(
+  'eboard requests - re-filing after a denial',
+  $$WITH denied AS (
+      UPDATE eboard_join_requests SET status = 'denied'
+       WHERE eboard_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+         AND user_id = '22222222-2222-4222-8222-222222222222'
+      RETURNING 1
+    )
+    INSERT INTO eboard_join_requests (eboard_id, user_id)
+    SELECT 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+           '22222222-2222-4222-8222-222222222222'
+      FROM denied$$);
+
 -- ---------------------------------------------------------------------------
 -- Phase 1: notifications, devices, mutes
 -- ---------------------------------------------------------------------------
@@ -457,6 +493,30 @@ SELECT pg_temp.assert_accepted(
   $$INSERT INTO news_posts (club_id, author_id, body)
     VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             '11111111-1111-4111-8111-111111111111', 'We won.')$$);
+
+-- PRD/06 rule 4: news reactions use the same emoji set as chat. Constrained from Phase 3.75a,
+-- when the route that can write to this column was built - until then the rule held only
+-- because nothing could reach it. Same reasoning as message_reactions below: the column
+-- renders directly into every client, and a second write path must not be able to widen it.
+SELECT pg_temp.assert_rejected(
+  'news reactions - an emoji outside the fixed set',
+  $$INSERT INTO news_reactions (post_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🦄' FROM news_posts LIMIT 1$$);
+
+SELECT pg_temp.assert_rejected(
+  'news reactions - arbitrary text in the emoji column',
+  $$INSERT INTO news_reactions (post_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', 'nice one' FROM news_posts LIMIT 1$$);
+
+SELECT pg_temp.assert_accepted(
+  'news reactions - one of the six is allowed',
+  $$INSERT INTO news_reactions (post_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🔥' FROM news_posts LIMIT 1$$);
+
+SELECT pg_temp.assert_rejected(
+  'news reactions - the same emoji twice from the same member',
+  $$INSERT INTO news_reactions (post_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🔥' FROM news_posts LIMIT 1$$);
 
 SELECT pg_temp.assert_rejected(
   'routines - an invented activity type',

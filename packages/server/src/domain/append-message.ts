@@ -14,9 +14,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { MessageEnvelope, MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { messages, outbox } from '../db/schema.ts';
-
-/** Postgres unique_violation. */
-const UNIQUE_VIOLATION = '23505';
+import { isUniqueViolation } from '../db/errors.ts';
 
 export type AppendMessageInput = {
   channelId: string;
@@ -246,26 +244,3 @@ export class ChannelGoneError extends Error {
   }
 }
 
-/**
- * Is this a unique-constraint violation, possibly wrapped?
- *
- * The cause chain matters. Drizzle wraps driver errors in its own error type, so the
- * pg `code` is NOT on the thrown object - it is on `.cause`. Checking only the top
- * level looks correct and silently never matches, which turns the idempotent-retry
- * path into an unhandled 500 under exactly the concurrent double-send it exists to
- * absorb. Found by the concurrency test rather than by reading this function.
- */
-function isUniqueViolation(error: unknown): boolean {
-  let current: unknown = error;
-  for (let depth = 0; current !== null && current !== undefined && depth < 5; depth += 1) {
-    if (
-      typeof current === 'object' &&
-      'code' in current &&
-      (current as { code?: unknown }).code === UNIQUE_VIOLATION
-    ) {
-      return true;
-    }
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}

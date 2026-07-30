@@ -1,0 +1,328 @@
+/**
+ * Meetings, calendar events, routines and news.
+ *
+ * Four features that look alike and notify deliberately differently. The table lives in the
+ * domain module; what matters at this layer is that none of these routes accepts a `clubId`.
+ * `createMeeting` and `deleteMeeting` take one - used only to route their effects - and a wrong
+ * one would send a notification and a chat card into the wrong club. It is resolved from the
+ * space instead, by `clubIdOfEboard`.
+ */
+
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { ReactionEmoji } from '@clubchat/shared';
+import {
+  createEvent,
+  createMeeting,
+  createNewsPost,
+  createWorkout,
+  deleteEvent,
+  deleteMeeting,
+  deleteNewsPost,
+  deleteWorkout,
+  listMeetings,
+  readMeeting,
+  readNewsFeed,
+  readNewsPost,
+  readRoutineWeek,
+  toggleNewsReaction,
+  updateMeeting,
+  updateNewsPost,
+} from '../../domain/content.ts';
+import { clubIdOfEboard } from '../../domain/scopes.ts';
+import { refusalStatus, type AppDeps } from '../plumbing.ts';
+
+/** A calendar day, never a timestamp - see the `raceDate` note on the race routes. */
+const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD');
+
+export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void {
+  /**
+   * 403 where the caller can already see the thing, 404 otherwise.
+   *
+   * Meetings are the case that needs it: both handlers check membership of the space before
+   * checking creatorship, so a `forbidden` reached somebody who can read the meeting and is
+   * merely not its creator. PRD/10 puts that distinction on screen - any member creates
+   * meetings, only the creator edits one - so the API has to make it expressible.
+   */
+  const creatorStatus = (code: string): number =>
+    code === 'forbidden' ? 403 : refusalStatus(code);
+
+  // ---------------------------------------------------------------------
+  // Meetings
+  // ---------------------------------------------------------------------
+
+  const MeetingBody = z.object({
+    title: z.string().min(1).max(300),
+    description: z.string().max(5_000).nullish(),
+    startsAt: z.string().datetime(),
+    link: z.string().max(2_000).nullish(),
+  });
+
+  app.post<{ Params: { id: string } }>('/eboards/:id/meetings', async (request, reply) => {
+    const body = MeetingBody.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: 'invalid_body', issues: body.error.issues });
+    }
+
+    const clubId = await clubIdOfEboard(deps.db, request.params.id);
+    if (clubId === null) return reply.code(404).send({ error: 'not_found' });
+
+    const result = await createMeeting(deps.db, request.access!, {
+      eboardId: request.params.id,
+      clubId,
+      ...body.data,
+    });
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return reply.code(201).send(result);
+  });
+
+  const WhenQuery = z.object({ when: z.enum(['upcoming', 'past']).default('upcoming') });
+
+  app.get<{ Params: { id: string } }>('/eboards/:id/meetings', async (request, reply) => {
+    const query = WhenQuery.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+
+    const result = await listMeetings(
+      deps.db,
+      request.access!,
+      request.params.id,
+      query.data.when,
+    );
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  app.get<{ Params: { id: string } }>('/meetings/:id', async (request, reply) => {
+    const result = await readMeeting(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  /**
+   * Edit a meeting. **Creator only**, unlike creating one.
+   *
+   * A true partial update, unlike Meet Information: an absent field keeps its value rather than
+   * clearing it. The two differ because the products differ - Meet Information is five fields
+   * of one form, and a meeting is a record with independently editable parts.
+   */
+  const MeetingPatch = z.object({
+    title: z.string().min(1).max(300).optional(),
+    description: z.string().max(5_000).nullish(),
+    startsAt: z.string().datetime().optional(),
+    link: z.string().max(2_000).nullish(),
+  });
+
+  app.patch<{ Params: { id: string } }>('/meetings/:id', async (request, reply) => {
+    const body = MeetingPatch.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+
+    const result = await updateMeeting(deps.db, request.access!, request.params.id, body.data);
+    if (!result.ok) return reply.code(creatorStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  app.delete<{ Params: { id: string } }>('/meetings/:id', async (request, reply) => {
+    // Read first, so the club the effects route on comes from the meeting's own space rather
+    // than from the caller. The read is itself membership-gated, so this also refuses a
+    // non-member before the delete is attempted.
+    const found = await readMeeting(deps.db, request.access!, request.params.id);
+    if (!found.ok) return reply.code(refusalStatus(found.code)).send({ error: found.code });
+
+    const result = await deleteMeeting(
+      deps.db,
+      request.access!,
+      request.params.id,
+      found.meeting.clubId,
+    );
+    if (!result.ok) return reply.code(creatorStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  // ---------------------------------------------------------------------
+  // Calendar events
+  // ---------------------------------------------------------------------
+
+  const EventBody = z.object({
+    // `race` is a LABEL with no relationship to a real Race. Creating one does not create a
+    // race and never has; whether the type should exist at all is an open question in PRD/17.
+    type: z.enum(['race', 'practice', 'team_bonding', 'volunteer', 'other']),
+    title: z.string().min(1).max(300),
+    startsAt: z.string().datetime(),
+    endsAt: z.string().datetime().nullish(),
+    location: z.string().max(500).nullish(),
+    description: z.string().max(5_000).nullish(),
+  });
+
+  app.post<{ Params: { id: string } }>('/clubs/:id/events', async (request, reply) => {
+    const body = EventBody.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: 'invalid_body', issues: body.error.issues });
+    }
+    const result = await createEvent(deps.db, request.access!, {
+      clubId: request.params.id,
+      ...body.data,
+    });
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return reply.code(201).send(result);
+  });
+
+  app.delete<{ Params: { id: string } }>('/events/:id', async (request, reply) => {
+    const result = await deleteEvent(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  // ---------------------------------------------------------------------
+  // Routines
+  // ---------------------------------------------------------------------
+
+  const WorkoutBody = z.object({
+    workoutDate: IsoDate,
+    activityType: z.enum([
+      'run',
+      'trail_run',
+      'bike',
+      'swim',
+      'strength',
+      'hybrid_fitness',
+      'indoor_climb',
+      'bouldering',
+      'xc_ski',
+      'other',
+    ]),
+    title: z.string().min(1).max(300),
+    description: z.string().max(5_000).nullish(),
+  });
+
+  /** Notifies nobody and posts nothing. A routine is reference material, not an event. */
+  app.post<{ Params: { id: string } }>('/clubs/:id/workouts', async (request, reply) => {
+    const body = WorkoutBody.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: 'invalid_body', issues: body.error.issues });
+    }
+    const result = await createWorkout(deps.db, request.access!, {
+      clubId: request.params.id,
+      ...body.data,
+    });
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return reply.code(201).send(result);
+  });
+
+  app.delete<{ Params: { id: string } }>('/workouts/:id', async (request, reply) => {
+    const result = await deleteWorkout(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  const WeekQuery = z.object({ monday: IsoDate });
+
+  /**
+   * One real calendar week, Monday through Sunday.
+   *
+   * The Monday is required rather than defaulted, because "this week" is a question about the
+   * caller's timezone and the server has no business guessing it.
+   */
+  app.get<{ Params: { id: string } }>('/clubs/:id/routines', async (request, reply) => {
+    const query = WeekQuery.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+
+    const result = await readRoutineWeek(
+      deps.db,
+      request.access!,
+      request.params.id,
+      query.data.monday,
+    );
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  // ---------------------------------------------------------------------
+  // News
+  // ---------------------------------------------------------------------
+
+  const NewsBody = z.object({
+    body: z.string().max(10_000).nullish(),
+    mediaId: z.string().uuid().nullish(),
+  });
+
+  app.post<{ Params: { id: string } }>('/clubs/:id/news', async (request, reply) => {
+    const body = NewsBody.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+
+    const result = await createNewsPost(deps.db, request.access!, {
+      clubId: request.params.id,
+      ...body.data,
+    });
+    if (!result.ok) {
+      // 400 for `invalid`: an entirely empty post is a malformed request rather than a
+      // refusal, and the check constraint says the same thing one layer down.
+      return reply
+        .code(result.code === 'invalid' ? 400 : refusalStatus(result.code))
+        .send({ error: result.code });
+    }
+    return reply.code(201).send(result);
+  });
+
+  const FeedQuery = z.object({
+    before: z.string().datetime().optional(),
+    limit: z.coerce.number().int().positive().max(100).optional(),
+  });
+
+  app.get<{ Params: { id: string } }>('/clubs/:id/news', async (request, reply) => {
+    const query = FeedQuery.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+
+    const result = await readNewsFeed(deps.db, request.access!, request.params.id, query.data);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  app.get<{ Params: { id: string } }>('/news/:id', async (request, reply) => {
+    const result = await readNewsPost(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  /** Any club admin edits any post, not only its author. Notifies nobody. */
+  app.patch<{ Params: { id: string } }>('/news/:id', async (request, reply) => {
+    const body = NewsBody.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+
+    const result = await updateNewsPost(deps.db, request.access!, request.params.id, body.data);
+    if (!result.ok) {
+      return reply
+        .code(result.code === 'invalid' ? 400 : refusalStatus(result.code))
+        .send({ error: result.code });
+    }
+    return result;
+  });
+
+  app.delete<{ Params: { id: string } }>('/news/:id', async (request, reply) => {
+    const result = await deleteNewsPost(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  const NewsReactionBody = z.object({ emoji: ReactionEmoji });
+
+  /**
+   * React to a post, or remove your own reaction. **Every club member**, not only admins.
+   *
+   * `ReactionEmoji` is the same set chat uses, which PRD/06 rule 4 requires. As with message
+   * reactions it is not the enforcement - a check constraint on the column is, added in this
+   * phase because until a route existed the rule held only for want of a writer.
+   */
+  app.post<{ Params: { id: string } }>('/news/:id/reactions', async (request, reply) => {
+    const body = NewsReactionBody.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_emoji' });
+
+    const result = await toggleNewsReaction(
+      deps.db,
+      request.access!,
+      request.params.id,
+      body.data.emoji,
+    );
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+}

@@ -1,0 +1,1 @@
+ALTER TABLE "news_reactions" ADD CONSTRAINT "news_reactions_emoji_valid" CHECK (emoji in ('👍', '❤️', '😂', '🔥', '🎉', '😮'));

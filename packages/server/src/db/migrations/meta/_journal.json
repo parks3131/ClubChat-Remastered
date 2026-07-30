@@ -71,6 +71,20 @@
       "when": 1785389455906,
       "tag": "0009_message_reactions",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785415067431,
+      "tag": "0010_news_reaction_emoji_set",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1785415990196,
+      "tag": "0011_eboard_join_requests",
+      "breakpoints": true
     }
   ]
 }

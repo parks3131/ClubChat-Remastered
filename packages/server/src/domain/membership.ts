@@ -13,6 +13,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { ClubRole, JoinPolicy } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
+import { isoUtc } from '../db/sql-helpers.ts';
 import {
   clubJoinRequests,
   clubMemberships,
@@ -28,10 +29,12 @@ import {
   canLeaveClub,
   canManageJoinRequests,
   canRemoveMember,
+  canRotateInviteToken,
   canTransferOwnership,
   isClubAdmin,
   isClubMember,
 } from '../policy/predicates.ts';
+import { mintInviteToken } from './create-club.ts';
 
 export type Refusal = {
   ok: false;
@@ -612,4 +615,306 @@ export async function deleteClub(
   });
 
   return { ok: true, deleted: true, channelIds };
+}
+
+// ---------------------------------------------------------------------------
+// Reads
+// ---------------------------------------------------------------------------
+//
+// Phase 2 and Phase 1 between them built every club command and no club queries: the roster
+// could be written to and never read, and the club itself had PATCH and DELETE with no GET.
+// A route answering 404 because nothing was built is indistinguishable from one answering 404
+// because the caller may not look, which is why these went in before the screens.
+
+export type ClubRosterEntry = {
+  userId: string;
+  name: string;
+  image: string | null;
+  role: ClubRole;
+  joinedAt: string;
+};
+
+export type ClubJoinRequestEntry = {
+  requestId: string;
+  userId: string;
+  name: string;
+  requestedAt: string;
+};
+
+/**
+ * The roster, and - for an admin only - who is waiting to join.
+ *
+ * `pendingRequests` is **null** rather than `[]` for a plain member, so a client cannot read
+ * "not allowed to see this" as "nobody is waiting". The same shape as the race roster, for the
+ * same reason.
+ *
+ * Ordering is owner, then admins, then members, each alphabetically: the roster doubles as the
+ * screen where authority is granted and removed, so who holds it belongs at the top rather than
+ * wherever their name happens to sort.
+ */
+export async function readClubRoster(
+  db: Db,
+  ctx: AccessContext,
+  clubId: string,
+): Promise<Result<{ members: ClubRosterEntry[]; pendingRequests: ClubJoinRequestEntry[] | null }>> {
+  if (!isClubMember(ctx, clubId)) return { ok: false, code: 'not_found' };
+
+  const memberRows = await db.execute<{
+    user_id: string;
+    full_name: string;
+    image: string | null;
+    role: string;
+    joined_at: string;
+  }>(sql`
+    SELECT u.id::text AS user_id,
+           u.full_name,
+           u.image,
+           cm.role::text AS role,
+           ${isoUtc('cm.joined_at')} AS joined_at
+      FROM club_memberships cm
+      JOIN users u ON u.id = cm.user_id
+     WHERE cm.club_id = ${clubId}
+     ORDER BY CASE cm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+              u.full_name
+  `);
+
+  const members: ClubRosterEntry[] = memberRows.rows.map((row) => ({
+    userId: row.user_id,
+    name: row.full_name,
+    image: row.image,
+    role: row.role as ClubRole,
+    joinedAt: row.joined_at,
+  }));
+
+  // Who is waiting is decision-making data, and only the admin tier decides.
+  if (!canManageJoinRequests(ctx, clubId)) {
+    return { ok: true, members, pendingRequests: null };
+  }
+
+  const requestRows = await db.execute<{
+    id: string;
+    user_id: string;
+    full_name: string;
+    created_at: string;
+  }>(sql`
+    SELECT jr.id::text AS id,
+           u.id::text AS user_id,
+           u.full_name,
+           ${isoUtc('jr.created_at')} AS created_at
+      FROM club_join_requests jr
+      JOIN users u ON u.id = jr.user_id
+     WHERE jr.club_id = ${clubId} AND jr.status = 'pending'
+     ORDER BY jr.created_at
+  `);
+
+  return {
+    ok: true,
+    members,
+    pendingRequests: requestRows.rows.map((row) => ({
+      requestId: row.id,
+      userId: row.user_id,
+      name: row.full_name,
+      requestedAt: row.created_at,
+    })),
+  };
+}
+
+export type ClubDetail = {
+  id: string;
+  name: string;
+  sport: string;
+  description: string | null;
+  joinPolicy: JoinPolicy;
+  memberCount: number;
+  createdAt: string;
+  /** The club's main chat, so the hub can navigate without a second lookup. */
+  channelId: string | null;
+  /** The Eboard space, present for every club - but only named to somebody in it. */
+  eboardId: string | null;
+  viewer: {
+    role: ClubRole;
+    isAdmin: boolean;
+    isOwner: boolean;
+  };
+  /**
+   * The invite token, for the admin tier only.
+   *
+   * The link is now the ONLY invite mechanism (ADR-0010 removed the typed code), so the token
+   * is the whole of a club's access control against anybody holding it. It is withheld from a
+   * plain member here rather than hidden in the UI, because a hidden field is not withheld.
+   */
+  inviteToken: string | null;
+};
+
+/** One club, for the club hub and the club profile screen. Members only. */
+export async function readClub(
+  db: Db,
+  ctx: AccessContext,
+  clubId: string,
+): Promise<Result<{ club: ClubDetail }>> {
+  const role = ctx.clubRole.get(clubId);
+  if (role === undefined) return { ok: false, code: 'not_found' };
+
+  const rows = await db.execute<{
+    id: string;
+    name: string;
+    sport: string;
+    description: string | null;
+    join_policy: string;
+    invite_token: string;
+    created_at: string;
+    member_count: string;
+    channel_id: string | null;
+    eboard_id: string | null;
+  }>(sql`
+    SELECT c.id::text AS id,
+           c.name,
+           c.sport,
+           c.description,
+           c.join_policy::text AS join_policy,
+           c.invite_token,
+           ${isoUtc('c.created_at')} AS created_at,
+           (SELECT count(*) FROM club_memberships m WHERE m.club_id = c.id) AS member_count,
+           ch.id::text AS channel_id,
+           eb.id::text AS eboard_id
+      FROM clubs c
+      LEFT JOIN channels ch ON ch.scope = 'club' AND ch.scope_id = c.id
+      LEFT JOIN eboard_channels eb ON eb.club_id = c.id
+     WHERE c.id = ${clubId}
+  `);
+
+  const row = rows.rows[0];
+  if (!row) return { ok: false, code: 'not_found' };
+
+  const isAdmin = isClubAdmin(ctx, clubId);
+
+  return {
+    ok: true,
+    club: {
+      id: row.id,
+      name: row.name,
+      sport: row.sport,
+      description: row.description,
+      joinPolicy: row.join_policy as JoinPolicy,
+      memberCount: Number(row.member_count),
+      createdAt: row.created_at,
+      channelId: row.channel_id,
+      // Named only to somebody actually in the space. An ordinary member has no visibility
+      // of the Eboard at all, and returning its id here would be the one place that leaked.
+      eboardId:
+        row.eboard_id !== null && ctx.eboardMember.has(row.eboard_id) ? row.eboard_id : null,
+      viewer: {
+        role,
+        isAdmin,
+        isOwner: role === 'owner',
+      },
+      inviteToken: isAdmin ? row.invite_token : null,
+    },
+  };
+}
+
+/**
+ * Find a club to join.
+ *
+ * > **A safe projection, and only clubs the caller is NOT in.** Non-members must be able to
+ * > find and join a club without being able to read anything inside it, so this returns the
+ * > name, the sport, a member count and the caller's own request status - and nothing else. No
+ * > description, no roster, no invite token, no channel id.
+ *
+ * Clubs the caller already belongs to are excluded rather than annotated. PRD/04's edge-case
+ * table says a searched club they are in "shows membership rather than a Join button", and the
+ * client already knows every club it belongs to from `GET /clubs` - so including them here would
+ * duplicate that list into a second shape that could disagree with it.
+ *
+ * Limited to a handful of results by default. There is no paging: search is a way to find a
+ * specific club by name, not a directory to browse.
+ */
+export async function searchClubs(
+  db: Db,
+  ctx: AccessContext,
+  opts: { query: string; limit?: number | undefined },
+): Promise<
+  Array<{
+    id: string;
+    name: string;
+    sport: string;
+    memberCount: number;
+    joinPolicy: JoinPolicy;
+    requestPending: boolean;
+  }>
+> {
+  const query = opts.query.trim();
+  // An empty query returns nothing rather than every club. "No clubs found" is the right
+  // answer to a question nobody asked, and a bare listing is the directory this is not.
+  if (query.length === 0) return [];
+
+  const limit = Math.min(opts.limit ?? 10, 25);
+
+  const rows = await db.execute<{
+    id: string;
+    name: string;
+    sport: string;
+    member_count: string;
+    join_policy: string;
+    request_pending: boolean;
+  }>(sql`
+    SELECT c.id::text AS id,
+           c.name,
+           c.sport,
+           (SELECT count(*) FROM club_memberships m WHERE m.club_id = c.id) AS member_count,
+           c.join_policy::text AS join_policy,
+           EXISTS (
+             SELECT 1 FROM club_join_requests jr
+              WHERE jr.club_id = c.id AND jr.user_id = ${ctx.userId} AND jr.status = 'pending'
+           ) AS request_pending
+      FROM clubs c
+     WHERE c.name ILIKE ${'%' + query + '%'}
+       AND NOT EXISTS (
+         SELECT 1 FROM club_memberships mine
+          WHERE mine.club_id = c.id AND mine.user_id = ${ctx.userId}
+       )
+     ORDER BY c.name
+     LIMIT ${limit}
+  `);
+
+  return rows.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    sport: row.sport,
+    memberCount: Number(row.member_count),
+    joinPolicy: row.join_policy as JoinPolicy,
+    requestPending: row.request_pending,
+  }));
+}
+
+/**
+ * Rotate the invite token, invalidating every outstanding link at once.
+ *
+ * > **A requirement rather than a nicety.** ADR-0010 removed the typed invite code, so the link
+ * > is the *only* way into a club besides search - which means a leaked link has no alternative
+ * > to fall back on and rotation is the sole remedy. PRD/17 promoted this from an open question
+ * > on 2026-07-28 for exactly that reason, and the `invite_token_rotated_at` column has been
+ * > sitting unwritten ever since.
+ *
+ * Invalidating every outstanding link is the correct and expected behaviour, not a side effect
+ * to warn about: a rotation happens because a link got somewhere it should not have, and a
+ * rotation that left the old one working would be theatre.
+ */
+export async function rotateInviteToken(
+  db: Db,
+  ctx: AccessContext,
+  clubId: string,
+): Promise<Result<{ inviteToken: string }>> {
+  if (!canRotateInviteToken(ctx, clubId)) return { ok: false, code: 'not_found' };
+
+  const token = mintInviteToken();
+  const rows = await db
+    .update(clubs)
+    .set({ inviteToken: token, inviteTokenRotatedAt: new Date() })
+    .where(eq(clubs.id, clubId))
+    .returning({ inviteToken: clubs.inviteToken });
+
+  const updated = rows[0];
+  if (!updated) return { ok: false, code: 'not_found' };
+  return { ok: true, inviteToken: updated.inviteToken };
 }

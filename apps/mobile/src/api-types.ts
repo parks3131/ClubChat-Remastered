@@ -1,0 +1,389 @@
+/**
+ * The shapes the API returns.
+ *
+ * Hand-written rather than derived, and that is a deliberate cost. The server's response types
+ * live in its domain modules, which the client cannot import - `@clubchat/shared` is the wire
+ * contract that both sides depend on, and putting every read shape in it would make the shared
+ * package a copy of the server's query layer.
+ *
+ * > **So these types are an assertion, not a check** - the same warning AGENTS.md failure mode 7
+ * > makes about row types over raw SQL. A field renamed on the server typechecks cleanly here and
+ * > fails at the call site. The route-level tests on the server are what actually pin the shapes;
+ * > these exist so a screen is written against something.
+ *
+ * What IS imported from shared: anything that travels on the wire in both directions - message
+ * envelopes, reactions, roles, join policies. Those must never be restated here.
+ */
+
+import type {
+  ClubRole,
+  JoinPolicy,
+  MessageEnvelope,
+  MessageReaction,
+  NotificationTarget,
+} from '@clubchat/shared';
+
+// ---------------------------------------------------------------------------
+// Clubs
+// ---------------------------------------------------------------------------
+
+export type ClubDetail = {
+  id: string;
+  name: string;
+  sport: string;
+  description: string | null;
+  joinPolicy: JoinPolicy;
+  memberCount: number;
+  createdAt: string;
+  mainChannelId?: string | null;
+  channelId: string | null;
+  /** Present only for somebody inside the space. Null is "you are not in it". */
+  eboardId: string | null;
+  viewer: { role: ClubRole; isAdmin: boolean; isOwner: boolean };
+  /** Admin tier only. The link is the only invite mechanism, so this is the club's front door. */
+  inviteToken: string | null;
+};
+
+export type RosterEntry = {
+  userId: string;
+  name: string;
+  image: string | null;
+  role: ClubRole;
+  joinedAt: string;
+};
+
+export type JoinRequestEntry = {
+  requestId: string;
+  userId: string;
+  name: string;
+  requestedAt: string;
+};
+
+/** `pendingRequests` is null for a non-admin: distinct from an empty queue, on purpose. */
+export type ClubRoster = {
+  members: RosterEntry[];
+  pendingRequests: JoinRequestEntry[] | null;
+};
+
+export type ClubSearchResult = {
+  id: string;
+  name: string;
+  sport: string;
+  memberCount: number;
+  joinPolicy: JoinPolicy;
+  requestPending: boolean;
+};
+
+// ---------------------------------------------------------------------------
+// Races
+// ---------------------------------------------------------------------------
+
+export type RaceListItem = {
+  id: string;
+  name: string;
+  raceDate: string;
+  pinned: boolean;
+  /** A roster row. The ONLY proof of race access - never inferred from isManager. */
+  hasAccess: boolean;
+  /** Club-admin status: management authority, which is not access. */
+  isManager: boolean;
+  requestPending: boolean;
+  memberCount: number;
+  channelId: string | null;
+};
+
+export type RaceDetail = {
+  id: string;
+  clubId: string;
+  name: string;
+  raceDate: string;
+  meetDescription: string | null;
+  meetLocationUrl: string | null;
+  meetHotelUrl: string | null;
+  meetPhotosUrl: string | null;
+  meetResultsUrl: string | null;
+  memberCount: number;
+  viewer: {
+    hasAccess: boolean;
+    isManager: boolean;
+    requestPending: boolean;
+    pinned: boolean;
+    channelId: string | null;
+  };
+};
+
+export type RaceRosterEntry = {
+  userId: string;
+  name: string;
+  image: string | null;
+  isManager: boolean;
+  carGroupNumber: number | null;
+};
+
+export type RaceRoster = {
+  members: RaceRosterEntry[];
+  pendingRequests: JoinRequestEntry[] | null;
+};
+
+export type CarGroup = {
+  id: string;
+  number: number;
+  inchargeUserId: string | null;
+  members: Array<{ userId: string; name: string; isIncharge: boolean }>;
+};
+
+export type CarGroupsView = {
+  groups: CarGroup[];
+  /** On the roster and in no car. Exactly the add-to-group search (PRD/09 rule 16). */
+  unassigned: Array<{ userId: string; name: string }>;
+};
+
+// ---------------------------------------------------------------------------
+// Polls
+// ---------------------------------------------------------------------------
+
+export type PollSummary = {
+  id: string;
+  question: string;
+  closed: boolean;
+  votedByMe: boolean;
+};
+
+export type PollView = {
+  id: string;
+  question: string;
+  scope: 'club' | 'race' | 'eboard';
+  allowMultiple: boolean;
+  isPrivate: boolean;
+  closed: boolean;
+  closesAt: string | null;
+  isCreator: boolean;
+  options: Array<{
+    id: string;
+    label: string;
+    position: number;
+    /** Always present: counts are public on every poll, including private ones. */
+    voteCount: number;
+    votedByMe: boolean;
+    /** Null when the viewer may not see identities. Not the same as nobody voting. */
+    voters: Array<{ userId: string; name: string }> | null;
+  }>;
+};
+
+// ---------------------------------------------------------------------------
+// Content
+// ---------------------------------------------------------------------------
+
+export type MeetingSummary = {
+  id: string;
+  title: string;
+  startsAt: string;
+  link: string | null;
+  creatorId: string;
+  creatorName: string;
+  isCreator: boolean;
+};
+
+export type MeetingDetail = MeetingSummary & {
+  description: string | null;
+  eboardId: string;
+  clubId: string;
+};
+
+export type NewsPost = {
+  id: string;
+  body: string | null;
+  mediaId: string | null;
+  authorId: string;
+  authorName: string;
+  authorImage: string | null;
+  createdAt: string;
+  /**
+   * Never null: the column defaults to `now()` alongside `created_at`, so a post that has never
+   * been edited carries the same value in both. "Edited" is therefore `updatedAt !== createdAt`,
+   * not `updatedAt !== null` - which is what the feed said at first, and it labelled every post as
+   * edited from the moment it was posted.
+   */
+  updatedAt: string;
+  reactions: Array<{ emoji: string; count: number; mine: boolean }>;
+};
+
+export type ActivityType =
+  | 'run'
+  | 'trail_run'
+  | 'bike'
+  | 'swim'
+  | 'strength'
+  | 'hybrid_fitness'
+  | 'indoor_climb'
+  | 'bouldering'
+  | 'xc_ski'
+  | 'other';
+
+export type RoutineDay = {
+  date: string;
+  workouts: Array<{
+    id: string;
+    activityType: ActivityType;
+    title: string;
+    description: string | null;
+  }>;
+  /** Rendered as "Rest day", never as an empty absence. */
+  restDay: boolean;
+};
+
+export type EventType = 'race' | 'practice' | 'team_bonding' | 'volunteer' | 'other';
+
+// ---------------------------------------------------------------------------
+// Calendar
+// ---------------------------------------------------------------------------
+
+export type FeedItem = {
+  kind: 'event' | 'race' | 'meeting' | 'poll';
+  id: string;
+  clubId: string;
+  clubName: string;
+  title: string;
+  /** Null for a poll with no deadline, which is why polls sort last and are off the grid. */
+  at: string | null;
+  upcoming: boolean;
+  open?: boolean;
+  /** False for a race the viewer can see but not enter. Still shown.  */
+  accessible: boolean;
+};
+
+// ---------------------------------------------------------------------------
+// Eboard
+// ---------------------------------------------------------------------------
+
+export type EboardDetail = {
+  id: string;
+  clubId: string;
+  name: string;
+  description: string | null;
+  memberCount: number;
+  channelId: string | null;
+  viewer: {
+    isMember: boolean;
+    isClubAdmin: boolean;
+    isOwner: boolean;
+    requestPending: boolean;
+  };
+};
+
+export type EboardRoster = {
+  members: Array<{
+    userId: string;
+    name: string;
+    image: string | null;
+    role: string;
+    joinedAt: string;
+  }>;
+  pendingRequests: JoinRequestEntry[];
+};
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+/**
+ * An inbox row.
+ *
+ * > **A discriminated union, mirroring the server's exactly - including `target`, which is imported
+ * > from `@clubchat/shared` rather than restated.** That import is the point: `notificationTarget`
+ * > is exhaustive over the type union on the server, so a new notification type that nothing routes
+ * > is a compile error there. Restating the shape here would throw that away and turn it into a
+ * > runtime surprise.
+ *
+ * This type was first written from a guess - `params: Record<string, unknown>`, a nullable `body`,
+ * `readAt` instead of `read` - and the screen crashed on `row.params.approved` the first time it
+ * rendered a real row. Which is precisely the warning at the top of this file: a hand-written type
+ * over somebody else's response is an assertion, not a check.
+ */
+export type InboxRow =
+  | {
+      kind: 'notification';
+      id: string;
+      type: string;
+      title: string;
+      body: string;
+      target: NotificationTarget;
+      read: boolean;
+      /** Present on a decided request, so the admin keeps a record of what they decided. */
+      decision?: 'approved' | 'denied';
+      createdAt: string;
+    }
+  | {
+      kind: 'chat_unread';
+      /** Synthetic and stable, since there is no row to have an id. */
+      id: string;
+      channelId: string;
+      channelName: string;
+      count: number;
+      target: NotificationTarget;
+      createdAt: string;
+    };
+
+export type InboxPage = { rows: InboxRow[]; nextCursor: string | null };
+
+// ---------------------------------------------------------------------------
+// Profile
+// ---------------------------------------------------------------------------
+
+export type Profile = {
+  userId: string;
+  name: string;
+  image: string | null;
+  bio: string | null;
+  city: string | null;
+  school: string | null;
+  /** Present only on your own profile. Absent is the server withholding it, not an empty value. */
+  dob?: string | null;
+  createdAt: string;
+};
+
+// ---------------------------------------------------------------------------
+// Chat reads that the Highlights and jump-to-message screens use
+// ---------------------------------------------------------------------------
+
+export type HighlightPage = { messages: MessageEnvelope[]; hasMore: boolean };
+
+export type AroundWindow = {
+  messages: MessageEnvelope[];
+  hasBefore: boolean;
+  hasAfter: boolean;
+};
+
+export type ReportRow = {
+  reportId: string;
+  channelId: string;
+  seq: number;
+  reporterId: string;
+  reporterName: string;
+  createdAt: string;
+  dismissedAt: string | null;
+  message: { body: string | null; senderId: string; senderName: string } | null;
+};
+
+export type GalleryEntry = {
+  mediaId: string;
+  seq: number;
+  /**
+   * The server's stable, permanent URLs - **which a web client cannot use directly.**
+   *
+   * They point at `GET /media/:id`, which answers 302 behind an `Authorization` header. `<img src>`
+   * sends no custom headers and react-native-web renders every `Image` as an `<img>`, so these are
+   * unusable exactly where this project develops and tests. The gallery therefore renders from
+   * `mediaId` through `resolveMediaUrl`, the JSON sibling of the same authorized hop - see the
+   * Phase 3 entry in HISTORY.md, where this cost an afternoon the first time.
+   *
+   * Kept in the type because they are on the wire and a native client CAN follow them.
+   */
+  url: string;
+  thumbUrl: string;
+  createdAt: string;
+};
+
+export type GalleryPage = { entries: GalleryEntry[]; nextCursor: number | null };
+
+export type { MessageEnvelope, MessageReaction, NotificationTarget };

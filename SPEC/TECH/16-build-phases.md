@@ -33,38 +33,68 @@ And from [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) "
 
 ## Where we are
 
-**Last updated 2026-07-30, after Phase 3.5 and the close of Phase 3.**
+**Last updated 2026-07-30, after Phase 3.75a.**
 
 | Phase | State | Note |
 |---|---|---|
 | 0 - Skeleton and the vertical slice | **Done** | Exit drill passes: nothing lost, nothing twice, identical order |
 | 1 - Effects, notifications, push | **Done** | |
 | 1.5 - Kafka downstream of the outbox | **Not started** | Skipped over. The worker still drains the outbox directly with `FOR UPDATE SKIP LOCKED`, which works and is correct - see below |
-| 2 - Breadth across the domain | **Done at the domain layer only** | Schema, 32 command handlers and the permission matrix. **No HTTP routes and no screens** - see below |
+| 2 - Breadth across the domain | **Done** | Schema, 32 command handlers and the permission matrix. Shipped with no routes and no screens; the routes arrived in 3.75a, the screens are 3.75b - see below |
 | 3 - Media and offline | **Done** | Closed 2026-07-30; the client can attach and render. Gallery grid and full-screen viewer outstanding |
 | 3.5 - Direct messages and safety tooling | **Done** | |
-| 4 - Hardening | **Not started** | Next, unless the surface gap below is taken first |
+| 3.75a - The HTTP surface | **Done** | 2026-07-30. 45 routes became **111**; ~20 new query and command functions; one new table; 76 route-level tests; five defects in shipped code fixed on the way. Gate met: 73 checks against a running server, `npm run gate:surface` |
+| 3.75b - The screens | **In progress** | Started 2026-07-30. The tab shell, the shared primitives and ~28 screens exist; the client data layer covers the whole API. Chat integration and the full reachability walk are outstanding - see below |
+| 4 - Hardening | **Not started** | Its parity checklist cannot be attempted until 3.75b |
 
 ### The two things this table is really saying
 
+> **Updated 2026-07-30, during Phase 3.75b.** The first point below is now **history rather than
+> status**: the domain is reachable, over 111 routes, and most of it now has a screen. It is kept
+> because the *reason* it happened is the most useful thing in this document, and because the
+> second point is still true.
+>
+> The client went from six files to roughly thirty-five during 3.75b: a real tab shell over the four
+> destinations `PRD/15` names, and screens for clubs, races, polls, meetings, news, routines, events,
+> the calendar, the Eboard space, Highlights, the gallery, profiles and the invite link. What is
+> still owed is listed under the phase below.
+
 **1. Phase 2 shipped a domain, not a feature.** Races, polls, calendar, routines, news and Eboard
-meetings all have schema, handlers and tests - 32 exported command handlers across four modules,
-47 test cases - and **none of them is reachable over HTTP**. The API registers 45 routes covering
+meetings all had schema, handlers and tests - 32 exported command handlers across four modules,
+47 test cases - and **none of them was reachable over HTTP**. The API registered 45 routes covering
 clubs, membership, chat reads, reactions, reports, moderation, mute, media, DMs, notifications,
-devices and sync, and nothing else. The Expo client has six screens: sign-in, the club list, chat,
-the DM list, and two layout files.
+devices and sync, and nothing else.
 
-**This is server work, not UI work**, and the distinction matters when planning: a finished screen
-would have nothing to call. Two further gaps found the same way, both outside Phase 2:
+**That was server work, not UI work**, and the distinction mattered when planning: a finished
+screen would have had nothing to call. Two further gaps were found the same way, both outside
+Phase 2:
 
-- **`setPinned` and `softDeleteMessage` have no route either.** Pinning and soft-deleting a
-  message are Phase 0 chat features, and the column-level authority trap they exist to solve is
-  carefully handled in the domain and unreachable from any client. `msg.update` now publishes both,
-  so the realtime half works and there is no way to trigger it.
-- **`eboard_join_requests` is not in the schema at all**, though [Data model](09-data-model.md)
-  specifies it and [Eboard and Council](../PRD/10-eboard-and-council.md) depends on it. An admin
-  who leaves the Eboard space must request or be re-added, and there is nowhere to record the
-  request. That is a domain gap rather than a delivery one - and it is **the only one**, see below.
+- **`setPinned` and `softDeleteMessage` had no route either.** Pinning and soft-deleting a message
+  are Phase 0 chat features, and the column-level authority trap they exist to solve was carefully
+  handled in the domain and unreachable from any client. `msg.update` had published both since
+  Phase 3.5, so the realtime half worked with no way to trigger it. *Routed in 3.75a, and the trap
+  is now proved the way PRD/18 asks: a member attempts the pin and is refused.*
+- **`eboard_join_requests` was not in the schema at all**, though [Data model](09-data-model.md)
+  specified it and [Eboard and Council](../PRD/10-eboard-and-council.md) depended on it. An admin
+  who left the Eboard space had to be re-added by somebody noticing, with nowhere to record a
+  request. A domain gap rather than a delivery one. *Built in 3.75a, shaped exactly like the club
+  and race request tables.*
+
+> **It was not the only one.** That sentence read "and it is **the only one**" until 2026-07-30,
+> when starting Phase 3.75a found five more: club search, invite-token rotation, account deletion,
+> profile editing, and both Highlights queries have no domain function either. Then a second pass
+> found that **the read side of almost every screen is missing too** - the 34 handlers are all
+> commands. Both are listed under Phase 3.75a below.
+>
+> Worth recording *why* the first count was wrong, because the method was the bug rather than the
+> care taken. The audit compared the **handler list** against the router, so it could only find
+> handlers nobody had routed. A capability that was never written at all appears in neither list
+> and survives the comparison untouched. The v1 table-by-table check made the same shape of
+> mistake safe in one dimension and not the other: it proved the *schema* complete, and four of
+> those five gaps sit on columns that already exist. **Audit against the spec, not against the
+> code's own inventory** - the code cannot list what it never had. The second pass worked because
+> it walked [Screen map](../PRD/15-screen-map.md) asking "what does this screen read?", which is
+> a question the codebase has no opinion about.
 
 ### Checked against v1, 2026-07-30
 
@@ -92,8 +122,10 @@ phase gate names something a person can do, and those phases all shipped a surfa
 can be met without a running surface will be**, which is worth carrying into how Phase 4's gate is
 written.
 
-This is the largest outstanding body of work in the project and it does not currently belong to
-any phase. It is sketched as "Phase 3.75" below, but numbering it is a product call.
+This is the largest outstanding body of work in the project. It became **Phase 3.75** on
+2026-07-30, split into **3.75a - the HTTP surface** and **3.75b - the screens**, taken in that
+order: the routes are server work, and until they exist the backend can only prove itself inside
+its own test suite. See below for both.
 
 **2. Phase 1.5 was skipped and is still owed.** The outbox is drained directly by the worker,
 which is correct, ordered and idempotent - so nothing is broken. What is missing is the
@@ -260,18 +292,183 @@ conversation produces no push while still incrementing its unread count.*
 > check constraint, so widening it starts with dropping that constraint - which is the right place
 > to be forced to think about validating arbitrary Unicode.
 
-**Phase 3.75 - The missing surface.** *(Proposed 2026-07-30. Numbering is a product call.)*
-Wire the 32 Phase 2 command handlers to HTTP routes, and build the screens
-[Screen map](../PRD/15-screen-map.md) already specifies for them: races and their roster, Meet
+**Phase 3.75a - The HTTP surface.** *(Started 2026-07-30.)*
+Routes over the 34 unrouted command handlers: the 12 race handlers, the 6 poll handlers, the 12
+content handlers (meetings, events, workouts, news), the 2 calendar reads, and `setPinned` and
+`softDeleteMessage`.
+
+**The proposal this replaces claimed "nothing here needs new domain logic or new schema", and that
+was wrong twice over.** Found by reading [Protocol](10-protocol.md)'s REST sketch and the
+[Screen map](../PRD/15-screen-map.md) against the router, rather than the handler list against the
+router.
+
+**First: the 34 are all *commands*, and a route needs something to return.** There is no read
+function for the club roster or its pending requests, the club or Eboard space itself, the race
+list, a race and its Meet Information, the race roster, the car groups, the news feed, the meetings
+list, or another member's profile card. Ten or so query functions, none of which exist. The one
+place this is *not* true is the calendar and the routines week, which Phase 2 built as reads
+already.
+
+**Second: six specified capabilities have no function of either kind** - only a column, or a spec
+line, waiting for one:
+
+| Gap | What exists today | Specified in |
+|---|---|---|
+| `eboard_join_requests` | Nothing. Not in the schema | [Data model](09-data-model.md), [Eboard and Council](../PRD/10-eboard-and-council.md) |
+| Club search | Nothing. No `GET /clubs/search`, no domain function | [Clubs and membership](../PRD/04-clubs-and-membership.md) |
+| Invite-token rotation | The `invite_token_rotated_at` column. Nothing writes it | [Roadmap](../PRD/17-roadmap-and-open-questions.md), a requirement since the typed code was removed |
+| Account deletion | The `anonymized_at` and `signin_blocked_at` columns, **read** by the auth hook and written by nothing | [Accounts and profile](../PRD/03-accounts-and-profile.md) rules 11-12 |
+| Profile editing and the avatar | Nothing. `GET /me` returns club roles only | [Accounts and profile](../PRD/03-accounts-and-profile.md) rules 5-6 |
+| Highlights, and jump-to-message | Nothing. No `/pinned`, no `/announcements`, no `?around={seq}` | [Protocol](10-protocol.md), [Chat](../PRD/05-chat.md) rules 7-8 |
+
+The last one is worth its own note: three lines of the
+[Acceptance checklist](../PRD/18-acceptance-checklist.md) - the pinned strip jumping to its message
+on the **first** tap, and chat opening on the first unread with no visible scrolling - cannot pass
+without `?around=`, and the Highlights tabs have no endpoint behind them in any scope. Both
+Highlights queries run over the whole channel server-side, never over a loaded window, which is
+debt item 6 above.
+
+*Done when: **every route has been called against the running API by hand**, in both directions -
+the happy path, and the forbidden path attempted as the unprivileged actor and watched to fail.
+Specifically including the direct-URL refusals the checklist names: a race poll requested by an
+admin with no roster row, an Eboard route by an ordinary member, another club's roster.*
+
+> **Why the gate is worded that way.** Phase 2's gate was *"the permission-matrix test suite covers
+> every cell"*, which a domain layer satisfies with no surface at all - and it did, for two phases.
+> A gate that can be met without a running surface will be. This one cannot be met by `npm test`.
+
+**Met on 2026-07-30**, and the gate is checked in as `scripts/surface-gate.sh`
+(`npm run gate:surface`) rather than performed once and described: **73 checks over TCP against a
+running server and a real Postgres**, all passing, of which roughly half are refusals. It found
+what a test-only gate could not - see the note on the stale dev server in AGENTS.md failure mode
+15, which reported 46 checks as broken before anything was wrong with the code.
+
+What landed:
+
+| | |
+|---|---|
+| Routes | 45 → **111** |
+| New query functions | Club roster and club detail; race list, race, roster, car groups; meetings list and meeting; news feed and post; the Eboard space and its roster; profile; club search; Highlights (pinned, announcements); jump-to-message |
+| New commands | Invite-token rotation, profile editing, account deletion, and the four Eboard membership commands |
+| New schema | `eboard_join_requests`, and a check constraint on `news_reactions.emoji` |
+| Tests | 76 route-level cases across five files, all through the HTTP stack with real session tokens |
+| Constraint proof | 62 → **70** assertions |
+
+Five defects in shipped code, none of them in the phase's own new work, all found because a
+client-shaped caller finally existed. Full accounts in [`HISTORY.md`](../../HISTORY.md):
+
+1. **Account revocation had never worked**, in both the API and the gateway, since Phase 0.
+2. **An untargeted `ON CONFLICT DO NOTHING`** silently swallowed car-group invariant 5.
+3. **A malformed id was a 500** on every id-addressed route, with a stack trace in the log.
+4. **`news_reactions.emoji` was unconstrained text**, so PRD/06 rule 4 held only for want of a
+   writer - and this phase was about to add the writer.
+5. **A two-part authorization check could be satisfied against two different clubs**, had the
+   poll routes accepted a `clubId` from the caller. Never exploitable, because no route existed;
+   the fix is that the owning club is resolved server-side and no route takes one.
+
+The one product question this phase could not answer for itself is recorded in
+[Roadmap](../PRD/17-roadmap-and-open-questions.md): what account deletion should do when the
+caller still owns a club. Built as a refusal, which is the only option that keeps both the
+one-Owner invariant and the other members' club.
+
+**Phase 3.75b - The screens.** *(Started 2026-07-30.)*
+The screens [Screen map](../PRD/15-screen-map.md) already specifies: races and their roster, Meet
 Information and car groups; polls in three scopes with inline voting; the calendar and events
 list; routines; news and Highlights; the Eboard space and its meetings. Plus the surfaces every
 phase has quietly deferred - the notification inbox, the member roster, profile, and chat's own
 Highlights tabs. And Phase 3's remaining two: the Gallery grid and the full-screen viewer.
 
-Nothing here needs new domain logic or new schema. It is routes and screens over work that is
-already written, already authorized and already tested, which is the cheapest this will ever be.
-*Done when: every screen in [Screen map](../PRD/15-screen-map.md) exists and is reachable, and the
-[Acceptance checklist](../PRD/18-acceptance-checklist.md) can be attempted at all.*
+Ordinary client work now, against a surface that is finished and tested. Three things decided up
+front, because each is the difference between forty screens and forty *copies*:
+
+1. **The four top-level destinations become a real tab group** - Clubs, Calendar, Notifications,
+   Profile - with the unread badge on Notifications. There was no tab bar at all; Messages hung
+   off the bottom of the club list as a button, which is not what
+   [Screen map](../PRD/15-screen-map.md) describes.
+2. **Loading, loaded and retryable-error are one component, used by every screen that reads.**
+   [Cross-cutting UX](../PRD/16-cross-cutting-ux.md) rules 1 and 2 are requirements rather than
+   polish, and forty hand-written copies of a three-state fetch is how a blank-on-error screen
+   gets shipped. Same argument as the policy module, one layer up.
+3. **Shared screens, not forked copies**, per [Design system](13-design-system.md) rule 5. Polls,
+   Highlights, Members, Gallery and the calendar each have **one** implementation parametrised by
+   scope. If any of them forks per scope, the channel abstraction has been broken in the client
+   after surviving intact in the server.
+
+*Done when: every screen in [Screen map](../PRD/15-screen-map.md) exists and is reachable, **every
+one of them can be navigated back out of when entered by direct URL with no history**, and the
+[Acceptance checklist](../PRD/18-acceptance-checklist.md) can be attempted end to end.*
+
+> **Why the back-out clause is in the gate.** It is [Screen map](../PRD/15-screen-map.md) rule 3,
+> it has already shipped as a bug twice in this project, and it is invisible to clicking through -
+> the navigator renders its own back button only when history exists, so every screen looks fine
+> until somebody opens a notification deep link or refreshes the page.
+
+**Progress, 2026-07-30.** The shell and the screens exist, the app runs, and every screen has been
+walked by direct URL. What is still owed is listed at the end.
+
+Built: the `(tabs)` group over Clubs, Calendar, Notifications and Profile, with the badge live on
+its own destination. A client data layer covering all 111 routes (`src/api.ts`), so no screen
+assembles a URL or a header. `useLoad` plus `<DataScreen>`, which is where loading, retryable-error
+and empty live once rather than per screen. Roughly twenty-eight screens, with Polls, Highlights and
+the Calendar each **one** implementation parametrised by scope.
+
+Three defects found by running it, all fixed:
+
+1. **Every screen entered by direct URL had no back control**, caught on `/clubs/:id/members`. The
+   layout declared titles and left `headerLeft` to the navigator, which renders one only when
+   history exists - rule 3 again, the third time in this project. Now every screen declares one, and
+   the nested ones build it from their own route params so a screen inside a club goes back to *that
+   club*.
+2. **The invite link pointed at the API origin.** `/join/:token` is a client route, so the link an
+   admin copies would have sent whoever tapped it to a server with no such path. Now
+   `Linking.createURL`, which is the app's own address on every platform.
+3. **The inbox crashed on its first real row.** The hand-written client type for an inbox row was a
+   guess - `params`, a nullable body, `readAt` - and the real shape is a discriminated union with a
+   `NotificationTarget`. That type is now imported from `@clubchat/shared` instead of restated, so
+   the client's routing switch is exhaustive over it the same way the server's is.
+
+Then three more, found by walking the rest of the screens - all of the same family, a hand-written
+client type disagreeing with what the server actually returns:
+
+4. **The gallery crashed on load.** Its page type said `{ items, hasMore }`; the server returns
+   `{ entries, nextCursor }`. Worth more than the fix: each entry also carries `url` and `thumbUrl`,
+   and **a web client cannot use either** - they point at the 302-behind-a-header endpoint that
+   Phase 3 already established is unusable as an `<img src>`. The gallery renders from `mediaId`
+   through the JSON sibling instead, and the type now says why in the place somebody would reach
+   for them.
+5. **Every news post read as "edited".** The marker was `updatedAt !== null`, and both timestamp
+   columns default to `now()` - so a post was labelled edited from the moment it was created. It is
+   `updatedAt !== createdAt`.
+6. **A plain member was offered the Reports tab**, which would always have errored: reports reach
+   only that space's admins. `readChannelMeta` now returns `canReadReports`, so the client offers
+   the tab on the server's own answer rather than guessing from `canPin` - which would have been
+   wrong for a DM, where the reader is a platform moderator and not either participant.
+
+Also: chat now reads the `?around=seq` that Highlights and notification deep links hand it, fetching
+the window, caching it in the local store, scrolling the target to the middle and marking it - so a
+jump is one tap and the reader can see where they landed. News can attach a photo, uploaded against
+the club's main channel because that channel's access rules are exactly news's audience.
+
+**Verified by walking it** as three different actors - owner, an admin with no race roster row, and
+a plain member - against a real API, gateway, worker and Postgres:
+
+- Every screen renders, and **every one entered by direct URL with no history has a back control**.
+- A race member opening `/races/:id` lands in **race chat**, whose back goes to Clubs and never to
+  the hub. No bounce.
+- The header quick-nav carries exactly its scope's entries.
+- A poll card posted itself into race chat on creation.
+- Voting **casts, moves and withdraws** on the same gesture, and opening the voter list cast nothing.
+- A deadline-less poll sits in Upcoming, sorted last, and never falls into Past.
+- The manager with no roster row gets the preview, "You manage this", Meet Information with its
+  per-field empty states, and a route into the roster **only**.
+- That same admin is refused the race poll **by direct URL**, and the car groups, each landing on a
+  retryable "Not found" rather than a blank.
+- The Eboard row is **absent** for a plain member, and its URL refuses them.
+- A member sees the roster with no role or removal controls at all.
+- An invalid invite link says so plainly and offers search, disclosing nothing.
+
+Still owed: the acceptance checklist run end to end on **all three platforms** - everything above is
+web only, and the simulator has still never been run.
 
 **Phase 4 - Hardening.**
 Rate limits everywhere. Retention and GC jobs. Accessibility pass on every icon-only control.

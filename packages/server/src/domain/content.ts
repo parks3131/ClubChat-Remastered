@@ -18,6 +18,7 @@
 
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
+import { isoUtc } from '../db/sql-helpers.ts';
 import {
   calendarEvents,
   meetings,
@@ -55,9 +56,9 @@ export async function createMeeting(
     eboardId: string;
     clubId: string;
     title: string;
-    description?: string | null;
+    description?: string | null | undefined;
     startsAt: string;
-    link?: string | null;
+    link?: string | null | undefined;
   },
 ): Promise<Result<{ meetingId: string }>> {
   if (!canCreateMeeting(ctx, input.eboardId)) return { ok: false, code: 'forbidden' };
@@ -104,11 +105,14 @@ export async function updateMeeting(
   db: Db,
   ctx: AccessContext,
   meetingId: string,
+  // Optional AND explicitly `undefined`-able, which `exactOptionalPropertyTypes` treats as two
+  // different things: a validated body hands over the key holding undefined rather than omitting
+  // it. The body below reads `!== undefined`, so both mean "leave this field alone".
   fields: {
-    title?: string;
-    description?: string | null;
-    startsAt?: string;
-    link?: string | null;
+    title?: string | undefined;
+    description?: string | null | undefined;
+    startsAt?: string | undefined;
+    link?: string | null | undefined;
   },
 ): Promise<Result<{ updated: true }>> {
   const rows = await db.select().from(meetings).where(eq(meetings.id, meetingId)).limit(1);
@@ -180,9 +184,9 @@ export async function createEvent(
     type: EventType;
     title: string;
     startsAt: string;
-    endsAt?: string | null;
-    location?: string | null;
-    description?: string | null;
+    endsAt?: string | null | undefined;
+    location?: string | null | undefined;
+    description?: string | null | undefined;
   },
 ): Promise<Result<{ eventId: string }>> {
   if (!canManageClubContent(ctx, input.clubId)) return { ok: false, code: 'forbidden' };
@@ -278,7 +282,7 @@ export async function createWorkout(
     workoutDate: string;
     activityType: ActivityType;
     title: string;
-    description?: string | null;
+    description?: string | null | undefined;
   },
 ): Promise<Result<{ workoutId: string }>> {
   if (!canManageClubContent(ctx, input.clubId)) return { ok: false, code: 'forbidden' };
@@ -422,7 +426,7 @@ function isoPlusDays(iso: string, days: number): string {
 export async function createNewsPost(
   db: Db,
   ctx: AccessContext,
-  input: { clubId: string; body?: string | null; mediaId?: string | null },
+  input: { clubId: string; body?: string | null | undefined; mediaId?: string | null | undefined },
 ): Promise<Result<{ postId: string }>> {
   if (!canManageClubContent(ctx, input.clubId)) return { ok: false, code: 'forbidden' };
   const hasBody = (input.body ?? '').trim().length > 0;
@@ -461,7 +465,7 @@ export async function updateNewsPost(
   db: Db,
   ctx: AccessContext,
   postId: string,
-  fields: { body?: string | null; mediaId?: string | null },
+  fields: { body?: string | null | undefined; mediaId?: string | null | undefined },
 ): Promise<Result<{ updated: true }>> {
   const rows = await db.select().from(newsPosts).where(eq(newsPosts.id, postId)).limit(1);
   const post = rows[0];
@@ -544,4 +548,310 @@ export async function toggleNewsReaction(
     .values({ postId, userId: ctx.userId, emoji })
     .onConflictDoNothing();
   return { ok: true, reacted: true };
+}
+
+// ---------------------------------------------------------------------------
+// Reads
+// ---------------------------------------------------------------------------
+//
+// `readRoutineWeek` above was the only read this module had. The meetings list, a single
+// meeting and the news feed are all screens in PRD/15 with nothing behind them, which is the
+// shape of gap Phase 3.75a exists to close.
+
+export type MeetingSummary = {
+  id: string;
+  title: string;
+  startsAt: string;
+  link: string | null;
+  creatorId: string;
+  creatorName: string;
+  /** Only the creator may edit or delete, in every case. */
+  isCreator: boolean;
+};
+
+export type MeetingDetail = MeetingSummary & {
+  description: string | null;
+  eboardId: string;
+  /** Resolved from the space, never taken from a caller. Effects route on it. */
+  clubId: string;
+};
+
+/**
+ * Upcoming or past meetings for one Eboard space.
+ *
+ * Split on `starts_at` against now rather than stored as a flag, for the same reason a poll's
+ * closed-ness is evaluated at read time: a meeting becomes past by the clock passing it, and
+ * nothing should have to run for that to be true.
+ *
+ * Ordering differs per half on purpose - upcoming ascending, so the next one is first; past
+ * descending, so the most recent is first. Both put the meeting a reader is looking for at the
+ * top of the list they opened.
+ */
+export async function listMeetings(
+  db: Db,
+  ctx: AccessContext,
+  eboardId: string,
+  when: 'upcoming' | 'past',
+): Promise<Result<{ meetings: MeetingSummary[] }>> {
+  if (!isEboardMember(ctx, eboardId)) return { ok: false, code: 'not_found' };
+
+  const rows = await db.execute<{
+    id: string;
+    title: string;
+    starts_at: string;
+    link: string | null;
+    creator_id: string;
+    full_name: string;
+  }>(sql`
+    SELECT m.id::text AS id,
+           m.title,
+           ${isoUtc('m.starts_at')} AS starts_at,
+           m.link,
+           m.creator_id::text AS creator_id,
+           u.full_name
+      FROM meetings m
+      JOIN users u ON u.id = m.creator_id
+     WHERE m.eboard_id = ${eboardId}
+       AND ${when === 'upcoming' ? sql`m.starts_at >= now()` : sql`m.starts_at < now()`}
+     ORDER BY m.starts_at ${when === 'upcoming' ? sql`ASC` : sql`DESC`}
+  `);
+
+  return {
+    ok: true,
+    meetings: rows.rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      startsAt: row.starts_at,
+      link: row.link,
+      creatorId: row.creator_id,
+      creatorName: row.full_name,
+      isCreator: row.creator_id === ctx.userId,
+    })),
+  };
+}
+
+/** One meeting. Members of the space only; the detail view shows "Added by <name>". */
+export async function readMeeting(
+  db: Db,
+  ctx: AccessContext,
+  meetingId: string,
+): Promise<Result<{ meeting: MeetingDetail }>> {
+  const rows = await db.execute<{
+    id: string;
+    title: string;
+    description: string | null;
+    starts_at: string;
+    link: string | null;
+    creator_id: string;
+    full_name: string;
+    eboard_id: string;
+    club_id: string;
+  }>(sql`
+    SELECT m.id::text AS id,
+           m.title,
+           m.description,
+           ${isoUtc('m.starts_at')} AS starts_at,
+           m.link,
+           m.creator_id::text AS creator_id,
+           u.full_name,
+           m.eboard_id::text AS eboard_id,
+           eb.club_id::text AS club_id
+      FROM meetings m
+      JOIN users u ON u.id = m.creator_id
+      JOIN eboard_channels eb ON eb.id = m.eboard_id
+     WHERE m.id = ${meetingId}
+  `);
+
+  const row = rows.rows[0];
+  if (!row) return { ok: false, code: 'not_found' };
+  if (!isEboardMember(ctx, row.eboard_id)) return { ok: false, code: 'not_found' };
+
+  return {
+    ok: true,
+    meeting: {
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      startsAt: row.starts_at,
+      link: row.link,
+      creatorId: row.creator_id,
+      creatorName: row.full_name,
+      isCreator: row.creator_id === ctx.userId,
+      eboardId: row.eboard_id,
+      clubId: row.club_id,
+    },
+  };
+}
+
+export const NEWS_PAGE_SIZE = 20;
+
+export type NewsPostView = {
+  id: string;
+  body: string | null;
+  mediaId: string | null;
+  authorId: string;
+  authorName: string;
+  authorImage: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+  /** Every emoji with a count, and whether this viewer is in it. */
+  reactions: Array<{ emoji: string; count: number; mine: boolean }>;
+};
+
+/**
+ * The club's front page: reverse-chronological, newest first.
+ *
+ * **No pinning and no ordering controls** (PRD/06 rule 2), which is the difference from chat
+ * Highlights and the reason there is no sort parameter here.
+ *
+ * Paged by a `before` timestamp rather than an offset, because an offset shifts under a page
+ * whenever a newer post lands - and this feed's whole job is that new posts land at the top.
+ */
+export async function readNewsFeed(
+  db: Db,
+  ctx: AccessContext,
+  clubId: string,
+  opts: { before?: string | undefined; limit?: number | undefined } = {},
+): Promise<Result<{ posts: NewsPostView[]; hasMore: boolean }>> {
+  if (!canReadClubContent(ctx, clubId)) return { ok: false, code: 'not_found' };
+
+  const limit = Math.min(opts.limit ?? NEWS_PAGE_SIZE, 100);
+
+  const rows = await db.execute<{
+    id: string;
+    body: string | null;
+    media_id: string | null;
+    author_id: string;
+    full_name: string;
+    image: string | null;
+    created_at: string;
+    updated_at: string | null;
+  }>(sql`
+    SELECT p.id::text AS id,
+           p.body,
+           p.media_id::text AS media_id,
+           p.author_id::text AS author_id,
+           u.full_name,
+           u.image,
+           ${isoUtc('p.created_at')} AS created_at,
+           ${isoUtc('p.updated_at')} AS updated_at
+      FROM news_posts p
+      JOIN users u ON u.id = p.author_id
+     WHERE p.club_id = ${clubId}
+       ${opts.before ? sql`AND p.created_at < ${opts.before}::timestamptz` : sql``}
+     ORDER BY p.created_at DESC
+     LIMIT ${limit + 1}
+  `);
+
+  // One row over the limit answers "is there more" without a second count query.
+  const hasMore = rows.rows.length > limit;
+  const page = hasMore ? rows.rows.slice(0, limit) : rows.rows;
+
+  return {
+    ok: true,
+    posts: await withReactions(db, ctx, page),
+    hasMore,
+  };
+}
+
+/** One post, for the permalink a notification opens. */
+export async function readNewsPost(
+  db: Db,
+  ctx: AccessContext,
+  postId: string,
+): Promise<Result<{ post: NewsPostView }>> {
+  const rows = await db.execute<{
+    id: string;
+    club_id: string;
+    body: string | null;
+    media_id: string | null;
+    author_id: string;
+    full_name: string;
+    image: string | null;
+    created_at: string;
+    updated_at: string | null;
+  }>(sql`
+    SELECT p.id::text AS id,
+           p.club_id::text AS club_id,
+           p.body,
+           p.media_id::text AS media_id,
+           p.author_id::text AS author_id,
+           u.full_name,
+           u.image,
+           ${isoUtc('p.created_at')} AS created_at,
+           ${isoUtc('p.updated_at')} AS updated_at
+      FROM news_posts p
+      JOIN users u ON u.id = p.author_id
+     WHERE p.id = ${postId}
+  `);
+
+  const row = rows.rows[0];
+  if (!row) return { ok: false, code: 'not_found' };
+  if (!canReadClubContent(ctx, row.club_id)) return { ok: false, code: 'not_found' };
+
+  const [post] = await withReactions(db, ctx, [row]);
+  if (!post) return { ok: false, code: 'not_found' };
+  return { ok: true, post };
+}
+
+/**
+ * Attach reaction summaries to a page of posts in ONE query.
+ *
+ * Not one query per post: a feed of twenty would otherwise cost twenty round trips for
+ * something the client renders as a single row of counts. The same reasoning as
+ * `reactionsForMessages` on the chat side, and the same shape - grouped by emoji with the
+ * viewer's own membership resolved server-side, because "did I react" cannot be derived from
+ * a count.
+ */
+async function withReactions(
+  db: Db,
+  ctx: AccessContext,
+  rows: ReadonlyArray<{
+    id: string;
+    body: string | null;
+    media_id: string | null;
+    author_id: string;
+    full_name: string;
+    image: string | null;
+    created_at: string;
+    updated_at: string | null;
+  }>,
+): Promise<NewsPostView[]> {
+  if (rows.length === 0) return [];
+
+  const ids = rows.map((row) => row.id);
+  const reactionRows = await db.execute<{
+    post_id: string;
+    emoji: string;
+    count: string;
+    mine: boolean;
+  }>(sql`
+    SELECT post_id::text AS post_id,
+           emoji,
+           count(*) AS count,
+           bool_or(user_id = ${ctx.userId}) AS mine
+      FROM news_reactions
+     WHERE post_id = ANY(${sql.param(ids)}::uuid[])
+     GROUP BY post_id, emoji
+     ORDER BY emoji
+  `);
+
+  const byPost = new Map<string, NewsPostView['reactions']>();
+  for (const row of reactionRows.rows) {
+    const list = byPost.get(row.post_id) ?? [];
+    list.push({ emoji: row.emoji, count: Number(row.count), mine: row.mine });
+    byPost.set(row.post_id, list);
+  }
+
+  return rows.map((row) => ({
+    id: row.id,
+    body: row.body,
+    mediaId: row.media_id,
+    authorId: row.author_id,
+    authorName: row.full_name,
+    authorImage: row.image,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    reactions: byPost.get(row.id) ?? [],
+  }));
 }

@@ -10,7 +10,40 @@
  * truth about what has been delivered.
  */
 
-import type { MessageReaction, ReactionEmoji } from '@clubchat/shared';
+import type {
+  Club,
+  ClubRole,
+  JoinPolicy,
+  MessageEnvelope,
+  MessageReaction,
+  ReactionEmoji,
+} from '@clubchat/shared';
+import type {
+  ActivityType,
+  AroundWindow,
+  CarGroupsView,
+  ClubDetail,
+  ClubRoster,
+  ClubSearchResult,
+  EboardDetail,
+  EboardRoster,
+  EventType,
+  FeedItem,
+  GalleryPage,
+  HighlightPage,
+  InboxPage,
+  MeetingDetail,
+  MeetingSummary,
+  NewsPost,
+  PollSummary,
+  PollView,
+  Profile,
+  RaceDetail,
+  RaceListItem,
+  RaceRoster,
+  ReportRow,
+  RoutineDay,
+} from './api-types.ts';
 import { config } from './config.ts';
 import { sessionStore } from './session.ts';
 
@@ -92,9 +125,14 @@ export type ChannelMeta = {
   channelId: string;
   scope: 'club' | 'race' | 'eboard' | 'dm';
   name: string;
+  /** The scope the header quick-nav links into. `clubId` is null only for a dm. */
+  scopeId: string;
+  clubId: string | null;
   canPost: boolean;
   postDeniedReason: PostDeniedReason | null;
   canPin: boolean;
+  /** Whether to OFFER the Reports tab. Never computed from canPin - see the server's note. */
+  canReadReports: boolean;
   muted: boolean;
   peer: { userId: string; name: string; blockedByMe: boolean } | null;
 };
@@ -149,6 +187,373 @@ export const dmApi = {
     apiFetch<{ reactions: MessageReaction[] }>(
       `/channels/${channelId}/messages/${seq}/reactions`,
     ),
+};
+
+// ---------------------------------------------------------------------------
+// Everything else
+// ---------------------------------------------------------------------------
+//
+// One binding per route, grouped the way the routes are. The point is not brevity: it is that a
+// screen never assembles a URL or a header, so a path that changes on the server changes in one
+// place here. `clubs/index.tsx` used to build its own `fetch` with its own headers, which is the
+// duplication this module exists to prevent - one screen forgetting the header is an
+// unauthenticated request that reads as an empty list.
+
+const query = (params: Record<string, string | number | undefined>): string => {
+  const pairs = Object.entries(params).filter(([, v]) => v !== undefined && v !== '');
+  return pairs.length === 0
+    ? ''
+    : `?${pairs.map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&')}`;
+};
+
+export const clubApi = {
+  mine: () => apiFetch<{ clubs: Club[] }>('/clubs'),
+
+  create: (body: { name: string; sport: string; description?: string; joinPolicy?: JoinPolicy }) =>
+    apiFetch<{ clubId: string; mainChannelId: string; eboardId: string; inviteToken: string }>(
+      '/clubs',
+      { method: 'POST', body },
+    ),
+
+  detail: (clubId: string) => apiFetch<{ club: ClubDetail }>(`/clubs/${clubId}`),
+
+  roster: (clubId: string) => apiFetch<ClubRoster>(`/clubs/${clubId}/members`),
+
+  /** Clears that club's pending join-request notifications. Only opening the roster does. */
+  rosterSeen: (clubId: string) =>
+    apiFetch<{ cleared: number }>(`/clubs/${clubId}/members/seen`, { method: 'POST', body: {} }),
+
+  search: (q: string) => apiFetch<{ clubs: ClubSearchResult[] }>(`/clubs/search${query({ q })}`),
+
+  join: (clubId: string) =>
+    apiFetch<{ status: 'joined' | 'requested'; role?: ClubRole }>(`/clubs/${clubId}/join`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  redeemInvite: (token: string) =>
+    apiFetch<{ status: 'joined' | 'requested' }>(`/invites/${token}/redeem`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  rotateInvite: (clubId: string) =>
+    apiFetch<{ inviteToken: string }>(`/clubs/${clubId}/invite-token/rotate`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  setJoinPolicy: (clubId: string, joinPolicy: JoinPolicy) =>
+    apiFetch<unknown>(`/clubs/${clubId}`, { method: 'PATCH', body: { joinPolicy } }),
+
+  addMember: (clubId: string, userId: string) =>
+    apiFetch<unknown>(`/clubs/${clubId}/members`, { method: 'POST', body: { userId } }),
+
+  changeRole: (clubId: string, userId: string, role: 'admin' | 'member') =>
+    apiFetch<unknown>(`/clubs/${clubId}/members/${userId}/role`, { method: 'PATCH', body: { role } }),
+
+  removeMember: (clubId: string, userId: string) =>
+    apiFetch<unknown>(`/clubs/${clubId}/members/${userId}`, { method: 'DELETE' }),
+
+  leave: (clubId: string) =>
+    apiFetch<unknown>(`/clubs/${clubId}/leave`, { method: 'POST', body: {} }),
+
+  transferOwnership: (clubId: string, toUserId: string) =>
+    apiFetch<unknown>(`/clubs/${clubId}/transfer-ownership`, { method: 'POST', body: { toUserId } }),
+
+  remove: (clubId: string) => apiFetch<{ deleted: boolean }>(`/clubs/${clubId}`, { method: 'DELETE' }),
+
+  decideRequest: (requestId: string, approve: boolean) =>
+    apiFetch<unknown>(`/join-requests/${requestId}/${approve ? 'approve' : 'deny'}`, {
+      method: 'POST',
+      body: {},
+    }),
+};
+
+export const raceApi = {
+  list: (clubId: string, q?: string) =>
+    apiFetch<{ races: RaceListItem[] }>(`/clubs/${clubId}/races${query({ q })}`),
+
+  detail: (raceId: string) => apiFetch<{ race: RaceDetail }>(`/races/${raceId}`),
+
+  create: (clubId: string, body: { name: string; raceDate: string }) =>
+    apiFetch<{ raceId: string; channelId: string }>(`/clubs/${clubId}/races`, {
+      method: 'POST',
+      body,
+    }),
+
+  remove: (raceId: string) => apiFetch<unknown>(`/races/${raceId}`, { method: 'DELETE' }),
+
+  /** All five fields as one form: an absent field is cleared, not kept. */
+  saveMeetInformation: (
+    raceId: string,
+    body: {
+      meetDescription?: string | null;
+      meetLocationUrl?: string | null;
+      meetHotelUrl?: string | null;
+      meetPhotosUrl?: string | null;
+      meetResultsUrl?: string | null;
+    },
+  ) => apiFetch<unknown>(`/races/${raceId}/meet-information`, { method: 'PATCH', body }),
+
+  /** Personal. Affects only the pinner's own hub, never anybody else's. */
+  setPin: (raceId: string, pinned: boolean) =>
+    apiFetch<{ pinned: boolean }>(`/races/${raceId}/pin`, { method: 'POST', body: { pinned } }),
+
+  roster: (raceId: string) => apiFetch<RaceRoster>(`/races/${raceId}/members`),
+
+  rosterSeen: (raceId: string) =>
+    apiFetch<{ cleared: number }>(`/races/${raceId}/members/seen`, { method: 'POST', body: {} }),
+
+  requestAccess: (raceId: string) =>
+    apiFetch<{ status: 'requested' }>(`/races/${raceId}/join-requests`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  decideRequest: (requestId: string, approve: boolean) =>
+    apiFetch<unknown>(`/race-join-requests/${requestId}/${approve ? 'approve' : 'deny'}`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  addMember: (raceId: string, userId: string) =>
+    apiFetch<unknown>(`/races/${raceId}/members`, { method: 'POST', body: { userId } }),
+
+  removeMember: (raceId: string, userId: string) =>
+    apiFetch<unknown>(`/races/${raceId}/members/${userId}`, { method: 'DELETE' }),
+
+  carGroups: (raceId: string) => apiFetch<CarGroupsView>(`/races/${raceId}/car-groups`),
+
+  createCarGroup: (raceId: string) =>
+    apiFetch<{ groupId: string; number: number }>(`/races/${raceId}/car-groups`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  assignToCarGroup: (groupId: string, userId: string) =>
+    apiFetch<unknown>(`/car-groups/${groupId}/members`, { method: 'POST', body: { userId } }),
+
+  /** Null clears it. The Incharge must be a current member of that group. */
+  setIncharge: (groupId: string, userId: string | null) =>
+    apiFetch<{ inchargeUserId: string | null }>(`/car-groups/${groupId}/incharge`, {
+      method: 'PATCH',
+      body: { userId },
+    }),
+
+  leaveCarGroup: (raceId: string, userId: string) =>
+    apiFetch<unknown>(`/races/${raceId}/car-group-members/${userId}`, { method: 'DELETE' }),
+};
+
+/** The scope a poll belongs to. The path names it; there is no body field for it. */
+export type PollScope = 'clubs' | 'races' | 'eboards';
+
+export const pollApi = {
+  list: (scope: PollScope, scopeId: string) =>
+    apiFetch<{ polls: PollSummary[] }>(`/${scope}/${scopeId}/polls`),
+
+  create: (
+    scope: PollScope,
+    scopeId: string,
+    body: {
+      question: string;
+      options: string[];
+      allowMultiple?: boolean;
+      isPrivate?: boolean;
+      closesInMinutes?: number | null;
+    },
+  ) => apiFetch<{ pollId: string }>(`/${scope}/${scopeId}/polls`, { method: 'POST', body }),
+
+  detail: (pollId: string) => apiFetch<{ poll: PollView }>(`/polls/${pollId}`),
+
+  /** Cast, move or withdraw - one gesture. Addressed by option, which identifies its poll. */
+  vote: (optionId: string) =>
+    apiFetch<{ action: 'cast' | 'withdrawn' | 'moved' }>(`/poll-options/${optionId}/vote`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  setClosed: (pollId: string, closed: boolean) =>
+    apiFetch<{ closed: boolean }>(`/polls/${pollId}/closed`, { method: 'POST', body: { closed } }),
+
+  remove: (pollId: string) => apiFetch<unknown>(`/polls/${pollId}`, { method: 'DELETE' }),
+};
+
+export const contentApi = {
+  meetings: (eboardId: string, when: 'upcoming' | 'past') =>
+    apiFetch<{ meetings: MeetingSummary[] }>(`/eboards/${eboardId}/meetings${query({ when })}`),
+
+  meeting: (meetingId: string) => apiFetch<{ meeting: MeetingDetail }>(`/meetings/${meetingId}`),
+
+  createMeeting: (
+    eboardId: string,
+    body: { title: string; description?: string | null; startsAt: string; link?: string | null },
+  ) => apiFetch<{ meetingId: string }>(`/eboards/${eboardId}/meetings`, { method: 'POST', body }),
+
+  updateMeeting: (
+    meetingId: string,
+    body: { title?: string; description?: string | null; startsAt?: string; link?: string | null },
+  ) => apiFetch<unknown>(`/meetings/${meetingId}`, { method: 'PATCH', body }),
+
+  deleteMeeting: (meetingId: string) =>
+    apiFetch<unknown>(`/meetings/${meetingId}`, { method: 'DELETE' }),
+
+  createEvent: (
+    clubId: string,
+    body: {
+      type: EventType;
+      title: string;
+      startsAt: string;
+      endsAt?: string | null;
+      location?: string | null;
+      description?: string | null;
+    },
+  ) => apiFetch<{ eventId: string }>(`/clubs/${clubId}/events`, { method: 'POST', body }),
+
+  deleteEvent: (eventId: string) => apiFetch<unknown>(`/events/${eventId}`, { method: 'DELETE' }),
+
+  /** The Monday is required: "this week" is a question about the caller's timezone. */
+  routines: (clubId: string, monday: string) =>
+    apiFetch<{ days: RoutineDay[] }>(`/clubs/${clubId}/routines${query({ monday })}`),
+
+  createWorkout: (
+    clubId: string,
+    body: {
+      workoutDate: string;
+      activityType: ActivityType;
+      title: string;
+      description?: string | null;
+    },
+  ) => apiFetch<{ workoutId: string }>(`/clubs/${clubId}/workouts`, { method: 'POST', body }),
+
+  deleteWorkout: (workoutId: string) =>
+    apiFetch<unknown>(`/workouts/${workoutId}`, { method: 'DELETE' }),
+
+  news: (clubId: string, before?: string) =>
+    apiFetch<{ posts: NewsPost[]; hasMore: boolean }>(`/clubs/${clubId}/news${query({ before })}`),
+
+  newsPost: (postId: string) => apiFetch<{ post: NewsPost }>(`/news/${postId}`),
+
+  createNews: (clubId: string, body: { body?: string | null; mediaId?: string | null }) =>
+    apiFetch<{ postId: string }>(`/clubs/${clubId}/news`, { method: 'POST', body }),
+
+  updateNews: (postId: string, body: { body?: string | null; mediaId?: string | null }) =>
+    apiFetch<unknown>(`/news/${postId}`, { method: 'PATCH', body }),
+
+  deleteNews: (postId: string) => apiFetch<unknown>(`/news/${postId}`, { method: 'DELETE' }),
+
+  /** The same emoji set as chat, which a check constraint on the column also enforces. */
+  toggleNewsReaction: (postId: string, emoji: ReactionEmoji) =>
+    apiFetch<{ reacted: boolean }>(`/news/${postId}/reactions`, { method: 'POST', body: { emoji } }),
+};
+
+export const calendarApi = {
+  /** Omit `club` for the cross-club view, which tags each row and offers no create action. */
+  feed: (opts: { club?: string; when?: 'upcoming' | 'past' | 'all' } = {}) =>
+    apiFetch<{ items: FeedItem[] }>(`/calendar${query({ club: opts.club, when: opts.when })}`),
+
+  markers: (opts: { club?: string; year: number; month: number }) =>
+    apiFetch<{ days: string[] }>(`/calendar/markers${query(opts)}`),
+};
+
+export const eboardApi = {
+  detail: (eboardId: string) => apiFetch<{ eboard: EboardDetail }>(`/eboards/${eboardId}`),
+
+  roster: (eboardId: string) => apiFetch<EboardRoster>(`/eboards/${eboardId}/members`),
+
+  rosterSeen: (eboardId: string) =>
+    apiFetch<{ cleared: number }>(`/eboards/${eboardId}/members/seen`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  /** The path nobody uses in normal operation: an admin who deliberately left. */
+  requestAccess: (eboardId: string) =>
+    apiFetch<{ status: 'requested' }>(`/eboards/${eboardId}/join-requests`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  decideRequest: (requestId: string, approve: boolean) =>
+    apiFetch<unknown>(`/eboard-join-requests/${requestId}/${approve ? 'approve' : 'deny'}`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  addMember: (eboardId: string, userId: string) =>
+    apiFetch<unknown>(`/eboards/${eboardId}/members`, { method: 'POST', body: { userId } }),
+
+  removeMember: (eboardId: string, userId: string) =>
+    apiFetch<unknown>(`/eboards/${eboardId}/members/${userId}`, { method: 'DELETE' }),
+};
+
+export const inboxApi = {
+  page: (cursor?: string) => apiFetch<InboxPage>(`/notifications${query({ cursor })}`),
+
+  badge: () => apiFetch<{ count: number }>('/notifications/badge'),
+
+  /**
+   * Opening the inbox.
+   *
+   * Clears the badge and NOT the chat-unread rows (only opening that chat does) and NOT the
+   * pending join requests (only opening the relevant roster does).
+   */
+  markRead: () =>
+    apiFetch<{ cleared: number; badge: number }>('/notifications/read', {
+      method: 'POST',
+      body: {},
+    }),
+};
+
+export const accountApi = {
+  me: () => apiFetch<{ userId: string; clubs: Array<{ clubId: string; role: ClubRole }> }>('/me'),
+
+  profile: (userId: string) => apiFetch<{ profile: Profile }>(`/users/${userId}`),
+
+  /** Self only. There is deliberately no route that takes somebody else's id. */
+  saveProfile: (body: {
+    name?: string;
+    bio?: string | null;
+    city?: string | null;
+    school?: string | null;
+    dob?: string | null;
+    image?: string | null;
+  }) => apiFetch<{ profile: Profile }>('/me/profile', { method: 'PATCH', body }),
+
+  /** 409 `owns_clubs` until every owned club is transferred or deleted. */
+  deleteAccount: () => apiFetch<{ deleted: true }>('/me', { method: 'DELETE' }),
+};
+
+export const channelApi = {
+  meta: (channelId: string) => apiFetch<ChannelMeta>(`/channels/${channelId}`),
+
+  /** Highlights: over the whole channel, so a pin past the loaded page is still found. */
+  pinned: (channelId: string, before?: number) =>
+    apiFetch<HighlightPage>(`/channels/${channelId}/pinned${query({ before })}`),
+
+  announcements: (channelId: string, before?: number) =>
+    apiFetch<HighlightPage>(`/channels/${channelId}/announcements${query({ before })}`),
+
+  reports: (channelId: string) =>
+    apiFetch<{ reports: ReportRow[] }>(`/channels/${channelId}/reports`),
+
+  /** The window jump-to-message needs. Paging back from the tail cannot do it in one tap. */
+  around: (channelId: string, around: number, radius?: number) =>
+    apiFetch<AroundWindow>(`/channels/${channelId}/messages/around${query({ around, radius })}`),
+
+  gallery: (channelId: string, before?: number) =>
+    apiFetch<GalleryPage>(`/channels/${channelId}/gallery${query({ before })}`),
+
+  setPinned: (channelId: string, seq: number, pinned: boolean) =>
+    apiFetch<{ message: MessageEnvelope }>(`/channels/${channelId}/messages/${seq}/pinned`, {
+      method: 'POST',
+      body: { pinned },
+    }),
+
+  deleteMessage: (channelId: string, seq: number) =>
+    apiFetch<{ message: MessageEnvelope }>(`/channels/${channelId}/messages/${seq}`, {
+      method: 'DELETE',
+    }),
 };
 
 // ---------------------------------------------------------------------------

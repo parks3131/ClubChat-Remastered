@@ -1,0 +1,229 @@
+/**
+ * The account itself: the profile, and deletion.
+ *
+ * Both write columns that have existed since Phase 0 and that nothing has ever written.
+ * `anonymized_at` and `signin_blocked_at` were only ever *read* - and one of those reads was
+ * broken for four phases, which is its own story in HISTORY.md.
+ *
+ * The reason identity lives in our own Postgres rather than in a hosted auth service is exactly
+ * this function: **deletion is anonymise-and-block in ONE transaction** rather than a two-system
+ * dance where the profile is scrubbed and the credential outlives it, or vice versa. See
+ * ADR-0011.
+ */
+
+import { eq, sql } from 'drizzle-orm';
+import type { Db } from '../db/client.ts';
+import { isoUtc } from '../db/sql-helpers.ts';
+import { users } from '../db/schema.ts';
+import type { AccessContext } from '../policy/context.ts';
+
+export type Refusal = {
+  ok: false;
+  code: 'forbidden' | 'not_found' | 'invalid' | 'owns_clubs';
+};
+export type Result<T> = ({ ok: true } & T) | Refusal;
+
+export type Profile = {
+  userId: string;
+  name: string;
+  image: string | null;
+  bio: string | null;
+  city: string | null;
+  school: string | null;
+  /** Date only, never a timestamp: a birthday is a day. */
+  dob: string | null;
+  createdAt: string;
+};
+
+/** What another member may see. Deliberately a narrower type than the owner's own view. */
+export type PublicProfile = Omit<Profile, 'dob'>;
+
+/**
+ * Read a profile.
+ *
+ * > **`dob` is withheld from everybody but its owner**, and that is the whole reason this
+ * > returns two different shapes. Clubs are small and often include minors; PRD/03 lists the
+ * > date of birth as a profile field and public profiles as an explicitly rejected alternative.
+ * > Nothing in the product needs to show one member another's birthday.
+ *
+ * Email is absent from both shapes: it is auth-only and is never shown to another member.
+ *
+ * An anonymised account is `not_found`. Their messages stay in history unattributed, so the
+ * conversation is intact, and there is no profile left to open.
+ */
+export async function readProfile(
+  db: Db,
+  ctx: AccessContext,
+  userId: string,
+): Promise<Result<{ profile: Profile | PublicProfile }>> {
+  const rows = await db.execute<{
+    id: string;
+    full_name: string;
+    image: string | null;
+    bio: string | null;
+    city: string | null;
+    school: string | null;
+    dob: string | null;
+    created_at: string;
+  }>(sql`
+    SELECT id::text AS id,
+           full_name,
+           image,
+           bio,
+           city,
+           school,
+           dob::text AS dob,
+           ${isoUtc('created_at')} AS created_at
+      FROM users
+     WHERE id = ${userId}
+       AND anonymized_at IS NULL
+  `);
+
+  const row = rows.rows[0];
+  if (!row) return { ok: false, code: 'not_found' };
+
+  const base = {
+    userId: row.id,
+    name: row.full_name,
+    image: row.image,
+    bio: row.bio,
+    city: row.city,
+    school: row.school,
+    createdAt: row.created_at,
+  };
+
+  return {
+    ok: true,
+    profile: userId === ctx.userId ? { ...base, dob: row.dob } : base,
+  };
+}
+
+/**
+ * Edit your own profile. **Self only, including for an Owner.**
+ *
+ * There is no `actorId`-versus-`targetId` pair to compare, and that is the point: the function
+ * takes no target at all, so "nobody can edit another member's profile" is not a check that
+ * could be forgotten - it is unrepresentable. PRD/03 rule 5.
+ *
+ * Email is absent on purpose. It is an auth credential rather than a profile field, and changing
+ * one belongs to the auth flow that can re-verify it.
+ */
+export async function updateOwnProfile(
+  db: Db,
+  ctx: AccessContext,
+  fields: {
+    name?: string | undefined;
+    bio?: string | null | undefined;
+    city?: string | null | undefined;
+    school?: string | null | undefined;
+    dob?: string | null | undefined;
+    image?: string | null | undefined;
+  },
+): Promise<Result<{ profile: Profile }>> {
+  const patch: Record<string, unknown> = {};
+  if (fields.name !== undefined) {
+    const name = fields.name.trim();
+    // A member with no name is unrenderable in every roster and every chat bubble, and the
+    // letter-initial avatar placeholder has nothing to take its initial from.
+    if (name.length === 0) return { ok: false, code: 'invalid' };
+    patch.name = name;
+  }
+  if (fields.bio !== undefined) patch.bio = fields.bio;
+  if (fields.city !== undefined) patch.city = fields.city;
+  if (fields.school !== undefined) patch.school = fields.school;
+  if (fields.dob !== undefined) patch.dob = fields.dob;
+  if (fields.image !== undefined) patch.image = fields.image;
+
+  if (Object.keys(patch).length > 0) {
+    patch.updatedAt = new Date();
+    await db.update(users).set(patch).where(eq(users.id, ctx.userId));
+  }
+
+  const reread = await readProfile(db, ctx, ctx.userId);
+  if (!reread.ok) return reread;
+  // Own profile, so the read returned the full shape.
+  return { ok: true, profile: reread.profile as Profile };
+}
+
+/**
+ * Delete your own account: anonymise, and block future sign-in.
+ *
+ * > **One transaction, and this is the argument for self-hosted auth.** The profile is scrubbed
+ * > and the credential is blocked together; there is no window in which one has happened and the
+ * > other has not.
+ *
+ * What it deliberately does NOT do is remove content. Their messages stay where they are,
+ * unattributed - domain invariant 10 - because a message vanishing mid-conversation tears a hole
+ * in every thread it was part of, and the same reasoning that makes a chat delete a tombstone
+ * makes an account deletion an anonymisation.
+ *
+ * Sessions are deleted as well as blocked. The block is what makes an existing token useless on
+ * the next request, since `isSessionUsable` re-asks every time; deleting the rows is so a
+ * long-lived session is not left sitting in the table looking valid.
+ */
+export async function deleteOwnAccount(
+  db: Db,
+  ctx: AccessContext,
+): Promise<Result<{ deleted: true; blockedBy?: string[] }>> {
+  /*
+   * A club Owner has to hand the club over first, and this is a real collision between two
+   * rules rather than a cautious choice.
+   *
+   * PRD/03 rule 11 makes deletion unconditional and self-service. PRD/04 says the Owner's Leave
+   * action is not even rendered, because transfer is the only path out - and domain invariant 1
+   * requires exactly one Owner per club, always, "because an ownerless club has NO recovery
+   * path". Deleting an Owner's memberships would produce precisely that: the partial unique
+   * index enforces *at most* one owner, so nothing would stop it.
+   *
+   * Of the three available outcomes - leave the club ownerless, delete other people's club out
+   * from under them, or refuse until the owner acts - only the third preserves both the
+   * invariant and the other members' club. So deletion refuses and NAMES the clubs, which keeps
+   * it self-service: the client can offer transfer-or-delete for each one and come back.
+   *
+   * Recorded as an open product question in PRD/17. If the answer turns out to be "promote the
+   * longest-serving admin automatically", it belongs here.
+   */
+  const owned = await db.execute<{ id: string; name: string }>(sql`
+    SELECT c.id::text AS id, c.name
+      FROM club_memberships cm
+      JOIN clubs c ON c.id = cm.club_id
+     WHERE cm.user_id = ${ctx.userId} AND cm.role = 'owner'
+     ORDER BY c.name
+  `);
+  if (owned.rows.length > 0) {
+    return { ok: false, code: 'owns_clubs' };
+  }
+
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`
+      UPDATE users
+         SET anonymized_at = now(),
+             signin_blocked_at = now(),
+             -- A name, because every roster and message bubble renders one. "Deleted member"
+             -- rather than an empty string for the same reason a tombstone says something.
+             full_name = 'Deleted member',
+             -- The email is released rather than kept: it is UNIQUE, and holding it would stop
+             -- the person ever signing up again with their own address. Made unique-but-dead by
+             -- deriving it from the id, which is already unique.
+             email = 'deleted+' || id::text || '@deleted.invalid',
+             image = NULL,
+             bio = NULL,
+             city = NULL,
+             school = NULL,
+             dob = NULL
+       WHERE id = ${ctx.userId}
+    `);
+
+    // Memberships go: a deleted account must not keep appearing on rosters, and leaving them
+    // would keep it in every audience function and notification fan-out.
+    await tx.execute(sql`DELETE FROM club_memberships WHERE user_id = ${ctx.userId}`);
+    await tx.execute(sql`DELETE FROM eboard_memberships WHERE user_id = ${ctx.userId}`);
+    await tx.execute(sql`DELETE FROM race_memberships WHERE user_id = ${ctx.userId}`);
+    await tx.execute(sql`DELETE FROM car_group_members WHERE user_id = ${ctx.userId}`);
+    await tx.execute(sql`DELETE FROM devices WHERE user_id = ${ctx.userId}`);
+    await tx.execute(sql`DELETE FROM sessions WHERE user_id = ${ctx.userId}`);
+    await tx.execute(sql`DELETE FROM accounts WHERE user_id = ${ctx.userId}`);
+  });
+
+  return { ok: true, deleted: true };
+}

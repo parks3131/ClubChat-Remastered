@@ -28,7 +28,10 @@ type AccessContext = {
   dmThreads: Map<DmId, { otherUserId: UserId; sharesClub: boolean }>
   blockedEither: Set<UserId>      // blocked BY me, or blocking me - symmetric on purpose
   isPlatformModerator: boolean    // gates the DM report queue and nothing else
+  signinBlocked: boolean          // account revoked; re-asked on EVERY request. See below
 }
+
+const isSessionUsable = (ctx) => !ctx.signinBlocked
 
 const isClubMember  = (ctx, club) => ctx.clubRole.has(club)
 const isClubAdmin   = (ctx, club) => ['owner','admin'].includes(ctx.clubRole.get(club))
@@ -122,12 +125,32 @@ The most-misunderstood rule in the product ([Roles and permissions](../PRD/02-ro
 named, documented predicates so the distinction cannot be accidentally collapsed:
 
 ```
-isRaceManager  - may approve, add, remove, edit Meet Info, delete the race
-isRaceMember   - may read/post chat, vote in race polls, be assigned to a car group
+isRaceManager     - may approve, add, remove, edit Meet Info, delete the race
+isRaceMember      - may read/post chat, vote in race polls, be assigned to a car group
+canReadRaceRoster - EITHER of the above. The one race read authority does grant
 ```
 
 Nothing in the codebase is allowed to write `isClubAdmin(ctx, race.clubId)` where race *access*
 is meant. Lint rule candidate; test coverage minimum.
+
+`canReadRaceRoster` is the only union of the two in the module, and it exists because
+[Races and Meets](../PRD/09-races-and-meets.md) rule 5 gives a manager with no roster row exactly
+one thing: a way into the roster to manage others. Its neighbour is the counter-example worth
+keeping in view - the roster's **pending requests** go through `canManageRace` instead, because
+who is waiting to be let in is decision-making data and a plain race member has no decision to
+make.
+
+### Revocation is a per-request question
+
+**Blocking an account does not invalidate a token it already holds.** So both entry points - the
+HTTP hook and the gateway's `auth` frame - ask `isSessionUsable` on every request and every
+connection, and the answer is loaded from our own `users` row into the access context.
+
+> That is a correction, not a description. Both sites previously read `signinBlockedAt` off
+> better-auth's session user, which returns only the columns declared in its `additionalFields`
+> and does not carry that one. The check therefore read `undefined` on every request and **never
+> fired at all**, in both places, from Phase 0 until 2026-07-30. Never authorize against a field
+> on a third-party object you did not put there; see AGENTS.md failure mode 12.
 
 ### Defense in depth
 

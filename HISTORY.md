@@ -13,6 +13,401 @@ Newest first.
 
 ---
 
+## 2026-07-30 - The design system: Stitch, v1, and which one is the truth
+
+The designs live in a Google Stitch project, reached over MCP. Registering it with
+`claude mcp add` worked and **its tools do not load**: `tools fetch failed - can't resolve
+reference #/$defs/ScreenInstance`, a broken `$ref` in Stitch's own schema. Server-side and not
+fixable here, so the project was read by speaking JSON-RPC to the endpoint with `curl` - which also
+sidesteps MCP tools only attaching at session start. All 15 tools work that way.
+
+### I "corrected" the tokens to the wrong thing, then corrected them back
+
+The live Stitch project's theme is **warm peach** - background `#fff8f6`, chrome `#ffe9e3`, text
+`#281712`. `SPEC/TECH/13`'s table said **cool grey** - `#f7f9fb`, `#f2f4f6`, `#191c1e`. The accent,
+the error and the tertiary matched in both.
+
+I assumed the live project was authoritative and the table had drifted, rewrote both the token
+module and the spec to the warm ramp, and said so in this file. **That was backwards.** v1's
+`constants/theme.ts` carries the cool grey set verbatim from the Stitch export's DESIGN.md
+frontmatter, and v1 is what shipped and ran with real clubs - the Stitch project has simply moved on
+since. Both are now restored from v1.
+
+The rule that comes out of it, recorded in `TECH/13` because more designs will arrive: **v1 is
+ground truth for what the product looks like, because it is the thing that actually ran.** A live
+design tool is a working document. Read it for screens the product does not have yet; do not let it
+overrule the shipped appearance of the ones it does.
+
+The near miss underneath is worth naming too. Nobody eyeballs a background colour against a spec
+table, so a wrong neutral family would have survived indefinitely - and it was only caught because
+the founder said, in passing, that v1's UI was fine and the backend was the problem. That sentence
+was the actual bug report.
+
+### The fonts were specified and had no implementation
+
+`TECH/13` rule 3 says a typography role is a complete family/size/line-height triple, and rule 4
+says the whole app is gated on fonts being loaded so no screen flashes a system face. The families
+were in neither the token module nor the app: every role carried a size and a weight and no
+`fontFamily`, so the app rendered in the platform default at the right sizes - which looks
+deliberate enough to survive a casual look and is not the design.
+
+Anton, Archivo Narrow and Inter are now loaded behind a `FontGate` that holds the app, wired into
+the roles, and **Anton is on every header title** as the rule says - it had been Archivo Narrow
+bold, the body face, which made every header read as a heavy paragraph.
+
+Two things worth keeping from doing it:
+
+- **The gate fails open.** If the faces cannot load, the app renders anyway. A missing font is a
+  visual regression; a permanent spinner is a dead app, and `PRD/03` names the spinner-forever
+  failure specifically.
+- **The family names are tokens and live in `theme.ts`.** Putting them next to the loader made
+  `theme` import `fonts` import `theme`, which failed at runtime with "Cannot access 'color' before
+  initialization" - the module graph saying the dependency pointed the wrong way. The token module
+  imports nothing; everything imports it.
+
+### Four designs that asked for things the product does not have
+
+The project carries 67 screens. Several show data and features that exist nowhere in the schema or
+the PRD, and all four were settled the same way - **take the visual language, not the implied
+scope**:
+
+| The design shows | Decided |
+|---|---|
+| "MILES LOGGED 42.1K / Goal: 50K", "MEMBERS 1,248 / +12% this month" | Dropped. Member count is real; mileage, goals and growth-over-time are a domain that does not exist |
+| A Message Search screen | Stays deferred, per `PRD/17`'s "do not fix" list |
+| An Appearance & Dark Mode screen | Light only for now; the flat token module is already the seam |
+| A hero cover image per club | Skipped. Clubs carry no media at all today |
+
+Recorded in `TECH/13` with the rule they share, because more designs will arrive: **a design is a
+specification of appearance, not of scope.** Where one implies data the product does not hold, the
+gap gets raised, never quietly invented inside a component.
+
+### Where the re-skin actually is
+
+Done: the colour ramp and type scale restored from v1 verbatim, the three typefaces behind a
+loading gate, Anton on every header title, the chevron affordance on navigable rows, and the four
+tab icons v1 shipped (`groups`, `calendar-month`, `notifications`, `person` - MaterialIcons, the
+same set). That is four files - `theme.ts`, `fonts.tsx`, `ui.tsx` and the two layouts - landing on
+all thirty-odd screens at once, which was the entire point of building behind that seam.
+
+Not done: **v1's screens have not been read individually.** Its `components/` directory holds
+`ChatScreen`, `PollsListScreen`, `MembersScreen`, `HighlightsScreen`, `GalleryScreen`,
+`CalendarScreen` and `EventsListScreen` - the same shared-screen shapes this build converged on
+independently, which is a good sign and also means there is a lot of proven layout detail in there
+to take. Icons on rows and section headers are not wired. And the surfaces v1 never had - direct
+messages, blocking, the moderation queue - have no design to copy and will need one built in the
+same language.
+
+---
+
+## 2026-07-30 - Phase 3.75b: the screens
+
+The client went from six files to roughly thirty-five. Not finished - what is missing is listed at
+the end - but the shell, the shared vocabulary and most of the screens exist and the app runs.
+
+### Three decisions made before writing any screen
+
+Each is the difference between forty screens and forty copies.
+
+**A real tab group.** There was no tab bar at all: Messages hung off the bottom of the club list as
+a button, and Calendar, Notifications and Profile had nowhere to be. `PRD/15` opens with four
+destinations and a badge on one of them, so that is what the `(tabs)` group is. Everything below a
+destination is a sibling of the group on the root stack, which is what makes a club or a chat cover
+the tab bar rather than nest inside one tab's history. Messages stays out of the tab bar
+deliberately: group chat is the product and DMs are additive, and `PRD/15` lists four, not five.
+
+**One three-state loader.** `useLoad` owns the state machine and `<DataScreen>` owns what each state
+looks like. `PRD/16` rules 1 and 2 are requirements rather than polish, and forty hand-written copies
+of a three-state fetch is how one of them ends up blank on a 500. Same argument as the policy module,
+one layer up.
+
+**Shared screens, not forked copies.** Polls, Highlights and the Calendar are each one implementation
+parametrised by scope. The scope arrives as two strings and changes nothing about behaviour - if a
+`switch (scope)` ever appears inside them, the abstraction that survived intact through the whole
+server has been broken in the client.
+
+### Three defects, all found by running it
+
+**Every screen entered by direct URL had no back control.** Caught by opening
+`/clubs/:id/members` in a fresh tab: the header rendered its title and nothing else. The layout had
+declared titles and left `headerLeft` to the navigator, which renders a back button only when history
+exists - `PRD/15` rule 3, for the **third** time in this project. The fix is a `parented()` helper so
+every nested screen builds its back target from its own route params: a screen inside a club goes
+back to that club, not to the clubs list. Worth noting how invisible it is to clicking through -
+every one of those screens looked correct when reached from its parent.
+
+**The invite link pointed at the API.** `/join/:token` is a client route, and the club profile built
+the link from `config.apiUrl` - so the link an admin copied and shared would have sent whoever tapped
+it to a server with no such path. Now `Linking.createURL`, which resolves to the site origin on web
+and the registered scheme on a device.
+
+**The inbox crashed on its first real row.** `Cannot read properties of undefined (reading
+'approved')`. The client's `InboxRow` type was a guess - a `params` bag, a nullable body, `readAt` -
+and the real shape is a discriminated union carrying a `NotificationTarget`. Exactly the hazard the
+top of `api-types.ts` warns about: a hand-written type over somebody else's response is an assertion,
+not a check. `NotificationTarget` is now **imported from `@clubchat/shared`** rather than restated,
+which buys something real - the server derives targets exhaustively over the notification types, and
+the client's routing switch is now exhaustive over the same union, so a new target kind is a compile
+error rather than a row that navigates nowhere.
+
+Also fixed on sight, per the pixel-perfection standard: every tab rendered two stray chevrons
+because the navigator fills an empty icon slot with a placeholder, and the club, race and Eboard
+headers said "Club", "Race" and "Eboard & Council" instead of the actual name - the Eboard one
+mattering most, since that name is per-club data and "Eboard & Council" is only its default.
+
+### Three more defects, all the same family
+
+Found by walking the remaining screens with a seeded club that had real content on every one. Every
+single one was a hand-written client type disagreeing with the server - which is the hazard written
+at the top of `api-types.ts`, now demonstrated four times in one phase.
+
+**The gallery crashed on load.** Its type said `{ items, hasMore }`; the server returns
+`{ entries, nextCursor }`. The more interesting half: each entry also carries `url` and `thumbUrl`,
+and **a web client cannot use either**. They point at `GET /media/:id`, which answers 302 behind an
+`Authorization` header - the exact thing the Phase 3 entry above records as unusable for an
+`<img src>`, because react-native-web renders every `Image` as one. The gallery renders from
+`mediaId` through the JSON sibling instead, and the type now says so where somebody would otherwise
+reach for the convenient-looking field.
+
+**Every news post read as "edited".** The marker was `updatedAt !== null`, and both timestamp columns
+default to `now()` - so a post was labelled edited from the instant it was posted. It is
+`updatedAt !== createdAt`, and the client type no longer claims the column is nullable.
+
+**A plain member was offered the Reports tab.** It would always have errored, because reports reach
+only that space's admins. The fix is a new field rather than a client-side guess:
+`readChannelMeta` now returns `canReadReports`. Guessing from `canPin` would have looked equivalent
+and been wrong in the one case that matters - a DM, where the reader is a platform moderator and not
+either participant.
+
+### The two loose ends, closed
+
+**Jump-to-message.** Chat now reads the `?around=seq` that Highlights, the pinned strip and mention
+notifications hand it: it fetches the window from `/channels/:id/messages/around`, writes it into the
+local store so it is cached like any other page, scrolls the target to the middle of the viewport and
+marks the row with a left rule. Two details were load-bearing - the scroll-to-end that chat does on
+every content change has to be suppressed while a jump is in effect, or it immediately undoes it; and
+`onScrollToIndexFailed` has to be handled, because a row far from the tail has not been measured yet
+and that is precisely the case a jump hits.
+
+**News photos.** Uploaded against the club's **main channel**, which is not a workaround: an upload
+intent for a photo requires a channel because the channel's access rules govern the object, a news
+post has none of its own, and news and the main channel have exactly the same audience. The
+alternative was a news-shaped branch in the media pipeline - a second answer to a question that
+already had a correct one.
+
+`RemoteImage` came out of this: the chat bubble, the gallery tile and the news photo all needed
+"turn this id into an image, and say so honestly when it will not load", which is the third caller
+and therefore the point to extract.
+
+### Verified by walking it
+
+Three actors against a real API, gateway, worker and Postgres, with a seeded club carrying a race,
+a roster, a car group, four polls, two meetings, two events, workouts and a news post.
+
+- **Every screen renders, and every screen entered by direct URL with no history has a back
+  control.** That was the whole reason the gate said so.
+- A race member opening `/races/:id` lands in **race chat**; chat's back goes to Clubs and never to
+  the hub, so there is no bounce. The quick-nav carries exactly the race scope's entries.
+- The poll card posted itself into race chat on creation.
+- Voting **cast, moved and withdrew** on the same gesture - 1 vote, 2, moved back to 1 and 1, then 0
+  - and opening the voter list cast nothing.
+- A deadline-less poll sat in Upcoming, sorted last among dated rows, and never fell into Past.
+- The **admin with no roster row** got the preview, the "You manage this" badge, Meet Information
+  with its per-field empty states (hotel hidden, photos and results reading "Stay tuned"), and a
+  route into the roster and nothing else.
+- That same admin was refused the **race poll by direct URL** and the car groups - each a retryable
+  "Not found" with a back control, never a blank page.
+- The **Eboard row was absent entirely** for a plain member, and its URL refused them.
+- A member saw the roster ordered owner, admin, member with no role or removal controls at all.
+- An invalid invite link said so plainly and offered search, disclosing nothing about which clubs
+  exist.
+
+**Still owed:** the acceptance checklist run end to end on all three platforms. Everything above is
+react-native-web in Chrome, and the simulator has still never been run in this project.
+
+One process note worth keeping. `npx expo start` refuses the port when a dev server already owns it
+and then, in non-interactive mode, **skips starting anything** - and the API had a `CLIENT_ORIGIN`
+pinned to the other port, so the first sign-up attempt died on CORS rather than on anything real.
+Same family as AGENTS.md failure mode 15: confirm the process you are talking to is the one you
+started.
+
+---
+
+## 2026-07-30 - Phase 3.75a: the HTTP surface
+
+Phase 3.75 was created and split on the way in. The proposal that existed said "wire the 32
+handlers to routes, nothing here needs new domain logic or new schema", and both halves of that
+turned out to be wrong, so the phase was re-scoped before any code was written.
+
+### What the audit had missed, and why
+
+The earlier audit compared the **handler list** against the router. That can only find handlers
+nobody routed; a capability that was never written at all appears in neither list and survives
+the comparison. Reading `TECH/10`'s REST sketch and `PRD/15`'s screen map against the router
+instead found two further classes:
+
+1. **Six capabilities with no function of any kind** - club search, invite-token rotation,
+   account deletion, profile editing, and both Highlights queries. Four of them sit on columns
+   that already exist, which is why the v1 table-by-table check had passed them: it proved the
+   schema complete, and the schema was not the gap.
+2. **The 34 handlers are all commands.** There is no read function for the club roster, the race
+   list, a race, the race roster, the car groups, the news feed, the meetings list, or another
+   member's profile. A route needs something to return, so ten or so queries were missing too.
+
+The lesson is recorded in `TECH/16` rather than only here: **audit against the spec, not against
+the code's own inventory.** The code cannot list what it never had.
+
+### The router became a directory before it doubled
+
+`api/app.ts` was 959 lines of plumbing plus 45 routes, and this phase roughly doubles the route
+count. Split first, so the split is mechanical rather than a rewrite of a 2,000-line file later:
+route groups now live in `api/routes/*.ts`, grouped by **path** rather than by domain module, and
+`app.ts` is composition. The shared pieces - `authorizeChannel`, `refusalStatus`,
+`mediaConfigOf`, `AppDeps` - moved to `api/plumbing.ts`.
+
+One structural guarantee came out of it that the single file only had by habit: groups are
+handed the `protectedRoutes` scope rather than the root instance, so an unauthenticated route
+cannot be added by forgetting the hook. It can only be added by editing `app.ts`.
+
+Verified as a pure refactor before anything was built on it: 531 tests, same counts, and
+`check:runtime` loading every module the way production does.
+
+### Races: twelve commands routed, four reads written
+
+Sixteen routes, and four query functions that did not exist. One new predicate,
+`canReadRaceRoster`, because the roster is the single race read where management authority does
+grant sight - `PRD/09` rule 5 gives a manager with no roster row exactly one thing, a way into
+the roster to manage others. It is the only union of `isRaceMember` and `isRaceManager` in the
+policy module, so it gets a name rather than a caller reaching for whichever looks close.
+
+`pendingRequests` comes back as `null` rather than `[]` for a non-manager, so a client cannot
+read "not allowed to see this" as "nobody is waiting".
+
+The tests deliberately sit at a different altitude from `policy/matrix.test.ts`: sixteen cases,
+every one through `app.inject` with a real session token against a real database. A matrix over
+pure functions cannot tell whether anything calls them, which is exactly how Phase 2 passed its
+gate with no surface at all.
+
+### Two defects in shipped code, found by the first test that crossed the middle
+
+**Account revocation had never worked.** The HTTP hook and the gateway both checked
+`session.user.signinBlockedAt`, and better-auth returns only the columns declared in
+`user.additionalFields` - which those two lifecycle columns are not. So the property was absent
+rather than false, both checks read `undefined`, and **a blocked or deleted account kept working
+until its session expired**, in both entry points, since Phase 0. The comment above each check
+described precisely the protection it was failing to provide.
+
+Proved before fixing, by asserting on the session object: it carries eleven keys and
+`signinBlockedAt` is not among them, while the database column is set. The fix moves the answer
+to where it always lived - our own `users` row, loaded into the access context, asked through
+one predicate `isSessionUsable`, consulted by both entry points. The API now loads the context
+*before* deciding, which costs a query the request was going to make anyway.
+
+**An untargeted `ON CONFLICT DO NOTHING` swallowed invariant 5.** `assignToCarGroup` inserted
+with a bare `onConflictDoNothing()`, which absorbs every unique violation on the table -
+including `car_group_members_one_per_race`. So assigning somebody already in a different car
+answered `{ assigned: true }` and did nothing, and the `catch` written to turn that collision
+into a refusal was unreachable because nothing ever threw. Now targeted at the primary key, so
+re-adding to the same group stays idempotent and a second group raises; and the catch checks the
+pg code through the cause chain rather than treating any failure as "already in a group".
+
+`isUniqueViolation` moved out of `append-message.ts` into `db/errors.ts` on the way, since the
+second caller is the point at which a copy would have been made.
+
+Both defects were invisible to 531 passing tests, a full permission matrix, and 62 constraint
+assertions. Neither is a race bug. Both were found because a test finally called the code over
+HTTP the way a client will, which is the argument for the phase gate being what it is.
+
+### The rest of the surface
+
+Races were the first slice and the pattern for the rest. In order after that: the club roster and
+club detail reads, polls in three scopes, the content group (meetings, events, routines, news), the
+calendar, pin and soft delete, Highlights and jump-to-message, then the four capabilities that had
+no function of any kind.
+
+Final shape: **45 routes became 111**, with roughly twenty new query and command functions, one new
+table, one new check constraint, and 76 route-level test cases. The gate is checked in as
+`scripts/surface-gate.sh` and passes 73 checks against a running server.
+
+Three route-shape decisions worth keeping:
+
+- **The scope is in the path, never in the body.** `POST /races/:id/polls` rather than `POST /polls`
+  with a scope triple. See the security note below - this is not a matter of taste.
+- **Pin and soft delete are two narrow routes, not a PATCH over the message.** A single partial
+  update is exactly the shape that reintroduces the trap they exist to prevent: a caller who may
+  delete would be sending a payload that could also carry `pinned`.
+- **Voting is addressed by option** (`POST /poll-options/:id/vote`), because the option already
+  identifies its poll. A `/polls/:id/votes` route taking `{ optionId }` accepts a pair that can
+  disagree, and there is nothing sensible to do with a disagreement.
+
+### Three more defects in shipped code
+
+On top of the two found with races.
+
+**A malformed id was a 500 on every id-addressed route.** `/channels/undefined/messages` put the
+string straight into a `uuid` column, Postgres refused to parse it, and the driver error surfaced as
+an unhandled failure with a stack trace in the log - the wrong status, and more than a caller should
+learn. Found by a test that built a path from an undefined variable, which is how a client will hit
+it. Fixed with one hook over the whole protected scope rather than sixty parse calls: every `:id`
+and `:uid` in this API is a UUID, and anything else is 404. `seq` and `token` are deliberately
+outside it.
+
+**`news_reactions.emoji` was unconstrained text.** PRD/06 rule 4 says news reactions use the same
+emoji set as chat; `message_reactions` has a check constraint saying exactly that and this table had
+none. It held only because nothing could write to the column - and this phase was about to add the
+writer. Now constrained identically, with four assertions in `constraint-proof.sql`, because a
+column that renders directly into every client must not depend on a route remembering.
+
+**A two-part authorization check could have been satisfied against two different clubs.** Never
+exploitable, because no route existed - but it is the reason the poll routes take no `clubId`.
+`canCreatePoll` for a race asks for a roster row on the race *and* club-admin on the club, and it
+cannot tell whether its two arguments describe the same race. A caller sending both could pair a
+race they are merely on the roster of with a club they happen to administer and pass both halves of
+a check meant to be one question. The owning club is now resolved server-side by `domain/scopes.ts`,
+which `createMeeting` and `deleteMeeting` use for the same reason - a wrong `clubId` there routes a
+notification and a chat card into the wrong club.
+
+### Two mistakes of my own, both worth the entry
+
+**`::text` on a `timestamptz` is not ISO 8601.** It renders Postgres's own format, with a space and
+a two-digit offset. A browser parses it, so a response looks fine; a strict validator does not.
+Found when a paging cursor this API emitted was rejected by the same API's own `before` parameter.
+There is now an `isoUtc()` helper and a rule: plain `::text` for a `date`, `isoUtc` for a timestamp.
+
+**The gate reported 46 failures against code that was correct.** `npm run dev:api` had exited with
+`EADDRINUSE` because a server from an earlier session still owned port 3000, so every request went
+to a process that predated the whole phase. Races and polls answered; everything newer 404'd. The
+tell was that the *pattern* of failure matched the age of the code rather than anything structural.
+Recorded as AGENTS.md failure mode 15, and the script now says so in its own header. Note which
+direction it fails in: it called new work broken, which wastes an hour. The inverse - a stale
+process confirming a fix that never deployed - is the one to actually fear.
+
+### One product question this phase could not answer
+
+**What should deleting an account do when the caller still owns a club?** Three rules collide:
+deletion is unconditional and self-service (PRD/03 rule 11), an Owner cannot leave and transfer is
+their only path out (PRD/04), and exactly one Owner must exist per club because an ownerless club
+has no recovery path (invariant 1). Deleting the memberships would produce exactly that: the partial
+unique index enforces *at most* one owner, so nothing would have stopped it.
+
+Built as a refusal - `409 owns_clubs` - which preserves both the invariant and the other members'
+club, and keeps deletion self-service since the client can offer transfer-or-delete per club. It
+does make deletion conditional, which rule 11 says it is not, so it is recorded as an open question
+in PRD/17 with the fourth option named: auto-promote the longest-serving admin.
+
+### Verification
+
+- **Typecheck** clean, **`check:runtime`** loads all 57 modules the way Node runs them.
+- **607 tests** passing, up from 531. Zero failures, zero flakes.
+- **`db:prove`** at 70 assertions, exit 0.
+- **`npm run gate:surface`**: 73 checks over TCP against a real server and a real Postgres, all
+  passing, roughly half of them refusals - including every direct-URL case the acceptance
+  checklist names.
+- **Not verified**: nothing was exercised from the Expo client, because the screens do not exist
+  yet. That is Phase 3.75b, and it is the honest limit of this phase.
+
+---
+
 ## 2026-07-30 - Completing Phase 3: attachments actually reachable from the app
 
 Phase 3's two gate conditions were met back when it shipped - a private Eboard photo provably

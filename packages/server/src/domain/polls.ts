@@ -23,6 +23,7 @@ import {
   canSeePollVoters,
   type PollRef,
 } from '../policy/predicates.ts';
+import { clubIdOfClub, clubIdOfEboard, clubIdOfRace } from './scopes.ts';
 
 export type Refusal = {
   ok: false;
@@ -63,6 +64,30 @@ async function pollRef(db: Db, pollId: string): Promise<(PollRef & { closed: boo
 }
 
 /**
+ * Which club owns this scope?
+ *
+ * > **Exists so that no caller ever supplies `clubId` alongside `scopeId`.** `canCreatePoll`
+ * > for a race asks for a roster row on `scopeId` **and** club-admin on `clubId`, and it has
+ * > no way to know whether those two arguments describe the same race. A client that sent
+ * > both could pair a race it is merely on the roster of with a club it happens to administer
+ * > and satisfy both halves of a check that was meant to be one question. The pairing is a
+ * > fact about the data, so the database answers it.
+ *
+ * Returns null when the scope does not exist, which the caller turns into the same "nothing
+ * back" as a scope it may not reach.
+ */
+export async function resolvePollScope(
+  db: Db,
+  scope: 'club' | 'race' | 'eboard',
+  scopeId: string,
+): Promise<{ clubId: string } | null> {
+  const lookup =
+    scope === 'club' ? clubIdOfClub : scope === 'race' ? clubIdOfRace : clubIdOfEboard;
+  const clubId = await lookup(db, scopeId);
+  return clubId === null ? null : { clubId };
+}
+
+/**
  * Create a poll.
  *
  * Between 2 and 10 options. Editing a question or its options after creation is out of scope
@@ -81,9 +106,12 @@ export async function createPoll(
     scopeId: string;
     question: string;
     options: readonly string[];
-    allowMultiple?: boolean;
-    isPrivate?: boolean;
-    closesInMinutes?: number | null;
+    // Explicitly `undefined`-able as well as optional, which `exactOptionalPropertyTypes`
+    // treats as two different things: a validated body hands over the key holding undefined
+    // rather than omitting it.
+    allowMultiple?: boolean | undefined;
+    isPrivate?: boolean | undefined;
+    closesInMinutes?: number | null | undefined;
   },
 ): Promise<Result<{ pollId: string }>> {
   if (!canCreatePoll(ctx, input)) return { ok: false, code: 'forbidden' };

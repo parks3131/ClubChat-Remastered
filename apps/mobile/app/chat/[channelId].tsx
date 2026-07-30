@@ -19,7 +19,7 @@ import {
   type ReactionEmoji,
 } from '@clubchat/shared';
 import { useSession } from '../../src/chat-provider.tsx';
-import { dmApi, type ChannelMeta } from '../../src/api.ts';
+import { channelApi, dmApi, type ChannelMeta } from '../../src/api.ts';
 import { DocumentBubble, PhotoBubble } from '../../src/media-bubble.tsx';
 import {
   pickDocument,
@@ -30,6 +30,7 @@ import {
   type PickedAttachment,
   type UploadKind,
 } from '../../src/upload.ts';
+import { QuickNav } from '../../src/nav.tsx';
 import { color, radius, space, type } from '../../src/theme.ts';
 
 type Row =
@@ -59,8 +60,45 @@ const DENIED_TEXT: Record<NonNullable<ChannelMeta['postDeniedReason']>, string> 
   unavailable: 'You can no longer send messages in this conversation.',
 };
 
+
+/**
+ * The header quick-nav entries for a group scope.
+ *
+ * `PRD/15` gives club chat "Members · Poll · Routines · Events" and race chat "Members · Meet
+ * Information · Polls · Car Assignments and Groups", and Eboard chat "Members · Meetings · Polls".
+ * Built from the channel's scope rather than forked per scope: one list function, three answers.
+ *
+ * Every target is addressed by the SCOPE id, which is why the channel meta carries it.
+ */
+function scopeLinks(
+  scope: 'club' | 'race' | 'eboard',
+  meta: { scopeId: string; clubId: string | null },
+): Array<{ href: string; label: string }> {
+  if (scope === 'club') {
+    return [
+      { href: `/clubs/${meta.scopeId}/members`, label: 'Members' },
+      { href: `/clubs/${meta.scopeId}/polls`, label: 'Polls' },
+      { href: `/clubs/${meta.scopeId}/routines`, label: 'Routines' },
+      { href: `/clubs/${meta.scopeId}/events`, label: 'Events' },
+    ];
+  }
+  if (scope === 'race') {
+    return [
+      { href: `/races/${meta.scopeId}/roster`, label: 'Members' },
+      { href: `/races/${meta.scopeId}/meet`, label: 'Meet Info' },
+      { href: `/races/${meta.scopeId}/polls`, label: 'Polls' },
+      { href: `/races/${meta.scopeId}/car-groups`, label: 'Car Groups' },
+    ];
+  }
+  return [
+    { href: `/eboard/${meta.scopeId}/members`, label: 'Members' },
+    { href: `/eboard/${meta.scopeId}/meetings`, label: 'Meetings' },
+    { href: `/eboard/${meta.scopeId}/polls`, label: 'Polls' },
+  ];
+}
+
 export default function ChatScreen() {
-  const { channelId } = useLocalSearchParams<{ channelId: string }>();
+  const { channelId, around } = useLocalSearchParams<{ channelId: string; around?: string }>();
   const { authState, client, userId, revision, offline } = useSession();
   const router = useRouter();
   const [rows, setRows] = useState<Row[]>([]);
@@ -83,6 +121,15 @@ export default function ChatScreen() {
   /** True while bytes are in flight, so the "+" cannot start a second upload. */
   const [uploading, setUploading] = useState(false);
   const listRef = useRef<FlatList<Row>>(null);
+  /**
+   * The message a jump landed on, if any.
+   *
+   * Held in state rather than read from the param on every render because it does two jobs: it
+   * suppresses the scroll-to-end that chat otherwise does on every content change, and it marks
+   * the row so the reader can see WHICH message they were sent to. Cleared once they scroll away,
+   * which is what makes it a jump rather than a mode.
+   */
+  const [jumpedTo, setJumpedTo] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     if (!client || !channelId) return;
@@ -126,6 +173,58 @@ export default function ChatScreen() {
   useEffect(() => {
     void loadMeta();
   }, [loadMeta, revision]);
+
+  /**
+   * Jump to a message named in the URL.
+   *
+   * > **This is what `GET /channels/:id/messages/around` exists for.** Highlights, a pinned-strip
+   * > notice and a mention notification all name a specific `seq`, and paging backward from the tail
+   * > until it appears cannot satisfy "jumps on the FIRST tap" - the message is not loaded yet, so a
+   * > first tap could only start fetching.
+   *
+   * The window is written into the local store rather than held in this component, so it is cached
+   * like every other page of history and a second jump to the same place needs no network at all.
+   * Failing is survivable: the chat still renders its tail, which is the "realtime and paging are
+   * enhancements" rule applied to navigation.
+   */
+  useEffect(() => {
+    const target = Number(around);
+    if (!client || !channelId || !Number.isInteger(target) || target <= 0) return;
+
+    let alive = true;
+    void (async () => {
+      try {
+        const window = await channelApi.around(channelId, target);
+        if (!alive) return;
+        await client.store.upsert(window.messages);
+        await refresh();
+      } catch {
+        // Leave the tail on screen. A jump that cannot load is a worse outcome than a jump that
+        // does not happen, and the notice below says which.
+        if (alive) setNotice('Could not open that message.');
+      } finally {
+        if (alive) setJumpedTo(target);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [client, channelId, around, refresh]);
+
+  /**
+   * Scroll the jumped-to message into view.
+   *
+   * Separate from the fetch because it has to run after the rows render - the index does not exist
+   * until the window is in `rows`. `viewPosition: 0.5` puts the target in the middle rather than at
+   * the top, so the messages around it are visible, which is the whole reason a window was fetched
+   * instead of one message.
+   */
+  useEffect(() => {
+    if (jumpedTo === null) return;
+    const index = rows.findIndex((row) => row.kind === 'message' && row.message.seq === jumpedTo);
+    if (index < 0) return;
+    listRef.current?.scrollToIndex({ index, viewPosition: 0.5, animated: false });
+  }, [jumpedTo, rows]);
 
   // Opening a chat marks it read. That is the ONLY thing that clears its unread count -
   // nothing else does, including opening the notification inbox.
@@ -284,6 +383,29 @@ export default function ChatScreen() {
       </View>
 
       {/*
+        The header quick-nav.
+        
+        `PRD/15` hangs everything else off chat's header, because chat is the home screen of a race
+        and of an Eboard space - so Highlights, Members and the Gallery have no other entry point in
+        those scopes. Built from the channel's own scope rather than forked per scope: a DM gets
+        Gallery and the profile card and nothing club-shaped, which is the same list minus the
+        entries that have no meaning there.
+      */}
+      {meta !== null && (
+        <QuickNav
+          items={[
+            { href: `/channels/${channelId}/highlights`, label: 'Highlights' },
+            { href: `/channels/${channelId}/gallery`, label: 'Gallery' },
+            ...(meta.scope === 'dm'
+              ? meta.peer !== null
+                ? [{ href: `/users/${meta.peer.userId}`, label: 'Profile' }]
+                : []
+              : scopeLinks(meta.scope, meta)),
+          ]}
+        />
+      )}
+
+      {/*
         An in-app sheet rather than a platform Alert. A confirmation dialog can report success,
         log nothing and do nothing where a platform stubs out the dialog API - and react-native-web
         is exactly such a platform, which would make block and mute silently no-op on the surface
@@ -390,7 +512,32 @@ export default function ChatScreen() {
             row.kind === 'message' ? `m-${row.message.seq}` : `p-${row.clientMsgId}`
           }
           contentContainerStyle={styles.list}
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+          /*
+            Chat opens at the tail - except when a jump sent us somewhere specific, where scrolling
+            to the end would immediately undo the jump. `jumpedTo` is the one thing that suppresses
+            it.
+          */
+          onContentSizeChange={() => {
+            if (jumpedTo === null) listRef.current?.scrollToEnd({ animated: false });
+          }}
+          /*
+            A row whose height has not been measured yet cannot be scrolled to, which is exactly the
+            case a jump hits - the target is far from the tail. The list reports the failure instead
+            of throwing, so the recovery is to scroll to the offset it managed and try the index
+            again once that render has measured it.
+          */
+          onScrollToIndexFailed={(info) => {
+            listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+            setTimeout(() => {
+              if (jumpedTo !== null) {
+                listRef.current?.scrollToIndex({
+                  index: info.index,
+                  viewPosition: 0.5,
+                  animated: false,
+                });
+              }
+            }, 50);
+          }}
           ListEmptyComponent={
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>No messages yet</Text>
@@ -449,8 +596,12 @@ export default function ChatScreen() {
             }
 
             const mine = message.senderId === userId;
+            // Marked so a reader can see WHICH message a jump sent them to. Without it the screen
+            // has silently scrolled somewhere and the target is indistinguishable from its
+            // neighbours, which is most of the value of jumping.
+            const isJumpTarget = jumpedTo === message.seq;
             return (
-              <View>
+              <View style={isJumpTarget ? styles.jumpTarget : undefined}>
                 <Pressable
                   // Long press, not a visible button: reporting is rare and a tap target on
                   // every bubble would be noise. Own messages are excluded because nobody can
@@ -712,6 +863,13 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
+  /** The row a jump landed on. A left rule rather than a fill, so the bubble keeps its own colour. */
+  jumpTarget: {
+    borderLeftWidth: 3,
+    borderLeftColor: color.accent,
+    backgroundColor: color.chrome,
+    borderRadius: radius.sm,
+  },
   flex: { flex: 1, backgroundColor: color.appBackground },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   list: {

@@ -31,7 +31,7 @@ import { ChannelGoneError } from '../domain/append-message.ts';
 import { sendMessage } from '../domain/send-message.ts';
 import { advanceReadCursor, getChannelRef, listAccessibleChannels } from '../domain/reads.ts';
 import { loadAccessContext } from '../policy/context.ts';
-import { isChannelMember } from '../policy/predicates.ts';
+import { isChannelMember, isSessionUsable } from '../policy/predicates.ts';
 import {
   channelTopic,
   createConnectionRegistry,
@@ -221,8 +221,10 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
     }
 
     // Blocking a user does not invalidate an already-issued token, so the check has to
-    // happen here too rather than only at sign-in.
-    if ((session.user as { signinBlockedAt?: unknown }).signinBlockedAt) {
+    // happen here too rather than only at sign-in. Through the access context and the
+    // policy module, because the version that read `session.user.signinBlockedAt` directly
+    // was asking for a property better-auth does not return, and never fired.
+    if (!isSessionUsable(await loadAccessContext(deps.db, session.user.id))) {
       send(state.socket, { t: 'auth.err', d: { code: 'signin_blocked' } }, correlationId);
       state.socket.close();
       return;

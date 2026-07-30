@@ -28,6 +28,12 @@ never shown to other members.
 10. Signing out returns to sign-in and clears the session.
 11. **Account deletion is permanent, self-service, and confirmation-gated on every
     platform.** It anonymises the profile and permanently blocks future sign-in.
+    **One precondition, decided 2026-07-30: an Owner must transfer or delete each club they own
+    first, and deletion refuses until they have.** An ownerless club has no recovery path
+    (invariant 1) and the Owner has no other way out, so the refusal is the only outcome that
+    keeps both the invariant and the other members' club. The client turns it into
+    transfer-or-delete per club, which keeps deletion self-service. Rejected alternatives are
+    recorded in [Roadmap](17-roadmap-and-open-questions.md).
 12. Deleting an account **does not delete the content they posted**. Their messages remain in
     their conversations, unattributed.
 

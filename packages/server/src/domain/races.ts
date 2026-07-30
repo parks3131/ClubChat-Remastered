@@ -9,6 +9,8 @@
 
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
+import { isUniqueViolation } from '../db/errors.ts';
+import { isoUtc } from '../db/sql-helpers.ts';
 import {
   carGroupMembers,
   carGroups,
@@ -25,9 +27,13 @@ import {
   canManageCarGroups,
   canManageRace,
   canPinRace,
+  canReadRaceRoster,
   canRequestRaceAccess,
   canSeeRace,
+  canViewCarGroups,
   isClubAdmin,
+  isClubMember,
+  isRaceManager,
   isRaceMember,
   type RaceRef,
 } from '../policy/predicates.ts';
@@ -284,12 +290,16 @@ export async function updateMeetInformation(
   db: Db,
   ctx: AccessContext,
   raceId: string,
+  // Every field is optional AND explicitly `undefined`-able, which under
+  // `exactOptionalPropertyTypes` are two different things. The body treats both the same way -
+  // `?? null`, clearing the field - because rule 10 makes the five atomic: a form that omits a
+  // key is saying that field is now empty, not that it should keep its old value.
   fields: {
-    meetDescription?: string | null;
-    meetLocationUrl?: string | null;
-    meetHotelUrl?: string | null;
-    meetPhotosUrl?: string | null;
-    meetResultsUrl?: string | null;
+    meetDescription?: string | null | undefined;
+    meetLocationUrl?: string | null | undefined;
+    meetHotelUrl?: string | null | undefined;
+    meetPhotosUrl?: string | null | undefined;
+    meetResultsUrl?: string | null | undefined;
   },
 ): Promise<Result<{ updated: true }>> {
   const race = await raceRef(db, raceId);
@@ -448,10 +458,29 @@ export async function assignToCarGroup(
     await db
       .insert(carGroupMembers)
       .values({ carGroupId: groupId, raceId: found.raceId, userId })
-      .onConflictDoNothing();
-  } catch {
+      /*
+       * **Targeted at the primary key, and that is the whole behaviour of this call.**
+       *
+       * An untargeted `ON CONFLICT DO NOTHING` absorbs EVERY unique violation on the table,
+       * including `car_group_members_one_per_race`. So assigning somebody who is already in a
+       * different car silently did nothing and answered "assigned" - the invariant held, the
+       * caller was told the opposite, and the `catch` below could never run because nothing
+       * ever threw. Shipped in Phase 2 and found by the first test to try moving a person
+       * between two cars.
+       *
+       * Targeted, the two outcomes separate the way they were always meant to: re-adding
+       * somebody to the group they are already in is idempotent, and adding them to a second
+       * group hits invariant 5 and raises.
+       */
+      .onConflictDoNothing({
+        target: [carGroupMembers.carGroupId, carGroupMembers.userId],
+      });
+  } catch (error) {
     // Hit the one-per-race unique index: already in a different group for this race.
-    return { ok: false, code: 'already_member' };
+    // Checked through the cause chain, because Drizzle wraps the driver's error and a
+    // bare `catch` would report any failure whatsoever as "already in a group".
+    if (isUniqueViolation(error)) return { ok: false, code: 'already_member' };
+    throw error;
   }
   return { ok: true, assigned: true };
 }
@@ -573,4 +602,415 @@ async function departCarGroup(
     });
   }
   // No event otherwise. A plain member leaving their car is deliberately silent.
+}
+
+// ---------------------------------------------------------------------------
+// Reads
+// ---------------------------------------------------------------------------
+//
+// Phase 2 built the race commands and no race queries at all, which was invisible for two
+// phases because a command handler and a query function look equally absent from a router
+// that references neither. Every read below is gated by a predicate from the policy module,
+// and none of them re-derives one - the whole point of the boundary is that a read is as
+// authorized as a write.
+//
+// `db.execute` is used rather than the query builder wherever the shape needs viewer state
+// joined per row, and every row type says `string` for a timestamp or a `count`, because
+// `execute` skips Drizzle's coercion and hands back the driver's value (pitfall 7).
+
+export type RaceListItem = {
+  id: string;
+  name: string;
+  raceDate: string;
+  /** This viewer's own pin. Personal, and never anybody else's (PRD/09 rules 21-22). */
+  pinned: boolean;
+  /** A roster row, which is the only proof of access. */
+  hasAccess: boolean;
+  /** Club-admin status: management authority, which is NOT access. */
+  isManager: boolean;
+  /** Shows "Requested - waiting on an admin to approve". A denied request can be re-filed,
+   *  so only a pending one is reported. */
+  requestPending: boolean;
+  memberCount: number;
+  /** Null unless this viewer can actually enter the chat, so a preview cannot navigate. */
+  channelId: string | null;
+};
+
+/**
+ * Every race in a club, with this viewer's own state per row.
+ *
+ * **Every club member can see every race** (rule 2), so the gate is club membership and the
+ * per-race access question is answered as data rather than by filtering rows out. That is the
+ * distinction the whole race design rests on: a member with no roster row still sees the race
+ * exists, and gets a preview plus a request action rather than a 404.
+ *
+ * Ordering puts this viewer's pinned races first, then the most recent date - the club hub
+ * shows a short preview of this list, and a pin exists precisely to control what appears in
+ * it. The date direction is not specified by PRD/09; newest-first is chosen so a season's
+ * upcoming races sit at the top rather than behind years of history.
+ */
+export async function listRaces(
+  db: Db,
+  ctx: AccessContext,
+  clubId: string,
+  opts: { query?: string | undefined; limit?: number | undefined } = {},
+): Promise<Result<{ races: RaceListItem[] }>> {
+  if (!isClubMember(ctx, clubId)) return { ok: false, code: 'not_found' };
+
+  const limit = Math.min(opts.limit ?? 50, 200);
+  const query = (opts.query ?? '').trim();
+
+  const rows = await db.execute<{
+    id: string;
+    name: string;
+    race_date: string;
+    pinned: boolean;
+    has_access: boolean;
+    request_pending: boolean;
+    member_count: string;
+    channel_id: string | null;
+  }>(sql`
+    SELECT r.id::text AS id,
+           r.name,
+           r.race_date::text AS race_date,
+           (rp.user_id IS NOT NULL) AS pinned,
+           (rm.user_id IS NOT NULL) AS has_access,
+           (jr.id IS NOT NULL) AS request_pending,
+           (SELECT count(*) FROM race_memberships all_m WHERE all_m.race_id = r.id)
+             AS member_count,
+           ch.id::text AS channel_id
+      FROM races r
+      LEFT JOIN race_pins rp
+             ON rp.race_id = r.id AND rp.user_id = ${ctx.userId}
+      LEFT JOIN race_memberships rm
+             ON rm.race_id = r.id AND rm.user_id = ${ctx.userId}
+      LEFT JOIN race_join_requests jr
+             ON jr.race_id = r.id AND jr.user_id = ${ctx.userId} AND jr.status = 'pending'
+      LEFT JOIN channels ch
+             ON ch.scope = 'race' AND ch.scope_id = r.id
+     WHERE r.club_id = ${clubId}
+       ${query.length > 0 ? sql`AND r.name ILIKE ${'%' + query + '%'}` : sql``}
+     ORDER BY (rp.user_id IS NULL), r.race_date DESC, r.name
+     LIMIT ${limit}
+  `);
+
+  return {
+    ok: true,
+    races: rows.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      raceDate: row.race_date,
+      pinned: row.pinned,
+      hasAccess: row.has_access,
+      // Asked per row with the real race, rather than once with a fabricated ref. The answer
+      // happens to be the same for every race in a club today, and a predicate that ignores a
+      // field it is given is not a licence to pass it a lie.
+      isManager: isRaceManager(ctx, { id: row.id, clubId }),
+      requestPending: row.request_pending,
+      memberCount: Number(row.member_count),
+      // Withheld without access, so a preview screen has nothing to navigate with. The
+      // channel is guarded independently; this only keeps the client honest.
+      channelId: row.has_access ? row.channel_id : null,
+    })),
+  };
+}
+
+export type RaceDetail = {
+  id: string;
+  clubId: string;
+  name: string;
+  raceDate: string;
+  meetDescription: string | null;
+  meetLocationUrl: string | null;
+  meetHotelUrl: string | null;
+  meetPhotosUrl: string | null;
+  meetResultsUrl: string | null;
+  memberCount: number;
+  viewer: {
+    hasAccess: boolean;
+    isManager: boolean;
+    requestPending: boolean;
+    pinned: boolean;
+    channelId: string | null;
+  };
+};
+
+/**
+ * One race, with Meet Information.
+ *
+ * **Readable by any club member** (rule 13), because Meet Information is exactly what somebody
+ * needs in order to decide whether to ask to go - hiding it would make the request-to-join
+ * decision uninformed. So this single read serves all three states the screen map names: the
+ * preview, the manager-without-a-roster-row hub, and a real member's race.
+ *
+ * Nothing member-only is in the response (rule 6). The roster and the car groups are separate
+ * reads behind their own predicates, which is what keeps that promise structural rather than a
+ * matter of remembering.
+ */
+export async function readRace(
+  db: Db,
+  ctx: AccessContext,
+  raceId: string,
+): Promise<Result<{ race: RaceDetail }>> {
+  const race = await raceRef(db, raceId);
+  if (!race || !canSeeRace(ctx, race)) return { ok: false, code: 'not_found' };
+
+  const rows = await db.execute<{
+    id: string;
+    club_id: string;
+    name: string;
+    race_date: string;
+    meet_description: string | null;
+    meet_location_url: string | null;
+    meet_hotel_url: string | null;
+    meet_photos_url: string | null;
+    meet_results_url: string | null;
+    member_count: string;
+    request_pending: boolean;
+    pinned: boolean;
+    channel_id: string | null;
+  }>(sql`
+    SELECT r.id::text AS id,
+           r.club_id::text AS club_id,
+           r.name,
+           r.race_date::text AS race_date,
+           r.meet_description,
+           r.meet_location_url,
+           r.meet_hotel_url,
+           r.meet_photos_url,
+           r.meet_results_url,
+           (SELECT count(*) FROM race_memberships m WHERE m.race_id = r.id) AS member_count,
+           (jr.id IS NOT NULL) AS request_pending,
+           (rp.user_id IS NOT NULL) AS pinned,
+           ch.id::text AS channel_id
+      FROM races r
+      LEFT JOIN race_join_requests jr
+             ON jr.race_id = r.id AND jr.user_id = ${ctx.userId} AND jr.status = 'pending'
+      LEFT JOIN race_pins rp
+             ON rp.race_id = r.id AND rp.user_id = ${ctx.userId}
+      LEFT JOIN channels ch
+             ON ch.scope = 'race' AND ch.scope_id = r.id
+     WHERE r.id = ${raceId}
+  `);
+
+  const row = rows.rows[0];
+  if (!row) return { ok: false, code: 'not_found' };
+
+  const hasAccess = isRaceMember(ctx, race);
+
+  return {
+    ok: true,
+    race: {
+      id: row.id,
+      clubId: row.club_id,
+      name: row.name,
+      raceDate: row.race_date,
+      meetDescription: row.meet_description,
+      meetLocationUrl: row.meet_location_url,
+      meetHotelUrl: row.meet_hotel_url,
+      meetPhotosUrl: row.meet_photos_url,
+      meetResultsUrl: row.meet_results_url,
+      memberCount: Number(row.member_count),
+      viewer: {
+        hasAccess,
+        isManager: isRaceManager(ctx, race),
+        requestPending: row.request_pending,
+        pinned: row.pinned,
+        channelId: hasAccess ? row.channel_id : null,
+      },
+    },
+  };
+}
+
+export type RaceRosterEntry = {
+  userId: string;
+  name: string;
+  image: string | null;
+  /** An admin of the parent club, so a manager of this race. */
+  isManager: boolean;
+  /** The group they are in for this race, or null. At most one, by invariant 5. */
+  carGroupNumber: number | null;
+};
+
+export type RaceRequestEntry = {
+  requestId: string;
+  userId: string;
+  name: string;
+  requestedAt: string;
+};
+
+/**
+ * The roster, and - for a manager only - who is waiting to get on it.
+ *
+ * Two audiences in one read, split by predicate rather than by endpoint: a race member sees
+ * who is going, and a manager additionally sees the pending requests they are the one to
+ * decide. `pendingRequests` is **null** rather than `[]` for a non-manager, so a client cannot
+ * mistake "not allowed to see this" for "nobody is waiting".
+ *
+ * `carGroupNumber` rides along because rule 16 needs it: the add-to-group search must exclude
+ * anyone already in a group for this race, and answering that from the roster read costs one
+ * join rather than a second round trip that could disagree with this one.
+ */
+export async function readRaceRoster(
+  db: Db,
+  ctx: AccessContext,
+  raceId: string,
+): Promise<
+  Result<{ members: RaceRosterEntry[]; pendingRequests: RaceRequestEntry[] | null }>
+> {
+  const race = await raceRef(db, raceId);
+  if (!race || !canReadRaceRoster(ctx, race)) return { ok: false, code: 'not_found' };
+
+  const memberRows = await db.execute<{
+    user_id: string;
+    full_name: string;
+    image: string | null;
+    is_manager: boolean;
+    car_group_number: number | null;
+  }>(sql`
+    SELECT u.id::text AS user_id,
+           u.full_name,
+           u.image,
+           -- The admin tier, which is owner OR admin. Asking for role = 'admin' here would
+           -- silently exclude the Owner, which is the bug that shipped five times in v1.
+           (cm.role IN ('owner', 'admin')) AS is_manager,
+           cg.number AS car_group_number
+      FROM race_memberships rm
+      JOIN users u ON u.id = rm.user_id
+      LEFT JOIN club_memberships cm
+             ON cm.user_id = rm.user_id AND cm.club_id = ${race.clubId}
+      LEFT JOIN car_group_members cgm
+             ON cgm.race_id = rm.race_id AND cgm.user_id = rm.user_id
+      LEFT JOIN car_groups cg ON cg.id = cgm.car_group_id
+     WHERE rm.race_id = ${raceId}
+     ORDER BY u.full_name
+  `);
+
+  const members: RaceRosterEntry[] = memberRows.rows.map((row) => ({
+    userId: row.user_id,
+    name: row.full_name,
+    image: row.image,
+    isManager: row.is_manager,
+    carGroupNumber: row.car_group_number === null ? null : Number(row.car_group_number),
+  }));
+
+  if (!canManageRace(ctx, race)) return { ok: true, members, pendingRequests: null };
+
+  const requestRows = await db.execute<{
+    id: string;
+    user_id: string;
+    full_name: string;
+    created_at: string;
+  }>(sql`
+    SELECT jr.id::text AS id,
+           u.id::text AS user_id,
+           u.full_name,
+           ${isoUtc('jr.created_at')} AS created_at
+      FROM race_join_requests jr
+      JOIN users u ON u.id = jr.user_id
+     WHERE jr.race_id = ${raceId} AND jr.status = 'pending'
+     ORDER BY jr.created_at
+  `);
+
+  return {
+    ok: true,
+    members,
+    pendingRequests: requestRows.rows.map((row) => ({
+      requestId: row.id,
+      userId: row.user_id,
+      name: row.full_name,
+      requestedAt: row.created_at,
+    })),
+  };
+}
+
+export type CarGroupView = {
+  id: string;
+  number: number;
+  inchargeUserId: string | null;
+  members: Array<{ userId: string; name: string; isIncharge: boolean }>;
+};
+
+/**
+ * The car groups, with their members and Incharge tags.
+ *
+ * **Every race member can view these, read-only** (rule 20), so the gate is `canViewCarGroups`
+ * - a roster row - and not the manage predicate. A manager with no roster row gets nothing
+ * here, which is rule 5: they manage the roster, not the race.
+ *
+ * A group with a null `inchargeUserId` is a normal state, not a data error: the Incharge is
+ * cleared automatically when its holder leaves and the group persists until an admin names a
+ * new one (rule 18).
+ */
+export async function readCarGroups(
+  db: Db,
+  ctx: AccessContext,
+  raceId: string,
+): Promise<Result<{ groups: CarGroupView[]; unassigned: Array<{ userId: string; name: string }> }>> {
+  const race = await raceRef(db, raceId);
+  if (!race || !canViewCarGroups(ctx, race)) return { ok: false, code: 'not_found' };
+
+  const rows = await db.execute<{
+    group_id: string;
+    number: number;
+    incharge_user_id: string | null;
+    user_id: string | null;
+    full_name: string | null;
+  }>(sql`
+    SELECT cg.id::text AS group_id,
+           cg.number,
+           cg.incharge_user_id::text AS incharge_user_id,
+           u.id::text AS user_id,
+           u.full_name
+      FROM car_groups cg
+      LEFT JOIN car_group_members cgm ON cgm.car_group_id = cg.id
+      LEFT JOIN users u ON u.id = cgm.user_id
+     WHERE cg.race_id = ${raceId}
+     ORDER BY cg.number, u.full_name
+  `);
+
+  const groups = new Map<string, CarGroupView>();
+  for (const row of rows.rows) {
+    let group = groups.get(row.group_id);
+    if (!group) {
+      group = {
+        id: row.group_id,
+        number: Number(row.number),
+        inchargeUserId: row.incharge_user_id,
+        members: [],
+      };
+      groups.set(row.group_id, group);
+    }
+    // A LEFT JOIN over an empty group yields one row with a null user, which is a real
+    // group with nobody in it rather than a member to render.
+    if (row.user_id !== null) {
+      group.members.push({
+        userId: row.user_id,
+        name: row.full_name ?? '',
+        isIncharge: row.user_id === row.incharge_user_id,
+      });
+    }
+  }
+
+  // Who is on the roster and in no group - which is exactly rule 16's add-member search.
+  const unassignedRows = await db.execute<{ user_id: string; full_name: string }>(sql`
+    SELECT u.id::text AS user_id, u.full_name
+      FROM race_memberships rm
+      JOIN users u ON u.id = rm.user_id
+     WHERE rm.race_id = ${raceId}
+       AND NOT EXISTS (
+         SELECT 1 FROM car_group_members cgm
+          WHERE cgm.race_id = rm.race_id AND cgm.user_id = rm.user_id
+       )
+     ORDER BY u.full_name
+  `);
+
+  return {
+    ok: true,
+    groups: [...groups.values()],
+    unassigned: unassignedRows.rows.map((row) => ({
+      userId: row.user_id,
+      name: row.full_name,
+    })),
+  };
 }

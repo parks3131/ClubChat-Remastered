@@ -22,6 +22,25 @@ export type ChannelRef = {
 };
 
 // ---------------------------------------------------------------------------
+// The session itself
+// ---------------------------------------------------------------------------
+
+/**
+ * May this session act at all?
+ *
+ * Asked at both entry points - the HTTP hook and the gateway's `auth` frame - because
+ * **blocking an account does not invalidate a token it already holds**. Without a per-request
+ * question, a deleted or shut-off account keeps working until its session expires.
+ *
+ * > It gets a name here, rather than staying an inline field read, because it had been written
+ * > inline twice and was wrong in both places: each site asked better-auth's session user for
+ * > `signinBlockedAt`, a property that object does not carry, so both checks read `undefined`
+ * > and neither ever fired. One predicate over a context loaded from our own table has one
+ * > behaviour, and a test can reach it.
+ */
+export const isSessionUsable = (ctx: AccessContext): boolean => !ctx.signinBlocked;
+
+// ---------------------------------------------------------------------------
 // Club tier
 // ---------------------------------------------------------------------------
 
@@ -388,6 +407,42 @@ export const canLeaveClub = (ctx: AccessContext, clubId: string): boolean =>
 export const isEboardMember = (ctx: AccessContext, eboardId: string): boolean =>
   ctx.eboardMember.has(eboardId);
 
+/**
+ * Approving a request, or adding an admin directly. **Existing members of the space only.**
+ *
+ * Deliberately `isEboardMember` and not `isClubAdmin`, and this is the one predicate in the
+ * file where that substitution would not merely be wrong but self-defeating: letting any club
+ * admin approve would let an admin outside the space **approve their own way in**, which is the
+ * privacy boundary the space consists of. PRD/10 lists that as an explicitly rejected
+ * alternative.
+ *
+ * Its own name rather than an alias of `isEboardMember`, because "who may let somebody in" and
+ * "who is in" are two capabilities the spec names separately - failure mode 10.
+ */
+export const canApproveEboardRequest = (ctx: AccessContext, eboardId: string): boolean =>
+  isEboardMember(ctx, eboardId);
+
+/**
+ * Asking to rejoin: admin-tier in the club, and not already inside.
+ *
+ * The club-admin half is checked by the caller against the space's own club, because a
+ * predicate stays a pure function and the space-to-club mapping is a row.
+ */
+export const canRequestEboardAccess = (ctx: AccessContext, eboardId: string): boolean =>
+  !isEboardMember(ctx, eboardId);
+
+/**
+ * Removing somebody else from the space: **the club Owner, and nobody else.**
+ *
+ * The strictest removal rule in the product. Mutual removal between admins was rejected
+ * outright - this is the highest-trust space in it, and two admins able to eject each other is
+ * a governance problem rather than a feature. Leaving is separate and needs no authority.
+ */
+export const canRemoveFromEboard = (
+  ctx: AccessContext,
+  eboard: { id: string; clubId: string },
+): boolean => isEboardMember(ctx, eboard.id) && isClubOwner(ctx, eboard.clubId);
+
 // ---------------------------------------------------------------------------
 // Races: the authority-versus-access boundary
 // ---------------------------------------------------------------------------
@@ -451,6 +506,22 @@ export const canRequestRaceAccess = (ctx: AccessContext, race: RaceRef): boolean
  * the groups**. That asymmetry is the clearest expression of authority not being access.
  */
 export const canBeInCarGroup = isRaceMember;
+
+/**
+ * Reading the roster. A race member, **or** a manager with no roster row.
+ *
+ * The only race read where management authority does grant sight, and the only union of
+ * `isRaceMember` and `isRaceManager` in this file. PRD/09 rule 5 gives a manager who is not on
+ * the roster exactly one thing - "a way into the roster to manage others" - so this is neither
+ * of the two predicates it is built from, and takes its own name rather than a caller reaching
+ * for whichever one looks close (failure mode 10).
+ *
+ * Note what it deliberately does not cover: the roster's **pending requests** go through
+ * `canManageRace`, because who is waiting to be let in is decision-making data rather than
+ * roster data, and a plain race member has no decision to make.
+ */
+export const canReadRaceRoster = (ctx: AccessContext, race: RaceRef): boolean =>
+  isRaceMember(ctx, race) || isRaceManager(ctx, race);
 
 /** Viewing the groups. Any race member, read-only unless they also manage. */
 export const canViewCarGroups = isRaceMember;

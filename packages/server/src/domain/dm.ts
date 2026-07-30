@@ -25,6 +25,7 @@ import {
   canMuteChannel,
   canOpenDm,
   canPinInChannel,
+  canReadReports,
   canPostInChannel,
   canUnblock,
   dmThreadWith,
@@ -333,9 +334,35 @@ export type ChannelMeta = {
   channelId: string;
   scope: ChannelRef['scope'];
   name: string;
+  /**
+   * The scope this channel belongs to, and the club that owns it.
+   *
+   * > **Returned so the chat screen's header quick-nav can exist at all.** PRD/15 hangs Members,
+   * > Polls, Meet Information and Meetings off chat's header, because chat is the home screen of a
+   * > race and of an Eboard space - and every one of those is addressed by the SCOPE, not by the
+   * > channel. Without these two ids the client would have to keep a channel-to-scope map of its
+   * > own, which is a second copy of a fact the channel row already holds.
+   *
+   * `clubId` is null for a dm, which is the one scope that belongs to no club.
+   */
+  scopeId: string;
+  clubId: string | null;
   canPost: boolean;
   postDeniedReason: PostDeniedReason | null;
   canPin: boolean;
+  /**
+   * May this viewer read the reports raised here?
+   *
+   * Carried so the Highlights screen can decide whether to OFFER the Reports tab, rather than
+   * offering it and letting the read fail. A tab that always errors is not a leak - the refusal
+   * still holds - but it tells a member a thing exists that they will never see, and PRD/18 says
+   * reports reach only admins.
+   *
+   * `canReadReports`, not a re-derivation: it is false for a club member, true for that space's
+   * admins, and for a **dm** it is the platform-moderator bit rather than either participant -
+   * which is precisely why the client must not compute it from `canPin`.
+   */
+  canReadReports: boolean;
   muted: boolean;
   /** Present for a dm, so the client can offer block, unblock and report. */
   peer: { userId: string; name: string; blockedByMe: boolean } | null;
@@ -411,9 +438,12 @@ export async function readChannelMeta(
     channelId: row.id,
     scope: channel.scope,
     name: row.name,
+    scopeId: channel.scopeId,
+    clubId: channel.clubId,
     canPost,
     postDeniedReason: canPost ? null : row.blocked_by_me ? 'you_blocked_them' : 'unavailable',
     canPin: canPinInChannel(ctx, channel),
+    canReadReports: canReadReports(ctx, channel),
     muted: row.muted,
     peer:
       row.peer_id === null

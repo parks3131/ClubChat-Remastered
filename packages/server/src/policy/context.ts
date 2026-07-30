@@ -70,6 +70,17 @@ export type AccessContext = {
    * reading reports raised in conversations that have no admin party to them.
    */
   readonly isPlatformModerator: boolean;
+  /**
+   * Sign-in has been blocked - a deleted account, or one an operator has shut off.
+   *
+   * > **Loaded here, from our own table, rather than read off the session user.** Blocking
+   * > does not invalidate an already-issued token, so every request has to re-ask. Both
+   * > entry points used to ask better-auth's session object for `signinBlockedAt`, which it
+   * > does not return unless the column is declared in `additionalFields` - so the check
+   * > read `undefined` on every request and the revocation path never fired at all. The
+   * > column is ours; the answer comes from us.
+   */
+  readonly signinBlocked: boolean;
 };
 
 type ContextRow = {
@@ -139,6 +150,14 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
            NULL::boolean AS flag
       FROM users u
      WHERE u.id = ${userId} AND u.is_platform_moderator
+    UNION ALL
+    -- A presence row, like 'moderator' above: it exists only when the flag is set, so the
+    -- loop below reads the same way for both. This is the account-lifecycle half of the
+    -- context; see signinBlocked on AccessContext for why it is loaded here at all.
+    SELECT 'signin_blocked'::text AS kind, u.id::text AS id, NULL::text AS detail,
+           NULL::boolean AS flag
+      FROM users u
+     WHERE u.id = ${userId} AND u.signin_blocked_at IS NOT NULL
   `);
 
   const clubRole = new Map<string, ClubRole>();
@@ -147,6 +166,7 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
   const dmThreads = new Map<string, DmThread>();
   const blockedEither = new Set<string>();
   let isPlatformModerator = false;
+  let signinBlocked = false;
 
   for (const row of rows.rows) {
     if (row.kind === 'club' && row.detail !== null) {
@@ -165,6 +185,8 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
       blockedEither.add(row.id);
     } else if (row.kind === 'moderator') {
       isPlatformModerator = true;
+    } else if (row.kind === 'signin_blocked') {
+      signinBlocked = true;
     }
   }
 
@@ -176,6 +198,7 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
     dmThreads,
     blockedEither,
     isPlatformModerator,
+    signinBlocked,
   };
 }
 
@@ -193,6 +216,7 @@ export function accessContextOf(init: {
   dmThreads?: Iterable<{ conversationId: string; otherUserId: string; sharesClub?: boolean }>;
   blockedEither?: Iterable<string>;
   isPlatformModerator?: boolean;
+  signinBlocked?: boolean;
 }): AccessContext {
   const dmThreads = new Map<string, DmThread>();
   for (const thread of init.dmThreads ?? []) {
@@ -211,5 +235,6 @@ export function accessContextOf(init: {
     dmThreads,
     blockedEither: new Set(init.blockedEither ?? []),
     isPlatformModerator: init.isPlatformModerator ?? false,
+    signinBlocked: init.signinBlocked ?? false,
   };
 }

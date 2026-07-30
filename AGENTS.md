@@ -104,7 +104,7 @@ without being restated. Section 5 is the repo-specific part.
 
 | Layer | Rule |
 |---|---|
-| Screens / routes | Call the data layer. Never build a raw query inline. |
+| Screens / routes | Call the data layer. Never build a raw query inline. **Never accept a `clubId` (or any owning-scope id) from the caller alongside the id it belongs to** - resolve it with `domain/scopes.ts`. A two-part authorization check cannot tell whether its two arguments describe the same thing. |
 | Shared UI | Parametrize by scope rather than forking a copy. A fix must land everywhere at once. |
 | Data access | Plain exported typed functions, one concern per module. Return app-shaped types, never raw database rows. |
 | Authorization | One policy module. Every predicate defined exactly once and reused. No handler re-derives one inline, ever. |
@@ -209,6 +209,12 @@ npm run db:nuke              # stop AND destroy the volume. Development data onl
 npm run typecheck            # every workspace, strict
 npm test                     # every workspace. Handler tests start throwaway containers
 npm run lint:emdash          # standing instruction 1, with a detector self-test
+npm run check:runtime        # imports every module the way Node runs it. See failure mode 5
+
+# The Phase 3.75a exit gate: every route against a RUNNING server, in both directions.
+# Needs dev:api up. Deliberately not a test - see the header of the script for why.
+npm run gate:surface
+API=http://127.0.0.1:3100 npm run gate:surface
 
 npm run dev:api              # API on :3000
 npm run dev:gateway          # WebSocket gateway on :3001
@@ -242,9 +248,12 @@ move a version bump rather than a migration. Do not "upgrade" this without check
 | `packages/shared/` | Wire contract and domain vocabulary. Imported by client AND server, so neither can drift from the other |
 | `packages/client-core/` | Local store, send outbox, sync engine. Shared by the Expo app and the exit drill, so the drill tests what ships |
 | `packages/server/` | Three roles, one codebase: `src/api`, `src/gateway`, `src/worker` |
+| `packages/server/src/api/app.ts` | Composition only. Registers route groups inside the authenticated scope, so an unauthenticated route cannot be added by forgetting a hook |
+| `packages/server/src/api/routes/` | One file per **path** group, not per domain module. `/channels/:id/reports` sits with the moderation queue |
+| `packages/server/src/api/plumbing.ts` | What every route group shares: `AppDeps`, `authorizeChannel`, `refusalStatus`, `isUuid` |
 | `packages/server/src/policy/` | **The** policy module. Every predicate lives here exactly once |
 | `packages/server/src/domain/` | Command handlers and query functions |
-| `packages/server/src/db/` | Schema, migrations, and `constraint-proof.sql` |
+| `packages/server/src/db/` | Schema, migrations, `constraint-proof.sql`, and the raw-read helpers |
 | `apps/mobile/` | Expo client (iOS / Android / web) |
 | `scripts/` | Diagram export, service readiness, em-dash check |
 
@@ -352,7 +361,65 @@ that records how to recognise the class._
     recognise the class: the tests exercise each end against a fixture, and no test crosses the
     middle. A green suite over a pipeline is evidence about the pieces, not about the pipe.
 
-12. **A nested pressable is invalid HTML on web and swallows the outer gesture on native.**
+12. **A check against a field the library does not return reads `undefined` forever.** Symptom:
+    none, for four phases. Account revocation was checked at both entry points -
+    `session.user.signinBlockedAt` in the HTTP hook and again in the gateway's `auth` frame -
+    and neither ever fired, so a blocked or deleted account kept working until its session
+    expired. Root cause: better-auth returns only the columns declared in
+    `user.additionalFields`, and the two lifecycle columns are not declared, so the property
+    was absent rather than false. **Rule: never authorize against a field on a third-party
+    object you did not put there.** The answer lived in our own `users` row the whole time;
+    it is now loaded into the access context and asked through one predicate. How to
+    recognise the class: the check is a truthiness test on an optional property of a foreign
+    type, so TypeScript is content, the code reads correctly, and nothing can fail. Note the
+    shape it shares with entry 1 - a condition that silently never matches - and that this
+    one guarded a security boundary, which is why "prove the refusal, do not read the rule"
+    is a non-negotiable and not a preference.
+
+13. **An untargeted `ON CONFLICT DO NOTHING` absorbs every unique violation on the table, not
+    the one you meant.** Symptom: assigning a member to a second car group answered
+    `{ assigned: true }` and did nothing, so the UI reported a move that never happened. Root
+    cause: the insert carried a bare `onConflictDoNothing()`, which swallowed
+    `car_group_members_one_per_race` - the very invariant the surrounding `catch` existed to
+    turn into a refusal. The catch was unreachable because nothing threw. **Rule: always name
+    the conflict target.** An untargeted clause is a claim that every current and future
+    unique constraint on the table means "ignore this write", which is almost never true, and
+    is least true on a table whose whole purpose is holding a domain invariant.
+
+14. **`::text` on a `timestamptz` is not ISO 8601.** Symptom: a paging cursor this API emitted
+    was rejected by the same API's own `before` parameter. Root cause: `db.execute` does no
+    coercion (entry 7), so a timestamp has to be cast in SQL - and `::text` renders Postgres's
+    own format, `2026-07-30 08:42:41.123+00`, with a space and a two-digit offset. A browser's
+    `new Date()` parses it, so the mistake survives eyeballing a response; a strict validator
+    refuses it. **Rule: use `isoUtc()` from `db/sql-helpers.ts` for a timestamp, and plain
+    `::text` only for a `date`.** How to recognise the class: every timestamp the ORM returns
+    goes through `.toISOString()`, so a raw read is the only place a second format can enter,
+    and it enters looking almost right.
+
+15. **A dev server that failed to start leaves the OLD one answering.** Symptom: 46 of 73 gate
+    checks failed with "route not found" for code that was definitely present, while the routes
+    from two phases ago answered fine. Root cause: `npm run dev:api` exited with `EADDRINUSE`
+    because a server from an earlier session still owned the port, and every request went to
+    that stale process. **Rule: before believing a live-test result, confirm the process you are
+    talking to is the one you just started** - grep the log for `EADDRINUSE`, or start on a
+    different port. Note which way this fails: it reports your new work as broken, which is the
+    direction that wastes an hour rather than shipping a bug. The inverse - a stale process
+    reporting a fixed bug as fixed - is the one to actually fear.
+
+16. **A hand-written client type over an API response is an assertion, and it fails at the screen
+    rather than at the declaration.** Symptom: four separate crashes and wrong renders in one
+    phase - an inbox row reading `params.approved` off `undefined`, a gallery reading `.length` off
+    `undefined`, every news post labelled "edited", and a Reports tab offered to somebody who could
+    never read it. Root cause: `apps/mobile/src/api-types.ts` restates the server's response shapes,
+    because the server's own types live in modules the client cannot import. Every one of those was a
+    plausible guess that typechecked cleanly. **Rules: import from `@clubchat/shared` anything that
+    exists there** - `NotificationTarget` was being restated, and importing it made the client's
+    routing switch exhaustive over the same union the server derives from - **and read the server's
+    type before writing the client's, rather than inferring it from the screen you are building.**
+    The generalisation of entry 7, one layer up: the type passing proves you and the compiler agree,
+    not that either of you is right.
+
+17. **A nested pressable is invalid HTML on web and swallows the outer gesture on native.**
     Symptom: React reporting `<button> cannot contain a nested <button>` and warning of a
     hydration error, from a photo bubble rendered inside the message bubble's own long-press
     target. **Rule: only the outermost element in a row owns the gesture** - inner content is a

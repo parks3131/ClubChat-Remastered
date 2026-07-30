@@ -1,0 +1,219 @@
+/**
+ * Clubs and membership.
+ *
+ * Every refusal here goes through `refusalStatus`, which answers 404 for both "forbidden"
+ * and "not found". A member who has no business with a club must not learn whether it
+ * exists, and a distinguishable 403 would tell them.
+ */
+
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { JoinPolicy } from '@clubchat/shared';
+import { createClub } from '../../domain/create-club.ts';
+import {
+  addMember,
+  changeRole,
+  decideJoinRequest,
+  deleteClub,
+  joinClub,
+  leaveClub,
+  readClub,
+  readClubRoster,
+  rotateInviteToken,
+  redeemInvite,
+  removeMember,
+  setJoinPolicy,
+  transferOwnership,
+} from '../../domain/membership.ts';
+import { listClubsForUser } from '../../domain/reads.ts';
+import { markRosterSeen } from '../../domain/inbox.ts';
+import { isClubAdmin } from '../../policy/predicates.ts';
+import { refusalStatus, type AppDeps } from '../plumbing.ts';
+
+export function registerClubRoutes(app: FastifyInstance, deps: AppDeps): void {
+  app.get('/clubs', async (request) => ({
+    clubs: await listClubsForUser(deps.db, request.userId!),
+  }));
+
+  const CreateClubBody = z.object({
+    name: z.string().min(1).max(120),
+    sport: z.string().min(1).max(60),
+    description: z.string().max(2_000).nullish(),
+    joinPolicy: JoinPolicy.default('open'),
+  });
+
+  app.post('/clubs', async (request, reply) => {
+    const parsed = CreateClubBody.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'invalid_body', issues: parsed.error.issues });
+    }
+
+    // Anyone signed in may create a club; they become its Owner. There is no
+    // authorization gate beyond having an account.
+    const result = await createClub(deps.db, {
+      ...parsed.data,
+      creatorId: request.userId!,
+    });
+
+    // Every mutation returns the created resource. Legal and trivial here, and the
+    // direct counter-example to v1's create-and-read-back trap: this handler
+    // authorized the write, so it may obviously return what it wrote.
+    return reply.code(201).send(result);
+  });
+
+  app.get<{ Params: { id: string } }>('/clubs/:id', async (request, reply) => {
+    const result = await readClub(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  app.get<{ Params: { id: string } }>('/clubs/:id/members', async (request, reply) => {
+    const result = await readClubRoster(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  app.post<{ Params: { id: string } }>('/clubs/:id/join', async (request, reply) => {
+    const result = await joinClub(deps.db, request.userId!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  app.post<{ Params: { token: string } }>('/invites/:token/redeem', async (request, reply) => {
+    const result = await redeemInvite(deps.db, request.userId!, request.params.token);
+    if (!result.ok) {
+      // A revoked or malformed link gets a plain "no longer valid", never a hint about
+      // which clubs exist.
+      return reply.code(404).send({ error: 'invite_invalid' });
+    }
+    return result;
+  });
+
+  app.post<{ Params: { id: string } }>('/join-requests/:id/approve', async (request, reply) => {
+    const result = await decideJoinRequest(deps.db, request.access!, request.params.id, true);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  app.post<{ Params: { id: string } }>('/join-requests/:id/deny', async (request, reply) => {
+    const result = await decideJoinRequest(deps.db, request.access!, request.params.id, false);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  const AddMemberBody = z.object({ userId: z.string().uuid() });
+  app.post<{ Params: { id: string } }>('/clubs/:id/members', async (request, reply) => {
+    const body = AddMemberBody.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+    const result = await addMember(deps.db, request.access!, request.params.id, body.data.userId);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  const RoleBody = z.object({ role: z.enum(['admin', 'member']) });
+  app.patch<{ Params: { id: string; uid: string } }>(
+    '/clubs/:id/members/:uid/role',
+    async (request, reply) => {
+      const body = RoleBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+      const result = await changeRole(
+        deps.db,
+        request.access!,
+        request.params.id,
+        request.params.uid,
+        body.data.role,
+      );
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return result;
+    },
+  );
+
+  app.delete<{ Params: { id: string; uid: string } }>(
+    '/clubs/:id/members/:uid',
+    async (request, reply) => {
+      const result = await removeMember(
+        deps.db,
+        request.access!,
+        request.params.id,
+        request.params.uid,
+      );
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return result;
+    },
+  );
+
+  app.post<{ Params: { id: string } }>('/clubs/:id/leave', async (request, reply) => {
+    const result = await leaveClub(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  const TransferBody = z.object({ toUserId: z.string().uuid() });
+  app.post<{ Params: { id: string } }>(
+    '/clubs/:id/transfer-ownership',
+    async (request, reply) => {
+      const body = TransferBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+      const result = await transferOwnership(
+        deps.db,
+        request.access!,
+        request.params.id,
+        body.data.toUserId,
+      );
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return result;
+    },
+  );
+
+  const PolicyBody = z.object({ joinPolicy: JoinPolicy });
+  app.patch<{ Params: { id: string } }>('/clubs/:id', async (request, reply) => {
+    const body = PolicyBody.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+    const result = await setJoinPolicy(
+      deps.db,
+      request.access!,
+      request.params.id,
+      body.data.joinPolicy,
+    );
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  app.delete<{ Params: { id: string } }>('/clubs/:id', async (request, reply) => {
+    const result = await deleteClub(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return { deleted: true };
+  });
+
+  /**
+   * Rotate the invite token, invalidating every outstanding link at once.
+   *
+   * That total invalidation is the feature, not a caveat: the link is the ONLY invite mechanism
+   * since ADR-0010 removed the typed code, so a leaked one has no alternative to fall back on
+   * and rotation is the sole remedy. A rotation that left the old link working would be theatre.
+   *
+   * The new token comes back in the response, because the caller is an admin who is entitled to
+   * it and has just asked for a link to share.
+   */
+  app.post<{ Params: { id: string } }>('/clubs/:id/invite-token/rotate', async (request, reply) => {
+    const result = await rotateInviteToken(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  /**
+   * Opening a club's member roster.
+   *
+   * The only thing that clears that club's pending join-request rows. Gated on admin,
+   * since only the admin tier sees those requests in the first place.
+   */
+  app.post<{ Params: { id: string } }>('/clubs/:id/members/seen', async (request, reply) => {
+    if (!isClubAdmin(request.access!, request.params.id)) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    return markRosterSeen(deps.db, request.userId!, {
+      kind: 'club',
+      clubId: request.params.id,
+    });
+  });
+}

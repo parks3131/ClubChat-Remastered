@@ -7,7 +7,7 @@
  * inbox, no drain-on-connect path and no delete-after-delivery job. See ADR-0003.
  */
 
-import { and, asc, desc, eq, gt, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, isNull, lt, lte, sql } from 'drizzle-orm';
 import type { ChannelState, MessageEnvelope, MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { channels, messages } from '../db/schema.ts';
@@ -125,6 +125,108 @@ export async function readHistory(
     .limit(limit);
 
   return withReactions(db, rows.reverse().map(toEnvelope));
+}
+
+/**
+ * A window centred on one message, for jump-to-message.
+ *
+ * > **Three lines of the acceptance checklist need this and nothing else can provide them**:
+ * > the pinned strip's notice jumping to its message on the **first** tap, chat opening on the
+ * > first unread with no visible scrolling, and a notification deep-linking to a message that
+ * > may be thousands of rows back. Paging backward from the tail until the target appears is
+ * > what makes the "first tap" version impossible - the message is not loaded yet, so the first
+ * > tap can only start fetching.
+ *
+ * Returns the target plus `radius` messages either side, oldest-first, and reports whether
+ * more exists in each direction so a client knows which way it may still page. A target that
+ * does not exist yields an empty window rather than a refusal: the caller has already been
+ * authorized for the channel, and a deleted message is a legitimate thing to land on.
+ */
+export async function readAround(
+  db: Db,
+  channelId: string,
+  seq: number,
+  radius = 20,
+): Promise<{
+  messages: MessageEnvelope[];
+  hasBefore: boolean;
+  hasAfter: boolean;
+}> {
+  const span = Math.min(Math.max(radius, 1), 100);
+
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.channelId, channelId),
+        gte(messages.seq, seq - span),
+        lte(messages.seq, seq + span),
+      ),
+    )
+    .orderBy(asc(messages.seq));
+
+  const envelopes = await withReactions(db, rows.map(toEnvelope));
+  const lowest = envelopes[0]?.seq ?? seq;
+  const highest = envelopes[envelopes.length - 1]?.seq ?? seq;
+
+  // Asked of the channel head and of seq 1 rather than inferred from a full page, because a
+  // window with holes in it - deleted rows leave their seq behind, so there are none, but a
+  // gapless log is the reason that is true - would otherwise read as "no more".
+  const head = await db
+    .select({ lastSeq: channels.lastSeq })
+    .from(channels)
+    .where(eq(channels.id, channelId))
+    .limit(1);
+
+  return {
+    messages: envelopes,
+    hasBefore: lowest > 1,
+    hasAfter: highest < (head[0]?.lastSeq ?? highest),
+  };
+}
+
+/**
+ * Everything pinned in a channel, or every announcement.
+ *
+ * > **Queried over the whole channel, never over a loaded window**, which is debt item 6:
+ * > v1 computed both lists from a bounded slice of history, so a pin older than the loaded
+ * > page silently vanished from Highlights. The partial indexes on `messages` exist for
+ * > exactly these two reads.
+ *
+ * Tombstones are excluded from both. A soft delete clears `pinned` anyway, so a deleted pin
+ * cannot appear - but an announcement keeps its type, and Highlights listing "this message was
+ * deleted" as a club announcement would be worse than listing nothing.
+ */
+export async function readHighlights(
+  db: Db,
+  channelId: string,
+  kind: 'pinned' | 'announcements',
+  opts: { before?: number | undefined; limit?: number | undefined } = {},
+): Promise<{ messages: MessageEnvelope[]; hasMore: boolean }> {
+  const limit = Math.min(opts.limit ?? HISTORY_PAGE_SIZE, 200);
+
+  const conditions = [
+    eq(messages.channelId, channelId),
+    isNull(messages.deletedAt),
+    kind === 'pinned' ? eq(messages.pinned, true) : eq(messages.type, 'announcement'),
+  ];
+  if (opts.before !== undefined) conditions.push(lt(messages.seq, opts.before));
+
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(and(...conditions))
+    // Newest first: Highlights is a reference list rather than a conversation, so the most
+    // recent pin is the one somebody opening the tab is looking for.
+    .orderBy(desc(messages.seq))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  return {
+    messages: await withReactions(db, rows.slice(0, limit).map(toEnvelope)),
+    hasMore,
+  };
 }
 
 /**

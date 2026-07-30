@@ -15,10 +15,90 @@
  */
 
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Image,
+  StyleSheet,
+  Text,
+  View,
+  type ImageStyle,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { formatBytes } from '@clubchat/shared';
 import { resolveMediaUrl, type MediaVariant } from './api.ts';
 import { color, radius, space, type } from './theme.ts';
+
+
+/**
+ * A media id, resolved and rendered.
+ *
+ * > **Extracted on the third caller**, which is the rule: the chat bubble, the gallery grid and the
+ * > news feed all need "turn this id into an image, and say so honestly when it will not load".
+ * > `PhotoBubble` is this plus the bubble frame; the gallery and news pass their own.
+ *
+ * Every render resolves through the authorized `/media/:id/url` hop, so access is re-decided
+ * server-side rather than trusted from a URL held in a component. The memo in `api.ts` makes that
+ * one request per id per hour-aligned window rather than one per mount.
+ */
+export function RemoteImage({
+  mediaId,
+  variant = 'display',
+  style,
+  resizeMode = 'cover',
+  accessibilityLabel = 'Photo',
+}: {
+  mediaId: string;
+  variant?: MediaVariant;
+  style?: StyleProp<ImageStyle>;
+  resizeMode?: 'cover' | 'contain';
+  accessibilityLabel?: string;
+}) {
+  const [uri, setUri] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void resolveMediaUrl(mediaId, variant)
+      .then((resolved) => {
+        if (!cancelled) setUri(resolved);
+      })
+      .catch(() => {
+        // Losing access is a legitimate reason to fail. Never a silent blank.
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mediaId, variant]);
+
+  if (failed) {
+    return (
+      <View style={[styles.remoteFallback, style as StyleProp<ViewStyle>]}>
+        <Text style={styles.unavailableText}>Photo unavailable</Text>
+      </View>
+    );
+  }
+
+  if (uri === null) {
+    return (
+      <View style={[styles.remoteFallback, style as StyleProp<ViewStyle>]}>
+        <ActivityIndicator color={color.accent} />
+      </View>
+    );
+  }
+
+  return (
+    <Image
+      source={{ uri }}
+      style={style}
+      resizeMode={resizeMode}
+      onError={() => setFailed(true)}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityIgnoresInvertColors
+    />
+  );
+}
 
 type PhotoProps = {
   mediaId: string | null;
@@ -129,6 +209,11 @@ export function DocumentBubble({ name, size, mine }: DocumentProps) {
 }
 
 const styles = StyleSheet.create({
+  remoteFallback: {
+    backgroundColor: color.fallback,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   photoFrame: {
     width: 220,
     height: 220,

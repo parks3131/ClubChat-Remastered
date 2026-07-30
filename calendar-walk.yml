@@ -1,0 +1,109 @@
+- generic [ref=e9]:
+  - generic [ref=e12]:
+    - heading "Calendar" [level=1] [ref=e14]
+    - generic [ref=e16]:
+      - generic [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e20]: July 2026
+          - generic [ref=e21]:
+            - button "Previous month" [ref=e22] [cursor=pointer]: <
+            - button "Next month" [ref=e23] [cursor=pointer]: ">"
+        - generic [ref=e24]:
+          - generic [ref=e25]: S
+          - generic [ref=e26]: M
+          - generic [ref=e27]: T
+          - generic [ref=e28]: W
+          - generic [ref=e29]: T
+          - generic [ref=e30]: F
+          - generic [ref=e31]: S
+        - generic [ref=e32]:
+          - generic [ref=e37]: "1"
+          - generic [ref=e39]: "2"
+          - generic [ref=e41]: "3"
+          - generic [ref=e43]: "4"
+          - generic [ref=e45]: "5"
+          - generic [ref=e47]: "6"
+          - generic [ref=e49]: "7"
+          - generic [ref=e51]: "8"
+          - generic [ref=e53]: "9"
+          - generic [ref=e55]: "10"
+          - generic [ref=e57]: "11"
+          - generic [ref=e59]: "12"
+          - generic [ref=e61]: "13"
+          - generic [ref=e63]: "14"
+          - generic [ref=e65]: "15"
+          - generic [ref=e67]: "16"
+          - generic [ref=e69]: "17"
+          - generic [ref=e71]: "18"
+          - generic [ref=e73]: "19"
+          - generic [ref=e75]: "20"
+          - generic [ref=e77]: "21"
+          - generic [ref=e79]: "22"
+          - generic [ref=e81]: "23"
+          - generic [ref=e83]: "24"
+          - generic [ref=e85]: "25"
+          - generic [ref=e87]: "26"
+          - generic [ref=e89]: "27"
+          - generic [ref=e91]: "28"
+          - generic [ref=e93]: "29"
+          - generic [ref=e95]: "30"
+          - generic [ref=e97]: "31"
+      - generic [ref=e107]:
+        - tab "Upcoming" [ref=e108] [cursor=pointer]:
+          - generic [ref=e109]: Upcoming
+        - tab "Past" [ref=e110] [cursor=pointer]:
+          - generic [ref=e111]: Past
+      - generic [ref=e112]:
+        - link "Which day for the long run?" [ref=e113] [cursor=pointer]:
+          - /url: /polls/5a3081ae-71b4-4f46-8d0f-8a9b032b60ec
+          - generic [ref=e114]:
+            - generic [ref=e115]:
+              - generic [ref=e116]: Which day for the long run?
+              - generic [ref=e117]: 2026-08-06 · Walkthrough Runners
+            - generic [ref=e120]: poll
+        - button "Thursday track session" [ref=e121] [cursor=pointer]:
+          - generic [ref=e122]:
+            - generic [ref=e123]:
+              - generic [ref=e124]: Thursday track session
+              - generic [ref=e125]: 2027-04-01 · Walkthrough Runners
+            - generic [ref=e128]: event
+        - link "Season planning" [ref=e129] [cursor=pointer]:
+          - /url: /meetings/821b3252-0a5a-41e3-bdfe-18c69ff7f2a3
+          - generic [ref=e130]:
+            - generic [ref=e131]:
+              - generic [ref=e132]: Season planning
+              - generic [ref=e133]: 2027-09-01 · Walkthrough Runners
+            - generic [ref=e136]: meeting
+        - link "Autumn Regionals" [ref=e137] [cursor=pointer]:
+          - /url: /races/d18f9d7f-436d-4310-9d8d-4e8248e0be4d
+          - generic [ref=e138]:
+            - generic [ref=e139]:
+              - generic [ref=e140]: Autumn Regionals
+              - generic [ref=e141]: 2027-10-03 · Walkthrough Runners
+            - generic [ref=e144]: race
+        - link "Van or minibus?" [ref=e145] [cursor=pointer]:
+          - /url: /polls/3f366e36-5033-4f04-a402-33e82b627a05
+          - generic [ref=e146]:
+            - generic [ref=e147]:
+              - generic [ref=e148]: Van or minibus?
+              - generic [ref=e149]: No deadline · Walkthrough Runners
+            - generic [ref=e152]: poll
+        - link "Raise the subs?" [ref=e153] [cursor=pointer]:
+          - /url: /polls/e797e737-53bc-4a64-a7e5-44dd67ff3a26
+          - generic [ref=e154]:
+            - generic [ref=e155]:
+              - generic [ref=e156]: Raise the subs?
+              - generic [ref=e157]: No deadline · Walkthrough Runners
+            - generic [ref=e160]: poll
+  - tablist [ref=e162]:
+    - tab "Clubs" [ref=e164] [cursor=pointer]:
+      - generic [ref=e168]: Clubs
+    - tab "Calendar" [selected] [ref=e170] [cursor=pointer]:
+      - generic [ref=e174]: Calendar
+    - tab "Alerts 2 unread notifications" [ref=e176] [cursor=pointer]:
+      - generic [ref=e180]:
+        - generic [ref=e181]: Alerts
+        - generic "2 unread notifications" [ref=e182]:
+          - generic [ref=e183]: "2"
+    - tab "Profile" [ref=e185] [cursor=pointer]:
+      - generic [ref=e189]: Profile

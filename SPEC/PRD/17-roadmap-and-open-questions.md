@@ -1,12 +1,14 @@
 # Roadmap and open questions
 
-> **Status, 2026-07-30.** Phases 0, 1, 2, 3 and 3.5 are built; see
+> **Status, 2026-07-30.** Phases 0, 1, 2, 3, 3.5 and 3.75a are built; see
 > [Build phases](../TECH/16-build-phases.md) for the phase-by-phase state and what each one still
 > owes. Two facts dominate everything below:
 >
-> 1. **Most of the product has no user interface.** Races, polls, calendar, routines, news and
->    Eboard meetings have schema, command handlers and tests, and no HTTP routes and no screens.
->    The app is sign-in, a club list, chat, and a DM list.
+> 1. **Most of the product has no user interface** - but it does now have a server. Races, polls,
+>    calendar, routines, news and Eboard are reachable over 111 HTTP routes as of Phase 3.75a, and
+>    the app is still sign-in, a club list, chat and a DM list. The remaining work is screens
+>    against a finished surface (Phase 3.75b), which is a different and much smaller problem than
+>    the one this entry described before.
 > 2. **Phase 1.5 (Kafka) was skipped** and the worker still drains the outbox directly. Correct
 >    and ordered, but not the distributed design ADR-0006 specifies.
 
@@ -15,7 +17,7 @@
 | Gap | Impact | Note for the remaster |
 |---|---|---|
 | ~~**Push notifications**~~ | | **Done in Phase 1.** Device registry, Expo Push, per-device fan-out, and suppression by read cursor rather than by connection liveness (ADR-0008). Phase 3.5 added the DM push (ADR-0015) |
-| **A user interface for most of the product** | Races, polls, calendar, routines, news and Eboard are unreachable from the app | **Newly surfaced 2026-07-30, and now the largest single gap.** 32 command handlers, fully authorized and tested, with no routes and no screens. Sketched as Phase 3.75 in [Build phases](../TECH/16-build-phases.md). No new domain logic or schema needed |
+| **A user interface for most of the product** | Races, polls, calendar, routines, news and Eboard are unreachable from the **app**, though no longer from the API | **Half closed 2026-07-30.** Phase 3.75a built the HTTP surface: 45 routes became 111, with the ~20 missing queries and the six capabilities that had no function of any kind. What is left is Phase 3.75b, the screens - and it is now ordinary client work rather than a screen with nothing to call |
 | **Legal review** of Privacy Policy and Terms | The shipped documents are an in-house first draft, explicitly not legal advice | Must happen before any public release |
 | **iOS distribution** | Blocked on paid developer-program enrolment | Not a code problem |
 | **Error monitoring** | A crash or failed load in real use is **invisible** | **Still true of the remaster.** [Stack and hosting](../TECH/15-stack-and-hosting.md) says Sentry "in the error path from the first commit"; there is no Sentry anywhere. Phase 4 |
@@ -26,7 +28,7 @@
 |---|---|
 | **Accessibility** | Every interactive control labelled, screen-reader navigable, contrast verified against WCAG AA, dynamic type supported, reduced motion respected. Start with the icon-only controls |
 | ~~**Offline**~~ | **Done in Phase 3.** Read-only cached chat plus a send outbox with optimistic messages, which was the "ideally" of this entry rather than the minimum. See [Cross-cutting UX](16-cross-cutting-ux.md) |
-| ~~**Test coverage**~~ | **Substantially done.** 531 tests, five permission matrices asserted cell by cell in both directions, 62 constraint assertions attempted against a live database, and mutation checks on the authorization gates. The gap that remains is UI tests, which wait on there being a UI |
+| ~~**Test coverage**~~ | **Substantially done.** 607 tests, five permission matrices asserted cell by cell in both directions, 70 constraint assertions attempted against a live database, 76 route-level cases through the HTTP stack, and a 73-check gate against a running server. The gap that remains is UI tests, which wait on there being a UI |
 | ~~**Muting**~~ | **Done in Phase 3.5.** Per-conversation, every scope: no push, unread count still accrues. Per-**type** and per-club preferences are still open, and are now one check inside the audience function rather than something with nowhere to live |
 | ~~**Block or mute between members**~~ | **No longer deferrable.** Promoted out of this list on 2026-07-28: with direct messages in scope, blocking, conversation mute, and a report destination ship in the same release as DMs. A private one-to-one channel with no admin party to it, no block, and nowhere for a report to go, is a materially different risk class in a product that will include minors. See [Direct messages](14-direct-messages.md) |
 | **Over-the-air updates** | Every fix currently needs a full store release |
@@ -46,8 +48,10 @@ designed in.
    double-post.
 5. **Denormalized and capped unread counts**, and a collapsed calendar feed. The cross-club
    merged calendar currently reads once per feature **per club the user belongs to**.
-6. **Highlights must not silently lose pins past the loaded window.** Today the pinned and
-   announcement lists are computed over a bounded slice of history.
+6. ~~**Highlights must not silently lose pins past the loaded window.**~~ **Done in Phase 3.75a** -
+   `readHighlights` queries the whole channel behind the partial indexes that were built for it,
+   so a pin sixty messages past the loaded page is still the first row of the Pinned tab.
+   Originally: the pinned and announcement lists were computed over a bounded slice of history.
 7. ~~**Media cost.**~~ **Done in Phase 3**, and the mechanism turned out to matter more than expected - see [Media pipeline](../TECH/07-media-pipeline.md) on which of the CDN and the object store signs. Originally: Signed URLs are memoized per device, which fixed the repeat-fetch
    multiplier, but two devices still hold different URLs for the same object, so N viewers is
    still N origin downloads. A CDN-friendly scheme (stable URLs plus an authorization gate, or
@@ -99,6 +103,16 @@ on news posts. Recurring events. External calendar sync. RSVP or attendance, any
   is the sole remedy. Rotation invalidates every outstanding link at once, which is the correct
   and expected behaviour.
 - Should ownership transfer **require the recipient to accept**?
+- ~~**What should deleting an account do when the caller still owns a club?**~~ **Settled
+  2026-07-30: deletion refuses with `owns_clubs` until the Owner transfers or deletes each club.**
+  Three rules collided - deletion is unconditional and self-service
+  ([Accounts](03-accounts-and-profile.md) rule 11), an Owner cannot leave and transfer is their
+  only path out ([Clubs](04-clubs-and-membership.md)), and exactly one Owner must exist per club
+  because an ownerless club has no recovery path ([Domain model](01-domain-model.md) invariant 1).
+  The refusal is the only outcome that keeps both the invariant and the other members' club, and it
+  stays self-service because the client can offer transfer-or-delete per club. Rejected:
+  auto-promoting the longest-serving admin (hands a club to somebody who never asked for it), and
+  deleting the owned clubs (destroys other people's club to close one account).
 - Should an admin other than a poll's creator be able to close a poll whose creator has left?
 - Do clubs including **minors** need age gating, parental consent, or restricted profile
   fields? Is a **data-retention policy** needed? Should a user be able to **export their own
