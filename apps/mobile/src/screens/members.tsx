@@ -202,23 +202,27 @@ export function MembersScreen({
                 {inSection.map((row) => {
                   const actions = actionsFor(row);
                   return (
-                    <Pressable
-                      key={row.userId}
-                      style={styles.row}
-                      onPress={() => router.push(`/users/${row.userId}`)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Open ${row.name}'s profile`}
-                    >
-                      <Avatar name={row.name} />
-                      <View style={styles.personText}>
-                        <Text style={styles.name}>{row.name}</Text>
-                        {row.tag !== null && <Text style={styles.tag}>{row.tag}</Text>}
-                      </View>
-                      {/*
-                        Plain Views, never nested Pressables - a pressable inside a pressable is
-                        a <button> in a <button> on web and swallows the outer gesture on native
-                        (failure mode 17). The menu opens from the row's own long press instead.
-                      */}
+                    /*
+                      A View, with TWO SIBLING pressables inside it - never a pressable wrapping
+                      another. A row that was itself pressable put a <button> inside a <button> on
+                      web and swallowed the menu's gesture on native, which is failure mode 17 and
+                      is exactly what shipped here on the first pass. v1 has the same shape for the
+                      same reason: the name area opens the profile, the menu button opens the menu,
+                      and neither contains the other.
+                    */
+                    <View key={row.userId} style={styles.row}>
+                      <Pressable
+                        style={styles.rowInfo}
+                        onPress={() => router.push(`/users/${row.userId}`)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Open ${row.name}'s profile`}
+                      >
+                        <Avatar name={row.name} />
+                        <View style={styles.personText}>
+                          <Text style={styles.name}>{row.name}</Text>
+                          {row.tag !== null && <Text style={styles.tag}>{row.tag}</Text>}
+                        </View>
+                      </Pressable>
                       {row.isSelf && <Text style={styles.you}>You</Text>}
                       {busy === row.userId ? (
                         <ActivityIndicator color={color.accent} />
@@ -250,7 +254,7 @@ export function MembersScreen({
                           />
                         )
                       )}
-                    </Pressable>
+                    </View>
                   );
                 })}
               </View>
@@ -431,6 +435,7 @@ const styles = StyleSheet.create({
     marginBottom: space.xs,
   },
   person: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  rowInfo: { flexDirection: 'row', alignItems: 'center', gap: space.sm + 2, flex: 1 },
   personText: { flex: 1, gap: 2 },
   name: { ...type.headline, color: color.textPrimary },
   tag: { ...type.label, color: color.accent, textTransform: 'none' },

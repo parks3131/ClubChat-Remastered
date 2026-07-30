@@ -9,15 +9,16 @@
  * them no visibility that the space exists at all, and a greyed-out row is visibility.
  */
 
-import { StyleSheet, Text, View } from 'react-native';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
+import { Link, Stack, useLocalSearchParams } from 'expo-router';
 import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { BackAlwaysTo } from '../../../../../src/nav.tsx';
 import { unreadCount } from '@clubchat/shared';
 import { clubApi, raceApi } from '../../../../../src/api.ts';
 import { useSession } from '../../../../../src/chat-provider.tsx';
-import { color, space, type } from '../../../../../src/theme.ts';
-import { Badge, Body, DataScreen, Row, SectionHeader } from '../../../../../src/ui.tsx';
+import { color, radius, space, type } from '../../../../../src/theme.ts';
+import { DataScreen } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
 /** How many races the hub previews before "See all". */
@@ -25,8 +26,6 @@ const RACE_PREVIEW = 5;
 
 export default function ClubHubScreen() {
   const { clubId, from } = useLocalSearchParams<{ clubId: string; from?: string }>();
-  // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
-  useDeclareClub(clubId);
 
   /*
    * Where this hub's back control goes, which depends on how the hub was reached.
@@ -51,6 +50,9 @@ export default function ClubHubScreen() {
 
   const club = useLoad(() => clubApi.detail(clubId), [clubId, revision]);
   const races = useLoad(() => raceApi.list(clubId), [clubId, revision]);
+  // Inside this club for as long as this screen is mounted, and carrying its name so every
+  // header below can show the club's identity rather than the screen's.
+  useDeclareClub(clubId, club.data?.club.name);
 
   const unreadFor = (channelId: string | null): number => {
     if (channelId === null) return 0;
@@ -63,13 +65,10 @@ export default function ClubHubScreen() {
       {(data) => {
         const previewed = (races.data?.races ?? []).slice(0, RACE_PREVIEW);
         const total = races.data?.races.length ?? 0;
+        const unread = unreadFor(data.club.channelId);
 
         return (
-          <Body>
-            {/*
-              The header carries the club's own name rather than the word "Club". Set from the
-              screen because only the screen has the data - the layout knows the route, not the row.
-            */}
+          <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
             <Stack.Screen
               options={{
                 title: data.club.name,
@@ -80,88 +79,298 @@ export default function ClubHubScreen() {
                   : {}),
               }}
             />
-            <Text style={styles.sport}>{data.club.sport}</Text>
-            {data.club.description !== null && data.club.description.length > 0 && (
-              <Text style={styles.description}>{data.club.description}</Text>
-            )}
 
-            {/* First row: the club's front page. */}
-            <Row
-              title="News & Highlights"
-              subtitle="Results, recaps and photo drops"
-              href={`/clubs/${clubId}/news`}
-            />
-
-            <Row
-              title="Club chat"
-              subtitle="The centre of gravity"
-              href={data.club.channelId !== null ? `/chat/${data.club.channelId}` : undefined}
-              right={
-                unreadFor(data.club.channelId) > 0 ? (
-                  <Badge label={String(unreadFor(data.club.channelId))} tone="alert" />
-                ) : undefined
-              }
-            />
+            {/* The club's name again, at display weight. The header states where you are; this
+                states what you are looking at, which is what makes the hub feel like a front
+                door rather than a menu. */}
+            <Text style={styles.identity}>{data.club.name.toUpperCase()}</Text>
 
             {/*
-              Present only for somebody actually in the space. The server returns a null id to
-              everybody else, so this row cannot be rendered for them by mistake.
+              ONE continuous panel, not a stack of separately bordered cards.
+
+              Every row is flat with a divider between, and every icon is a filled circle. That
+              is what gives the hub a group-list feel instead of the card-per-item look the rest
+              of the app uses - v1's deliberate exception, and the reason the three destinations
+              read as one place rather than three unrelated links.
             */}
-            {data.club.eboardId !== null && (
-              <Row
-                title="Eboard & Council"
-                subtitle="Admins only"
-                href={`/eboard/${data.club.eboardId}`}
+            <View style={styles.panel}>
+              <HubRow
+                icon="auto-awesome"
+                tint={color.secondary}
+                label="News & Highlights"
+                subtitle="Club updates & photos"
+                href={`/clubs/${clubId}/news`}
               />
-            )}
+              <View style={styles.divider} />
+              <HubRow
+                icon="forum"
+                tint={color.accent}
+                label="Club main chat"
+                subtitle="Jump into the conversation"
+                href={data.club.channelId !== null ? `/chat/${data.club.channelId}` : undefined}
+                badge={unread > 0 ? String(unread) : undefined}
+              />
+              {/*
+                Present only for somebody actually in the space. The server returns a null id to
+                everybody else, so this row cannot be rendered for them by mistake - and rule 4
+                of PRD/10 gives an ordinary member no visibility that the space exists, which a
+                greyed-out row would be.
+              */}
+              {data.club.eboardId !== null && (
+                <>
+                  <View style={styles.divider} />
+                  <HubRow
+                    icon="shield"
+                    tint={color.tertiary}
+                    label="Eboard & Council"
+                    subtitle="Private space for admins"
+                    href={`/eboard/${data.club.eboardId}`}
+                  />
+                </>
+              )}
 
-            <SectionHeader
-              title="Races & Meets"
-              action={
-                total > RACE_PREVIEW ? (
-                  <Text style={styles.seeAll} accessibilityRole="link">
-                    {`${total} total`}
-                  </Text>
-                ) : undefined
-              }
-            />
-            {previewed.length === 0 ? (
-              <Text style={styles.meta}>No upcoming races yet.</Text>
-            ) : (
-              previewed.map((race) => (
-                <Row
-                  key={race.id}
-                  title={race.name}
-                  subtitle={race.raceDate}
-                  href={`/races/${race.id}`}
-                  right={
-                    <>
-                      {race.pinned && <Badge label="Pinned" tone="accent" />}
-                      {!race.hasAccess && <Badge label="No access" tone="muted" />}
-                    </>
-                  }
-                />
-              ))
-            )}
-            <Row title="See all races" href={`/clubs/${clubId}/races`} />
+              <View style={styles.divider} />
 
-            <SectionHeader title="This club" />
-            <Row title="Members" subtitle={`${data.club.memberCount}`} href={`/clubs/${clubId}/members`} />
-            <Row title="Calendar" href={`/clubs/${clubId}/calendar`} />
-            <Row title="Events" href={`/clubs/${clubId}/events`} />
-            <Row title="Routines" href={`/clubs/${clubId}/routines`} />
-            <Row title="Polls" href={`/clubs/${clubId}/polls`} />
-            <Row title="Club profile" href={`/clubs/${clubId}/profile`} />
-          </Body>
+              <View style={styles.racesHead}>
+                <Text style={styles.sectionTitle}>Races and meets</Text>
+                <Link href={`/clubs/${clubId}/races`} asChild accessibilityRole="link">
+                  <Pressable accessibilityLabel="See all races">
+                    <Text style={styles.seeAll}>See all</Text>
+                  </Pressable>
+                </Link>
+              </View>
+
+              {previewed.length === 0 ? (
+                <Text style={styles.emptyRaces}>No upcoming races yet.</Text>
+              ) : (
+                previewed.map((race, index) => (
+                  <View key={race.id}>
+                    {index > 0 && <View style={styles.divider} />}
+                    <Link href={`/races/${race.id}`} asChild accessibilityRole="link">
+                      <Pressable
+                        style={styles.raceRow}
+                        accessibilityLabel={`${race.name}${race.hasAccess ? '' : ', no access'}`}
+                      >
+                        <View style={styles.raceAvatar}>
+                          <Text style={styles.raceInitial}>
+                            {race.name.charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
+                        <Text style={styles.raceName} numberOfLines={1}>
+                          {race.name}
+                        </Text>
+                        {race.pinned && (
+                          <MaterialIcons name="push-pin" size={16} color={color.accent} />
+                        )}
+                        {!race.hasAccess && (
+                          <MaterialIcons name="lock" size={16} color={color.textSecondary} />
+                        )}
+                      </Pressable>
+                    </Link>
+                  </View>
+                ))
+              )}
+              {total > RACE_PREVIEW && (
+                <Text style={styles.emptyRaces}>{`${total} in total`}</Text>
+              )}
+            </View>
+
+            {/* Everything the hub does not put in the panel, because these are settings rather
+                than places the club lives. */}
+            <View style={styles.secondary}>
+              <Link href={`/clubs/${clubId}/calendar`} asChild accessibilityRole="link">
+                <Pressable style={styles.chip}>
+                  <MaterialIcons name="calendar-month" size={18} color={color.accent} />
+                  <Text style={styles.chipLabel}>Calendar</Text>
+                </Pressable>
+              </Link>
+              <Link href={`/clubs/${clubId}/events`} asChild accessibilityRole="link">
+                <Pressable style={styles.chip}>
+                  <MaterialIcons name="event" size={18} color={color.accent} />
+                  <Text style={styles.chipLabel}>Events</Text>
+                </Pressable>
+              </Link>
+              <Link href={`/clubs/${clubId}/routines`} asChild accessibilityRole="link">
+                <Pressable style={styles.chip}>
+                  <MaterialIcons name="fitness-center" size={18} color={color.accent} />
+                  <Text style={styles.chipLabel}>Routines</Text>
+                </Pressable>
+              </Link>
+              <Link href={`/clubs/${clubId}/polls`} asChild accessibilityRole="link">
+                <Pressable style={styles.chip}>
+                  <MaterialIcons name="how-to-vote" size={18} color={color.accent} />
+                  <Text style={styles.chipLabel}>Polls</Text>
+                </Pressable>
+              </Link>
+              <Link href={`/clubs/${clubId}/members`} asChild accessibilityRole="link">
+                <Pressable style={styles.chip}>
+                  <MaterialIcons name="group" size={18} color={color.accent} />
+                  <Text style={styles.chipLabel}>{`Members  ${data.club.memberCount}`}</Text>
+                </Pressable>
+              </Link>
+              <Link href={`/clubs/${clubId}/profile`} asChild accessibilityRole="link">
+                <Pressable style={styles.chip}>
+                  <MaterialIcons name="info" size={18} color={color.accent} />
+                  <Text style={styles.chipLabel}>Club profile</Text>
+                </Pressable>
+              </Link>
+            </View>
+
+            {/* Admin only: the one create action the hub carries. */}
+            {data.club.viewer.isAdmin && (
+              <Link href={`/clubs/${clubId}/races?create=1`} asChild accessibilityRole="link">
+                <Pressable style={styles.addGroup} accessibilityLabel="Add a race or meet">
+                  <MaterialIcons name="add" size={20} color={color.onAccent} />
+                  <Text style={styles.addGroupLabel}>Add Group</Text>
+                </Pressable>
+              </Link>
+            )}
+          </ScrollView>
         );
       }}
     </DataScreen>
   );
 }
 
+/**
+ * One row of the hub's panel.
+ *
+ * The filled circular icon well in its own tint is what stops the three destinations reading as an
+ * undifferentiated list - chat on the accent, News on the secondary, Eboard on the tertiary.
+ */
+function HubRow({
+  icon,
+  tint,
+  label,
+  subtitle,
+  href,
+  badge,
+}: {
+  icon: React.ComponentProps<typeof MaterialIcons>['name'];
+  tint: string;
+  label: string;
+  subtitle: string;
+  href: string | undefined;
+  badge?: string | undefined;
+}) {
+  const body = (
+    <>
+      <View style={[styles.well, { backgroundColor: tint }]}>
+        <MaterialIcons name={icon} size={20} color={color.onAccent} />
+      </View>
+      <View style={styles.rowText}>
+        <Text style={styles.rowLabel}>{label.toUpperCase()}</Text>
+        <Text style={styles.rowSubtitle}>{subtitle}</Text>
+      </View>
+      {badge !== undefined && <Text style={styles.badge}>{badge}</Text>}
+      <MaterialIcons name="chevron-right" size={22} color={color.textSecondary} />
+    </>
+  );
+
+  if (href === undefined) return <View style={styles.hubRow}>{body}</View>;
+
+  return (
+    <Link href={href} asChild accessibilityRole="link">
+      <Pressable style={styles.hubRow} accessibilityLabel={label}>
+        {body}
+      </Pressable>
+    </Link>
+  );
+}
+
 const styles = StyleSheet.create({
-  sport: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
-  description: { ...type.body, color: color.textPrimary, paddingBottom: space.sm },
-  meta: { ...type.bodySmall, color: color.textSecondary },
+  flex: { flex: 1, backgroundColor: color.appBackground },
+  content: { padding: space.md, paddingBottom: space.xl },
+
+  identity: {
+    ...type.display,
+    fontSize: 24,
+    lineHeight: 30,
+    letterSpacing: 0.5,
+    color: color.textPrimary,
+    textAlign: 'center',
+    marginBottom: space.md,
+  },
+
+  panel: {
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    paddingHorizontal: space.md,
+    paddingBottom: space.sm,
+  },
+  divider: { height: 1, backgroundColor: color.hairline },
+
+  hubRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, paddingVertical: space.md },
+  well: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowText: { flex: 1 },
+  rowLabel: { ...type.title, fontSize: 17, lineHeight: 22, color: color.textPrimary },
+  rowSubtitle: { ...type.bodySmall, color: color.textSecondary, marginTop: 2 },
+  badge: {
+    ...type.label,
+    fontSize: 10,
+    minWidth: 20,
+    textAlign: 'center',
+    borderRadius: radius.pill,
+    paddingHorizontal: space.xs,
+    paddingVertical: 2,
+    backgroundColor: color.error,
+    color: color.onAccent,
+    overflow: 'hidden',
+  },
+
+  racesHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: space.md,
+  },
+  sectionTitle: { ...type.title, fontSize: 15, lineHeight: 20, color: color.textPrimary },
   seeAll: { ...type.label, color: color.accent, textTransform: 'uppercase' },
+  emptyRaces: { ...type.bodySmall, color: color.textSecondary, paddingBottom: space.md },
+
+  raceRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, paddingVertical: space.md },
+  raceAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.pill,
+    backgroundColor: color.cardSunken,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  raceInitial: { ...type.headline, fontSize: 17, color: color.accent },
+  raceName: { ...type.body, color: color.textPrimary, flex: 1 },
+
+  secondary: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.md },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs + 2,
+    backgroundColor: color.card,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+  },
+  chipLabel: { ...type.label, color: color.textSecondary, textTransform: 'none' },
+
+  addGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: space.sm,
+    backgroundColor: color.accent,
+    borderRadius: radius.pill,
+    paddingVertical: space.sm + 6,
+    marginTop: space.md,
+  },
+  addGroupLabel: { ...type.title, fontSize: 17, lineHeight: 22, color: color.onAccent },
 });

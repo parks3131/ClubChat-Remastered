@@ -13,6 +13,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { Link, useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCurrentClub } from './current-club.tsx';
 import { color, radius, space, type } from './theme.ts';
 
 /**
@@ -111,6 +112,48 @@ export function BackAlwaysTo({ href, label }: { href: string; label: string }) {
 }
 
 /**
+ * The club's own identity as a header title: its avatar, then its name, in the accent.
+ *
+ * v1 gives every screen inside a club this header rather than the screen's own name, and the
+ * whole thing is tappable through to the club profile. It does two jobs at once - it says which
+ * club you are in from four levels deep, and it makes the club's identity reachable from
+ * everywhere without a menu.
+ *
+ * Reads the club from context rather than props, because the header is configured by the layout
+ * and only the screen has the data. The layout knows the route; the row knows the name.
+ */
+export function ClubHeaderTitle({ fallback }: { fallback: string }) {
+  const { currentClub } = useCurrentClub();
+  const router = useRouter();
+
+  /*
+   * The name is only known once some screen in this club has read it. Arriving cold - a deep
+   * link, a refresh, a notification tap - means nothing has, so the header falls back to the
+   * screen's own title rather than rendering empty. An empty header is worse than a plain one:
+   * it reads as a broken screen rather than as a loading one.
+   */
+  if (currentClub === null || currentClub.name.length === 0) {
+    return <Text style={styles.clubName}>{fallback}</Text>;
+  }
+
+  return (
+    <Pressable
+      onPress={() => router.push(`/clubs/${currentClub.clubId}/profile`)}
+      accessibilityRole="button"
+      accessibilityLabel={`${currentClub.name}, open the club profile`}
+      style={styles.clubTitle}
+    >
+      <View style={styles.clubAvatar}>
+        <Text style={styles.clubInitial}>{currentClub.name.charAt(0).toUpperCase()}</Text>
+      </View>
+      <Text style={styles.clubName} numberOfLines={1}>
+        {currentClub.name}
+      </Text>
+    </Pressable>
+  );
+}
+
+/**
  * A header action on the right.
  *
  * Always carries a label, because a header control is the most likely thing in the app to be
@@ -174,6 +217,17 @@ export function QuickNav({ items }: { items: ReadonlyArray<{ href: string; label
 
 const styles = StyleSheet.create({
   backWrap: { paddingHorizontal: space.md, paddingVertical: space.xs },
+  clubTitle: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  clubAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.pill,
+    backgroundColor: color.cardSunken,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clubInitial: { ...type.label, fontSize: 14, color: color.accent },
+  clubName: { ...type.headerTitle, fontSize: 17, lineHeight: 22, color: color.accent },
   back: { ...type.label, color: color.accent, textTransform: 'uppercase' },
   actionWrap: { paddingHorizontal: space.md, paddingVertical: space.xs },
   action: { ...type.label, color: color.accent, textTransform: 'uppercase' },

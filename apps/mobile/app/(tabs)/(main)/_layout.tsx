@@ -28,7 +28,7 @@
  */
 
 import { Stack } from 'expo-router';
-import { BackTo } from '../../../src/nav.tsx';
+import { BackTo, ClubHeaderTitle } from '../../../src/nav.tsx';
 import { color, type } from '../../../src/theme.ts';
 
 /**
@@ -48,6 +48,28 @@ function parented(
     return {
       title,
       headerLeft: () => <BackTo href={href} label={label} />,
+    };
+  };
+}
+
+/**
+ * The same, for a screen inside a club.
+ *
+ * v1 gives every club screen the club's own avatar and name as its title rather than the screen's,
+ * with a bare arrow as the control - so the header says which club you are in from any depth, and
+ * a worded back label would compete with it. The screen's own name is carried by the body.
+ */
+function inClub(
+  title: string,
+  parent: (params: Record<string, string>) => { href: string; label: string },
+) {
+  return ({ route }: { route: { params?: object } }) => {
+    const params = (route.params ?? {}) as Record<string, string>;
+    const { href, label } = parent(params);
+    return {
+      title,
+      headerTitle: () => <ClubHeaderTitle fallback={title} />,
+      headerLeft: () => <BackTo href={href} label={label} variant="icon" />,
     };
   };
 }
@@ -99,34 +121,34 @@ export default function MainStackLayout() {
       />
       <Stack.Screen
         name="clubs/[clubId]/members"
-        options={parented('Members', (p) => ({
+        options={inClub('Members', (p) => ({
           href: `/clubs/${p.clubId}/profile`,
           label: 'Club profile',
         }))}
       />
       <Stack.Screen
         name="clubs/[clubId]/news"
-        options={parented('News', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
+        options={inClub('News', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
       />
       <Stack.Screen
         name="clubs/[clubId]/races"
-        options={parented('Races & Meets', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
+        options={inClub('Races & Meets', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
       />
       <Stack.Screen
         name="clubs/[clubId]/routines"
-        options={parented('Routines', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
+        options={inClub('Routines', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
       />
       <Stack.Screen
         name="clubs/[clubId]/polls"
-        options={parented('Polls', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
+        options={inClub('Polls', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
       />
       <Stack.Screen
         name="clubs/[clubId]/events"
-        options={parented('Events', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
+        options={inClub('Events', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
       />
       <Stack.Screen
         name="clubs/[clubId]/calendar"
-        options={parented('Calendar', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
+        options={inClub('Calendar', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
       />
       <Stack.Screen
         name="clubs/[clubId]/profile"
@@ -166,7 +188,7 @@ export default function MainStackLayout() {
       />
       <Stack.Screen
         name="races/[raceId]/polls"
-        options={parented('Polls', (p) => ({ href: `/races/${p.raceId}`, label: 'Race' }))}
+        options={inClub('Polls', (p) => ({ href: `/races/${p.raceId}`, label: 'Race' }))}
       />
 
       {/* The Eboard space. */}
@@ -187,7 +209,7 @@ export default function MainStackLayout() {
       />
       <Stack.Screen
         name="eboard/[eboardId]/polls"
-        options={parented('Polls', (p) => ({ href: `/eboard/${p.eboardId}`, label: 'Eboard' }))}
+        options={inClub('Polls', (p) => ({ href: `/eboard/${p.eboardId}`, label: 'Eboard' }))}
       />
 
       {/*
