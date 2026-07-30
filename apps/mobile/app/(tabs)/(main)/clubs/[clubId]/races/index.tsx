@@ -11,9 +11,9 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useDeclareClub } from '../../../../../src/current-club.tsx';
-import { clubApi, raceApi } from '../../../../../src/api.ts';
-import { color, space, type } from '../../../../../src/theme.ts';
+import { useDeclareClub } from '../../../../../../src/current-club.tsx';
+import { clubApi, raceApi } from '../../../../../../src/api.ts';
+import { color, space, type } from '../../../../../../src/theme.ts';
 import {
   Action,
   Badge,
@@ -23,8 +23,8 @@ import {
   Field,
   Row,
   SectionHeader,
-} from '../../../../../src/ui.tsx';
-import { useLoad } from '../../../../../src/use-load.ts';
+} from '../../../../../../src/ui.tsx';
+import { useLoad } from '../../../../../../src/use-load.ts';
 
 export default function ClubRacesScreen() {
   const { clubId } = useLocalSearchParams<{ clubId: string }>();

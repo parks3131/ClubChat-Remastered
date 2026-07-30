@@ -47,7 +47,13 @@ function parented(
     const { href, label } = parent(params);
     return {
       title,
-      headerLeft: () => <BackTo href={href} label={label} />,
+      /*
+        An arrow, not the parent's name. v1 draws `arrow-back` on every nested screen and never a
+        word - a worded control competes with the title beside it, and "RACES" next to "New race
+        channel" reads as two labels rather than a control and a heading. The destination still
+        reaches a screen reader through `accessibilityLabel`, which says "Back to Races".
+      */
+      headerLeft: () => <BackTo href={href} label={label} variant="icon" />,
     };
   };
 }
@@ -137,8 +143,20 @@ export default function MainStackLayout() {
         options={inClub('News', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
       />
       <Stack.Screen
-        name="clubs/[clubId]/races"
+        name="clubs/[clubId]/races/index"
         options={inClub('Races & Meets', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
+      />
+      {/*
+        The create form names ITSELF rather than the club, because what it is doing is the thing
+        that needs saying - "Binghamton Running Club" over a form that makes a race is a header
+        answering a question nobody asked.
+      */}
+      <Stack.Screen
+        name="clubs/[clubId]/races/create"
+        options={parented('New race channel', (p) => ({
+          href: `/clubs/${p.clubId}/races`,
+          label: 'Races',
+        }))}
       />
       <Stack.Screen
         name="clubs/[clubId]/routines"

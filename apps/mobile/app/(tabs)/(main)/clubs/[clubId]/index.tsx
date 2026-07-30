@@ -181,7 +181,7 @@ export default function ClubHubScreen() {
 
             {/* Admin only: the one create action the hub carries. */}
             {data.club.viewer.isAdmin && (
-              <Link href={`/clubs/${clubId}/races?create=1`} asChild accessibilityRole="link">
+              <Link href={`/clubs/${clubId}/races/create`} asChild accessibilityRole="link">
                 <Pressable style={styles.addGroup} accessibilityLabel="Add a race or meet">
                   <MaterialIcons name="add" size={20} color={color.onAccent} />
                   <Text style={styles.addGroupLabel}>Add Group</Text>
