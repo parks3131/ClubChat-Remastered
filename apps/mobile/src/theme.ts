@@ -47,15 +47,44 @@ export const color = {
   /** The accent's container, for a pressed or filled state. */
   accentPressed: '#d43f00',
 
+  /**
+   * The accent at container weight, for a surface that is tinted rather than filled.
+   *
+   * v1's `primaryFixed`. It carries three jobs that all mean "this one is singled out": an
+   * unread notification row, a poll option you voted for, and the create-a-poll prompt. A
+   * screen wanting to highlight something reaches for this rather than for `accent` at an
+   * opacity, which is how two screens end up with two different highlights.
+   */
+  accentSoft: '#ffdbd0',
+  /** The border that goes with `accentSoft`. v1's `primaryFixedDim`. */
+  accentSoftBorder: '#ffb59e',
+  /** Text and icons on `accentSoft`. v1's `onPrimaryFixedVariant`. */
+  onAccentSoft: '#852400',
+
   appBackground: '#f7f9fb',
   card: '#ffffff',
   /** Every header and the tab bar share this surface. */
   chrome: '#f2f4f6',
   /** A surface that sits above `card` without becoming chrome. */
   cardRaised: '#eceef0',
+  /**
+   * A surface that sits BELOW `card`: an inactive pill, an icon well, an avatar placeholder.
+   *
+   * v1's `surfaceContainerHigh`. Distinct from `cardRaised` by one step, and the distinction
+   * matters where the two sit side by side - an inactive tab against the card behind it.
+   */
+  cardSunken: '#e6e8ea',
   divider: '#eceef0',
   /** A real border, as opposed to a hairline. */
   border: '#916f65',
+  /**
+   * The hairline that outlines a card.
+   *
+   * v1's `outlineVariant`, and the single most-used token in its whole interface: every card,
+   * row, search field and list item carries `1px` of it. Its absence is why the remaster's
+   * cards read as flat blocks of white against a near-white background.
+   */
+  hairline: '#e6beb2',
   fallback: '#e0e3e5',
 
   textPrimary: '#191c1e',
@@ -63,11 +92,23 @@ export const color = {
 
   secondary: '#565e74',
   secondaryContainer: '#dae2fd',
+  /** Text on `secondaryContainer`, and the colour v1 gives a location line. */
+  onSecondaryContainer: '#5c647a',
+  /** Text on `secondaryContainer` used as a badge. v1's `onSecondaryFixedVariant`. */
+  onSecondarySoft: '#3f465c',
   tertiary: '#005daa',
+  /** The tertiary at container weight, for a calendar badge. v1's `tertiaryFixed`. */
+  tertiarySoft: '#d4e3ff',
+  /** Text on `tertiarySoft`. v1's `onTertiaryFixedVariant`. */
+  onTertiarySoft: '#004785',
   error: '#ba1a1a',
   errorContainer: '#ffdad6',
+  /** Text on `errorContainer`. A destructive label that is readable rather than shouted. */
+  onErrorContainer: '#93000a',
 
   onAccent: '#ffffff',
+  /** Text on `accentPressed`. Not quite `onAccent`, and v1 ships both. */
+  onAccentPressed: '#fffbff',
   /** For a surface that inverts, such as the full-screen photo viewer. */
   inverseSurface: '#2d3133',
   onInverseSurface: '#eff1f3',

@@ -10,7 +10,7 @@
  * built from `<Action>` cannot ship without a label because the prop is required.
  */
 
-import type { ReactNode } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -23,6 +23,7 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
 import { color, radius, space, type } from './theme.ts';
 import type { Loaded } from './use-load.ts';
@@ -174,14 +175,20 @@ export function Row({
   subtitle,
   href,
   onPress,
+  left,
   right,
+  highlighted = false,
   accessibilityLabel,
 }: {
   title: string;
   subtitle?: string;
   href?: string;
   onPress?: () => void;
+  /** Leading content, typically an `Avatar` or an icon well. */
+  left?: ReactNode;
   right?: ReactNode;
+  /** The singled-out treatment: an unread notification, a selected choice. */
+  highlighted?: boolean;
   accessibilityLabel?: string;
 }) {
   // Navigable rows carry a chevron; rows that only hold a value do not. The design uses it as the
@@ -190,7 +197,9 @@ export function Row({
   const navigable = href !== undefined || onPress !== undefined;
 
   const body = (
-    <View style={styles.row}>
+    <View style={[styles.row, highlighted && styles.rowHighlighted]}>
+      {/* A plain View for the same reason `right` is - the row owns the gesture. */}
+      {left !== undefined && <View>{left}</View>}
       <View style={styles.rowMain}>
         <Text style={styles.rowTitle}>{title}</Text>
         {subtitle !== undefined && <Text style={styles.rowMeta}>{subtitle}</Text>}
@@ -290,37 +299,193 @@ export function Avatar({ name, size = 40 }: { name: string; size?: number }) {
 }
 
 /**
- * A tab strip, for Upcoming/Past and the Highlights tabs.
+ * A tab strip, in the two shapes v1 ships.
  *
- * One implementation because those two screens would otherwise each grow their own, and a
+ * One implementation because every screen with tabs would otherwise grow its own, and a
  * selected-tab colour that drifts between them is exactly the kind of defect PRD/16's
  * pixel-perfection standard is about.
+ *
+ * `segmented` is a track with a raised active pill, which is what v1 uses to switch a view over
+ * the same list: All polls / My votes, Upcoming / Past. `pill` is separate accent-filled pills,
+ * which v1 uses where the tabs select genuinely different content: Highlights' Pinned /
+ * Announcements / Reports. **The distinction carries meaning** - one says "same list, filtered",
+ * the other says "different list" - so it is a variant rather than two screens' local styling.
  */
 export function Tabs<T extends string>({
   tabs,
   active,
   onChange,
+  variant = 'segmented',
 }: {
   tabs: ReadonlyArray<{ key: T; label: string }>;
   active: T;
   onChange: (key: T) => void;
+  variant?: 'segmented' | 'pill';
+}) {
+  const pill = variant === 'pill';
+  return (
+    <View style={pill ? styles.tabsPill : styles.tabs}>
+      {tabs.map((tab) => {
+        const selected = tab.key === active;
+        return (
+          <Pressable
+            key={tab.key}
+            onPress={() => onChange(tab.key)}
+            style={[
+              pill ? styles.pillTab : styles.tab,
+              selected && (pill ? styles.pillTabActive : styles.tabActive),
+            ]}
+            accessibilityRole="tab"
+            accessibilityLabel={tab.label}
+            accessibilityState={{ selected }}
+          >
+            <Text
+              style={[
+                pill ? styles.pillTabLabel : styles.tabLabel,
+                selected && (pill ? styles.pillTabLabelActive : styles.tabLabelActive),
+              ]}
+            >
+              {tab.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * The floating create control.
+ *
+ * v1 puts one on every list a member can add to: polls, events, the calendar. Shared because
+ * three screens placing their own would be three chances to place it differently, and it is
+ * positioned absolutely - so it is the caller's job to leave room at the bottom of the list
+ * rather than have the last row sit under it.
+ */
+export function Fab({
+  onPress,
+  accessibilityLabel,
+  icon = 'add',
+}: {
+  onPress: () => void;
+  /** Required: an icon-only control with no label is the accessibility gap PRD/16 names. */
+  accessibilityLabel: string;
+  icon?: ComponentProps<typeof MaterialIcons>['name'];
 }) {
   return (
-    <View style={styles.tabs}>
-      {tabs.map((tab) => (
+    <Pressable
+      style={styles.fab}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+    >
+      <MaterialIcons name={icon} size={26} color={color.onAccentPressed} />
+    </Pressable>
+  );
+}
+
+/**
+ * A screen's own title block: a small eyebrow over a headline.
+ *
+ * v1's list screens open with one ("Community Voice" over "Active Conversations"), which is what
+ * gives them a top edge rather than starting cold at the first row.
+ */
+export function ScreenHeading({ eyebrow, title }: { eyebrow: string; title: string }) {
+  return (
+    <View style={styles.heading}>
+      <Text style={styles.headingEyebrow}>{eyebrow}</Text>
+      <Text style={styles.headingTitle}>{title}</Text>
+    </View>
+  );
+}
+
+/**
+ * A search box over a list.
+ *
+ * Filtering in the client, over data already loaded. Every list that has one in v1 has already
+ * read its rows, so a round trip per keystroke would be slower and would break while offline.
+ */
+export function SearchField({
+  value,
+  onChangeText,
+  placeholder,
+}: {
+  value: string;
+  onChangeText: (next: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <View style={styles.searchWrap}>
+      <MaterialIcons
+        name="search"
+        size={18}
+        color={color.textSecondary}
+        accessibilityElementsHidden
+        importantForAccessibility="no"
+      />
+      <TextInput
+        style={styles.searchInput}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor={color.textSecondary}
+        accessibilityLabel={placeholder}
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+    </View>
+  );
+}
+
+/**
+ * A bottom sheet of choices, and its scrim.
+ *
+ * **An in-app sheet rather than a platform `Alert`.** A confirmation dialog can report success,
+ * log nothing and do nothing where a platform stubs out the dialog API - and react-native-web is
+ * exactly such a platform, which is the surface this project develops and tests on. Chat reached
+ * the same conclusion independently; this is that decision made once.
+ */
+export function SheetMenu({
+  title,
+  items,
+  onDismiss,
+}: {
+  title: string;
+  items: ReadonlyArray<{ label: string; onPress: () => void; destructive?: boolean }>;
+  onDismiss: () => void;
+}) {
+  return (
+    <View style={styles.sheetBackdrop}>
+      <Pressable
+        style={styles.sheetScrim}
+        onPress={onDismiss}
+        accessibilityRole="button"
+        accessibilityLabel="Dismiss"
+      />
+      <View style={styles.sheet}>
+        <Text style={styles.sheetTitle}>{title}</Text>
+        {items.map((item) => (
+          <Pressable
+            key={item.label}
+            style={styles.sheetRow}
+            onPress={item.onPress}
+            accessibilityRole="button"
+            accessibilityLabel={item.label}
+          >
+            <Text style={[styles.sheetLabel, item.destructive === true && styles.sheetDestructive]}>
+              {item.label}
+            </Text>
+          </Pressable>
+        ))}
         <Pressable
-          key={tab.key}
-          onPress={() => onChange(tab.key)}
-          style={[styles.tab, tab.key === active && styles.tabActive]}
-          accessibilityRole="tab"
-          accessibilityLabel={tab.label}
-          accessibilityState={{ selected: tab.key === active }}
+          style={styles.sheetRow}
+          onPress={onDismiss}
+          accessibilityRole="button"
+          accessibilityLabel="Cancel"
         >
-          <Text style={[styles.tabLabel, tab.key === active && styles.tabLabelActive]}>
-            {tab.label}
-          </Text>
+          <Text style={styles.sheetLabel}>Cancel</Text>
         </Pressable>
-      ))}
+      </View>
     </View>
   );
 }
@@ -428,21 +593,39 @@ const styles = StyleSheet.create({
   },
   inputMultiline: { minHeight: 88, textAlignVertical: 'top' },
 
+  /*
+   * The card treatment, on both `Row` and `Card`.
+   *
+   * A 16px radius with a 1px hairline, which is v1's single most repeated shape: every row, card
+   * and field in the shipped interface carries it. The remaster shipped an 8px borderless block
+   * instead, and against a near-white background that reads as no card at all - the border is
+   * what separates the surface from the page, not the fill.
+   */
   row: {
     backgroundColor: color.card,
-    borderRadius: radius.sm,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.hairline,
     padding: space.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.md,
   },
+  rowHighlighted: { backgroundColor: color.accentSoft, borderColor: color.accentSoftBorder },
   rowMain: { flex: 1, gap: space.xs },
   rowRight: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   rowTitle: { ...type.headline, color: color.textPrimary },
   rowMeta: { ...type.bodySmall, color: color.textSecondary },
-  chevron: { ...type.title, color: color.divider, marginLeft: space.xs },
+  chevron: { ...type.title, color: color.border, marginLeft: space.xs },
 
-  card: { backgroundColor: color.card, borderRadius: radius.sm, padding: space.md, gap: space.sm },
+  card: {
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    padding: space.md,
+    gap: space.sm,
+  },
 
   sectionHeader: {
     flexDirection: 'row',
@@ -463,20 +646,104 @@ const styles = StyleSheet.create({
   },
   badgeLabel: { ...type.label },
 
-  avatar: { backgroundColor: color.fallback, alignItems: 'center', justifyContent: 'center' },
-  avatarLabel: { ...type.headline, color: color.textSecondary },
+  // v1 tints the initial with the accent on a sunken well, rather than greying it out. It is the
+  // one place a person's absence of a photo still reads as a person.
+  avatar: { backgroundColor: color.cardSunken, alignItems: 'center', justifyContent: 'center' },
+  avatarLabel: { ...type.headline, color: color.accent },
 
   tabs: {
     flexDirection: 'row',
     gap: space.xs,
     backgroundColor: color.chrome,
-    borderRadius: radius.sm,
+    borderRadius: radius.md,
     padding: space.xs,
   },
-  tab: { flex: 1, paddingVertical: space.sm, alignItems: 'center', borderRadius: radius.xs },
+  tab: { flex: 1, paddingVertical: space.sm, alignItems: 'center', borderRadius: radius.sm },
   tabActive: { backgroundColor: color.card },
   tabLabel: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
   tabLabelActive: { color: color.accent },
+
+  tabsPill: { flexDirection: 'row', gap: space.sm },
+  pillTab: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: space.sm + 2,
+    borderRadius: radius.pill,
+    backgroundColor: color.cardSunken,
+  },
+  pillTabActive: { backgroundColor: color.accent },
+  pillTabLabel: { ...type.label, color: color.onSecondaryContainer },
+  pillTabLabelActive: { color: color.onAccent },
+
+  fab: {
+    position: 'absolute',
+    right: space.md,
+    bottom: space.md,
+    width: 56,
+    height: 56,
+    borderRadius: radius.pill,
+    backgroundColor: color.accentPressed,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  heading: { paddingHorizontal: space.md, paddingTop: space.lg, gap: space.xs },
+  headingEyebrow: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
+  headingTitle: { ...type.title, fontSize: 24, lineHeight: 30, color: color.textPrimary },
+
+  searchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    paddingHorizontal: space.md,
+  },
+  searchInput: {
+    ...type.body,
+    flex: 1,
+    paddingVertical: space.sm + 4,
+    color: color.textPrimary,
+  },
+
+  // Explicit edges rather than `StyleSheet.absoluteFillObject`, which this React Native version
+  // does not declare on the type.
+  sheetBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'flex-end',
+    zIndex: 100,
+  },
+  sheetScrim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  sheet: {
+    backgroundColor: color.card,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    paddingTop: space.md,
+    paddingBottom: space.xl,
+  },
+  sheetTitle: {
+    ...type.label,
+    color: color.textSecondary,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    paddingBottom: space.sm,
+  },
+  sheetRow: { paddingVertical: space.md, paddingHorizontal: space.md },
+  sheetLabel: { ...type.body, color: color.textPrimary, textAlign: 'center' },
+  sheetDestructive: { color: color.error },
 
   bodyScroll: { flex: 1, backgroundColor: color.appBackground },
   bodyContent: { padding: space.md, gap: space.sm, paddingBottom: space.xl },
