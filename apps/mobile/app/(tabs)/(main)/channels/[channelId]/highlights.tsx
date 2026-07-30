@@ -29,6 +29,7 @@ import { channelApi } from '../../../../../src/api.ts';
 import type { ReportRow } from '../../../../../src/api-types.ts';
 import { formatClock } from '../../../../../src/dates.ts';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
+import { useGoBack } from '../../../../../src/nav.tsx';
 import { Avatar, DataScreen, EmptyState, Tabs } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
@@ -42,6 +43,8 @@ export default function HighlightsScreen() {
   const [tab, setTab] = useState<Tab>('pinned');
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  // Highlights is a view over a conversation, so back always returns to that chat.
+  const goBack = useGoBack(`/chat/${channelId}`);
 
   const meta = useLoad(() => channelApi.meta(channelId), [channelId]);
   const isDm = meta.data?.scope === 'dm';
@@ -83,7 +86,7 @@ export default function HighlightsScreen() {
         ]}
       >
         <Pressable
-          onPress={() => router.replace(`/chat/${channelId}`)}
+          onPress={goBack}
           accessibilityRole="button"
           accessibilityLabel="Back to the conversation"
           hitSlop={space.sm}

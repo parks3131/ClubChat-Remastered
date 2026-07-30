@@ -36,7 +36,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { Avatar } from "../../src/ui.tsx";
-import { QuickNav } from "../../src/nav.tsx";
+import { QuickNav, useGoBack } from "../../src/nav.tsx";
 import { color, radius, space, type } from "../../src/theme.ts";
 
 type Row =
@@ -572,6 +572,10 @@ export default function ChatScreen() {
           ? "Races"
           : "Club";
 
+  // One definition of "back" for the whole app: pop if there is history, use the declared
+  // parent if there is not. See `useGoBack`.
+  const goBack = useGoBack(parent);
+
   const act = async (run: () => Promise<unknown>, message: string) => {
     setMenuOpen(false);
     try {
@@ -595,7 +599,7 @@ export default function ChatScreen() {
       */}
       <BlurView intensity={80} tint="light" style={styles.header}>
         <Pressable
-          onPress={() => router.replace(parent)}
+          onPress={goBack}
           accessibilityRole="button"
           accessibilityLabel={`Back to ${parentLabel}`}
           hitSlop={space.sm}

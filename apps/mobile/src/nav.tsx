@@ -16,6 +16,27 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { color, radius, space, type } from './theme.ts';
 
 /**
+ * Going back: **pop if there is history, fall back to the declared parent if there is not.**
+ *
+ * A hook rather than logic inside `BackTo`, because two screens cannot use `BackTo` at all. Chat
+ * and Highlights replace the native header with their own glass-blur one, so they hand-roll the
+ * control - and when this rule lived only inside `BackTo`, both of them kept the old
+ * always-replace behaviour and nobody noticed until somebody tapped back inside a conversation
+ * and watched it refuse to unwind. This is the second time in this project that a rule written
+ * once and re-implemented twice has diverged; the hook is so there is one definition of "back"
+ * rather than three.
+ */
+export function useGoBack(href: string): () => void {
+  const router = useRouter();
+  return () => {
+    // `canGoBack()` rather than a try/catch around `back()`: popping an empty stack throws, and a
+    // thrown navigation is indistinguishable from a dead control to whoever tapped it.
+    if (router.canGoBack()) router.back();
+    else router.replace(href);
+  };
+}
+
+/**
  * An explicit back control, rendered whether or not history exists.
  *
  * **Permanent furniture, never conditional.** A native back button renders only when there is
@@ -45,14 +66,7 @@ export function BackTo({
    */
   variant?: 'label' | 'icon';
 }) {
-  const router = useRouter();
-
-  const go = () => {
-    // `canGoBack()` rather than a try/catch around `back()`: popping with an empty stack throws,
-    // and a thrown navigation is indistinguishable from a dead control to whoever tapped it.
-    if (router.canGoBack()) router.back();
-    else router.replace(href);
-  };
+  const go = useGoBack(href);
 
   return (
     <Pressable
