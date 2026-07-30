@@ -96,7 +96,15 @@ export function BackTo({
  * entry is somewhere the person did not come "down" from, so unwinding to it sends them sideways
  * and then bounces them back. See `SPEC/PRD/15`'s special cases.
  */
-export function BackAlwaysTo({ href, label }: { href: string; label: string }) {
+export function BackAlwaysTo({
+  href,
+  label,
+  variant = 'label',
+}: {
+  href: string;
+  label: string;
+  variant?: 'label' | 'icon';
+}) {
   const router = useRouter();
   return (
     <Pressable
@@ -106,7 +114,11 @@ export function BackAlwaysTo({ href, label }: { href: string; label: string }) {
       hitSlop={space.sm}
       style={styles.backWrap}
     >
-      <Text style={styles.back}>{label}</Text>
+      {variant === 'icon' ? (
+        <MaterialIcons name="arrow-back" size={22} color={color.accent} />
+      ) : (
+        <Text style={styles.back}>{label}</Text>
+      )}
     </Pressable>
   );
 }

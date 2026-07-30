@@ -75,7 +75,11 @@ export default function ClubHubScreen() {
                 // Overridden only for the two cross-stack jumps; an ordinary push keeps the
                 // stack's own control, which pops correctly.
                 ...(jumped
-                  ? { headerLeft: () => <BackAlwaysTo href={backHref} label={backLabel} /> }
+                  ? {
+                      headerLeft: () => (
+                        <BackAlwaysTo href={backHref} label={backLabel} variant="icon" />
+                      ),
+                    }
                   : {}),
               }}
             />
@@ -173,47 +177,6 @@ export default function ClubHubScreen() {
               {total > RACE_PREVIEW && (
                 <Text style={styles.emptyRaces}>{`${total} in total`}</Text>
               )}
-            </View>
-
-            {/* Everything the hub does not put in the panel, because these are settings rather
-                than places the club lives. */}
-            <View style={styles.secondary}>
-              <Link href={`/clubs/${clubId}/calendar`} asChild accessibilityRole="link">
-                <Pressable style={styles.chip}>
-                  <MaterialIcons name="calendar-month" size={18} color={color.accent} />
-                  <Text style={styles.chipLabel}>Calendar</Text>
-                </Pressable>
-              </Link>
-              <Link href={`/clubs/${clubId}/events`} asChild accessibilityRole="link">
-                <Pressable style={styles.chip}>
-                  <MaterialIcons name="event" size={18} color={color.accent} />
-                  <Text style={styles.chipLabel}>Events</Text>
-                </Pressable>
-              </Link>
-              <Link href={`/clubs/${clubId}/routines`} asChild accessibilityRole="link">
-                <Pressable style={styles.chip}>
-                  <MaterialIcons name="fitness-center" size={18} color={color.accent} />
-                  <Text style={styles.chipLabel}>Routines</Text>
-                </Pressable>
-              </Link>
-              <Link href={`/clubs/${clubId}/polls`} asChild accessibilityRole="link">
-                <Pressable style={styles.chip}>
-                  <MaterialIcons name="how-to-vote" size={18} color={color.accent} />
-                  <Text style={styles.chipLabel}>Polls</Text>
-                </Pressable>
-              </Link>
-              <Link href={`/clubs/${clubId}/members`} asChild accessibilityRole="link">
-                <Pressable style={styles.chip}>
-                  <MaterialIcons name="group" size={18} color={color.accent} />
-                  <Text style={styles.chipLabel}>{`Members  ${data.club.memberCount}`}</Text>
-                </Pressable>
-              </Link>
-              <Link href={`/clubs/${clubId}/profile`} asChild accessibilityRole="link">
-                <Pressable style={styles.chip}>
-                  <MaterialIcons name="info" size={18} color={color.accent} />
-                  <Text style={styles.chipLabel}>Club profile</Text>
-                </Pressable>
-              </Link>
             </View>
 
             {/* Admin only: the one create action the hub carries. */}
@@ -347,20 +310,6 @@ const styles = StyleSheet.create({
   },
   raceInitial: { ...type.headline, fontSize: 17, color: color.accent },
   raceName: { ...type.body, color: color.textPrimary, flex: 1 },
-
-  secondary: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.md },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.xs + 2,
-    backgroundColor: color.card,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: color.hairline,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-  },
-  chipLabel: { ...type.label, color: color.textSecondary, textTransform: 'none' },
 
   addGroup: {
     flexDirection: 'row',

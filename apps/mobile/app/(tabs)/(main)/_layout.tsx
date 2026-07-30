@@ -112,11 +112,17 @@ export default function MainStackLayout() {
       />
 
       {/* Clubs. A club falls back to the list; everything inside it falls back to the club. */}
+      {/*
+        The hub wears the club's own identity like every other screen in the club, and a bare
+        arrow rather than a worded label - a "CLUBS" next to "Binghamton Running Club" reads as
+        two competing titles.
+      */}
       <Stack.Screen
         name="clubs/[clubId]/index"
         options={{
           title: 'Club',
-          headerLeft: () => <BackTo href="/clubs" label="Clubs" />,
+          headerTitle: () => <ClubHeaderTitle fallback="Club" />,
+          headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
         }}
       />
       <Stack.Screen
