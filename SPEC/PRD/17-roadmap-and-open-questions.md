@@ -14,7 +14,7 @@
 | Gap | What "fixed" looks like |
 |---|---|
 | **Accessibility** | Every interactive control labelled, screen-reader navigable, contrast verified against WCAG AA, dynamic type supported, reduced motion respected. Start with the icon-only controls |
-| **Offline** | At minimum read-only cached chat; ideally a send outbox with optimistic messages. A club at a race venue with poor signal is the real failure case |
+| ~~**Offline**~~ | **Done in Phase 3.** Read-only cached chat plus a send outbox with optimistic messages, which was the "ideally" of this entry rather than the minimum. See [Cross-cutting UX](16-cross-cutting-ux.md) |
 | **Test coverage** | Today: date/formatting and calendar-feed logic only. **The permission matrix is verified by hand.** The remaster should have automated permission tests |
 | **Muting and notification preferences** | Everything fans out to everyone eligible, with no member control |
 | ~~**Block or mute between members**~~ | **No longer deferrable.** Promoted out of this list on 2026-07-28: with direct messages in scope, blocking, conversation mute, and a report destination ship in the same release as DMs. A private one-to-one channel with no admin party to it, no block, and nowhere for a report to go, is a materially different risk class in a product that will include minors. See [Direct messages](14-direct-messages.md) |

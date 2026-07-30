@@ -22,7 +22,7 @@ Envelope: `{ "t": <type>, "id": <correlation id>, "d": <payload> }`
 | `auth.ok` | `{ session_id, server_time, channels: [{id, last_seq, last_read_seq}] }` | The client immediately knows every channel with a gap. |
 | `auth.err` | `{ code }` | Socket closed. |
 | `msg.ack` | `{ client_msg_id, message_id, seq, created_at }` | **Gap-checked exactly like `msg.new`** - a skipped `seq` here leaves a permanent hole. See [Client architecture](08-client-architecture.md). |
-| `msg.err` | `{ client_msg_id, code }` | `rate_limited`, `forbidden`, `channel_gone` |
+| `msg.err` | `{ client_msg_id, code }` | `rate_limited`, `forbidden`, `channel_gone`, `malformed`, `media_not_ready` |
 | `msg.new` | full message envelope incl. `seq` | Append if `seq == local_max + 1`, else sync. |
 | `msg.update` | `{ channel_id, seq, pinned?, deleted_at?, reactions? }` | |
 | `notif.new` | `{ notification }` | Drives the badge live. |
@@ -57,7 +57,9 @@ POST   /polls · POST /polls/:id/votes · POST /polls/:id/close | /reopen
 POST   /clubs/:id/events | /routines | /news
 GET    /calendar?club=:id                    ← merged feed; omit club for cross-club
 
-POST   /media/upload-intent · POST /media/:id/complete · GET /media/:id
+POST   /media/upload-intent · POST /media/:id/complete
+GET    /media/:id[?variant=thumb|display]   ← authorized redirect, hour-aligned signature
+GET    /channels/:id/gallery?before={seq}   ← paginated; inherits the chat's access rules
 GET    /notifications?cursor=                · POST /notifications/read
 POST   /devices                              ← register push token
 ```

@@ -27,6 +27,7 @@ import type { Config } from '../config.ts';
 import { createDb, createPool, type Db } from '../db/client.ts';
 import { createRateLimiter, createRedis } from '../bus/redis.ts';
 import { RecordingPushSender } from '../push/sender.ts';
+import { FakeMediaStore } from '../media/store.ts';
 import { buildApp } from '../api/app.ts';
 import { createGateway, type Gateway } from '../gateway/server.ts';
 import { createClub } from '../domain/create-club.ts';
@@ -52,6 +53,10 @@ const config = {
   BETTER_AUTH_URL: 'http://localhost:3000',
   SEND_RATE_BURST: 1_000,
   SEND_RATE_REFILL_PER_SEC: 1_000,
+  S3_BUCKET_PUBLIC: 'identity',
+  S3_BUCKET_PRIVATE: 'content',
+  MEDIA_SIGNING_SECRET: 'test-signing-secret-not-real',
+  MEDIA_CDN_BASE_URL: 'http://cdn.invalid/content',
 } as unknown as Config;
 
 const silent = () => undefined;
@@ -121,7 +126,8 @@ beforeAll(async () => {
   db = pg.db;
   auth = createAuth(db, { secret: 'test-secret-not-a-real-one', baseURL: config.BETTER_AUTH_URL });
 
-  app = buildApp({ db, auth, config });
+  // The drill asserts nothing about media; the fake keeps it off the network.
+  app = buildApp({ db, auth, config, mediaStore: new FakeMediaStore() });
   await app.listen({ port: 0, host: '127.0.0.1' });
   const address = app.server.address();
   if (typeof address === 'string' || address === null) throw new Error('no api address');

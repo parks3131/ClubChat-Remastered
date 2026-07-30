@@ -31,6 +31,13 @@ type SessionContextValue = {
   userId: string | null;
   client: ChatClient | null;
   channels: ChannelState[];
+  /**
+   * True when we are running on a stored session we could not verify.
+   *
+   * Read-only reality rather than a guess: history comes from the local cache, sends queue in
+   * the outbox, and the flag exists so the UI can say so rather than looking broken.
+   */
+  offline: boolean;
   /** Bumped whenever the client's state changes, so screens can re-read the store. */
   revision: number;
   signedIn: (token: string, userId: string) => Promise<void>;
@@ -47,6 +54,7 @@ export function useSession(): SessionContextValue {
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [authState, setAuthState] = useState<AuthState>('checking');
+  const [offline, setOffline] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [channels, setChannels] = useState<ChannelState[]>([]);
   const [revision, setRevision] = useState(0);
@@ -80,11 +88,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (ids.length > 0) client.subscribe(ids);
         await client.syncAll();
         setChannels(client.channels);
+        setOffline(false);
       } catch (error) {
-        // Realtime is an enhancement, not a requirement. A failed socket must leave the
-        // app usable over REST rather than blocking sign-in, so this is logged and the
-        // user is let through.
-        console.warn('[chat] initial connect failed, continuing over REST', error);
+        // Realtime is an enhancement, not a requirement. A failed socket must leave the app
+        // usable rather than blocking sign-in - and with a local cache behind it, "usable"
+        // now means chat history actually renders rather than showing an empty screen.
+        console.warn('[chat] initial connect failed, running from the local cache', error);
+        setOffline(true);
       }
 
       setAuthState('signed-in');
@@ -103,14 +113,26 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // Raced against a timeout inside verifySession: a hung check falls back to
-      // signed-out rather than leaving the app on a spinner forever.
-      const valid = await verifySession(config.apiUrl, token);
+      // Raced against a timeout: a hung check never leaves the app on a spinner. But the
+      // THREE-way answer matters. Only a server that answered and rejected us is grounds to
+      // sign somebody out; being unable to reach it means carrying on with what we know.
+      const check = await verifySession(config.apiUrl, token);
       if (cancelled) return;
 
-      if (!valid) {
+      if (check === 'invalid') {
         await sessionStore.clear();
         setAuthState('signed-out');
+        return;
+      }
+
+      if (check === 'unreachable') {
+        // Airplane mode, or a dead server. Trust the stored session, run from the local
+        // cache, and let `start` re-verify when the socket comes back. Signing out here
+        // would make "no signal" indistinguishable from "you have been logged out", and
+        // would lock a member out of history they already have on the device.
+        const cachedUserId = await sessionStore.loadUserId();
+        setOffline(true);
+        await start(token, cachedUserId ?? '');
         return;
       }
 
@@ -118,6 +140,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         headers: { authorization: `Bearer ${token}` },
       });
       const body = (await response.json()) as { userId: string };
+      await sessionStore.saveUserId(body.userId);
       await start(token, body.userId);
     })();
 
@@ -148,6 +171,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const signedIn = useCallback(
     async (token: string, id: string) => {
       await sessionStore.save(token);
+      // Cached so an offline launch knows whose messages are "mine" without a round trip -
+      // otherwise every bubble would render as received.
+      await sessionStore.saveUserId(id);
       await start(token, id);
     },
     [start],
@@ -169,11 +195,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       userId,
       client: clientRef.current,
       channels,
+      offline,
       revision,
       signedIn,
       signOut,
     }),
-    [authState, userId, channels, revision, signedIn, signOut],
+    [authState, userId, channels, offline, revision, signedIn, signOut],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

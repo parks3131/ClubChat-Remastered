@@ -70,7 +70,12 @@
       "Bash(sed -n '/^### Races/,/^### Content/p' SPEC/TECH/09-data-model.md)",
       "Bash(sed -n '/^### Content/,/^### Direct messages/p' SPEC/TECH/09-data-model.md)",
       "Bash(sed -n '/Phase 3 - Media and offline/,/Phase 3.5/p' SPEC/TECH/16-build-phases.md)",
-      "Bash(sed -n '/### Download - the stable-URL problem/,/### Also fixed here/p' SPEC/TECH/07-media-pipeline.md)"
+      "Bash(sed -n '/### Download - the stable-URL problem/,/### Also fixed here/p' SPEC/TECH/07-media-pipeline.md)",
+      "Bash(pkill -f 'packages/server/src')",
+      "Bash(curl -s -m 3 -o /dev/null -w 'api :3000 -> %{http_code}\\\\n' http://localhost:3000/health)",
+      "Bash(lsof -nP -iTCP -sTCP:LISTEN)",
+      "Bash(xargs -I{} sh -c 'test {} -eq 0 && echo \"  no backend listening: airplane mode\" || echo \"  !! {} still listening\"')",
+      "Bash(curl -s -o /dev/null -w '  :8081 -> %{http_code}\\\\n' http://localhost:8081)"
     ]
   }
 }

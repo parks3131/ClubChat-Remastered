@@ -7,6 +7,106 @@ Newest first.
 
 ---
 
+## 2026-07-30 - Phase 3: media and offline
+
+**Both halves of the gate are met.** A private Eboard photo is provably unreachable without
+membership, and chat is readable in airplane mode. 423 tests, 46 constraint assertions.
+
+### The private-photo half, proved four ways
+
+"Provably" is the word in the gate, so a test showing that a member *can* see the photo is not
+enough - that passes against a build with no authorization at all. The denials are:
+
+- a plain club member, who is not in the Eboard space
+- **a club admin outside the space**, which is the sharpest case: being an admin is not being a
+  member of the space, and the test has to remove their auto-joined Eboard row to construct it
+- a complete outsider
+- an unsigned fetch of the raw object, which MinIO itself refuses with 403
+
+Then mutation-tested. Removing the membership check from the download hop fails exactly the
+three denial tests. All refusals return `not_found` rather than `forbidden`, because confirming
+an object exists is itself a disclosure.
+
+### The hour-aligned URL, which is the whole point of the download design
+
+Roadmap debt 7: a signed URL minted per fetch changes its query string every time, the query
+string is part of every cache key, so every layer misses and 300 viewers means 300 origin
+fetches. Aligning the expiry to the top of the hour makes the URL **byte-identical** for every
+viewer in the window, so one CDN entry serves the club.
+
+Mutating it back to `now + 1 hour` fails two tests: the byte-identical one and - less obviously -
+the one asserting at least an hour of remaining validity, which catches the related bug where a
+URL issued at 10:59 would expire sixty seconds later.
+
+### What the fake could not have verified
+
+The integration path runs against **MinIO**, not the in-memory fake, and that distinction earned
+its keep: a fake will happily accept a presigned-PUT flow that a real bucket rejects. Verified
+end to end against real storage - buckets ensured, a genuinely signed PUT accepted with 200,
+HEAD reporting the true size and type, an unsigned read refused with 403, a real `sharp`
+thumbnail derived, and GC removal confirmed.
+
+### Limits, which v1 had none of
+
+Debt 9 records that v1 had no size or MIME limits on any bucket. Now enforced at intent **and
+re-verified at complete**, because a presigned PUT constrains where the bytes go and what
+Content-Type rides along, and constrains nothing about how many bytes there are. A client that
+declares 1 KB and uploads 5 MB is caught, and its row stays `pending` so no message can
+reference it. Mutating the size check away fails exactly that test.
+
+Two attacks the send path refuses: attaching **somebody else's** upload, and moving an object
+from a channel you can read into one you cannot - which would launder it past the download
+authorization entirely.
+
+### The requirement collision worth recording
+
+`PRD/03` says a hung auth check falls back to signed-out. Phase 3 says chat must be readable in
+airplane mode. **Implemented naively, those contradict**: offline becomes signed-out becomes no
+chat, and a member is locked out of history already on their device.
+
+The resolution is that "the server said no" and "I could not reach the server" are different
+facts. Only a server that answered and rejected the token is grounds to sign somebody out; being
+unable to reach one means carrying on with what we know and re-verifying later. The check is now
+three-way - `valid` / `invalid` / `unreachable` - and a 500 counts as unreachable too, since the
+server's problem is not the token's. `PRD/03` has been corrected, because the two-way version was
+actively wrong once offline existed.
+
+That also required caching the user id alongside the token: without it an offline launch cannot
+tell which stored messages are its own, and every bubble renders as received.
+
+### Verified in a browser with the backend actually dead
+
+Not simulated. API, gateway and worker all killed, confirmed unreachable, then a cold page load:
+the offline banner appeared, all three cached messages rendered from SQLite, and a new message
+typed offline queued as "Sending" rather than failing. Restoring the backend flushed it **exactly
+once**, at seq 4, with no duplicates - `client_msg_id` idempotency holding across a real network
+outage rather than a mocked one.
+
+Worth noting the messages survived a full page reload with no backend, and no "SQLite
+unavailable" fallback warning appeared - so this is genuine OPFS persistence on web, not the
+in-memory fallback quietly standing in.
+
+### Decisions recorded in the specs
+
+- `msg.err` gained `media_not_ready`, deliberately distinct from `forbidden`: the client's
+  correct response is to finish the upload and retry the same `client_msg_id`, not give up.
+  Collapsing it into a generic failure would turn a recoverable state into a lost message.
+  `TECH/10` and `TECH/07` updated.
+- Media is validated **before** the send, never inside it. The sequence-allocating transaction
+  holds a row lock until commit, so a `HEAD` in there would serialize the entire channel behind
+  an object-storage round trip.
+- `PRD/16`'s offline section, which described an online-only build, is rewritten as four
+  behaviour rules. `PRD/17` marks the offline debt done - and done at the "ideally" level (a send
+  outbox with optimistic messages) rather than the stated minimum.
+
+### Still open
+
+The Expo client has no UI for picking or displaying media - the server pipeline and the gallery
+endpoint are complete and tested, but the app cannot yet attach a photo. Phase 3.5 is direct
+messages with their safety tooling, which inherits this media pipeline wholesale.
+
+---
+
 ## 2026-07-29 - Phase 2 completion, and a spec reconciliation that was overdue
 
 ### The spec debt, admitted and paid
@@ -22,7 +122,7 @@ What the audit found, now corrected:
 - **`TECH/09` gave every scope owner a `channel_id` column** - `races.channel_id`,
   `eboard_channels.channel_id`, `dm_conversations.channel_id` - and none of them were built.
   That is not an omission but a decision, and a structural one affecting four tables, so it is
-  now [ADR-0014](decisions/0014-channels-reference-their-scope-one-way.md): a channel
+  now [ADR-0014](SPEC/decisions/0014-channels-reference-their-scope-one-way.md): a channel
   references its scope and the scope never references the channel. Storing the relationship in
   both directions gives it two sources of truth with nothing keeping them honest, and
   `UNIQUE (scope, scope_id)` already makes the lookup unambiguous.

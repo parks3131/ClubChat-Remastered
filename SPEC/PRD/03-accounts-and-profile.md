@@ -43,7 +43,8 @@ never shown to other members.
 | User belongs to no clubs | "Your clubs" empty state |
 | Deleted account's past messages | Remain in history, unattributed |
 | Deleted account tries to sign in | Permanently blocked |
-| **Auth check hangs on a slow network** | **The app falls back to signed-out rather than hanging on a spinner.** A hung check previously presented as an app that never loaded. Race the session check against a timeout. |
+| **Auth check hangs on a slow network** | **Never hang on a spinner.** Race the session check against a timeout - a hung check previously presented as an app that never loaded. But the outcome is **three-way, not two-way**, and the distinction is load-bearing: a server that answered and rejected the token means sign out; being unable to *reach* a server means carry on with the stored session, read from the local cache, and re-verify when the network returns. *(Clarified 2026-07-30, when offline chat made the two-way version wrong: falling back to signed-out on a network failure makes "no signal" indistinguishable from "you have been logged out", and locks a member out of history already on their device.)* |
+| **Launched with no network at all** | The app opens signed in, reads chat from the local cache, and **says it is offline** rather than looking broken. Sends queue in the outbox and flush on reconnect. |
 
 **Rejected alternatives.** Hard-deleting a user and their content (tears holes in every
 conversation). Admin-mediated deletion (app-store requirement plus the right default).

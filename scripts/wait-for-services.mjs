@@ -12,6 +12,7 @@ import net from 'node:net';
 const TARGETS = [
   { name: 'postgres', host: '127.0.0.1', port: 5432 },
   { name: 'redis', host: '127.0.0.1', port: 6379 },
+  { name: 'minio', host: '127.0.0.1', port: 9000 },
 ];
 
 const TIMEOUT_MS = 60_000;

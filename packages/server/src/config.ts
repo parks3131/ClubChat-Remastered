@@ -21,6 +21,18 @@ const Env = z.object({
   SEND_RATE_BURST: z.coerce.number().int().positive().default(30),
   SEND_RATE_REFILL_PER_SEC: z.coerce.number().positive().default(1),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+
+  // --- Object storage ---
+  S3_ENDPOINT: z.string().url(),
+  S3_REGION: z.string().default('auto'),
+  S3_ACCESS_KEY_ID: z.string().min(1),
+  S3_SECRET_ACCESS_KEY: z.string().min(1),
+  S3_BUCKET_PUBLIC: z.string().min(1),
+  S3_BUCKET_PRIVATE: z.string().min(1),
+  // Distinct from BETTER_AUTH_SECRET on purpose: a leak of one must not become a leak of
+  // the other.
+  MEDIA_SIGNING_SECRET: z.string().min(16),
+  MEDIA_CDN_BASE_URL: z.string().url(),
 });
 
 export type Config = z.infer<typeof Env>;

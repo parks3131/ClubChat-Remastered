@@ -25,6 +25,20 @@ POST /media/:id/complete
 
 The chat server never touches file bytes. This is the transcript's point and it stands.
 
+**A send referencing an incomplete upload is refused with its own code.** `msg.err` carries
+`media_not_ready`, deliberately distinct from `forbidden`: the client's correct response is to
+finish the upload and retry the same `client_msg_id`, not to give up. Collapsing it into a
+generic failure would turn a recoverable state into a lost message.
+
+**The object must belong to the sending member and to that channel.** Otherwise a member could
+attach somebody else's private upload, or move a photo out of a channel they can read into one
+they cannot - laundering it past the download authorization entirely.
+
+**Media is validated before the send, never inside it.** The sequence-allocating transaction
+holds a row lock until commit, so a `HEAD` in there would serialize the whole channel behind an
+object-storage round trip. `/media/:id/complete` is where verification happens; the send does a
+cheap indexed read of the resulting `status`.
+
 ### Download - the stable-URL problem, solved
 
 [Media and galleries](../PRD/13-media-and-galleries.md) rule 5 and debt item 7 describe a real, specific failure: a signed URL minted per

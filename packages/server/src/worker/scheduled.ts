@@ -37,7 +37,16 @@ export const SCHEDULED_TICK_MS = 30_000;
 /** How far ahead of the deadline the reminder fires. */
 export const CLOSING_SOON_MINUTES = 10;
 
-export type TickResult = { remindersSent: number };
+export type TickResult = { remindersSent: number; gc?: { orphanedRemoved: number; stalePendingRemoved: number } };
+
+/**
+ * How often housekeeping runs.
+ *
+ * Nightly in production. The interval is separate from the poll tick because the two have
+ * completely different urgencies: a deadline reminder that is a minute late is a bug, and a
+ * storage sweep that is an hour late is nothing.
+ */
+export const HOUSEKEEPING_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
  * One tick.
@@ -177,11 +186,21 @@ export function startScheduler(
   opts: { intervalMs?: number; signal?: AbortSignal } = {},
 ): Promise<void> {
   const interval = opts.intervalMs ?? SCHEDULED_TICK_MS;
+  let lastHousekeeping = 0;
+
   return (async () => {
     while (!opts.signal?.aborted) {
       try {
         const result = await runScheduledTick(db, deps);
         if (result.remindersSent > 0) deps.log('info', 'scheduled tick', result);
+
+        // Housekeeping on its own, much slower cadence, inside the same loop so there is one
+        // timer to reason about rather than two racing.
+        if (deps.media && Date.now() - lastHousekeeping > HOUSEKEEPING_INTERVAL_MS) {
+          lastHousekeeping = Date.now();
+          const { runMediaGc } = await import('../media/derive.ts');
+          await runMediaGc(db, deps.media, (message, extra) => deps.log('info', message, extra));
+        }
       } catch (error) {
         // A failed tick must not kill the loop: the next one re-claims whatever was missed,
         // because the stamp is only written on a successful claim.

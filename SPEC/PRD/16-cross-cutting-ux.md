@@ -46,10 +46,19 @@ These are product requirements, not polish. Several were shipped bugs first.
 
 ### Offline
 
-The current build is **online-only**: no cache, no queued sends, no optimistic send. Sending
-offline fails **visibly**. This is a known limitation, not a decision - a club coordinating at
-a race venue with poor signal is exactly the failure case. See
-[Roadmap and open questions](17-roadmap-and-open-questions.md).
+*Closed in Phase 3. This was v1's clearest functional gap - a club coordinating at a race venue
+with poor signal is exactly the failure case - and it is no longer a limitation.*
+
+1. **Chat history is readable offline**, from a local cache keyed by `(channel_id, seq)`. The
+   conversation renders before any network call resolves, so a chat opened in airplane mode
+   shows messages rather than a spinner.
+2. **Sends queue rather than failing.** A message typed offline renders immediately as pending,
+   sits in the send outbox with its `client_msg_id` generated once, and flushes on reconnect -
+   which cannot double-post, because that key is what the server's unique index collapses.
+3. **A failed send still fails visibly.** Queued is not the same as sent; after retries are
+   exhausted the message is marked failed with a retry affordance, never silently dropped.
+4. **The app says it is offline** rather than looking broken. The distinction matters because
+   everything on screen is real: the history is genuine and the queued message will send.
 
 ### Accessibility
 

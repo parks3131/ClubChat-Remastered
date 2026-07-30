@@ -106,7 +106,20 @@ export const MsgAck = z.object({
   createdAt: z.string().datetime(),
 });
 
-export const msgErrCodes = ['rate_limited', 'forbidden', 'channel_gone', 'malformed'] as const;
+export const msgErrCodes = [
+  'rate_limited',
+  'forbidden',
+  'channel_gone',
+  'malformed',
+  /**
+   * The attached object was never completed.
+   *
+   * Distinct from `forbidden` on purpose: the client's correct response is to finish the
+   * upload and retry the same `client_msg_id`, not to give up. Collapsing it into a generic
+   * failure would turn a recoverable state into a lost message.
+   */
+  'media_not_ready',
+] as const;
 export const MsgErr = z.object({
   clientMsgId: Uuid,
   code: z.enum(msgErrCodes),

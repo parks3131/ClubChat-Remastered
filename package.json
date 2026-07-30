@@ -12,7 +12,7 @@
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "db:up": "docker compose up -d postgres redis && node scripts/wait-for-services.mjs",
+    "db:up": "docker compose up -d postgres redis minio && node scripts/wait-for-services.mjs",
     "db:down": "docker compose down",
     "db:nuke": "docker compose down -v",
     "db:generate": "npm run db:generate -w @clubchat/server",

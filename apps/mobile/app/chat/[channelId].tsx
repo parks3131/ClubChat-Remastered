@@ -22,7 +22,7 @@ type Row =
 
 export default function ChatScreen() {
   const { channelId } = useLocalSearchParams<{ channelId: string }>();
-  const { authState, client, userId, revision } = useSession();
+  const { authState, client, userId, revision, offline } = useSession();
   const router = useRouter();
   const [rows, setRows] = useState<Row[]>([]);
   const [draft, setDraft] = useState('');
@@ -117,6 +117,17 @@ export default function ChatScreen() {
         {/* Balances the row so the title stays optically centred. */}
         <View style={styles.headerSpacer} />
       </View>
+
+      {/*
+        Says so, rather than looking broken. History below is real - it comes from the local
+        cache - and a send will queue rather than fail, so the honest message is "offline",
+        not "error".
+      */}
+      {offline && (
+        <View style={styles.offlineBanner}>
+          <Text style={styles.offlineText}>Offline. Showing saved messages.</Text>
+        </View>
+      )}
 
       {loading ? (
         // The composer is not shown until the channel resolves, so nobody types into a
@@ -309,5 +320,12 @@ const styles = StyleSheet.create({
   headerTitle: { ...type.headline, color: color.accent, flex: 1, textAlign: 'center' },
   // Matches the back control's optical width so the centred title does not sit off-axis.
   headerSpacer: { width: 44 },
+  offlineBanner: {
+    backgroundColor: color.fallback,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    alignItems: 'center',
+  },
+  offlineText: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
   backLabel: { ...type.label, color: color.accent, textTransform: 'uppercase' },
 });

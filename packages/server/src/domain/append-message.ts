@@ -31,6 +31,9 @@ export type AppendMessageInput = {
   linkedPollId?: string | null | undefined;
   linkedEventId?: string | null | undefined;
   linkedMeetingId?: string | null | undefined;
+  mediaId?: string | null | undefined;
+  documentName?: string | null | undefined;
+  documentSize?: number | null | undefined;
   /**
    * Extra outbox events to write in the SAME transaction as the message. Used by
    * command handlers that need an effect to be atomic with the message itself.
@@ -170,6 +173,9 @@ export async function appendMessage(
           linkedPollId: input.linkedPollId ?? null,
           linkedEventId: input.linkedEventId ?? null,
           linkedMeetingId: input.linkedMeetingId ?? null,
+          mediaId: input.mediaId ?? null,
+          documentName: input.documentName ?? null,
+          documentSize: input.documentSize ?? null,
         })
         .returning();
 

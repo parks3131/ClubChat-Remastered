@@ -15,6 +15,8 @@
     "db:prove": "docker exec -i clubchat-postgres psql -q -v ON_ERROR_STOP=1 -U clubchat -d clubchat < src/db/constraint-proof.sql"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1098.0",
+    "@aws-sdk/s3-request-presigner": "^3.1098.0",
     "@clubchat/shared": "*",
     "@fastify/cors": "^11.2.0",
     "better-auth": "^1.6.25",
@@ -23,10 +25,12 @@
     "ioredis": "^5.11.1",
     "pg": "^8.16.3",
     "pino": "^10.3.1",
+    "sharp": "^0.35.3",
     "ws": "^8.21.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@clubchat/client-core": "*",
     "@testcontainers/postgresql": "^12.0.4",
     "@types/node": "^24.10.1",
     "@types/pg": "^8.15.6",
@@ -34,7 +38,6 @@
     "drizzle-kit": "^0.31.10",
     "testcontainers": "^12.0.4",
     "typescript": "~6.0.3",
-    "vitest": "^4.1.10",
-    "@clubchat/client-core": "*"
+    "vitest": "^4.1.10"
   }
 }

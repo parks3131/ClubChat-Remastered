@@ -10,7 +10,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { MessageEnvelope, MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
-import { messageMentions, messages, outbox } from '../db/schema.ts';
+import { mediaObjects, messageMentions, messages, outbox } from '../db/schema.ts';
 import { appendMessage, type AppendMessageResult } from './append-message.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
@@ -21,7 +21,10 @@ import {
   type ChannelRef,
 } from '../policy/predicates.ts';
 
-export type SendRefusal = { ok: false; code: 'forbidden' | 'channel_gone' | 'invalid_type' };
+export type SendRefusal = {
+  ok: false;
+  code: 'forbidden' | 'channel_gone' | 'invalid_type' | 'media_not_ready';
+};
 export type SendSuccess = { ok: true } & AppendMessageResult;
 export type SendResult = SendSuccess | SendRefusal;
 
@@ -43,6 +46,8 @@ export type SendMessageInput = {
   type?: MessageType;
   body?: string | null | undefined;
   mentions?: readonly string[] | undefined;
+  /** For a photo or document message: an object already uploaded and completed. */
+  mediaId?: string | null | undefined;
 };
 
 /**
@@ -67,6 +72,37 @@ export async function sendMessage(
     return { ok: false, code: 'forbidden' };
   }
 
+  // Media is validated BEFORE the send, never inside it.
+  //
+  // > The sequence-allocating transaction performs no I/O. Verifying an attachment there
+  // > would serialize the entire channel behind an object-storage round trip, because the
+  // > `last_seq` row lock is held until commit.
+  //
+  // So the object must already be `ready` - which /media/:id/complete established by HEADing
+  // it - and this is a cheap indexed read of that fact.
+  let document: { name: string | null; size: number } | null = null;
+  if (input.mediaId) {
+    const ready = await db
+      .select({
+        status: mediaObjects.status,
+        bytes: mediaObjects.bytes,
+        channelId: mediaObjects.channelId,
+        uploaderId: mediaObjects.uploaderId,
+        documentName: mediaObjects.documentName,
+      })
+      .from(mediaObjects)
+      .where(eq(mediaObjects.id, input.mediaId))
+      .limit(1);
+    const media = ready[0];
+    if (!media || media.status !== 'ready') return { ok: false, code: 'media_not_ready' };
+    // The object must belong to THIS channel and to THIS sender. Otherwise a member could
+    // attach somebody else's private upload, or move a photo from a channel they can read
+    // into one they cannot - laundering it past the download authorization.
+    if (media.channelId !== channel.id) return { ok: false, code: 'forbidden' };
+    if (media.uploaderId !== ctx.userId) return { ok: false, code: 'forbidden' };
+    document = { name: media.documentName, size: media.bytes };
+  }
+
   // Mentions are filtered to people who can actually reach this chat BEFORE they are
   // stored, so a client naming an outsider cannot manufacture a notification into a
   // conversation that person has no access to. The audience function re-checks anyway;
@@ -79,7 +115,20 @@ export async function sendMessage(
     clientMsgId: input.clientMsgId,
     type,
     body: input.body ?? null,
+    mediaId: input.mediaId ?? null,
+    // Shown on a document bubble. A photo carries neither.
+    documentName: type === 'document' ? document?.name ?? null : null,
+    documentSize: type === 'document' ? document?.size ?? null : null,
   });
+
+  // Point the object back at the message that owns it, which is what lets the nightly GC
+  // find objects whose message is gone.
+  if (!result.deduplicated && input.mediaId) {
+    await db
+      .update(mediaObjects)
+      .set({ ownerId: result.message.id })
+      .where(eq(mediaObjects.id, input.mediaId));
+  }
 
   if (!result.deduplicated && mentions.length > 0) {
     await db

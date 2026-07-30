@@ -281,6 +281,7 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
       type: MessageEnvelope['type'];
       body?: string | null | undefined;
       mentions?: readonly string[] | undefined;
+      mediaId?: string | null | undefined;
     },
     correlationId?: string,
   ) => {
@@ -319,6 +320,7 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
         type: payload.type,
         body: payload.body ?? null,
         mentions: payload.mentions,
+        mediaId: payload.mediaId,
       });
 
       if (!outcome.ok) {
@@ -328,6 +330,9 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
             t: 'msg.err',
             d: {
               clientMsgId: payload.clientMsgId,
+              // `invalid_type` is a client bug rather than a recoverable state, so it maps
+              // to malformed. `media_not_ready` passes through unchanged because the client
+              // CAN recover from it by completing the upload and retrying.
               code: outcome.code === 'invalid_type' ? 'malformed' : outcome.code,
             },
           },

@@ -11,6 +11,7 @@ import { createAuth } from '../auth.ts';
 import { loadConfig } from '../config.ts';
 import { createDb, createPool } from '../db/client.ts';
 import { buildApp } from './app.ts';
+import { S3MediaStore } from '../media/store.ts';
 
 const config = loadConfig();
 const pool = createPool(config.DATABASE_URL);
@@ -22,7 +23,22 @@ const auth = createAuth(db, {
   dev: process.env['NODE_ENV'] !== 'production',
 });
 
-const app = buildApp({ db, auth, config });
+const mediaStore = new S3MediaStore({
+  endpoint: config.S3_ENDPOINT,
+  region: config.S3_REGION,
+  accessKeyId: config.S3_ACCESS_KEY_ID,
+  secretAccessKey: config.S3_SECRET_ACCESS_KEY,
+});
+
+// Development convenience. In production the buckets are provisioned by infrastructure, not
+// by the application - an app that can create buckets is an app whose credentials can.
+if (process.env['NODE_ENV'] !== 'production') {
+  await mediaStore
+    .ensureBuckets([config.S3_BUCKET_PUBLIC, config.S3_BUCKET_PRIVATE])
+    .catch((error) => console.warn('[media] could not ensure buckets', error));
+}
+
+const app = buildApp({ db, auth, config, mediaStore });
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, 'shutting down');

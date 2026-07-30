@@ -304,6 +304,17 @@ export const messages = pgTable(
     linkedPollId: uuid('linked_poll_id'),
     linkedEventId: uuid('linked_event_id'),
     linkedMeetingId: uuid('linked_meeting_id'),
+    /**
+     * The attached object, for a photo or document message.
+     *
+     * No foreign key, deliberately: `media_objects.owner_id` points back at the message, and a
+     * mutual FK would make either insert impossible without deferred constraints. The message
+     * is the owner; this is the reference.
+     */
+    mediaId: uuid('media_id'),
+    /** Shown on a document bubble. A photo carries neither. */
+    documentName: text('document_name'),
+    documentSize: integer('document_size'),
     pinned: boolean('pinned').notNull().default(false),
     // Soft delete with a tombstone, never a removal: a message vanishing
     // mid-conversation makes the replies unreadable (domain invariant 7).
@@ -339,6 +350,12 @@ export const messages = pgTable(
     index('messages_linked_meeting')
       .on(t.linkedMeetingId)
       .where(sql`linked_meeting_id is not null`),
+    // The Gallery index. Partial, so it stays proportional to photos rather than to the
+    // whole log - and server-side, so the gallery cannot silently lose photos past a
+    // loaded window the way v1's client-side slice did.
+    index('messages_with_media')
+      .on(t.channelId, t.seq.desc())
+      .where(sql`media_id is not null and deleted_at is null`),
     // A card is a card for exactly one thing, or for nothing at all.
     check(
       'messages_at_most_one_link',
@@ -1025,4 +1042,75 @@ export const newsReactions = pgTable(
     emoji: text('emoji').notNull(),
   },
   (t) => [primaryKey({ columns: [t.postId, t.userId, t.emoji] })],
+);
+
+// ---------------------------------------------------------------------------
+// Media  (Phase 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * A stored object.
+ *
+ * > **Two classes of media, and the split is the whole design.**
+ * >
+ * > **Identity** - user, club, race and Eboard avatars - is public, served from a stable path
+ * > with a cache-busting query, and upserted one-per-owner so no old-file cleanup is needed.
+ * >
+ * > **Content** - chat photos, chat documents, news photos - is **private**. It is never on a
+ * > public URL, and the read check is the *same membership check that protects the messages
+ * > themselves*. A private Eboard channel's photos must not be readable by anyone holding a
+ * > guessable URL.
+ *
+ * `ownerType` and `ownerId` exist so the nightly GC can find objects whose owning row is gone.
+ * v1 deleted nothing from storage, ever (roadmap debt 8); this column is what makes that
+ * fixable.
+ *
+ * `status` distinguishes an upload that was intended from one that completed. A `pending` row
+ * with no object behind it is the normal state between issuing a presigned PUT and the client
+ * finishing, and a `pending` row that never advances is exactly what the GC sweeps.
+ */
+export const mediaObjects = pgTable(
+  'media_objects',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** What this belongs to: 'message' | 'news_post' | 'user_avatar' | 'club_avatar' | ... */
+    ownerType: text('owner_type').notNull(),
+    /**
+     * The owning row. Nullable because an upload is created BEFORE the message that
+     * references it exists - the client needs a media id to put in the send.
+     */
+    ownerId: uuid('owner_id'),
+    /** Which club's access rules govern this object. NULL for a dm, as everywhere. */
+    clubId: uuid('club_id').references(() => clubs.id, { onDelete: 'cascade' }),
+    /** The channel whose membership check protects it, for content media. */
+    channelId: uuid('channel_id').references(() => channels.id, { onDelete: 'cascade' }),
+    uploaderId: uuid('uploader_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    bucket: text('bucket').notNull(),
+    objectKey: text('object_key').notNull(),
+    mime: text('mime').notNull(),
+    /** Declared at intent, then RE-VERIFIED against the actual object at complete. */
+    bytes: integer('bytes').notNull(),
+    status: text('status').notNull().default('pending'),
+    /** Derived sizes: { thumb: key, display: key }. Empty until the worker derives them. */
+    variants: jsonb('variants').notNull().default({}),
+    /** Original filename, for a document bubble. Null for a photo. */
+    documentName: text('document_name'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('media_objects_key').on(t.bucket, t.objectKey),
+    check('media_objects_status_valid', sql`status in ('pending', 'ready', 'orphaned')`),
+    check('media_objects_bytes_positive', sql`bytes > 0`),
+    // The GC's claim index: uploads that never completed.
+    index('media_objects_stale_pending')
+      .on(t.createdAt)
+      .where(sql`status = 'pending'`),
+    // Gallery reads walk a channel's ready photos newest-first.
+    index('media_objects_gallery')
+      .on(t.channelId, t.createdAt.desc())
+      .where(sql`status = 'ready' and channel_id is not null`),
+  ],
 );

@@ -13,6 +13,13 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 const TOKEN_KEY = 'clubchat.session.token';
+/**
+ * The signed-in user's id, cached alongside the token.
+ *
+ * Needed for an offline launch: without it the app cannot tell which stored messages are its
+ * own, and every bubble renders as received. Not sensitive - it is this device's own user.
+ */
+const USER_ID_KEY = 'clubchat.session.userId';
 
 async function setItem(key: string, value: string): Promise<void> {
   if (Platform.OS === 'web') {
@@ -40,7 +47,12 @@ async function removeItem(key: string): Promise<void> {
 export const sessionStore = {
   save: (token: string) => setItem(TOKEN_KEY, token),
   load: () => getItem(TOKEN_KEY),
-  clear: () => removeItem(TOKEN_KEY),
+  saveUserId: (userId: string) => setItem(USER_ID_KEY, userId),
+  loadUserId: () => getItem(USER_ID_KEY),
+  clear: async () => {
+    await removeItem(TOKEN_KEY);
+    await removeItem(USER_ID_KEY);
+  },
 };
 
 export type AuthResult = { token: string; userId: string };
@@ -119,30 +131,52 @@ export async function signIn(
 }
 
 /**
+ * The three possible answers about a stored token.
+ *
+ * The distinction between `invalid` and `unreachable` is the whole point, and it took a
+ * collision between two requirements to notice it was needed:
+ *
+ *  - `PRD/03` says a hung auth check must fall back to signed-out rather than hanging on a
+ *    spinner. A hung check previously presented as an app that never loaded.
+ *  - Phase 3 requires chat to be readable in airplane mode.
+ *
+ * Implement the first naively and you break the second: offline becomes signed-out becomes no
+ * chat. But "the server said no" and "I could not reach the server" are different facts.
+ * The first is grounds to sign somebody out; the second is grounds to carry on with what we
+ * already know and re-verify when the network returns.
+ */
+export type SessionCheck = 'valid' | 'invalid' | 'unreachable';
+
+/**
  * Verify a stored token, racing the check against a timeout.
  *
- * PRD/03 edge case: **a hung auth check must fall back to signed-out rather than
- * hanging on a spinner.** A hung check previously presented as an app that never
- * loaded, which is indistinguishable from a crash to the person holding the phone.
+ * Never hangs - that is the requirement it was written for. But a timeout or a thrown fetch
+ * reports `unreachable`, not `invalid`: only an actual 401 from a server we reached is proof
+ * that the token is dead.
  */
 export async function verifySession(
   apiBase: string,
   token: string,
   timeoutMs = 5_000,
-): Promise<boolean> {
-  const check = (async () => {
+): Promise<SessionCheck> {
+  const check = (async (): Promise<SessionCheck> => {
     try {
       const response = await fetch(`${apiBase}/me`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      return response.ok;
+      if (response.ok) return 'valid';
+      // The server answered and rejected us. That IS proof.
+      if (response.status === 401 || response.status === 403) return 'invalid';
+      // A 500 is the server's problem, not the token's - do not sign somebody out over it.
+      return 'unreachable';
     } catch {
-      return false;
+      // Could not reach it at all.
+      return 'unreachable';
     }
   })();
 
-  const timeout = new Promise<boolean>((resolve) => {
-    setTimeout(() => resolve(false), timeoutMs);
+  const timeout = new Promise<SessionCheck>((resolve) => {
+    setTimeout(() => resolve('unreachable'), timeoutMs);
   });
 
   return Promise.race([check, timeout]);

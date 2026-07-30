@@ -23,6 +23,8 @@ import { resolveAudience } from './audience.ts';
 import { writeNotifications } from './notify.ts';
 import { dispatchPush, PUSH_DEFERRAL_MS } from '../push/dispatch.ts';
 import type { PushSender } from '../push/sender.ts';
+import type { MediaStore } from '../media/store.ts';
+import { deriveVariants } from '../media/derive.ts';
 
 export type OutboxEvent = {
   id: number;
@@ -35,6 +37,8 @@ export type EffectDeps = {
   db: Db;
   redis: Redis;
   push: PushSender;
+  /** Present in the worker, which derives thumbnails and runs the storage GC. */
+  media?: MediaStore | undefined;
   log: (level: 'info' | 'warn' | 'error', message: string, extra?: unknown) => void;
   /**
    * Schedule the deferred push evaluation.
@@ -1035,6 +1039,23 @@ export const handlers: Record<string, EffectHandler> = {
     cardLink: (event) => ({ linkedPollId: String(event.payload['pollId']) }),
   }),
   'poll.deleted': makeCardRemover('linked_poll_id', 'pollId'),
+
+  /**
+   * Derive thumbnails for a completed upload.
+   *
+   * An effect rather than part of the request: uploading must not wait on encoding. If the
+   * worker is down the variants simply do not exist yet, and the download path falls back to
+   * the original - a slower image rather than a broken one.
+   */
+  'media.uploaded': async (event, deps) => {
+    if (!deps.media) {
+      deps.log('warn', 'media.uploaded with no store configured', { eventId: event.id });
+      return;
+    }
+    const mediaId = String(event.payload['mediaId']);
+    const result = await deriveVariants(deps.db, deps.media, mediaId);
+    deps.log('info', 'derived media variants', { mediaId, ...result });
+  },
 };
 
 export async function dispatch(event: OutboxEvent, deps: EffectDeps): Promise<void> {

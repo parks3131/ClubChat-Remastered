@@ -10,6 +10,7 @@ import { startDrainLoop } from './drain.ts';
 import { startScheduler } from './scheduled.ts';
 import type { EffectDeps } from './effects.ts';
 import { ExpoPushSender } from '../push/sender.ts';
+import { S3MediaStore } from '../media/store.ts';
 
 const config = loadConfig();
 const logger = pino({ level: config.LOG_LEVEL, name: 'worker' });
@@ -25,6 +26,12 @@ const deps: EffectDeps = {
   redis,
   // One adapter, three platforms: Expo Push fronts APNs, FCM and web push.
   push: new ExpoPushSender(),
+  media: new S3MediaStore({
+    endpoint: config.S3_ENDPOINT,
+    region: config.S3_REGION,
+    accessKeyId: config.S3_ACCESS_KEY_ID,
+    secretAccessKey: config.S3_SECRET_ACCESS_KEY,
+  }),
   log: (level, message, extra) => logger[level](extra ?? {}, message),
 };
 

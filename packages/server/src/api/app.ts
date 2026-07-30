@@ -32,6 +32,14 @@ import { loadAccessContext, type AccessContext } from '../policy/context.ts';
 import { isChannelMember, isClubAdmin } from '../policy/predicates.ts';
 import { badgeCount, markInboxRead, markRosterSeen, openChat, readInbox } from '../domain/inbox.ts';
 import { registerDevice } from '../push/dispatch.ts';
+import type { MediaStore } from '../media/store.ts';
+import {
+  completeUpload,
+  createUploadIntent,
+  readGallery,
+  resolveMediaRedirect,
+  type MediaConfig,
+} from '../media/pipeline.ts';
 import {
   addMember,
   changeRole,
@@ -57,7 +65,19 @@ export type AppDeps = {
   db: Db;
   auth: Auth;
   config: Config;
+  /** Injected so tests can use the in-memory fake and production uses S3. */
+  mediaStore: MediaStore;
 };
+
+/** Media settings, derived once from config rather than rebuilt per request. */
+function mediaConfigOf(config: Config): MediaConfig {
+  return {
+    publicBucket: config.S3_BUCKET_PUBLIC,
+    privateBucket: config.S3_BUCKET_PRIVATE,
+    signingSecret: config.MEDIA_SIGNING_SECRET,
+    cdnBaseUrl: config.MEDIA_CDN_BASE_URL,
+  };
+}
 
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({
@@ -368,6 +388,106 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
       return { deleted: true };
     });
+
+    // ---------------------------------------------------------------------
+    // Media
+    // ---------------------------------------------------------------------
+
+    const media = mediaConfigOf(deps.config);
+
+    const IntentBody = z.object({
+      kind: z.enum(['photo', 'document', 'avatar']),
+      mime: z.string().min(1).max(200),
+      bytes: z.number().int().positive(),
+      channelId: z.string().uuid().optional(),
+      documentName: z.string().max(400).optional(),
+    });
+
+    protectedRoutes.post('/media/upload-intent', async (request, reply) => {
+      const body = IntentBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+
+      const result = await createUploadIntent(
+        deps.db,
+        deps.mediaStore,
+        media,
+        request.access!,
+        body.data,
+      );
+      if (!result.ok) {
+        // 413 for a size refusal and 415 for a type refusal, so a client can tell the user
+        // which limit they hit rather than showing one generic failure.
+        const status =
+          result.code === 'too_large' ? 413 : result.code === 'mime_not_allowed' ? 415 : 404;
+        return reply.code(status).send({ error: result.code });
+      }
+      return reply.code(201).send(result);
+    });
+
+    protectedRoutes.post<{ Params: { id: string } }>(
+      '/media/:id/complete',
+      async (request, reply) => {
+        const result = await completeUpload(
+          deps.db,
+          deps.mediaStore,
+          request.access!,
+          request.params.id,
+        );
+        if (!result.ok) {
+          const status = result.code === 'too_large' ? 413 : result.code === 'mismatch' ? 409 : 404;
+          return reply.code(status).send({ error: result.code });
+        }
+        return result;
+      },
+    );
+
+    const VariantQuery = z.object({
+      variant: z.enum(['original', 'display', 'thumb']).optional(),
+    });
+
+    /**
+     * The authorized download hop.
+     *
+     * Authorization happens HERE, on every request, with the same membership predicate that
+     * protects the message. The signed URL it redirects to grants fetchability of bytes whose
+     * key is already unguessable - it does not grant access, which is why this hop cannot be
+     * skipped or cached publicly.
+     */
+    protectedRoutes.get<{ Params: { id: string } }>('/media/:id', async (request, reply) => {
+      const query = VariantQuery.safeParse(request.query);
+      if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+
+      const result = await resolveMediaRedirect(
+        deps.db,
+        media,
+        request.access!,
+        request.params.id,
+        { variant: query.data.variant },
+      );
+      // Nothing back for an object that does not exist OR that this member cannot reach.
+      // Distinguishing the two would confirm the object exists.
+      if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+
+      return reply
+        .header('cache-control', result.cacheControl)
+        .redirect(result.url, 302);
+    });
+
+    const GalleryQuery = z.object({
+      before: z.coerce.number().int().positive().optional(),
+      limit: z.coerce.number().int().positive().max(200).optional(),
+    });
+
+    protectedRoutes.get<{ Params: { id: string } }>(
+      '/channels/:id/gallery',
+      async (request, reply) => {
+        const query = GalleryQuery.safeParse(request.query);
+        if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+        const result = await readGallery(deps.db, request.access!, request.params.id, query.data);
+        if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+        return result;
+      },
+    );
 
     // ---------------------------------------------------------------------
     // The inbox
