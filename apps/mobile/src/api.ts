@@ -265,6 +265,22 @@ export const clubApi = {
     apiFetch<unknown>(`/clubs/${clubId}`, { method: 'PATCH', body: { joinPolicy } }),
 
   /**
+   * Edit the club's identity, and optionally its join policy in the same request.
+   *
+   * An omitted field is left alone and an explicit null clears it - the two are different
+   * instructions, which is why this takes `null` rather than treating an empty string as "remove".
+   */
+  update: (
+    clubId: string,
+    body: {
+      name?: string;
+      description?: string | null;
+      image?: string | null;
+      joinPolicy?: JoinPolicy;
+    },
+  ) => apiFetch<unknown>(`/clubs/${clubId}`, { method: 'PATCH', body }),
+
+  /**
    * Who this club could add.
    *
    * People the caller already shares a club with, minus this club's current members - never a

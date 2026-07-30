@@ -56,7 +56,7 @@ export default function ClubHubScreen() {
   const races = useLoad(() => raceApi.list(clubId), [clubId, revision]);
   // Inside this club for as long as this screen is mounted, and carrying its name so every
   // header below can show the club's identity rather than the screen's.
-  useDeclareClub(clubId, club.data?.club.name);
+  useDeclareClub(clubId, club.data?.club.name, club.data?.club.image);
 
   const unreadFor = (channelId: string | null): number => {
     if (channelId === null) return 0;

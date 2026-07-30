@@ -230,6 +230,8 @@ export const Club = z.object({
   name: z.string(),
   sport: z.string(),
   description: z.string().nullable(),
+  /** The club's picture, as a media id. Null falls back to its initial. */
+  image: z.string().nullable().default(null),
   joinPolicy: JoinPolicy,
   role: ClubRole,
   mainChannelId: Uuid,

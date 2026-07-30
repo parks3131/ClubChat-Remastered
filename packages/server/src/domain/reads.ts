@@ -334,6 +334,7 @@ export async function listClubsForUser(db: Db, userId: string) {
     name: string;
     sport: string;
     description: string | null;
+    image: string | null;
     join_policy: string;
     role: string;
     main_channel_id: string;
@@ -342,6 +343,7 @@ export async function listClubsForUser(db: Db, userId: string) {
            cl.name,
            cl.sport,
            cl.description,
+           cl.image,
            cl.join_policy,
            cm.role,
            ch.id AS main_channel_id
@@ -358,6 +360,7 @@ export async function listClubsForUser(db: Db, userId: string) {
     id: row.id,
     name: row.name,
     sport: row.sport,
+    image: row.image,
     description: row.description,
     joinPolicy: row.join_policy as 'open' | 'request',
     role: row.role as 'owner' | 'admin' | 'member',

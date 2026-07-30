@@ -32,6 +32,8 @@ export type ClubDetail = {
   name: string;
   sport: string;
   description: string | null;
+  /** The club's picture, as a media id. Null falls back to its initial. */
+  image: string | null;
   joinPolicy: JoinPolicy;
   memberCount: number;
   createdAt: string;

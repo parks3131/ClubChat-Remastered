@@ -28,7 +28,7 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { useFocusEffect } from 'expo-router';
 
-export type CurrentClub = { clubId: string; name: string } | null;
+export type CurrentClub = { clubId: string; name: string; image: string | null } | null;
 
 type Store = {
   currentClub: CurrentClub;
@@ -59,7 +59,11 @@ export function useCurrentClub(): Store {
  * and that is handled rather than guarded at each call site - an undefined id simply does not
  * claim anything yet.
  */
-export function useDeclareClub(clubId: string | undefined | null, name?: string | undefined): void {
+export function useDeclareClub(
+  clubId: string | undefined | null,
+  name?: string | undefined,
+  image?: string | null | undefined,
+): void {
   const { setCurrentClub } = useCurrentClub();
 
   /*
@@ -84,6 +88,9 @@ export function useDeclareClub(clubId: string | undefined | null, name?: string 
          * the name is saying "I am in this club", not "this club has no name".
          */
         name: name ?? (previous?.clubId === clubId ? previous.name : ''),
+        // Same rule as the name: a screen that does not know the picture is not saying there
+        // isn't one.
+        image: image ?? (previous?.clubId === clubId ? previous.image : null),
       }));
 
       /*
@@ -101,7 +108,7 @@ export function useDeclareClub(clubId: string | undefined | null, name?: string 
        * the same is what produced the flicker.
        */
       return undefined;
-    }, [clubId, name, setCurrentClub]),
+    }, [clubId, name, image, setCurrentClub]),
   );
 }
 

@@ -13,6 +13,7 @@
 import { useCallback, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { RemoteImage } from '../../../../src/media-bubble.tsx';
 import { Redirect, useRouter } from 'expo-router';
 import { useClearClub } from '../../../../src/current-club.tsx';
 import { unreadCount, type Club } from '@clubchat/shared';
@@ -148,11 +149,20 @@ export default function ClubsScreen() {
                   accessibilityLabel={`Open ${item.name}, ${item.role}`}
                 >
                   <View style={styles.clubRowLeft}>
-                    <View style={styles.clubAvatar}>
-                      <Text style={styles.clubAvatarInitial}>
-                        {item.name.charAt(0).toUpperCase()}
-                      </Text>
-                    </View>
+                    {item.image === null ? (
+                      <View style={styles.clubAvatar}>
+                        <Text style={styles.clubAvatarInitial}>
+                          {item.name.charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                    ) : (
+                      <RemoteImage
+                        mediaId={item.image}
+                        variant="thumb"
+                        style={styles.clubAvatar}
+                        resizeMode="cover"
+                      />
+                    )}
                     <View style={styles.clubRowText}>
                       <Text style={styles.clubName} numberOfLines={1}>
                         {item.name}

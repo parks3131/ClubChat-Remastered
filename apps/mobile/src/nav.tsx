@@ -14,6 +14,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Link, useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useCurrentClub } from './current-club.tsx';
+import { RemoteImage } from './media-bubble.tsx';
 import { color, radius, space, type } from './theme.ts';
 
 /**
@@ -187,9 +188,18 @@ export function ClubHeaderTitle({ fallback }: { fallback: string }) {
       accessibilityLabel={`${currentClub.name}, open the club profile`}
       style={styles.clubTitle}
     >
-      <View style={styles.clubAvatar}>
-        <Text style={styles.clubInitial}>{currentClub.name.charAt(0).toUpperCase()}</Text>
-      </View>
+      {currentClub.image === null ? (
+        <View style={styles.clubAvatar}>
+          <Text style={styles.clubInitial}>{currentClub.name.charAt(0).toUpperCase()}</Text>
+        </View>
+      ) : (
+        <RemoteImage
+          mediaId={currentClub.image}
+          variant="thumb"
+          style={styles.clubAvatar}
+          resizeMode="cover"
+        />
+      )}
       <Text style={styles.clubName} numberOfLines={1}>
         {currentClub.name}
       </Text>

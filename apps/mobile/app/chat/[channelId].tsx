@@ -664,14 +664,32 @@ export default function ChatScreen() {
         ) : (
           <Avatar name={meta.name} size={36} />
         )}
-        <View style={styles.headerTitleColumn}>
+        {/*
+          The title opens the club's profile, from any group chat.
+
+          Which is why it reaches the CLUB rather than the race or the space: the profile is where
+          identity, the join link and the gallery live, and a race chat's header pointing at a race
+          screen that does not exist yet would be a link to nowhere. A DM's title goes nowhere at
+          all - there is no club behind it.
+        */}
+        <Pressable
+          style={styles.headerTitleColumn}
+          disabled={meta === null || meta.scope === "dm" || meta.clubId === null}
+          onPress={() => router.push(`/clubs/${meta?.clubId}/profile`)}
+          accessibilityRole={meta?.scope === "dm" ? undefined : "button"}
+          accessibilityLabel={
+            meta === null || meta.scope === "dm"
+              ? undefined
+              : `${meta.name}. Open the club profile`
+          }
+        >
           <Text style={styles.headerTitle} numberOfLines={1}>
             {meta?.name ?? (metaResolved ? "Chat" : "")}
           </Text>
           <Text style={styles.headerSubtitle} numberOfLines={1}>
             {meta === null ? "" : offline ? "Reconnecting" : "ClubChat"}
           </Text>
-        </View>
+        </Pressable>
         {/*
           Highlights is a filled pill and everything else hides behind the grid, which is v1's
           weighting: Highlights is the one destination somebody reaches for repeatedly, and the

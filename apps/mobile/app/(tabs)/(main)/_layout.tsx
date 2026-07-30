@@ -175,9 +175,21 @@ export default function MainStackLayout() {
         name="clubs/[clubId]/calendar"
         options={inClub('Calendar', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
       />
+      {/*
+        The club profile and its edit form name THEMSELVES rather than the club, because the club's
+        name is already the subject of the screen below the header - repeating it in the bar would
+        be the same word twice.
+      */}
       <Stack.Screen
         name="clubs/[clubId]/profile"
-        options={parented('Club profile', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
+        options={parented('Club Profile', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
+      />
+      <Stack.Screen
+        name="clubs/[clubId]/edit"
+        options={parented('Edit club', (p) => ({
+          href: `/clubs/${p.clubId}/profile`,
+          label: 'Club profile',
+        }))}
       />
 
       {/*
