@@ -11,14 +11,15 @@
 
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Link, Stack, useLocalSearchParams } from 'expo-router';
+import { Link, Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { useState } from 'react';
 import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { BackAlwaysTo } from '../../../../../src/nav.tsx';
 import { unreadCount } from '@clubchat/shared';
 import { clubApi, raceApi } from '../../../../../src/api.ts';
 import { useSession } from '../../../../../src/chat-provider.tsx';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
-import { DataScreen } from '../../../../../src/ui.tsx';
+import { DataScreen, SearchField } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
 /** How many races the hub previews before "See all". */
@@ -47,6 +48,9 @@ export default function ClubHubScreen() {
   const backHref = from === 'profile' ? '/profile' : '/clubs';
   const backLabel = from === 'profile' ? 'Profile' : 'Clubs';
   const { channels, revision } = useSession();
+  const router = useRouter();
+  const [racesOpen, setRacesOpen] = useState(false);
+  const [raceSearch, setRaceSearch] = useState('');
 
   const club = useLoad(() => clubApi.detail(clubId), [clubId, revision]);
   const races = useLoad(() => raceApi.list(clubId), [clubId, revision]);
@@ -137,11 +141,21 @@ export default function ClubHubScreen() {
 
               <View style={styles.racesHead}>
                 <Text style={styles.sectionTitle}>Races and meets</Text>
-                <Link href={`/clubs/${clubId}/races`} asChild accessibilityRole="link">
-                  <Pressable accessibilityLabel="See all races">
-                    <Text style={styles.seeAll}>See all</Text>
-                  </Pressable>
-                </Link>
+                {/*
+                  A sheet, not a page. v1 has no races list screen at all - "See all" is usually
+                  "find the one I am looking for", and a search over the club's races answers that
+                  without a destination whose only other job would be to be a back target.
+                */}
+                <Pressable
+                  onPress={() => {
+                    setRaceSearch('');
+                    setRacesOpen(true);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="See all races"
+                >
+                  <Text style={styles.seeAll}>See all</Text>
+                </Pressable>
               </View>
 
               {previewed.length === 0 ? (
@@ -179,6 +193,19 @@ export default function ClubHubScreen() {
               )}
             </View>
 
+            {racesOpen && (
+              <RacesSheet
+                races={races.data?.races ?? []}
+                query={raceSearch}
+                onQuery={setRaceSearch}
+                onDismiss={() => setRacesOpen(false)}
+                onPick={(raceId) => {
+                  setRacesOpen(false);
+                  router.push(`/races/${raceId}`);
+                }}
+              />
+            )}
+
             {/* Admin only: the one create action the hub carries. */}
             {data.club.viewer.isAdmin && (
               <Link href={`/clubs/${clubId}/races/create`} asChild accessibilityRole="link">
@@ -192,6 +219,85 @@ export default function ClubHubScreen() {
         );
       }}
     </DataScreen>
+  );
+}
+
+/**
+ * Every race in the club, searchable.
+ *
+ * The overflow behind "See all". A search rather than a page, because the question it answers is
+ * "which one was it" - and a page would additionally have to be somewhere a race's back control
+ * returned to, which is the intermediate screen this replaces.
+ */
+function RacesSheet({
+  races,
+  query,
+  onQuery,
+  onDismiss,
+  onPick,
+}: {
+  races: ReadonlyArray<{ id: string; name: string; raceDate: string; hasAccess: boolean }>;
+  query: string;
+  onQuery: (next: string) => void;
+  onDismiss: () => void;
+  onPick: (raceId: string) => void;
+}) {
+  const needle = query.trim().toLowerCase();
+  const shown = needle.length === 0 ? races : races.filter((r) => r.name.toLowerCase().includes(needle));
+
+  return (
+    <View style={styles.sheetBackdrop}>
+      <Pressable
+        style={styles.sheetScrim}
+        onPress={onDismiss}
+        accessibilityRole="button"
+        accessibilityLabel="Close"
+      />
+      <View style={styles.sheet}>
+        <View style={styles.sheetHead}>
+          <Text style={styles.sheetTitle}>Races & Meets</Text>
+          <Pressable
+            onPress={onDismiss}
+            hitSlop={space.sm}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+          >
+            <MaterialIcons name="close" size={22} color={color.textPrimary} />
+          </Pressable>
+        </View>
+
+        <SearchField value={query} onChangeText={onQuery} placeholder="Search races" />
+
+        <ScrollView style={styles.sheetList}>
+          {shown.length === 0 ? (
+            <Text style={styles.emptyRaces}>No races match "{query}".</Text>
+          ) : (
+            shown.map((race) => (
+              <Pressable
+                key={race.id}
+                style={styles.sheetRow}
+                onPress={() => onPick(race.id)}
+                accessibilityRole="button"
+                accessibilityLabel={`${race.name}${race.hasAccess ? '' : ', no access'}`}
+              >
+                <View style={styles.raceAvatar}>
+                  <Text style={styles.raceInitial}>{race.name.charAt(0).toUpperCase()}</Text>
+                </View>
+                <View style={styles.sheetRowText}>
+                  <Text style={styles.raceName} numberOfLines={1}>
+                    {race.name}
+                  </Text>
+                  <Text style={styles.emptyRaces}>{race.raceDate}</Text>
+                </View>
+                {!race.hasAccess && (
+                  <MaterialIcons name="lock" size={16} color={color.textSecondary} />
+                )}
+              </Pressable>
+            ))
+          )}
+        </ScrollView>
+      </View>
+    </View>
   );
 }
 
@@ -310,6 +416,47 @@ const styles = StyleSheet.create({
   },
   raceInitial: { ...type.headline, fontSize: 17, color: color.accent },
   raceName: { ...type.body, color: color.textPrimary, flex: 1 },
+
+  sheetBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    padding: space.md,
+    zIndex: 100,
+  },
+  sheetScrim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  sheet: {
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    padding: space.md,
+    gap: space.sm,
+    maxHeight: '70%',
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 420,
+  },
+  sheetHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sheetTitle: { ...type.title, fontSize: 18, lineHeight: 24, color: color.textPrimary },
+  sheetList: { marginTop: space.xs },
+  sheetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    paddingVertical: space.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: color.cardSunken,
+  },
+  sheetRowText: { flex: 1 },
 
   addGroup: {
     flexDirection: 'row',

@@ -583,18 +583,17 @@ export default function ChatScreen() {
         ? "/dm"
         : meta.scope === "club"
           ? `/clubs/${meta.scopeId}`
-          : meta.scope === "race"
-            ? `/clubs/${meta.clubId}/races`
-            : `/clubs/${meta.clubId}`;
+          : // Race and Eboard chat both fall back to the CLUB hub. Neither falls back to its own
+            // hub, which would bounce - both hubs send a member straight into chat - and there is
+            // no races list to fall back to, because the product does not have one.
+            `/clubs/${meta.clubId}`;
 
   const parentLabel =
     meta === null
       ? "Clubs"
       : meta.scope === "dm"
         ? "Messages"
-        : meta.scope === "race"
-          ? "Races"
-          : "Club";
+        : "Club";
 
   // One definition of "back" for the whole app: pop if there is history, use the declared
   // parent if there is not. See `useGoBack`.
@@ -1709,7 +1708,14 @@ const styles = StyleSheet.create({
     backgroundColor: color.cardSunken,
   },
   headerTitleColumn: { flex: 1, minWidth: 0 },
-  headerTitle: { ...type.headerTitle, color: color.textPrimary },
+  /*
+   * The accent, matching the club's identity everywhere outside chat.
+   *
+   * A conversation's name is the same kind of thing as the club name in every other header - the
+   * subject of the screen - so it wears the same colour. Rendering it in body black made chat the
+   * one place the product's own title stopped looking like a title.
+   */
+  headerTitle: { ...type.headerTitle, color: color.accent },
   /** 9px, v1's value. Doubles as the connection state, which chat is the one screen to care. */
   headerSubtitle: { ...type.label, fontSize: 9, color: color.textSecondary },
   headerAction: {

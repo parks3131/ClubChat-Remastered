@@ -28,7 +28,7 @@
  */
 
 import { Stack } from 'expo-router';
-import { BackTo, ClubHeaderTitle } from '../../../src/nav.tsx';
+import { BackTo, BackToClub, ClubHeaderTitle } from '../../../src/nav.tsx';
 import { color, type } from '../../../src/theme.ts';
 
 /**
@@ -142,11 +142,12 @@ export default function MainStackLayout() {
         name="clubs/[clubId]/news"
         options={inClub('News', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
       />
-      <Stack.Screen
-        name="clubs/[clubId]/races/index"
-        options={inClub('Races & Meets', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
-      />
       {/*
+        There is no races LIST screen. v1 has none: the hub previews races and "See all" opens a
+        searchable sheet over them, so a race's back control returns to the club rather than to an
+        intermediate page. A list that existed only to be a back target was a screen the product
+        did not want, and it is gone.
+
         The create form names ITSELF rather than the club, because what it is doing is the thing
         that needs saying - "Binghamton Running Club" over a form that makes a race is a header
         answering a question nobody asked.
@@ -154,8 +155,8 @@ export default function MainStackLayout() {
       <Stack.Screen
         name="clubs/[clubId]/races/create"
         options={parented('New race channel', (p) => ({
-          href: `/clubs/${p.clubId}/races`,
-          label: 'Races',
+          href: `/clubs/${p.clubId}`,
+          label: 'Club',
         }))}
       />
       <Stack.Screen
@@ -192,7 +193,8 @@ export default function MainStackLayout() {
         name="races/[raceId]/index"
         options={{
           title: 'Race',
-          headerLeft: () => <BackTo href="/clubs" label="Clubs" />,
+          headerTitle: () => <ClubHeaderTitle fallback="Race" />,
+          headerLeft: () => <BackToClub />,
         }}
       />
       <Stack.Screen
@@ -220,7 +222,8 @@ export default function MainStackLayout() {
         name="eboard/[eboardId]/index"
         options={{
           title: 'Eboard & Council',
-          headerLeft: () => <BackTo href="/clubs" label="Clubs" />,
+          headerTitle: () => <ClubHeaderTitle fallback="Eboard & Council" />,
+          headerLeft: () => <BackToClub />,
         }}
       />
       <Stack.Screen

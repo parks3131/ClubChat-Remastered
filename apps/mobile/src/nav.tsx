@@ -124,6 +124,35 @@ export function BackAlwaysTo({
 }
 
 /**
+ * Back to the club you are inside, whichever it is.
+ *
+ * A race and an Eboard space each belong to one club, but their routes carry only their own id -
+ * so a parent built from route params cannot name the club hub. The club comes from the context
+ * those screens already declare, and `/clubs` is the honest fallback for the instant before their
+ * read lands.
+ *
+ * This is why there is no races LIST screen to go back to: v1 has none, and a list that exists
+ * only to be a back target is a screen the product does not want.
+ */
+export function BackToClub() {
+  const { currentClub } = useCurrentClub();
+  const href = currentClub === null ? '/clubs' : `/clubs/${currentClub.clubId}`;
+  const go = useGoBack(href);
+
+  return (
+    <Pressable
+      onPress={go}
+      accessibilityRole="button"
+      accessibilityLabel="Back to the club"
+      hitSlop={space.sm}
+      style={styles.backWrap}
+    >
+      <MaterialIcons name="arrow-back" size={22} color={color.accent} />
+    </Pressable>
+  );
+}
+
+/**
  * The club's own identity as a header title: its avatar, then its name, in the accent.
  *
  * v1 gives every screen inside a club this header rather than the screen's own name, and the
