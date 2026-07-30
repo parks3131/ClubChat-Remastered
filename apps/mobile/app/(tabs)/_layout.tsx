@@ -85,10 +85,23 @@ export default function TabsLayout() {
         tabBarInactiveTintColor: color.textSecondary,
       }}
     >
+      {/*
+        The Clubs destination is a route GROUP, not a single screen: `(main)` holds its own stack
+        with the club hub, every roster, every list and every leaf inside it. That is what keeps
+        the tab bar on all of them - see `PRD/15` and the note in `(main)/_layout.tsx`. The group
+        is invisible in the URL, so this tab's root is still plain `/clubs`.
+      */}
       <Tabs.Screen
-        name="clubs"
+        name="(main)"
         options={{
           title: 'Clubs',
+          /*
+            This tab supplies its OWN headers, from the stack inside it. Without this the tab
+            navigator draws a second one above them - a "Clubs" bar stacked on top of every
+            screen's real header, which is exactly what appeared the first time this was wired up.
+            The other three destinations are single screens and keep the tab navigator's header.
+          */
+          headerShown: false,
           tabBarIcon: ({ focused }) => <TabIcon name="clubs" focused={focused} />,
           tabBarLabel: ({ focused }) => <TabLabel label="Clubs" focused={focused} />,
         }}

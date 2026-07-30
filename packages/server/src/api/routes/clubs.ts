@@ -25,6 +25,7 @@ import {
   setJoinPolicy,
   transferOwnership,
 } from '../../domain/membership.ts';
+import { searchMemberCandidates } from '../../domain/member-candidates.ts';
 import { listClubsForUser } from '../../domain/reads.ts';
 import { markRosterSeen } from '../../domain/inbox.ts';
 import { isClubAdmin } from '../../policy/predicates.ts';
@@ -100,6 +101,27 @@ export function registerClubRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return result;
   });
+
+  /*
+   * Who this club could add.
+   *
+   * Sits beside the add rather than under `/users`, because the answer is entirely a fact about
+   * this club: who is eligible, and who is already in. Authorized by the same predicate the add
+   * uses, so a member who cannot add cannot enumerate the roster by exclusion either.
+   */
+  app.get<{ Params: { id: string }; Querystring: { q?: string } }>(
+    '/clubs/:id/member-candidates',
+    async (request, reply) => {
+      const result = await searchMemberCandidates(
+        deps.db,
+        request.access!,
+        { kind: 'club', clubId: request.params.id },
+        { query: request.query.q },
+      );
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return result;
+    },
+  );
 
   const AddMemberBody = z.object({ userId: z.string().uuid() });
   app.post<{ Params: { id: string } }>('/clubs/:id/members', async (request, reply) => {

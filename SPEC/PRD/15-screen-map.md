@@ -93,6 +93,65 @@ screen falls back to the clubs list, and this one must not.
 Own profile (with "Your clubs"), Edit profile, Privacy Policy, Terms, Sign out, Delete
 account. Privacy Policy and Terms must **also** be reachable while signed out, from sign-up.
 
+### Chrome: where the tab bar, the masthead and the back control appear
+
+Read off v1 directly on 2026-07-30, because none of it is derivable from the screen list and all
+of it is load-bearing. **This is what shipped**, and where the remaster currently differs the
+difference is recorded as such rather than quietly kept.
+
+**The tab bar.** Present on every signed-in screen **except chat**, in all three chat scopes.
+Chat hides it on mount and restores it on unmount, because chat owns both edges of the screen: a
+translucent header at the top and the composer pinned to the bottom, and a tab bar under the
+composer would put two competing bars in the thumb's way. Everywhere else - club hub, roster,
+polls, races, highlights, gallery, calendar - the tab bar stays, so a member is never more than
+one tap from the four destinations. Signed-out screens have no tab bar at all.
+
+> **The remaster currently differs.** Every non-destination screen is a sibling of the tabs group
+> rather than nested inside it, so the tab bar disappears on the club hub, rosters and every list
+> as well as on chat. Matching v1 means those screens move inside the Clubs destination's stack.
+
+**The masthead.** The word "ClubChat" is a **one-time app masthead on the Clubs landing screen**,
+not a per-screen fixture. Calendar and Notifications carry the same branded header because they
+have no nested stack of their own to host one. Inside a club, the header title is instead the
+club's own avatar and name, **tappable through to the club profile from every screen in the
+club**. Chat and Highlights replace the header entirely with the glass-blur one.
+
+**The back control.** Present on every screen below a destination, and never on a destination
+itself. It **tries history first and falls back to a declared parent** - `back()` when there is
+something to pop, so returning preserves the scroll position and state of the screen behind, and
+an explicit parent when there is not, which is every screen reached by deep link, notification
+tap or page refresh. Falling back without trying history first is not equivalent: it discards the
+state of the screen being returned to, and it grows the stack instead of unwinding it.
+
+**The Calendar destination is club-scoped when a club is active.** Entering a club sets it as
+current, and the Calendar tab then shows that club's feed with the club's name in its header
+(`Ridgeway Calendar`); leaving the club clears it and the tab shows the merged cross-club feed
+again. The **tab bar label stays "Calendar"** either way - only the header title changes. This is
+why the club-scoped and cross-club calendars are one component: they are one screen with a
+parameter, reached two ways.
+
+### Icons
+
+One vocabulary, taken from v1. An icon that means a thing in one place means it everywhere.
+
+| Concept | Icon | Concept | Icon |
+|---|---|---|---|
+| Clubs (destination) | `groups` | Calendar (destination) | `calendar-month` |
+| Notifications (destination) | `notifications` | Profile (destination) | `person` |
+| News and Highlights | `auto-awesome` | Club main chat | `forum` |
+| Eboard and Council | `shield` | Race or meet | `flag` |
+| Highlights (from chat) | `bolt` | Members or roster | `group` |
+| Polls | `how-to-vote` | Routines | `fitness-center` |
+| Events | `event` | Meetings | `groups` |
+| Meet Information | `info` | Car groups | `directions-car` |
+| Pinned | `push-pin` | Announcement | `campaign` |
+| Report | `flag` | Delete | `delete-outline` |
+| Gallery or grid | `grid-view` | Document | `insert-drive-file` |
+
+The three club-hub rows carry **filled circular icon wells in three different tints** - chat on
+the accent, News on the secondary, Eboard on the tertiary - which is what stops the hub reading
+as an undifferentiated list.
+
 ### Navigation rules that must survive
 
 1. **Chat is the home screen of a race and of an Eboard space.** A member entering either is

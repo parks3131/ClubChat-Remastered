@@ -22,6 +22,7 @@ import {
   requestEboardAccess,
 } from '../../domain/eboard.ts';
 import { markRosterSeen } from '../../domain/inbox.ts';
+import { searchMemberCandidates } from '../../domain/member-candidates.ts';
 import { refusalStatus, type AppDeps } from '../plumbing.ts';
 
 export function registerEboardRoutes(app: FastifyInstance, deps: AppDeps): void {
@@ -72,6 +73,28 @@ export function registerEboardRoutes(app: FastifyInstance, deps: AppDeps): void 
     '/eboard-join-requests/:id/deny',
     async (request, reply) => {
       const result = await decideEboardRequest(deps.db, request.access!, request.params.id, false);
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return result;
+    },
+  );
+
+  /**
+   * Who this space could add.
+   *
+   * **Admin tier of the club only**, because `addEboardMember` refuses anybody else - this space
+   * is for the admin tier, and adding a plain member would put somebody in it whom a later
+   * demotion could not remove. Offering them here would advertise a capability the command
+   * refuses.
+   */
+  app.get<{ Params: { id: string }; Querystring: { q?: string } }>(
+    '/eboards/:id/member-candidates',
+    async (request, reply) => {
+      const result = await searchMemberCandidates(
+        deps.db,
+        request.access!,
+        { kind: 'eboard', eboardId: request.params.id },
+        { query: request.query.q },
+      );
       if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
       return result;
     },

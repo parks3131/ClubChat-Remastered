@@ -13,6 +13,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { markRosterSeen } from '../../domain/inbox.ts';
+import { searchMemberCandidates } from '../../domain/member-candidates.ts';
 import {
   addRaceMember,
   assignToCarGroup,
@@ -191,6 +192,21 @@ export function registerRaceRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return result;
   });
+
+  /** Who this race could add: members of its own club who are not already on the roster. */
+  app.get<{ Params: { id: string }; Querystring: { q?: string } }>(
+    '/races/:id/member-candidates',
+    async (request, reply) => {
+      const result = await searchMemberCandidates(
+        deps.db,
+        request.access!,
+        { kind: 'race', raceId: request.params.id },
+        { query: request.query.q },
+      );
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return result;
+    },
+  );
 
   const AddRaceMemberBody = z.object({ userId: z.string().uuid() });
 

@@ -112,6 +112,14 @@ export type DmThread = {
 export type DmCandidate = { userId: string; name: string };
 
 /**
+ * Somebody who could be added to a roster.
+ *
+ * Same shape for all three scopes, because the server answers all three from one query - the
+ * pool and the exclusion differ, the row does not.
+ */
+export type MemberCandidate = { userId: string; name: string };
+
+/**
  * Whether the composer is live, and why not.
  *
  * `unavailable` covers both "they blocked you" and "you no longer share a club", and does not
@@ -133,6 +141,16 @@ export type ChannelMeta = {
   canPin: boolean;
   /** Whether to OFFER the Reports tab. Never computed from canPin - see the server's note. */
   canReadReports: boolean;
+  /**
+   * Whether to offer the announcement toggle.
+   *
+   * **Never computed from `canPin`.** The two come apart in race chat, where pinning
+   * additionally requires a roster row - so deriving one from the other offers the control to
+   * the wrong set of people in exactly one scope, which is the kind of bug nothing catches.
+   */
+  canAnnounce: boolean;
+  /** Whether to offer Delete on somebody else's message. Own messages never need it. */
+  canDeleteAnyMessage: boolean;
   muted: boolean;
   peer: { userId: string; name: string; blockedByMe: boolean } | null;
 };
@@ -246,6 +264,18 @@ export const clubApi = {
   setJoinPolicy: (clubId: string, joinPolicy: JoinPolicy) =>
     apiFetch<unknown>(`/clubs/${clubId}`, { method: 'PATCH', body: { joinPolicy } }),
 
+  /**
+   * Who this club could add.
+   *
+   * People the caller already shares a club with, minus this club's current members - never a
+   * global user directory. A stranger is reached with the invite link instead, which ADR-0010
+   * makes the only front door anyway.
+   */
+  memberCandidates: (clubId: string, q: string) =>
+    apiFetch<{ candidates: MemberCandidate[] }>(
+      `/clubs/${clubId}/member-candidates${query({ q })}`,
+    ),
+
   addMember: (clubId: string, userId: string) =>
     apiFetch<unknown>(`/clubs/${clubId}/members`, { method: 'POST', body: { userId } }),
 
@@ -316,6 +346,12 @@ export const raceApi = {
       method: 'POST',
       body: {},
     }),
+
+  /** Members of this race's own club who are not already on the roster. */
+  memberCandidates: (raceId: string, q: string) =>
+    apiFetch<{ candidates: MemberCandidate[] }>(
+      `/races/${raceId}/member-candidates${query({ q })}`,
+    ),
 
   addMember: (raceId: string, userId: string) =>
     apiFetch<unknown>(`/races/${raceId}/members`, { method: 'POST', body: { userId } }),
@@ -479,6 +515,17 @@ export const eboardApi = {
       method: 'POST',
       body: {},
     }),
+
+  /**
+   * The club's admin tier, minus those already in the space.
+   *
+   * Narrower than the other two on purpose: `addEboardMember` refuses a plain member, so
+   * offering one here would be a search result that fails on tap.
+   */
+  memberCandidates: (eboardId: string, q: string) =>
+    apiFetch<{ candidates: MemberCandidate[] }>(
+      `/eboards/${eboardId}/member-candidates${query({ q })}`,
+    ),
 
   addMember: (eboardId: string, userId: string) =>
     apiFetch<unknown>(`/eboards/${eboardId}/members`, { method: 'POST', body: { userId } }),
