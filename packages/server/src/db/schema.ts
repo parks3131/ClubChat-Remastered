@@ -18,12 +18,14 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
   pgTable,
   primaryKey,
   text,
+  unique,
   timestamp,
   uniqueIndex,
   uuid,
@@ -547,4 +549,449 @@ export const messageMentions = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
   },
   (t) => [primaryKey({ columns: [t.messageId, t.userId] })],
+);
+
+// ---------------------------------------------------------------------------
+// Races  (Phase 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * A race: a mini-club nested one level inside a club.
+ *
+ * Same shape as a club - membership, roster, chat, sub-features - rather than a
+ * special-purpose "event" screen. That is why it gets a channel from the shared
+ * abstraction instead of its own message table.
+ *
+ * The five `meet*` columns are Meet Information, kept as columns on the race rather than a
+ * separate table because they are **edited together as one form**. A `meet_information`
+ * table would invite partial saves of something the product treats as atomic.
+ *
+ * `raceDate` is a DATE, not a timestamp: a race has a day, not a time. Storing it as a
+ * timestamp would reintroduce the timezone bug where a date-only value parsed as an ISO
+ * string becomes UTC midnight and renders a day early in negative-offset zones.
+ */
+export const races = pgTable(
+  'races',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    clubId: uuid('club_id')
+      .notNull()
+      .references(() => clubs.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    raceDate: date('race_date').notNull(),
+    // Meet Information. Empty-state behaviour differs per field on purpose: description,
+    // location and hotel are hidden when empty, while photos and results always show a
+    // "stay tuned" placeholder - photos and results are expected later, a missing hotel
+    // link usually means there is no hotel. That is a render decision, not a schema one.
+    meetDescription: text('meet_description'),
+    meetLocationUrl: text('meet_location_url'),
+    meetHotelUrl: text('meet_hotel_url'),
+    meetPhotosUrl: text('meet_photos_url'),
+    meetResultsUrl: text('meet_results_url'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('races_by_club').on(t.clubId, t.raceDate)],
+);
+
+/**
+ * The race roster.
+ *
+ * **The ONLY source of truth for race access.** Club-admin status is management authority,
+ * never access - substituting one for the other was wrong in five separate places in v1, so
+ * this table is the single thing every race access predicate consults.
+ */
+export const raceMemberships = pgTable(
+  'race_memberships',
+  {
+    raceId: uuid('race_id')
+      .notNull()
+      .references(() => races.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    joinedAt: timestamp('joined_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.raceId, t.userId] }),
+    index('race_memberships_by_user').on(t.userId),
+  ],
+);
+
+export const raceJoinRequests = pgTable(
+  'race_join_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    raceId: uuid('race_id')
+      .notNull()
+      .references(() => races.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('pending'),
+    decidedBy: uuid('decided_by').references(() => users.id, { onDelete: 'set null' }),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Scoped to pending, so a denied request can be re-filed.
+    uniqueIndex('race_join_requests_one_pending')
+      .on(t.raceId, t.userId)
+      .where(sql`status = 'pending'`),
+    check('race_join_requests_status_valid', sql`status in ('pending', 'approved', 'denied')`),
+  ],
+);
+
+/**
+ * Race pins.
+ *
+ * **Personal.** Each member pins for themselves and it affects only their own club-hub
+ * preview, never anyone else's. Club-wide admin pins were built in v1 and then corrected;
+ * the primary key including `user_id` is what makes the wrong version unrepresentable.
+ *
+ * Any member can pin any race they can SEE, which is every race in their club - pinning is
+ * not gated on race access, so this deliberately has no dependency on the roster.
+ */
+export const racePins = pgTable(
+  'race_pins',
+  {
+    raceId: uuid('race_id')
+      .notNull()
+      .references(() => races.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.raceId, t.userId] })],
+);
+
+/**
+ * Car groups.
+ *
+ * Auto-numbered on creation - "Group 1", "Group 2" - with no naming prompt, because naming
+ * eight cars is friction.
+ *
+ * The `UNIQUE (id, race_id)` looks redundant against the primary key, and it is not: it is
+ * the target the composite foreign key on `car_group_members` needs. See below.
+ */
+export const carGroups = pgTable(
+  'car_groups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    raceId: uuid('race_id')
+      .notNull()
+      .references(() => races.id, { onDelete: 'cascade' }),
+    number: integer('number').notNull(),
+    // Cleared automatically when the holder leaves the group. Nullable because a group
+    // legitimately persists with no Incharge until an admin names a new one.
+    inchargeUserId: uuid('incharge_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('car_groups_race_number').on(t.raceId, t.number),
+    // A UNIQUE CONSTRAINT, not a unique index, and the distinction matters: drizzle-kit
+    // emits every foreign key BEFORE every CREATE INDEX, so a composite FK pointing at an
+    // index would reference something that does not exist yet and the migration would fail.
+    // A table constraint is emitted inline with CREATE TABLE, so it is already there.
+    // Redundant against the PK otherwise.
+    unique('car_groups_id_race').on(t.id, t.raceId),
+  ],
+);
+
+/**
+ * Car group membership.
+ *
+ * > **Domain invariant 5: a person is in at most one car group per race.**
+ * >
+ * > Enforcing that needs `race_id` on this table, which means denormalising it off
+ * > `car_groups`. A generated column cannot do it - Postgres generated columns may only
+ * > reference columns in their own row, and `race_id` lives on the parent. So the value is
+ * > stored, and the **composite foreign key** back to `car_groups (id, race_id)` makes the
+ * > stored value provably consistent with the group's actual race.
+ * >
+ * > The result is that the invariant is enforced by the database rather than trusted from a
+ * > handler. Without the composite FK the denormalised `race_id` could drift and the unique
+ * > index below would be guarding a lie.
+ */
+export const carGroupMembers = pgTable(
+  'car_group_members',
+  {
+    carGroupId: uuid('car_group_id').notNull(),
+    raceId: uuid('race_id').notNull(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.carGroupId, t.userId] }),
+    // Invariant 5, at the data layer.
+    uniqueIndex('car_group_members_one_per_race').on(t.raceId, t.userId),
+    foreignKey({
+      columns: [t.carGroupId, t.raceId],
+      foreignColumns: [carGroups.id, carGroups.raceId],
+    }).onDelete('cascade'),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Eboard meetings
+// ---------------------------------------------------------------------------
+
+/**
+ * A meeting.
+ *
+ * Any Eboard member creates one; **only its creator edits or deletes it**. Two explicit
+ * founder follow-ups landed on that rule after meetings first shipped as any-member
+ * editable, which is why `creatorId` is not merely audit metadata here - it is the
+ * authorization subject.
+ */
+export const meetings = pgTable(
+  'meetings',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eboardId: uuid('eboard_id')
+      .notNull()
+      .references(() => eboardChannels.id, { onDelete: 'cascade' }),
+    creatorId: uuid('creator_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    title: text('title').notNull(),
+    description: text('description'),
+    startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+    link: text('link'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('meetings_by_eboard').on(t.eboardId, t.startsAt)],
+);
+
+// ---------------------------------------------------------------------------
+// Polls
+// ---------------------------------------------------------------------------
+
+/**
+ * A poll, in any of the three scopes.
+ *
+ * One poll concept with a club/race/eboard scope, repeating the channel abstraction's trick.
+ *
+ * **No `is_closed` column.** Closed-ness is evaluated at READ time as
+ * `closed_at IS NOT NULL OR closes_at < now()`, because a passed deadline must read as
+ * closed **everywhere** without anyone having closed it. A stored boolean would need a job
+ * to flip it, and there deliberately is no job that closes polls - the only scheduled job is
+ * the closing-soon reminder.
+ *
+ * `UNIQUE (id, allow_multiple)` is the composite-FK target that lets `poll_votes` enforce
+ * single-choice voting in the database. See below.
+ */
+export const polls = pgTable(
+  'polls',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    clubId: uuid('club_id')
+      .notNull()
+      .references(() => clubs.id, { onDelete: 'cascade' }),
+    scope: text('scope').notNull(),
+    scopeId: uuid('scope_id').notNull(),
+    creatorId: uuid('creator_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    question: text('question').notNull(),
+    allowMultiple: boolean('allow_multiple').notNull().default(false),
+    isPrivate: boolean('is_private').notNull().default(false),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    closesAt: timestamp('closes_at', { withTimezone: true }),
+    // Stamped in the same transaction as the fan-out, which is what makes the reminder fire
+    // at most once per poll, ever.
+    closingSoonNotifiedAt: timestamp('closing_soon_notified_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check('polls_scope_valid', sql`scope in ('club', 'race', 'eboard')`),
+    // A constraint rather than an index, for the same ordering reason as car_groups above:
+    // poll_votes' composite FK points here.
+    unique('polls_id_allow_multiple').on(t.id, t.allowMultiple),
+    index('polls_by_scope').on(t.scope, t.scopeId),
+    // The scheduled job's claim index: open polls with a deadline not yet flagged.
+    index('polls_closing_soon')
+      .on(t.closesAt)
+      .where(sql`closed_at is null and closing_soon_notified_at is null and closes_at is not null`),
+  ],
+);
+
+/**
+ * Poll options.
+ *
+ * `voteCount` is a maintained column rather than a derived count, and that is a deliberate
+ * carry-over: **vote counts are public while voter identity is gated**, so a count cannot be
+ * derived from rows the viewer is forbidden to read. Updated inside the vote transaction.
+ */
+export const pollOptions = pgTable(
+  'poll_options',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    pollId: uuid('poll_id')
+      .notNull()
+      .references(() => polls.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(),
+    position: integer('position').notNull(),
+    voteCount: integer('vote_count').notNull().default(0),
+  },
+  (t) => [
+    uniqueIndex('poll_options_position').on(t.pollId, t.position),
+    check('poll_options_count_non_negative', sql`vote_count >= 0`),
+  ],
+);
+
+/**
+ * A vote.
+ *
+ * > **Single-choice voting is enforced by the database, not by the handler.**
+ * >
+ * > `allow_multiple` is denormalised onto each vote, with a composite foreign key back to
+ * > `polls (id, allow_multiple)` so the copy cannot drift from the poll. That makes the
+ * > partial unique index below meaningful: on a single-choice poll, a member can hold at
+ * > most one vote, so "tapping a different option MOVES the vote rather than adding a
+ * > second" is guaranteed rather than merely implemented.
+ * >
+ * > Same pattern as `car_group_members`, and the migration checklist lists it as the
+ * > house style for exactly this shape.
+ */
+export const pollVotes = pgTable(
+  'poll_votes',
+  {
+    pollId: uuid('poll_id').notNull(),
+    optionId: uuid('option_id')
+      .notNull()
+      .references(() => pollOptions.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    allowMultiple: boolean('allow_multiple').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.optionId, t.userId] }),
+    uniqueIndex('poll_votes_single_choice')
+      .on(t.pollId, t.userId)
+      .where(sql`not allow_multiple`),
+    foreignKey({
+      columns: [t.pollId, t.allowMultiple],
+      foreignColumns: [polls.id, polls.allowMultiple],
+    }).onDelete('cascade'),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Calendar, routines, news
+// ---------------------------------------------------------------------------
+
+/**
+ * A calendar event. Club-scoped only.
+ *
+ * The `race` type is a **label only** and has no relationship to a real Race. Spawning races
+ * from a race-type event was designed and never built; the two remain unconnected, and an
+ * open question asks whether the type should be removed for reading as though it were.
+ */
+export const calendarEvents = pgTable(
+  'calendar_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    clubId: uuid('club_id')
+      .notNull()
+      .references(() => clubs.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    title: text('title').notNull(),
+    startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
+    endsAt: timestamp('ends_at', { withTimezone: true }),
+    location: text('location'),
+    description: text('description'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      'calendar_events_type_valid',
+      sql`type in ('race', 'practice', 'team_bonding', 'volunteer', 'other')`,
+    ),
+    index('calendar_events_by_club').on(t.clubId, t.startsAt),
+  ],
+);
+
+/**
+ * A weekly routine workout. The feature that replaces the screenshotted Excel sheet.
+ *
+ * `workoutDate` is a real calendar DATE - the week view shows one real Monday-to-Sunday
+ * week, not a repeating template. Deliberately carries an activity type, a title and an
+ * optional description and **nothing else**: no sets, reps, distances or splits, and no
+ * completion tracking. That is an explicit "keep it very simple" scoping call, not an
+ * omission to be filled in later.
+ */
+export const routineWorkouts = pgTable(
+  'routine_workouts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    clubId: uuid('club_id')
+      .notNull()
+      .references(() => clubs.id, { onDelete: 'cascade' }),
+    workoutDate: date('workout_date').notNull(),
+    activityType: text('activity_type').notNull(),
+    title: text('title').notNull(),
+    description: text('description'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      'routine_workouts_activity_valid',
+      sql`activity_type in ('run', 'trail_run', 'bike', 'swim', 'strength',
+                            'hybrid_fitness', 'indoor_climb', 'bouldering', 'xc_ski', 'other')`,
+    ),
+    index('routine_workouts_by_club').on(t.clubId, t.workoutDate),
+  ],
+);
+
+/**
+ * A news post. The club's front page.
+ *
+ * A post must have **body text, a photo, or both** - the check constraint carries that, so
+ * an entirely empty post cannot exist even if a handler forgets.
+ *
+ * `mediaId` has no foreign key yet: `media_objects` arrives in Phase 3. The column exists
+ * now so the check constraint can express the invariant today rather than being retrofitted
+ * over historical rows.
+ */
+export const newsPosts = pgTable(
+  'news_posts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    clubId: uuid('club_id')
+      .notNull()
+      .references(() => clubs.id, { onDelete: 'cascade' }),
+    authorId: uuid('author_id').references(() => users.id, { onDelete: 'set null' }),
+    body: text('body'),
+    mediaId: uuid('media_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check('news_posts_not_empty', sql`body is not null or media_id is not null`),
+    index('news_posts_by_club').on(t.clubId, t.createdAt.desc()),
+  ],
+);
+
+/** One reaction per emoji per member per post. Same fixed emoji set as chat. */
+export const newsReactions = pgTable(
+  'news_reactions',
+  {
+    postId: uuid('post_id')
+      .notNull()
+      .references(() => newsPosts.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    emoji: text('emoji').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.postId, t.userId, t.emoji] })],
 );

@@ -7,6 +7,76 @@ Newest first.
 
 ---
 
+## 2026-07-29 - Phase 2 (part 1): the domain schema and the permission-matrix gate
+
+**The Phase 2 gate is met.** `TECH/16` gates this phase on the permission-matrix suite
+covering every cell of the three matrices in `PRD/02`, and it now does: 340 tests total, 148
+of them in the matrix file alone, with both directions asserted in every cell.
+
+Note the spec says "three matrices" while `PRD/02` has four table sections - Club and Club
+content are one matrix split across two tables. Coverage is Club (14 rows, from Phase 0),
+Club content (7), Race (14 rows across 5 actor columns), and Eboard (10 rows across 4). A
+completeness guard asserts the total cell count so the suite cannot quietly shrink when
+someone deletes a row or an actor column.
+
+### Two invariants moved from handler code into the database
+
+Both use the same trick, and the migration checklist already lists it as the house pattern
+for this shape: denormalise the parent's discriminator onto the child, then add a **composite
+foreign key** back to the parent so the copy cannot drift.
+
+- **A person is in at most one car group per race** (domain invariant 5). Needs `race_id` on
+  `car_group_members`, which a generated column cannot supply - Postgres generated columns may
+  only reference columns in their own row, and `race_id` lives on `car_groups`. So the value
+  is stored and the composite FK to `car_groups (id, race_id)` proves it consistent. Without
+  the FK the unique index would be guarding a lie: a handler could write a mismatched
+  `race_id` and slip a second group past it. Proved by attempting exactly that.
+- **Single-choice polls move a vote rather than adding one.** `allow_multiple` is
+  denormalised onto each vote with a composite FK to `polls (id, allow_multiple)`, making the
+  partial unique index meaningful. A vote cannot lie about its poll's setting to escape the
+  index - also proved by attempting it.
+
+46 constraint assertions now, up from 32.
+
+### A bug in the migration itself
+
+The first generated migration failed to apply: `ALTER TABLE ... ADD CONSTRAINT ... FOREIGN
+KEY` ran before the `CREATE UNIQUE INDEX` it referenced, because drizzle-kit emits every
+foreign key before every index. The fix was a real UNIQUE **constraint** rather than a unique
+index - a table constraint is emitted inline with `CREATE TABLE`, so it exists by the time the
+FK is added. Caught by applying the migration rather than by reading it.
+
+Also fixed: several invented UUID literals in the constraint proof contained `g`, `p` and `o`,
+which are not hex digits. Postgres rejected them outright, which is the good version of that
+mistake.
+
+### The rule the matrix exists to protect
+
+`isRaceMember` reads the roster set and nothing else. Mutating it to fall back on
+`isClubAdmin` - the exact v1 substitution that was wrong in five separate places -
+fails 7 cells, including the property test asserting that every access-gated race capability
+is denied to a manager off the roster while the same manager on the roster is allowed, and the
+test stating how Eboard deliberately differs from Race. That asymmetry is the whole design:
+for a race, authority and access are separate; for the Eboard they are the same thing.
+
+The converse is tested too, because it is the trap on the other side: a naive "require a
+roster row for everything" would cost a manager the management they legitimately hold.
+
+### Scope, honestly
+
+Delivered: the full Phase 2 schema (races with Meet Information, roster, join requests,
+personal pins, car groups, meetings, polls with options and votes, calendar events, routine
+workouts, news posts and reactions), `raceRoster` populated in the access context so every
+race predicate is live, the race/poll/meeting/content predicates, and the gate.
+
+**Not yet delivered: the command handlers and routes for those features.** The schema and the
+authorization exist; creating a race, managing car groups, voting in a poll, scheduling a
+meeting, and posting news are the next step. The scheduled closing-soon job also waits on the
+poll commands, and the membership cascade's race-roster branch is still the marked comment
+Phase 1 left.
+
+---
+
 ## 2026-07-29 - Phase 1 completion: membership commands and revocation
 
 Closes the gap left open earlier in the phase. 192 tests green, 32 constraint assertions.

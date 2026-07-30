@@ -58,16 +58,23 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
     SELECT 'eboard'::text AS kind, eboard_id AS id, NULL::text AS role
       FROM eboard_memberships
      WHERE user_id = ${userId}
+    UNION ALL
+    SELECT 'race'::text AS kind, race_id AS id, NULL::text AS role
+      FROM race_memberships
+     WHERE user_id = ${userId}
   `);
 
   const clubRole = new Map<string, ClubRole>();
   const eboardMember = new Set<string>();
+  const raceRoster = new Set<string>();
 
   for (const row of rows.rows) {
     if (row.kind === 'club' && row.role !== null) {
       clubRole.set(row.id, row.role as ClubRole);
     } else if (row.kind === 'eboard') {
       eboardMember.add(row.id);
+    } else if (row.kind === 'race') {
+      raceRoster.add(row.id);
     }
   }
 
@@ -75,7 +82,9 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
     userId,
     clubRole,
     eboardMember,
-    raceRoster: new Set(),
+    raceRoster,
+    // Phase 3.5 populates both. Empty means every DM predicate denies, which is the safe
+    // direction while no DM can exist.
     dmThreads: new Set(),
     blockedEither: new Set(),
   };

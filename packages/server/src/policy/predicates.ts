@@ -184,6 +184,179 @@ export const canLeaveClub = (ctx: AccessContext, clubId: string): boolean =>
 export const isEboardMember = (ctx: AccessContext, eboardId: string): boolean =>
   ctx.eboardMember.has(eboardId);
 
+// ---------------------------------------------------------------------------
+// Races: the authority-versus-access boundary
+// ---------------------------------------------------------------------------
+
+/** Just enough of a race to authorize against. */
+export type RaceRef = { readonly id: string; readonly clubId: string };
+
+/**
+ * On the roster. **The only proof of race access.**
+ *
+ * Reads `raceRoster` and nothing else. Nothing in this codebase may write
+ * `isClubAdmin(ctx, race.clubId)` where race ACCESS is meant - that substitution was wrong
+ * in five separate places in v1, and the two predicates are named differently precisely so
+ * the distinction cannot be collapsed by accident.
+ */
+export const isRaceMember = (ctx: AccessContext, race: RaceRef): boolean =>
+  ctx.raceRoster.has(race.id);
+
+/**
+ * A manager of the race: any admin of its club.
+ *
+ * **Management authority, not access.** A manager may approve and add roster members, edit
+ * Meet Information, manage car groups and delete the race - and may not read its chat, vote
+ * in its polls, or be assigned to a car group. Auto-joining every admin to every race was
+ * built in v1 and then reversed, because an admin auto-added to 30 races drowns in chat for
+ * races they are not running.
+ */
+export const isRaceManager = (ctx: AccessContext, race: RaceRef): boolean =>
+  isClubAdmin(ctx, race.clubId);
+
+/** Reading and posting in race chat requires a roster row. Managers included. */
+export const canPostInRace = isRaceMember;
+
+/** Pinning or announcing in race chat requires BOTH a roster row and club-admin status. */
+export const canPinInRace = (ctx: AccessContext, race: RaceRef): boolean =>
+  isRaceMember(ctx, race) && isClubAdmin(ctx, race.clubId);
+
+/** Approving, adding, removing, editing Meet Information, deleting the race. */
+export const canManageRace = isRaceManager;
+
+/**
+ * Meet Information is readable by **any club member**, including those with no race access.
+ *
+ * Deliberate: it is exactly the information someone needs in order to decide whether to ask
+ * to go. Hiding it would make the request-to-join decision uninformed.
+ */
+export const canReadMeetInformation = (ctx: AccessContext, race: RaceRef): boolean =>
+  isClubMember(ctx, race.clubId);
+
+/** Every club member can see that a race exists, whether or not they can enter it. */
+export const canSeeRace = canReadMeetInformation;
+
+/** Requesting to join. Any club member not already on the roster, managers included. */
+export const canRequestRaceAccess = (ctx: AccessContext, race: RaceRef): boolean =>
+  isClubMember(ctx, race.clubId) && !isRaceMember(ctx, race);
+
+/**
+ * Being assigned to a car group requires real race access.
+ *
+ * So an admin who is not on the roster cannot be put in a car, **even though they manage
+ * the groups**. That asymmetry is the clearest expression of authority not being access.
+ */
+export const canBeInCarGroup = isRaceMember;
+
+/** Viewing the groups. Any race member, read-only unless they also manage. */
+export const canViewCarGroups = isRaceMember;
+
+/** Creating, deleting, assigning, and setting the Incharge. Managers only. */
+export const canManageCarGroups = isRaceManager;
+
+/**
+ * Pinning a race is personal and is **not** admin-gated.
+ *
+ * Any member can pin any race they can see. Club-wide admin pins were built in v1 and then
+ * corrected.
+ */
+export const canPinRace = canSeeRace;
+
+// ---------------------------------------------------------------------------
+// Polls
+// ---------------------------------------------------------------------------
+
+export type PollRef = {
+  readonly id: string;
+  readonly clubId: string;
+  readonly scope: 'club' | 'race' | 'eboard';
+  readonly scopeId: string;
+  readonly creatorId: string;
+  readonly isPrivate: boolean;
+};
+
+/**
+ * Seeing and voting in a poll.
+ *
+ * Scope determines the audience, and the race branch is the one that matters: **only race
+ * roster members**, never roster union club admins. A race poll must be invisible to an
+ * admin without a roster row, including by direct URL.
+ */
+export const canAccessPoll = (ctx: AccessContext, poll: PollRef): boolean => {
+  switch (poll.scope) {
+    case 'club':
+      return isClubMember(ctx, poll.clubId);
+    case 'race':
+      return ctx.raceRoster.has(poll.scopeId);
+    case 'eboard':
+      return ctx.eboardMember.has(poll.scopeId);
+  }
+};
+
+/**
+ * Creating a poll.
+ *
+ * Club: any club admin. Race: **both** a club admin AND on the roster. Eboard: any member
+ * of the space, with no further role distinction inside.
+ */
+export const canCreatePoll = (
+  ctx: AccessContext,
+  scope: { scope: 'club' | 'race' | 'eboard'; clubId: string; scopeId: string },
+): boolean => {
+  switch (scope.scope) {
+    case 'club':
+      return isClubAdmin(ctx, scope.clubId);
+    case 'race':
+      return ctx.raceRoster.has(scope.scopeId) && isClubAdmin(ctx, scope.clubId);
+    case 'eboard':
+      return ctx.eboardMember.has(scope.scopeId);
+  }
+};
+
+/**
+ * Closing, reopening or deleting a poll: **the creator only**.
+ *
+ * In every scope, including a club poll created by another admin. An admin who did not
+ * create it cannot close it, which is why this reads `creatorId` and never a role.
+ */
+export const canManagePoll = (ctx: AccessContext, poll: PollRef): boolean =>
+  poll.creatorId === ctx.userId;
+
+/** Voting requires access and an open poll. Closed-ness is the caller's read-time check. */
+export const canVoteInPoll = canAccessPoll;
+
+/**
+ * Seeing WHO voted for what.
+ *
+ * Counts are always public, on every poll including private ones. Identity is gated: on a
+ * public poll everyone eligible can see it, on a private poll **only the creator** can. A
+ * voter always sees their own vote either way, which is the caller's concern rather than
+ * this predicate's.
+ */
+export const canSeePollVoters = (ctx: AccessContext, poll: PollRef): boolean => {
+  if (!canAccessPoll(ctx, poll)) return false;
+  return !poll.isPrivate || poll.creatorId === ctx.userId;
+};
+
+// ---------------------------------------------------------------------------
+// Meetings, and club content
+// ---------------------------------------------------------------------------
+
+/** Any Eboard member creates a meeting. No further role distinction inside the space. */
+export const canCreateMeeting = isEboardMember;
+
+/** Only the meeting's creator edits or deletes it. Everyone else is view-only. */
+export const canManageMeeting = (
+  ctx: AccessContext,
+  meeting: { creatorId: string },
+): boolean => meeting.creatorId === ctx.userId;
+
+/** Calendar events, routines and news: any club admin, any item. Not only its author. */
+export const canManageClubContent = isClubAdmin;
+
+/** Every club member reads club content and reacts to news. */
+export const canReadClubContent = isClubMember;
+
 /**
  * Only club admins can even see that the Eboard space exists. Ordinary members have
  * no visibility of it, its chat, its meetings or its polls.

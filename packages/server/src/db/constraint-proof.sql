@@ -337,4 +337,146 @@ SELECT pg_temp.assert_rejected(
     VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             '00000000-0000-4000-8000-000000000001', 'maybe')$$);
 
+-- ---------------------------------------------------------------------------
+-- Phase 2: the two invariants the DATABASE enforces via composite foreign keys
+-- ---------------------------------------------------------------------------
+
+INSERT INTO races (id, club_id, name, race_date) VALUES
+  ('11110000-1111-4111-8111-111111111111',
+   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Spring Half', '2026-04-12'),
+  ('22220000-2222-4222-8222-222222222222',
+   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Autumn 10k', '2026-10-04');
+
+INSERT INTO car_groups (id, race_id, number) VALUES
+  ('ca110000-1111-4111-8111-111111111111', '11110000-1111-4111-8111-111111111111', 1),
+  ('ca120000-1111-4111-8111-111111111111', '11110000-1111-4111-8111-111111111111', 2),
+  ('ca210000-2222-4222-8222-222222222222', '22220000-2222-4222-8222-222222222222', 1);
+
+INSERT INTO car_group_members (car_group_id, race_id, user_id) VALUES
+  ('ca110000-1111-4111-8111-111111111111', '11110000-1111-4111-8111-111111111111',
+   '11111111-1111-4111-8111-111111111111');
+
+-- Domain invariant 5.
+SELECT pg_temp.assert_rejected(
+  'invariant 5 - the same person in two car groups for one race',
+  $$INSERT INTO car_group_members (car_group_id, race_id, user_id)
+    VALUES ('ca120000-1111-4111-8111-111111111111',
+            '11110000-1111-4111-8111-111111111111',
+            '11111111-1111-4111-8111-111111111111')$$);
+
+-- One group per RACE, not one group ever. The same person travelling to a different race
+-- is a different assignment.
+SELECT pg_temp.assert_accepted(
+  'invariant 5 - a group in a DIFFERENT race is allowed',
+  $$INSERT INTO car_group_members (car_group_id, race_id, user_id)
+    VALUES ('ca210000-2222-4222-8222-222222222222',
+            '22220000-2222-4222-8222-222222222222',
+            '11111111-1111-4111-8111-111111111111')$$);
+
+-- THE POINT OF THE COMPOSITE FK. The denormalised race_id cannot be made to disagree with
+-- the group's actual race. Without this, the unique index above would be guarding a lie:
+-- a handler could write a mismatched race_id and slip a second group past it.
+SELECT pg_temp.assert_rejected(
+  'composite FK - a car_group_member whose race_id does not match its group',
+  $$INSERT INTO car_group_members (car_group_id, race_id, user_id)
+    VALUES ('ca110000-1111-4111-8111-111111111111',
+            '22220000-2222-4222-8222-222222222222',
+            '22222222-2222-4222-8222-222222222222')$$);
+
+INSERT INTO polls (id, club_id, scope, scope_id, creator_id, question, allow_multiple) VALUES
+  ('fa110000-1111-4111-8111-111111111111',
+   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'club',
+   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+   '11111111-1111-4111-8111-111111111111', 'Carpool or bus?', false),
+  ('fa220000-2222-4222-8222-222222222222',
+   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'club',
+   '11110000-1111-4111-8111-111111111111',
+   '11111111-1111-4111-8111-111111111111', 'Which kit colours?', true);
+
+INSERT INTO poll_options (id, poll_id, label, position) VALUES
+  ('fb110000-1111-4111-8111-111111111111', 'fa110000-1111-4111-8111-111111111111', 'Carpool', 1),
+  ('fb120000-1111-4111-8111-111111111111', 'fa110000-1111-4111-8111-111111111111', 'Bus', 2),
+  ('fb210000-2222-4222-8222-222222222222', 'fa220000-2222-4222-8222-222222222222', 'Navy', 1),
+  ('fb220000-2222-4222-8222-222222222222', 'fa220000-2222-4222-8222-222222222222', 'Orange', 2);
+
+INSERT INTO poll_votes (poll_id, option_id, user_id, allow_multiple) VALUES
+  ('fa110000-1111-4111-8111-111111111111', 'fb110000-1111-4111-8111-111111111111',
+   '11111111-1111-4111-8111-111111111111', false);
+
+-- "Tapping a different option MOVES the vote rather than adding a second" is guaranteed by
+-- the database on a single-choice poll, not merely implemented in the handler.
+SELECT pg_temp.assert_rejected(
+  'single-choice poll - a second vote by the same member',
+  $$INSERT INTO poll_votes (poll_id, option_id, user_id, allow_multiple)
+    VALUES ('fa110000-1111-4111-8111-111111111111',
+            'fb120000-1111-4111-8111-111111111111',
+            '11111111-1111-4111-8111-111111111111', false)$$);
+
+-- A multi-select poll must still allow the second vote, which is why the index is partial.
+SELECT pg_temp.assert_accepted(
+  'multi-select poll - a second vote is allowed',
+  $$INSERT INTO poll_votes (poll_id, option_id, user_id, allow_multiple)
+    VALUES ('fa220000-2222-4222-8222-222222222222',
+            'fb210000-2222-4222-8222-222222222222',
+            '11111111-1111-4111-8111-111111111111', true),
+           ('fa220000-2222-4222-8222-222222222222',
+            'fb220000-2222-4222-8222-222222222222',
+            '11111111-1111-4111-8111-111111111111', true)$$);
+
+-- The composite FK again: a vote cannot lie about its poll's multi-select setting to escape
+-- the single-choice index.
+SELECT pg_temp.assert_rejected(
+  'composite FK - a vote claiming allow_multiple its poll does not have',
+  $$INSERT INTO poll_votes (poll_id, option_id, user_id, allow_multiple)
+    VALUES ('fa110000-1111-4111-8111-111111111111',
+            'fb120000-1111-4111-8111-111111111111',
+            '22222222-2222-4222-8222-222222222222', true)$$);
+
+SELECT pg_temp.assert_rejected(
+  'poll options - two options at the same position',
+  $$INSERT INTO poll_options (poll_id, label, position)
+    VALUES ('fa110000-1111-4111-8111-111111111111', 'Train', 1)$$);
+
+SELECT pg_temp.assert_rejected(
+  'polls - an invented scope',
+  $$INSERT INTO polls (club_id, scope, scope_id, creator_id, question)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'tournament',
+            'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            '11111111-1111-4111-8111-111111111111', 'nope')$$);
+
+-- A news post must have a body, a photo, or both. An entirely empty post cannot exist even
+-- if a handler forgets to check.
+SELECT pg_temp.assert_rejected(
+  'news - an entirely empty post',
+  $$INSERT INTO news_posts (club_id, author_id)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            '11111111-1111-4111-8111-111111111111')$$);
+
+SELECT pg_temp.assert_accepted(
+  'news - body only is a valid post',
+  $$INSERT INTO news_posts (club_id, author_id, body)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            '11111111-1111-4111-8111-111111111111', 'We won.')$$);
+
+SELECT pg_temp.assert_rejected(
+  'routines - an invented activity type',
+  $$INSERT INTO routine_workouts (club_id, workout_date, activity_type, title)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', 'quidditch', 'nope')$$);
+
+SELECT pg_temp.assert_rejected(
+  'calendar - an invented event type',
+  $$INSERT INTO calendar_events (club_id, type, title, starts_at)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'wedding', 'nope', now())$$);
+
+SELECT pg_temp.assert_rejected(
+  'car groups - two groups numbered the same in one race',
+  $$INSERT INTO car_groups (race_id, number)
+    VALUES ('11110000-1111-4111-8111-111111111111', 1)$$);
+
+SELECT pg_temp.assert_rejected(
+  'race pins - pinning the same race twice for one member',
+  $$INSERT INTO race_pins (race_id, user_id) VALUES
+    ('11110000-1111-4111-8111-111111111111', '11111111-1111-4111-8111-111111111111'),
+    ('11110000-1111-4111-8111-111111111111', '11111111-1111-4111-8111-111111111111')$$);
+
 ROLLBACK;

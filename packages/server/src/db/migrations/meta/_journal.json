@@ -36,6 +36,13 @@
       "when": 1785381640365,
       "tag": "0004_club_join_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785382319190,
+      "tag": "0005_phase2_domain_breadth",
+      "breakpoints": true
     }
   ]
 }
