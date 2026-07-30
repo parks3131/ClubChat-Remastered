@@ -501,3 +501,60 @@ describe('the session boundary', () => {
     }
   });
 });
+
+describe('the Eboard space has its own identity', () => {
+  /*
+   * The authority boundary this whole module exists for, restated on a write nobody thinks of as
+   * sensitive: renaming. A club admin who is NOT in the space can read it - that read is what
+   * draws their landing screen - and must not be able to rename it or change its face from
+   * outside. Authority over the club is not authority inside the space (rule 5), and the rename
+   * route is the easiest place to forget that, because it looks like club settings.
+   */
+  it('lets a member change the picture, and refuses an admin standing outside', async () => {
+    const owner = await signUp('SpaceOwner');
+    const outsideAdmin = await signUp('SpaceOutsideAdmin');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, outsideAdmin, 'admin');
+    const eboardId = await eboardIdOf(clubId);
+    // Admin-tier auto-joins, so the only way to be an admin outside the space is to leave it.
+    await as(outsideAdmin, 'DELETE', `/eboards/${eboardId}/members/${outsideAdmin.userId}`);
+
+    // They can still read it - that read is the landing screen - which is what makes the
+    // refusal below a real boundary rather than a 404 for something invisible.
+    expect((await as(outsideAdmin, 'GET', `/eboards/${eboardId}`)).status).toBe(200);
+
+    const mediaId = crypto.randomUUID();
+    expect(
+      (await as(outsideAdmin, 'PATCH', `/eboards/${eboardId}`, { image: mediaId })).status,
+      'an admin outside the space changed its face',
+    ).toBe(404);
+
+    expect((await as(owner, 'PATCH', `/eboards/${eboardId}`, { image: mediaId })).status).toBe(200);
+    expect((await as(owner, 'GET', `/eboards/${eboardId}`)).body.eboard.image).toBe(mediaId);
+  });
+
+  it('tells an ordinary member nothing, not even that the refusal was about permission', async () => {
+    const owner = await signUp('SpaceHiddenOwner');
+    const member = await signUp('SpaceHiddenMember');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, member);
+    const eboardId = await eboardIdOf(clubId);
+
+    // Rule 4: an ordinary member has no visibility that the space exists at all, so the
+    // refusal must be indistinguishable from "no such thing".
+    expect((await as(member, 'PATCH', `/eboards/${eboardId}`, { name: 'Mine' })).status).toBe(404);
+  });
+
+  it('changes the picture without renaming the space back to its default', async () => {
+    const owner = await signUp('SpaceRenameOwner');
+    const { clubId } = await createClubAs(owner);
+    const eboardId = await eboardIdOf(clubId);
+
+    await as(owner, 'PATCH', `/eboards/${eboardId}`, { name: 'Captains' });
+    await as(owner, 'PATCH', `/eboards/${eboardId}`, { image: crypto.randomUUID() });
+
+    const after = (await as(owner, 'GET', `/eboards/${eboardId}`)).body.eboard;
+    expect(after.name, 'an image-only patch reverted the name').toBe('Captains');
+    expect(after.image).toBeTruthy();
+  });
+});

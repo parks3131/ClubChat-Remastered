@@ -16,7 +16,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
-import { useDeclareClub } from '../../../../../src/current-club.tsx';
+import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { clubApi, contentApi } from '../../../../../src/api.ts';
 import type { ActivityType } from '../../../../../src/api-types.ts';
 import { color, space, type } from '../../../../../src/theme.ts';

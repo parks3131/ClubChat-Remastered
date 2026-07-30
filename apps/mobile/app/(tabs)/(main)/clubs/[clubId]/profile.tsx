@@ -16,7 +16,7 @@ import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, Text, View
 import * as Clipboard from 'expo-clipboard';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useDeclareClub } from '../../../../../src/current-club.tsx';
+import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import * as Linking from 'expo-linking';
 import { clubApi } from '../../../../../src/api.ts';
 import { color, radius, space, type } from '../../../../../src/theme.ts';

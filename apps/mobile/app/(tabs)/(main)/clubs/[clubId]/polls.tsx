@@ -7,7 +7,7 @@
  */
 
 import { useLocalSearchParams } from 'expo-router';
-import { useDeclareClub } from '../../../../../src/current-club.tsx';
+import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { clubApi } from '../../../../../src/api.ts';
 import { PollsList } from '../../../../../src/screens/polls.tsx';
 import { DataScreen } from '../../../../../src/ui.tsx';

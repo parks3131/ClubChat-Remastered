@@ -84,6 +84,8 @@ export type RaceListItem = {
   id: string;
   name: string;
   raceDate: string;
+  /** The race's picture, as a media id. Null falls back to its initial. */
+  image: string | null;
   pinned: boolean;
   /** A roster row. The ONLY proof of race access - never inferred from isManager. */
   hasAccess: boolean;
@@ -99,6 +101,7 @@ export type RaceDetail = {
   clubId: string;
   name: string;
   raceDate: string;
+  image: string | null;
   meetDescription: string | null;
   meetLocationUrl: string | null;
   meetHotelUrl: string | null;
@@ -267,6 +270,7 @@ export type EboardDetail = {
   clubId: string;
   name: string;
   description: string | null;
+  image: string | null;
   memberCount: number;
   channelId: string | null;
   viewer: {

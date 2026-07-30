@@ -18,7 +18,11 @@
 import { sql, type SQL } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { channelMutes, memberBlocks } from '../db/schema.ts';
-import { channelDisplayName, channelNameJoins } from './channel-access.ts';
+import {
+  channelDisplayImage,
+  channelDisplayName,
+  channelNameJoins,
+} from './channel-access.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
   canAnnounceInChannel,
@@ -337,6 +341,14 @@ export type ChannelMeta = {
   scope: ChannelRef['scope'];
   name: string;
   /**
+   * The picture that goes with that name, as a media id.
+   *
+   * The SCOPE's own - a race's, the Eboard space's, the peer's in a DM - and never the club's
+   * as a stand-in. A race chat wearing its club's face makes "which conversation is this"
+   * unanswerable from the header, which is the whole job the header does.
+   */
+  image: string | null;
+  /**
    * The scope this channel belongs to, and the club that owns it.
    *
    * > **Returned so the chat screen's header quick-nav can exist at all.** PRD/15 hangs Members,
@@ -406,6 +418,7 @@ export async function readChannelMeta(
     club_id: string | null;
     scope_id: string;
     name: string;
+    image: string | null;
     muted: boolean;
     peer_id: string | null;
     peer_name: string | null;
@@ -418,6 +431,8 @@ export async function readChannelMeta(
            -- The shared fragments, not a fifth hand-written copy. Writing one here is how the
            -- COALESCE ordering bug got into four places to begin with.
            ${channelDisplayName()} AS name,
+           -- Paired with the name above, and ordered identically. See the fragment.
+           ${channelDisplayImage()} AS image,
            (mute.user_id IS NOT NULL) AS muted,
            peer.id::text AS peer_id,
            peer.full_name AS peer_name,
@@ -458,6 +473,7 @@ export async function readChannelMeta(
     channelId: row.id,
     scope: channel.scope,
     name: row.name,
+    image: row.image,
     scopeId: channel.scopeId,
     clubId: channel.clubId,
     canPost,

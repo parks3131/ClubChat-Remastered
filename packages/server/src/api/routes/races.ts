@@ -31,6 +31,7 @@ import {
   setCarGroupIncharge,
   setRacePin,
   updateMeetInformation,
+  updateRace,
 } from '../../domain/races.ts';
 import { refusalStatus, type AppDeps } from '../plumbing.ts';
 
@@ -136,6 +137,31 @@ export function registerRaceRoutes(app: FastifyInstance, deps: AppDeps): void {
     meetHotelUrl: z.string().max(2_000).nullish(),
     meetPhotosUrl: z.string().max(2_000).nullish(),
     meetResultsUrl: z.string().max(2_000).nullish(),
+  });
+
+  /**
+   * The race's own identity: name, date, picture.
+   *
+   * A separate route from `/meet-information` one handler below, because the two obey opposite
+   * rules about an absent key - here it means "leave it alone", there it means "this field is
+   * now empty". Folding them into one endpoint would make the avatar upload, which sends only
+   * an image, indistinguishable from a form that cleared the name.
+   */
+  const EditRaceBody = z.object({
+    // `.trim()` BEFORE `.min(1)`, so "   " is a 400 at the edge rather than a 409 from the
+    // domain. The domain still refuses a blank name - this only makes the refusal say the
+    // right thing.
+    name: z.string().trim().min(1).max(120).optional(),
+    raceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    image: z.string().uuid().nullish(),
+  });
+
+  app.patch<{ Params: { id: string } }>('/races/:id', async (request, reply) => {
+    const body = EditRaceBody.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+    const result = await updateRace(deps.db, request.access!, request.params.id, body.data);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
   });
 
   app.patch<{ Params: { id: string } }>('/races/:id/meet-information', async (request, reply) => {

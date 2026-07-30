@@ -20,6 +20,7 @@ import {
   readEboardRoster,
   removeEboardMember,
   requestEboardAccess,
+  updateEboard,
 } from '../../domain/eboard.ts';
 import { markRosterSeen } from '../../domain/inbox.ts';
 import { searchMemberCandidates } from '../../domain/member-candidates.ts';
@@ -33,6 +34,26 @@ export function registerEboardRoutes(app: FastifyInstance, deps: AppDeps): void 
    */
   app.get<{ Params: { id: string } }>('/eboards/:id', async (request, reply) => {
     const result = await readEboard(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  /**
+   * The space's identity: name, description, picture.
+   *
+   * Members only, which the domain enforces - a club admin outside the space reads it (that is
+   * how they get the landing screen) and cannot rename it.
+   */
+  const EditEboardBody = z.object({
+    name: z.string().trim().min(1).max(120).optional(),
+    description: z.string().max(2_000).nullish(),
+    image: z.string().uuid().nullish(),
+  });
+
+  app.patch<{ Params: { id: string } }>('/eboards/:id', async (request, reply) => {
+    const body = EditEboardBody.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+    const result = await updateEboard(deps.db, request.access!, request.params.id, body.data);
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return result;
   });

@@ -995,3 +995,89 @@ describe('notification idempotency keys are injective', () => {
     expect(NOTIFICATION_SLOTS).toBeGreaterThanOrEqual(3);
   });
 });
+
+describe('a chat header wears its own face, never the club\'s', () => {
+  /*
+   * `channelDisplayName` carries a load-bearing COALESCE order - most specific first - because a
+   * race channel and an Eboard channel BOTH carry a `club_id`, so putting the club first titles
+   * every one of them with the club's name. That bug shipped once and the fragment exists to stop
+   * it recurring.
+   *
+   * `channelDisplayImage` is the same COALESCE one column over, and inherits the same trap
+   * silently: get the order wrong and every race chat shows the club's name correctly beside the
+   * club's picture, which looks deliberate. So the picture is pinned the same way the name is,
+   * with three DIFFERENT images so "showed its own" and "showed the club's" cannot both pass.
+   */
+  it('gives a race chat the race picture and an Eboard chat the space picture', async () => {
+    const ownerId = await makeUser('FaceOwner');
+    const club = await createClub(h.db, { name: 'Faces', sport: 'running', creatorId: ownerId });
+
+    const { createRace, updateRace } = await import('../domain/races.ts');
+    const { updateEboard } = await import('../domain/eboard.ts');
+
+    const race = await createRace(h.db, await ctxFor(ownerId), {
+      clubId: club.clubId,
+      name: 'Own Face Invitational',
+      raceDate: '2026-09-15',
+    });
+    if (!race.ok) throw new Error('race fixture failed');
+
+    const eboard = await h.db.execute<{ id: string }>(
+      sql`SELECT id::text AS id FROM eboard_channels WHERE club_id = ${club.clubId}`,
+    );
+    const eboardId = eboard.rows[0]!.id;
+
+    const CLUB_IMAGE = crypto.randomUUID();
+    const RACE_IMAGE = crypto.randomUUID();
+    const EBOARD_IMAGE = crypto.randomUUID();
+    await h.db.execute(sql`UPDATE clubs SET image = ${CLUB_IMAGE} WHERE id = ${club.clubId}`);
+    await updateRace(h.db, await ctxFor(ownerId), race.raceId, { image: RACE_IMAGE });
+    await updateEboard(h.db, await ctxFor(ownerId), eboardId, { image: EBOARD_IMAGE });
+
+    const channelOf = async (scope: string, scopeId: string) => {
+      const rows = await h.db.execute<{ id: string }>(
+        sql`SELECT id::text AS id FROM channels WHERE scope = ${scope} AND scope_id = ${scopeId}`,
+      );
+      return rows.rows[0]!.id;
+    };
+
+    const ctx = await ctxFor(ownerId);
+    const clubMeta = await readChannelMeta(h.db, ctx, club.mainChannelId);
+    const raceMeta = await readChannelMeta(h.db, ctx, await channelOf('race', race.raceId));
+    const eboardMeta = await readChannelMeta(h.db, ctx, await channelOf('eboard', eboardId));
+    if (!clubMeta.ok || !raceMeta.ok || !eboardMeta.ok) throw new Error('meta read refused');
+
+    expect(clubMeta.image).toBe(CLUB_IMAGE);
+    expect(raceMeta.image, 'race chat wore the club picture').toBe(RACE_IMAGE);
+    expect(eboardMeta.image, 'Eboard chat wore the club picture').toBe(EBOARD_IMAGE);
+
+    // The name it is paired with, asserted here too - the two COALESCEs have to move together,
+    // and a test that checks only one lets the other drift.
+    expect(raceMeta.name).toBe('Own Face Invitational');
+    expect(eboardMeta.name).toBe('Eboard & Council');
+  });
+
+  it('falls back to no picture rather than the club\'s when a race has none', async () => {
+    const ownerId = await makeUser('NoFaceOwner');
+    const club = await createClub(h.db, { name: 'Fallback', sport: 'running', creatorId: ownerId });
+    await h.db.execute(sql`UPDATE clubs SET image = ${crypto.randomUUID()} WHERE id = ${club.clubId}`);
+
+    const { createRace } = await import('../domain/races.ts');
+    const race = await createRace(h.db, await ctxFor(ownerId), {
+      clubId: club.clubId,
+      name: 'Pictureless',
+      raceDate: '2026-09-15',
+    });
+    if (!race.ok) throw new Error('race fixture failed');
+
+    const rows = await h.db.execute<{ id: string }>(
+      sql`SELECT id::text AS id FROM channels WHERE scope = 'race' AND scope_id = ${race.raceId}`,
+    );
+    const meta = await readChannelMeta(h.db, await ctxFor(ownerId), rows.rows[0]!.id);
+    if (!meta.ok) throw new Error('meta read refused');
+
+    // Null, so the client draws the race's INITIAL. Borrowing the club's picture here is the
+    // failure that looks most like success: a plausible face over the right name.
+    expect(meta.image, 'a race with no picture borrowed the club\'s').toBeNull();
+  });
+});

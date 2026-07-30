@@ -25,6 +25,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
+import { RemoteImage } from './media-bubble.tsx';
 import { color, radius, space, type } from './theme.ts';
 import type { Loaded } from './use-load.ts';
 
@@ -304,15 +305,50 @@ export function Badge({
   );
 }
 
-/** A letter-initial placeholder when there is no avatar, used consistently everywhere. */
-export function Avatar({ name, size = 40 }: { name: string; size?: number }) {
+/**
+ * Somebody's - or something's - face: their picture, or their initial when there is none.
+ *
+ * **The fallback is not an error state.** Most people and most spaces have no picture, so the
+ * lettered circle is the ordinary case and the photograph is the exception, which is why they
+ * live in one component rather than in a conditional at every call site. Four screens had already
+ * written that conditional by hand before this took the `image` prop.
+ *
+ * `shape` is the product's one rule about roundness: **circles are people, rounded squares are
+ * things.** A club, a race and Eboard & Council are things.
+ */
+export function Avatar({
+  name,
+  size = 40,
+  image = null,
+  shape = 'circle',
+}: {
+  name: string;
+  size?: number;
+  /** A media id. Null - the common case - draws the initial instead. */
+  image?: string | null;
+  shape?: 'circle' | 'square';
+}) {
+  const borderRadius = shape === 'circle' ? size / 2 : Math.round(size / 4);
+
+  if (image !== null) {
+    return (
+      <RemoteImage
+        mediaId={image}
+        variant="thumb"
+        style={{ width: size, height: size, borderRadius }}
+        resizeMode="cover"
+      />
+    );
+  }
+
   const initial = name.trim().slice(0, 1).toUpperCase() || '?';
   return (
     <View
       style={[
         styles.avatar,
-        // An explicit half-width radius, per the design system, rather than a radius token.
-        { width: size, height: size, borderRadius: size / 2 },
+        // An explicit radius computed from the size, per the design system, rather than a
+        // radius token - a token would not scale with a 28px stack avatar and a 140px profile.
+        { width: size, height: size, borderRadius },
       ]}
       accessibilityElementsHidden
       importantForAccessibility="no"

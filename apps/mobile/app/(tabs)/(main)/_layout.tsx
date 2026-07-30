@@ -28,7 +28,7 @@
  */
 
 import { Stack } from 'expo-router';
-import { BackTo, BackToClub, ClubHeaderTitle } from '../../../src/nav.tsx';
+import { BackTo, BackToClub, SpaceHeaderTitle } from '../../../src/nav.tsx';
 import { color, type } from '../../../src/theme.ts';
 
 /**
@@ -59,26 +59,43 @@ function parented(
 }
 
 /**
- * The same, for a screen inside a club.
+ * The same, for a screen that wears its SPACE's identity instead of its own name.
  *
- * v1 gives every club screen the club's own avatar and name as its title rather than the screen's,
- * with a bare arrow as the control - so the header says which club you are in from any depth, and
- * a worded back label would compete with it. The screen's own name is carried by the body.
+ * v1 gives every screen inside a club, a race or Eboard & Council that space's own avatar and
+ * name as its title, with a bare arrow as the control - so the header says where you are from any
+ * depth, and a worded back label would compete with it. The screen's own name is carried by the
+ * body.
+ *
+ * > **`idOf` is what keeps the header honest, and it must come from the ROUTE.** The title reads
+ * > the name and picture from context, which the incoming screen sets in a focus effect - i.e.
+ * > after the first paint. Without the route saying which space this screen is for, walking from
+ * > a club into one of its races drew the club's name for a frame and then swapped it. See
+ * > `SpaceHeaderTitle`.
  */
-function inClub(
-  title: string,
-  parent: (params: Record<string, string>) => { href: string; label: string },
+function inSpace(
+  kind: 'club' | 'race' | 'eboard',
+  idOf: (params: Record<string, string>) => string | undefined,
 ) {
-  return ({ route }: { route: { params?: object } }) => {
-    const params = (route.params ?? {}) as Record<string, string>;
-    const { href, label } = parent(params);
-    return {
-      title,
-      headerTitle: () => <ClubHeaderTitle fallback={title} />,
-      headerLeft: () => <BackTo href={href} label={label} variant="icon" />,
+  return (
+    title: string,
+    parent: (params: Record<string, string>) => { href: string; label: string },
+  ) =>
+    ({ route }: { route: { params?: object } }) => {
+      const params = (route.params ?? {}) as Record<string, string>;
+      const { href, label } = parent(params);
+      return {
+        title,
+        headerTitle: () => (
+          <SpaceHeaderTitle expect={{ kind, id: idOf(params) }} fallback={title} />
+        ),
+        headerLeft: () => <BackTo href={href} label={label} variant="icon" />,
+      };
     };
-  };
 }
+
+const inClub = inSpace('club', (p) => p['clubId']);
+const inRace = inSpace('race', (p) => p['raceId']);
+const inEboard = inSpace('eboard', (p) => p['eboardId']);
 
 export default function MainStackLayout() {
   return (
@@ -125,10 +142,15 @@ export default function MainStackLayout() {
       */}
       <Stack.Screen
         name="clubs/[clubId]/index"
-        options={{
-          title: 'Club',
-          headerTitle: () => <ClubHeaderTitle fallback="Club" />,
-          headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
+        options={({ route }) => {
+          const params = (route.params ?? {}) as Record<string, string>;
+          return {
+            title: 'Club',
+            headerTitle: () => (
+              <SpaceHeaderTitle expect={{ kind: 'club', id: params['clubId'] }} fallback="Club" />
+            ),
+            headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
+          };
         }}
       />
       <Stack.Screen
@@ -203,10 +225,18 @@ export default function MainStackLayout() {
       */}
       <Stack.Screen
         name="races/[raceId]/index"
-        options={{
-          title: 'Race',
-          headerTitle: () => <ClubHeaderTitle fallback="Race" />,
-          headerLeft: () => <BackToClub />,
+        options={({ route }) => {
+          const params = (route.params ?? {}) as Record<string, string>;
+          return {
+            title: 'Race',
+            // The RACE's identity, not its club's. A race is a mini-club with its own name,
+            // picture and profile, and wearing its parent's face here would make the header
+            // unable to answer the only question it is asked.
+            headerTitle: () => (
+              <SpaceHeaderTitle expect={{ kind: 'race', id: params['raceId'] }} fallback="Race" />
+            ),
+            headerLeft: () => <BackToClub />,
+          };
         }}
       />
       <Stack.Screen
@@ -226,16 +256,40 @@ export default function MainStackLayout() {
       />
       <Stack.Screen
         name="races/[raceId]/polls"
-        options={inClub('Polls', (p) => ({ href: `/races/${p.raceId}`, label: 'Race' }))}
+        options={inRace('Polls', (p) => ({ href: `/races/${p.raceId}`, label: 'Race' }))}
+      />
+      {/*
+        The race profile and its edit form name THEMSELVES rather than the race, for the same
+        reason the club's pair do: the race's name is already the subject of the screen below the
+        header, and repeating it in the bar would be the same word twice.
+      */}
+      <Stack.Screen
+        name="races/[raceId]/profile"
+        options={parented('Race Profile', (p) => ({ href: `/races/${p.raceId}`, label: 'Race' }))}
+      />
+      <Stack.Screen
+        name="races/[raceId]/edit"
+        options={parented('Edit race', (p) => ({
+          href: `/races/${p.raceId}/profile`,
+          label: 'Race profile',
+        }))}
       />
 
       {/* The Eboard space. */}
       <Stack.Screen
         name="eboard/[eboardId]/index"
-        options={{
-          title: 'Eboard & Council',
-          headerTitle: () => <ClubHeaderTitle fallback="Eboard & Council" />,
-          headerLeft: () => <BackToClub />,
+        options={({ route }) => {
+          const params = (route.params ?? {}) as Record<string, string>;
+          return {
+            title: 'Eboard & Council',
+            headerTitle: () => (
+              <SpaceHeaderTitle
+                expect={{ kind: 'eboard', id: params['eboardId'] }}
+                fallback="Eboard & Council"
+              />
+            ),
+            headerLeft: () => <BackToClub />,
+          };
         }}
       />
       <Stack.Screen
@@ -248,7 +302,21 @@ export default function MainStackLayout() {
       />
       <Stack.Screen
         name="eboard/[eboardId]/polls"
-        options={inClub('Polls', (p) => ({ href: `/eboard/${p.eboardId}`, label: 'Eboard' }))}
+        options={inEboard('Polls', (p) => ({ href: `/eboard/${p.eboardId}`, label: 'Eboard' }))}
+      />
+      <Stack.Screen
+        name="eboard/[eboardId]/profile"
+        options={parented('Eboard Profile', (p) => ({
+          href: `/eboard/${p.eboardId}`,
+          label: 'Eboard',
+        }))}
+      />
+      <Stack.Screen
+        name="eboard/[eboardId]/edit"
+        options={parented('Edit Eboard & Council', (p) => ({
+          href: `/eboard/${p.eboardId}/profile`,
+          label: 'Eboard profile',
+        }))}
       />
 
       {/*

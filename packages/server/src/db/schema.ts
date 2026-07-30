@@ -217,6 +217,14 @@ export const eboardChannels = pgTable('eboard_channels', {
     .references(() => clubs.id, { onDelete: 'cascade' }),
   name: text('name').notNull().default('Eboard & Council'),
   description: text('description'),
+  /**
+   * The space's picture, as a media id. Same identity media as a club's or a person's.
+   *
+   * A space nested inside a club still gets its own face rather than borrowing the club's,
+   * because the header of every screen inside it wears this - and an Eboard that looked
+   * identical to its club would make "which conversation am I in" unanswerable from the bar.
+   */
+  image: text('image'),
 });
 
 export const eboardMemberships = pgTable(
@@ -727,6 +735,8 @@ export const races = pgTable(
       .references(() => clubs.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     raceDate: date('race_date').notNull(),
+    /** The race's picture, as a media id. Identity media, exactly like a club's `image`. */
+    image: text('image'),
     // Meet Information. Empty-state behaviour differs per field on purpose: description,
     // location and hotel are hidden when empty, while photos and results always show a
     // "stay tuned" placeholder - photos and results are expected later, a missing hotel

@@ -13,7 +13,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { buildApp } from '../api/app.ts';
 import { createAuth, type Auth } from '../auth.ts';
 import type { Config } from '../config.ts';
@@ -597,5 +597,165 @@ describe('club reads, which the race add-member search needs', () => {
     expect((await as(owner, 'GET', `/clubs/${clubId}`)).body.club.eboardId).toBeTruthy();
     // An ordinary member has no visibility of the space at all, so its id is not returned.
     expect((await as(member, 'GET', `/clubs/${clubId}`)).body.club.eboardId).toBeNull();
+  });
+});
+
+describe('a race has its own identity', () => {
+  /*
+   * `PATCH /races/:id` and `PATCH /races/:id/meet-information` sit one handler apart and obey
+   * OPPOSITE rules about an absent key: here absent means "leave it alone", there it means "this
+   * field is now empty". That is the trap this block is pinned against - folding them into one
+   * endpoint would make the avatar upload, which sends nothing but an image, indistinguishable
+   * from a form that cleared the name.
+   */
+  it('changes the picture without touching the name or the date', async () => {
+    const owner = await signUp('PicOwner');
+    const { clubId } = await createClubAs(owner);
+    const created = await as(owner, 'POST', `/clubs/${clubId}/races`, {
+      name: 'Maine Invitational',
+      raceDate: '2026-09-15',
+    });
+    const raceId = created.body.raceId;
+
+    const mediaId = crypto.randomUUID();
+    expect((await as(owner, 'PATCH', `/races/${raceId}`, { image: mediaId })).status).toBe(200);
+
+    const after = (await as(owner, 'GET', `/races/${raceId}`)).body.race;
+    expect(after.image).toBe(mediaId);
+    expect(after.name, 'an image-only patch renamed the race').toBe('Maine Invitational');
+    expect(after.raceDate, 'an image-only patch moved the race').toBe('2026-09-15');
+  });
+
+  it('renames and re-dates without dropping the picture', async () => {
+    const owner = await signUp('RenameOwner');
+    const { clubId } = await createClubAs(owner);
+    const created = await as(owner, 'POST', `/clubs/${clubId}/races`, {
+      name: 'Old name',
+      raceDate: '2026-09-15',
+    });
+    const raceId = created.body.raceId;
+    const mediaId = crypto.randomUUID();
+    await as(owner, 'PATCH', `/races/${raceId}`, { image: mediaId });
+
+    await as(owner, 'PATCH', `/races/${raceId}`, { name: 'New name', raceDate: '2026-10-01' });
+
+    const after = (await as(owner, 'GET', `/races/${raceId}`)).body.race;
+    expect(after.name).toBe('New name');
+    expect(after.raceDate).toBe('2026-10-01');
+    expect(after.image, 'the pencil wiped the picture it never touched').toBe(mediaId);
+  });
+
+  it('clears the picture on an explicit null, which is not the same as omitting it', async () => {
+    const owner = await signUp('ClearOwner');
+    const { clubId } = await createClubAs(owner);
+    const created = await as(owner, 'POST', `/clubs/${clubId}/races`, {
+      name: 'Clearable',
+      raceDate: '2026-09-15',
+    });
+    const raceId = created.body.raceId;
+    await as(owner, 'PATCH', `/races/${raceId}`, { image: crypto.randomUUID() });
+
+    expect((await as(owner, 'PATCH', `/races/${raceId}`, { image: null })).status).toBe(200);
+    expect((await as(owner, 'GET', `/races/${raceId}`)).body.race.image).toBeNull();
+  });
+
+  it('refuses a name that is only whitespace, rather than storing one nothing can render', async () => {
+    const owner = await signUp('BlankOwner');
+    const { clubId } = await createClubAs(owner);
+    const created = await as(owner, 'POST', `/clubs/${clubId}/races`, {
+      name: 'Has a name',
+      raceDate: '2026-09-15',
+    });
+    const raceId = created.body.raceId;
+
+    expect((await as(owner, 'PATCH', `/races/${raceId}`, { name: '   ' })).status).toBe(400);
+    expect((await as(owner, 'GET', `/races/${raceId}`)).body.race.name).toBe('Has a name');
+  });
+
+  it('is management authority, so a roster member who is not an admin cannot edit it', async () => {
+    const owner = await signUp('EditOwner');
+    const runner = await signUp('EditRunner');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, runner);
+    const created = await as(owner, 'POST', `/clubs/${clubId}/races`, {
+      name: 'Managed',
+      raceDate: '2026-09-15',
+    });
+    const raceId = created.body.raceId;
+    // On the roster - which is ACCESS, and deliberately not authority.
+    await as(owner, 'POST', `/races/${raceId}/members`, { userId: runner.userId });
+
+    // 404 rather than 403, like every refusal in this codebase: it must not confirm what it
+    // refused. The runner can read the race - they just cannot edit it.
+    expect((await as(runner, 'PATCH', `/races/${raceId}`, { name: 'Mine now' })).status).toBe(404);
+    expect((await as(owner, 'GET', `/races/${raceId}`)).body.race.name).toBe('Managed');
+  });
+
+  it('carries the picture into the race list the club hub reads', async () => {
+    const owner = await signUp('ListPicOwner');
+    const { clubId } = await createClubAs(owner);
+    const created = await as(owner, 'POST', `/clubs/${clubId}/races`, {
+      name: 'Listed',
+      raceDate: '2026-09-15',
+    });
+    const mediaId = crypto.randomUUID();
+    await as(owner, 'PATCH', `/races/${created.body.raceId}`, { image: mediaId });
+
+    const listed = (await as(owner, 'GET', `/clubs/${clubId}/races`)).body.races;
+    expect(listed.find((r: any) => r.id === created.body.raceId).image).toBe(mediaId);
+  });
+});
+
+describe('deleting a race takes its conversation with it', () => {
+  /*
+   * ADR-0014 has a channel reference its scope ONE WAY - `scope_id` is a plain uuid, no foreign
+   * key - so one table can serve four scopes. The price is that deleting a race cascades nothing,
+   * and for four phases it did not: the race row went and its channel stayed, holding every
+   * message in it, referenced by nothing and reachable from nothing. Invisible from the client,
+   * because the effect handler revokes the sockets either way - its own comment even says "its
+   * channel is gone".
+   *
+   * Found by deleting a test race by hand and counting the rows left behind.
+   */
+  it('leaves no orphaned channel behind', async () => {
+    const owner = await signUp('OrphanOwner');
+    const { clubId } = await createClubAs(owner);
+    const created = await as(owner, 'POST', `/clubs/${clubId}/races`, {
+      name: 'Doomed',
+      raceDate: '2026-09-15',
+    });
+    const { raceId, channelId } = created.body;
+
+    await as(owner, 'POST', `/channels/${channelId}/messages`, { body: 'anyone coming?' }).catch(
+      () => undefined,
+    );
+
+    expect((await as(owner, 'DELETE', `/races/${raceId}`)).status).toBe(200);
+
+    const left = await h.db.execute<{ channels: string; messages: string }>(sql`
+      SELECT (SELECT count(*) FROM channels WHERE scope = 'race' AND scope_id = ${raceId})
+               AS channels,
+             (SELECT count(*) FROM messages WHERE channel_id = ${channelId}) AS messages
+    `);
+    expect(Number(left.rows[0]?.channels), 'the race is gone and its channel is not').toBe(0);
+    // Cascades off `channel_id` once the channel row goes, which is the whole reason deleting
+    // the channel is sufficient.
+    expect(Number(left.rows[0]?.messages), 'messages outlived the channel they were in').toBe(0);
+  });
+
+  it('is refused for a roster member who is not a manager, leaving the race intact', async () => {
+    const owner = await signUp('KeepOwner');
+    const runner = await signUp('KeepRunner');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, runner);
+    const created = await as(owner, 'POST', `/clubs/${clubId}/races`, {
+      name: 'Kept',
+      raceDate: '2026-09-15',
+    });
+    const raceId = created.body.raceId;
+    await as(owner, 'POST', `/races/${raceId}/members`, { userId: runner.userId });
+
+    expect((await as(runner, 'DELETE', `/races/${raceId}`)).status).toBe(404);
+    expect((await as(owner, 'GET', `/races/${raceId}`)).status).toBe(200);
   });
 });

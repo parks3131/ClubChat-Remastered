@@ -85,6 +85,7 @@ GET    /clubs/:id/races?q=                   ← every race in the club; viewer 
 POST   /clubs/:id/races                      ← admin; name and date only
 GET    /races/:id                            ← preview, manager hub and member race, one read
 DELETE /races/:id
+PATCH  /races/:id                            ← name, date, picture; absent KEEPS
 PATCH  /races/:id/meet-information            ← all five fields, one form; absent clears
 POST   /races/:id/pin                        ← personal; body { pinned }
 GET    /races/:id/members                    ← roster; pendingRequests null for a non-manager
@@ -98,6 +99,7 @@ POST   /car-groups/:id/members · PATCH /car-groups/:id/incharge
 DELETE /races/:id/car-group-members/:uid     ← keyed by race: one group per person per race
 
 GET    /eboards/:id                          ← the landing state and the space, one read
+PATCH  /eboards/:id                          ← name, description, picture; MEMBERS only
 GET    /eboards/:id/members                  ← members only; a club admin outside gets nothing
 POST   /eboards/:id/members/seen
 POST   /eboards/:id/join-requests             ← the rejoin path for an admin who left
@@ -132,6 +134,14 @@ GET    /channels/:id/gallery?before={seq}   ← paginated; inherits the chat's a
 GET    /notifications?cursor=                · POST /notifications/read
 POST   /devices                              ← register push token
 ```
+
+> **`PATCH /races/:id` and `PATCH /races/:id/meet-information` obey opposite rules about an
+> absent key, and that is why they are two routes rather than one.** Meet Information is a
+> single form saved whole, so an omitted field means "this is now empty". A race's identity is
+> three independent facts touched from two different controls - the pencil sends a name and a
+> date, tapping the avatar sends nothing but a picture - so an omitted field means "not mine to
+> touch". Merged, an avatar upload would be indistinguishable from a form that cleared the name.
+> `PATCH /eboards/:id` and `PATCH /clubs/:id` follow the identity rule, not the form rule.
 
 Every mutation returns the created/updated resource - legal and trivial now, and the direct
 counter-example to [Engineering pitfalls](14-engineering-pitfalls.md) 1.

@@ -81,6 +81,30 @@ export function channelDisplayName(): SQL {
 }
 
 /**
+ * What to show beside that name.
+ *
+ * > **A CASE on the scope, and emphatically NOT the COALESCE above.** This was written as a
+ * > COALESCE first, to match its sibling, and it was wrong for a reason worth keeping: the names
+ * > it coalesces are all `NOT NULL`, so the fall-through never fires - `r.name` always wins for a
+ * > race. Pictures are nullable. A race with no picture of its own therefore fell straight through
+ * > to `cl.image` and wore the club's face over its own name, which is the failure that looks most
+ * > like success. Only a test with three DIFFERENT pictures, and a fourth case with none, tells
+ * > the two apart.
+ *
+ * So the scope picks its own column and stops. `NULL` is a real answer here, meaning "no picture
+ * set", and the client draws the initial of the name this pairs with - never the parent's face.
+ */
+export function channelDisplayImage(): SQL {
+  return sql`
+    CASE c.scope
+      WHEN 'dm' THEN peer.image
+      WHEN 'race' THEN r.image
+      WHEN 'eboard' THEN e.image
+      ELSE cl.image
+    END`;
+}
+
+/**
  * Everyone who can read a channel.
  *
  * The inverse of `accessibleChannelPredicate` and the single definition of "who is in this

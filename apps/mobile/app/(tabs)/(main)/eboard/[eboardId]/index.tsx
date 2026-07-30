@@ -15,7 +15,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Redirect, Stack, useLocalSearchParams } from 'expo-router';
-import { useDeclareClub } from '../../../../../src/current-club.tsx';
+import { useDeclareEboard } from '../../../../../src/current-space.tsx';
 import { eboardApi } from '../../../../../src/api.ts';
 import { color, space, type } from '../../../../../src/theme.ts';
 import { Action, Badge, Body, Card, DataScreen, Row, SectionHeader } from '../../../../../src/ui.tsx';
@@ -25,6 +25,20 @@ export default function EboardScreen() {
   const { eboardId } = useLocalSearchParams<{ eboardId: string }>();
   const [requested, setRequested] = useState(false);
   const load = useLoad(() => eboardApi.detail(eboardId), [eboardId]);
+  /*
+   * Which space this screen is in, for the header and for the Clubs tab's shortcut.
+   *
+   * The id comes from the ROUTE, so the header knows which space it is drawing before the name
+   * arrives - that is what stops it showing the previous screen's name for a frame. Everything
+   * else comes from the read, because a race and an Eboard space each know their own club and the
+   * route does not carry it.
+   */
+  useDeclareEboard(
+    eboardId,
+    load.data?.eboard.clubId,
+    load.data?.eboard.name,
+    load.data?.eboard.image,
+  );
 
   return (
     <DataScreen load={load}>
@@ -70,9 +84,6 @@ export default function EboardScreen() {
                     .requestAccess(eboardId)
                     .then(() => setRequested(true))
                     .catch(load.reload);
-  // Inside this club for as long as this screen is mounted. Resolved from the read
-  // rather than a param: a race and an Eboard space each know their own club.
-  useDeclareClub(load.data?.eboard.clubId);
                 }}
               />
             )}

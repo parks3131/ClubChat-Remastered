@@ -16,7 +16,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Tabs, usePathname, useRouter } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 import { useSession } from '../../src/chat-provider.tsx';
-import { useCurrentClub } from '../../src/current-club.tsx';
+import { useCurrentSpace } from '../../src/current-space.tsx';
 import { color, radius, space, type } from '../../src/theme.ts';
 import { useBadge } from '../../src/use-badge.ts';
 
@@ -77,7 +77,7 @@ function BadgedIcon({ focused }: { focused: boolean }) {
 
 export default function TabsLayout() {
   const { authState } = useSession();
-  const { currentClub } = useCurrentClub();
+  const { currentClub } = useCurrentSpace();
   const pathname = usePathname();
   const router = useRouter();
 

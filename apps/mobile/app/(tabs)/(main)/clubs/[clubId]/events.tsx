@@ -13,7 +13,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useDeclareClub } from '../../../../../src/current-club.tsx';
+import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { calendarApi, clubApi, contentApi } from '../../../../../src/api.ts';
 import type { EventType, FeedItem } from '../../../../../src/api-types.ts';
 import { bibParts, formatDateOnly, formatInstant } from '../../../../../src/dates.ts';

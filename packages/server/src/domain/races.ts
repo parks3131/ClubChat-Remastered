@@ -280,6 +280,59 @@ export async function removeRaceMember(
 }
 
 /**
+ * The race's own identity: what it is called, when it is, and its picture.
+ *
+ * > **Absent means "leave it alone" here, and that is the opposite of Meet Information below.**
+ * > The two live one function apart and follow opposite rules on purpose. Meet Information is
+ * > one form saved whole, so an omitted key means the field was emptied. This is three
+ * > independent facts touched from two different controls - the pencil edits the name and the
+ * > date, the avatar tap sends only a picture - so an omitted key here means "not my business",
+ * > and treating it as a clear would have the avatar upload silently rename the race to ''.
+ *
+ * `null` still clears, which is how the picture is removed. Absent and null are different
+ * instructions, which is the whole reason this takes `string | null | undefined` rather than
+ * folding an empty string into "remove".
+ *
+ * Manager-tier, the same authority that edits Meet Information: a club admin manages every
+ * race in the club without thereby being on its roster.
+ */
+export async function updateRace(
+  db: Db,
+  ctx: AccessContext,
+  raceId: string,
+  fields: {
+    name?: string | undefined;
+    raceDate?: string | undefined;
+    image?: string | null | undefined;
+  },
+): Promise<Result<{ updated: true }>> {
+  const race = await raceRef(db, raceId);
+  if (!race) return { ok: false, code: 'not_found' };
+  if (!canManageRace(ctx, race)) return { ok: false, code: 'forbidden' };
+
+  const patch: Record<string, unknown> = {};
+  if (fields.name !== undefined) {
+    const name = fields.name.trim();
+    // A race with no name is unreachable in every list that renders one, so this is refused
+    // rather than stored and worked around at each render.
+    if (name.length === 0) return { ok: false, code: 'invalid' };
+    patch['name'] = name;
+  }
+  if (fields.raceDate !== undefined) {
+    // A DATE column, and the column is what enforces the format - but a malformed string
+    // reaches Postgres as a type error rather than a refusal, and a 500 is the wrong way to
+    // tell somebody their date is wrong.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.raceDate)) return { ok: false, code: 'invalid' };
+    patch['raceDate'] = fields.raceDate;
+  }
+  if (fields.image !== undefined) patch['image'] = fields.image;
+  if (Object.keys(patch).length === 0) return { ok: true, updated: true };
+
+  await db.update(races).set(patch).where(eq(races.id, raceId));
+  return { ok: true, updated: true };
+}
+
+/**
  * Meet Information: five fields, edited together as one form.
  *
  * **Any manager can edit all five** - not restricted to whoever created the race. Written as
@@ -380,6 +433,25 @@ export async function deleteRace(
       },
     });
     await tx.delete(races).where(eq(races.id, raceId));
+
+    /*
+     * The channel, EXPLICITLY, in the same transaction.
+     *
+     * > **Nothing cascades here, and that is by design.** ADR-0014 has a channel reference its
+     * > scope one way: `scope_id` is a plain uuid with no foreign key, precisely so one table can
+     * > serve four different scopes. The cost is that deleting the scope deletes nothing else, and
+     * > this is the one place that has to pay it - a club's channels go with a `club_id` FK, and a
+     * > race's do not.
+     *
+     * Without this the race row vanished and its channel survived: unreferenced, unreachable, and
+     * still holding every message in it. Nothing pointed at it, so nothing complained. The effect
+     * handler's own comment says "its channel is gone" - it revokes the sockets, which is what
+     * made the omission invisible from the client.
+     *
+     * Deleting the channel row is enough for everything under it: messages, read cursors, mutes,
+     * moderation reads and media all cascade off `channel_id`.
+     */
+    await tx.delete(channels).where(and(eq(channels.scope, 'race'), eq(channels.scopeId, raceId)));
   });
 
   return { ok: true, deleted: true, channelIds };
@@ -622,6 +694,8 @@ export type RaceListItem = {
   id: string;
   name: string;
   raceDate: string;
+  /** The race's picture, or null for the initial fallback every avatar in the product uses. */
+  image: string | null;
   /** This viewer's own pin. Personal, and never anybody else's (PRD/09 rules 21-22). */
   pinned: boolean;
   /** A roster row, which is the only proof of access. */
@@ -664,6 +738,7 @@ export async function listRaces(
     id: string;
     name: string;
     race_date: string;
+    image: string | null;
     pinned: boolean;
     has_access: boolean;
     request_pending: boolean;
@@ -673,6 +748,7 @@ export async function listRaces(
     SELECT r.id::text AS id,
            r.name,
            r.race_date::text AS race_date,
+           r.image,
            (rp.user_id IS NOT NULL) AS pinned,
            (rm.user_id IS NOT NULL) AS has_access,
            (jr.id IS NOT NULL) AS request_pending,
@@ -700,6 +776,7 @@ export async function listRaces(
       id: row.id,
       name: row.name,
       raceDate: row.race_date,
+      image: row.image,
       pinned: row.pinned,
       hasAccess: row.has_access,
       // Asked per row with the real race, rather than once with a fabricated ref. The answer
@@ -720,6 +797,7 @@ export type RaceDetail = {
   clubId: string;
   name: string;
   raceDate: string;
+  image: string | null;
   meetDescription: string | null;
   meetLocationUrl: string | null;
   meetHotelUrl: string | null;
@@ -760,6 +838,7 @@ export async function readRace(
     club_id: string;
     name: string;
     race_date: string;
+    image: string | null;
     meet_description: string | null;
     meet_location_url: string | null;
     meet_hotel_url: string | null;
@@ -774,6 +853,7 @@ export async function readRace(
            r.club_id::text AS club_id,
            r.name,
            r.race_date::text AS race_date,
+           r.image,
            r.meet_description,
            r.meet_location_url,
            r.meet_hotel_url,
@@ -805,6 +885,7 @@ export async function readRace(
       clubId: row.club_id,
       name: row.name,
       raceDate: row.race_date,
+      image: row.image,
       meetDescription: row.meet_description,
       meetLocationUrl: row.meet_location_url,
       meetHotelUrl: row.meet_hotel_url,

@@ -16,7 +16,7 @@
 import { useEffect } from 'react';
 import { StyleSheet, Text } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
-import { useDeclareClub } from '../../../../../src/current-club.tsx';
+import { useDeclareEboard } from '../../../../../src/current-space.tsx';
 import { eboardApi } from '../../../../../src/api.ts';
 import { useSession } from '../../../../../src/chat-provider.tsx';
 import {
@@ -38,7 +38,12 @@ export default function EboardMembersScreen() {
   const eboard = useLoad(() => eboardApi.detail(eboardId), [eboardId]);
   // Inside this club for as long as this screen is mounted. Resolved from the read
   // rather than a param: a race and an Eboard space each know their own club.
-  useDeclareClub(eboard.data?.eboard.clubId);
+  useDeclareEboard(
+    eboardId,
+    eboard.data?.eboard.clubId,
+    eboard.data?.eboard.name,
+    eboard.data?.eboard.image,
+  );
 
   useEffect(() => {
     void eboardApi.rosterSeen(eboardId).catch(() => undefined);

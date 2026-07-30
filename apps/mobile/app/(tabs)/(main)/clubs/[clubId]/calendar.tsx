@@ -7,7 +7,7 @@
  */
 
 import { useLocalSearchParams } from 'expo-router';
-import { useDeclareClub } from '../../../../../src/current-club.tsx';
+import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { CalendarView } from '../../../calendar.tsx';
 
 export default function ClubCalendarScreen() {

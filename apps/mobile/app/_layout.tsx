@@ -24,7 +24,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SessionProvider } from '../src/chat-provider.tsx';
-import { CurrentClubProvider } from '../src/current-club.tsx';
+import { CurrentSpaceProvider } from '../src/current-space.tsx';
 import { FontGate } from '../src/fonts.tsx';
 import { BackTo } from '../src/nav.tsx';
 import { color, type } from '../src/theme.ts';
@@ -45,7 +45,7 @@ export default function RootLayout() {
             "which club am I inside" from OTHER tabs - they sit outside the club's own stack
             entirely and cannot see its params.
           */}
-          <CurrentClubProvider>
+          <CurrentSpaceProvider>
           <Stack
             screenOptions={{
               headerStyle: { backgroundColor: color.chrome },
@@ -87,7 +87,7 @@ export default function RootLayout() {
               }}
             />
           </Stack>
-          </CurrentClubProvider>
+          </CurrentSpaceProvider>
         </SessionProvider>
       </FontGate>
     </SafeAreaProvider>

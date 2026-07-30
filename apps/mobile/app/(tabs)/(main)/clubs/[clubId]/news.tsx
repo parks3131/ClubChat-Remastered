@@ -12,7 +12,7 @@
 import { useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
-import { useDeclareClub } from '../../../../../src/current-club.tsx';
+import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { reactionEmoji, type ReactionEmoji } from '@clubchat/shared';
 import { clubApi, contentApi } from '../../../../../src/api.ts';
 import type { NewsPost } from '../../../../../src/api-types.ts';

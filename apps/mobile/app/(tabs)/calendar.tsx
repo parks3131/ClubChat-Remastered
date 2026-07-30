@@ -22,7 +22,7 @@ import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Redirect, useRouter } from 'expo-router';
-import { useClearClub } from '../../src/current-club.tsx';
+import { useClearClub } from '../../src/current-space.tsx';
 import { calendarApi } from '../../src/api.ts';
 import type { FeedItem } from '../../src/api-types.ts';
 import { useSession } from '../../src/chat-provider.tsx';

@@ -15,7 +15,7 @@ import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'rea
 import { MaterialIcons } from '@expo/vector-icons';
 import { RemoteImage } from '../../../../src/media-bubble.tsx';
 import { Redirect, useRouter } from 'expo-router';
-import { useClearClub } from '../../../../src/current-club.tsx';
+import { useClearClub } from '../../../../src/current-space.tsx';
 import { unreadCount, type Club } from '@clubchat/shared';
 import { clubApi } from '../../../../src/api.ts';
 import type { ClubSearchResult } from '../../../../src/api-types.ts';

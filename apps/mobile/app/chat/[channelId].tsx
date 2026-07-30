@@ -12,7 +12,7 @@ import {
   View,
 } from "react-native";
 import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
-import { useDeclareClub } from "../../src/current-club.tsx";
+import { useDeclareSpace } from "../../src/current-space.tsx";
 import {
   reactionEmoji,
   reactionSummary,
@@ -36,7 +36,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { Avatar } from "../../src/ui.tsx";
-import { QuickNav, useGoBack } from "../../src/nav.tsx";
+import { QuickNav, spaceProfileHref, useGoBack } from "../../src/nav.tsx";
 import { color, radius, space, type } from "../../src/theme.ts";
 
 type Row =
@@ -237,9 +237,24 @@ export default function ChatScreen() {
   const [meta, setMeta] = useState<ChannelMeta | null>(null);
   /** Whether the meta read has finished, successfully or not. See `loadMeta`. */
   const [metaResolved, setMetaResolved] = useState(false);
-  // Chat counts as inside the club, which is what keeps the Clubs tab's shortcut working
-  // from a race or Eboard conversation. Null for a DM, which belongs to no club.
-  useDeclareClub(meta?.clubId);
+  /*
+   * Chat counts as inside the club, which is what keeps the Clubs tab's shortcut working from a
+   * race or Eboard conversation - and inside its own SPACE, so backing out of a race chat leaves
+   * the race's name in the header rather than its club's.
+   *
+   * A DM declares nothing: it belongs to no club and has no space of its own. `scope` is narrowed
+   * to the three that do rather than cast, so a fifth scope is a type error here instead of a
+   * header quietly labelled 'dm'.
+   */
+  const spaceScope =
+    meta === null || meta.scope === "dm" ? undefined : meta.scope;
+  useDeclareSpace({
+    kind: spaceScope ?? "club",
+    id: spaceScope === undefined ? undefined : meta?.scopeId,
+    clubId: meta?.clubId,
+    name: meta?.name,
+    image: meta?.image,
+  });
   const [menuOpen, setMenuOpen] = useState(false);
   /**
    * The seq a long press selected.
@@ -662,25 +677,37 @@ export default function ChatScreen() {
         {meta === null ? (
           <View style={styles.headerAvatarPlaceholder} />
         ) : (
-          <Avatar name={meta.name} size={36} />
+          <Avatar
+            name={meta.name}
+            size={36}
+            image={meta.image}
+            // A DM is a person; a club, a race and the Eboard space are things.
+            shape={meta.scope === "dm" ? "circle" : "square"}
+          />
         )}
         {/*
-          The title opens the club's profile, from any group chat.
+          The title opens THIS conversation's own profile - the race's from a race chat, the
+          space's from Eboard chat, the club's from club chat.
 
-          Which is why it reaches the CLUB rather than the race or the space: the profile is where
-          identity, the join link and the gallery live, and a race chat's header pointing at a race
-          screen that does not exist yet would be a link to nowhere. A DM's title goes nowhere at
-          all - there is no club behind it.
+          It used to reach the club from all three, because the race and Eboard profiles did not
+          exist and a link to nothing is worse than a link to the parent. Now that they do, sending
+          a race chat to the club's profile would be the wrong screen with the right club on it:
+          the roster, the gallery and the picture it shows would all belong to something else. A
+          DM's title still goes nowhere at all - there is no space behind it.
         */}
         <Pressable
           style={styles.headerTitleColumn}
-          disabled={meta === null || meta.scope === "dm" || meta.clubId === null}
-          onPress={() => router.push(`/clubs/${meta?.clubId}/profile`)}
-          accessibilityRole={meta?.scope === "dm" ? undefined : "button"}
+          disabled={spaceScope === undefined}
+          onPress={() =>
+            spaceScope !== undefined &&
+            meta !== null &&
+            router.push(spaceProfileHref(spaceScope, meta.scopeId))
+          }
+          accessibilityRole={spaceScope === undefined ? undefined : "button"}
           accessibilityLabel={
-            meta === null || meta.scope === "dm"
+            spaceScope === undefined || meta === null
               ? undefined
-              : `${meta.name}. Open the club profile`
+              : `${meta.name}. Open its profile`
           }
         >
           <Text style={styles.headerTitle} numberOfLines={1}>

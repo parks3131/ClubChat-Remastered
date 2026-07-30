@@ -38,7 +38,7 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Redirect, useFocusEffect } from 'expo-router';
-import { useClearClub } from '../../src/current-club.tsx';
+import { useClearClub } from '../../src/current-space.tsx';
 import type { NotificationTarget } from '@clubchat/shared';
 import { inboxApi } from '../../src/api.ts';
 import type { InboxRow } from '../../src/api-types.ts';

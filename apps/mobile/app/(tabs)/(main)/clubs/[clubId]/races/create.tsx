@@ -32,7 +32,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { clubApi, raceApi } from '../../../../../../src/api.ts';
 import { useSession } from '../../../../../../src/chat-provider.tsx';
-import { useDeclareClub } from '../../../../../../src/current-club.tsx';
+import { useDeclareClub } from '../../../../../../src/current-space.tsx';
 import { toDateKey } from '../../../../../../src/dates.ts';
 import { color, radius, space, type } from '../../../../../../src/theme.ts';
 import { Avatar, DataScreen } from '../../../../../../src/ui.tsx';

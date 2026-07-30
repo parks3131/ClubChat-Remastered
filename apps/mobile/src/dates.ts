@@ -72,6 +72,22 @@ export function formatInstant(iso: string): string {
   });
 }
 
+/**
+ * "Tuesday, 15 September 2026" - the same date-only value, spelled out in full.
+ *
+ * For a screen where the date IS the subject rather than a detail beside a title: a race profile
+ * has one date on it and room to say it properly, where a list row does not. Goes through
+ * `fromDateKey` like every other reader here, so it can never become a UTC instant.
+ */
+export function formatDateLong(dateKey: string): string {
+  return fromDateKey(dateKey).toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
 /** "Tue, Mar 2" for a date-only value. Never parses the string as an instant. */
 export function formatDateOnly(dateKey: string): string {
   return fromDateKey(dateKey).toLocaleDateString(undefined, {

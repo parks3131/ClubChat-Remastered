@@ -19,7 +19,7 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { isoUtc } from '../db/sql-helpers.ts';
-import { eboardJoinRequests, eboardMemberships, outbox } from '../db/schema.ts';
+import { eboardChannels, eboardJoinRequests, eboardMemberships, outbox } from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
   canApproveEboardRequest,
@@ -244,6 +244,47 @@ export async function removeEboardMember(
   return { ok: true, removed: true };
 }
 
+/**
+ * The space's own identity: what it is called, what it says about itself, and its picture.
+ *
+ * **Members only, not club admins** - the same boundary as every other write in this file. An
+ * admin who is not inside the space cannot rename it or change its face from the outside, for
+ * the reason rule 5 gives about adding people: authority over the club is not authority
+ * *inside* the space.
+ *
+ * Absent leaves a field alone; `null` clears it. The pencil sends a name and a description, the
+ * avatar tap sends only a picture, and neither may erase what the other owns.
+ */
+export async function updateEboard(
+  db: Db,
+  ctx: AccessContext,
+  eboardId: string,
+  fields: {
+    name?: string | undefined;
+    description?: string | null | undefined;
+    image?: string | null | undefined;
+  },
+): Promise<Result<{ updated: true }>> {
+  const eboard = await eboardRef(db, eboardId);
+  // `not_found` rather than `forbidden` for a non-admin, because rule 4 says an ordinary
+  // member must not learn the space exists - including by the shape of a refusal.
+  if (!eboard || !isClubAdmin(ctx, eboard.clubId)) return { ok: false, code: 'not_found' };
+  if (!isEboardMember(ctx, eboard.id)) return { ok: false, code: 'forbidden' };
+
+  const patch: Record<string, unknown> = {};
+  if (fields.name !== undefined) {
+    const name = fields.name.trim();
+    if (name.length === 0) return { ok: false, code: 'invalid' };
+    patch['name'] = name;
+  }
+  if (fields.description !== undefined) patch['description'] = fields.description;
+  if (fields.image !== undefined) patch['image'] = fields.image;
+  if (Object.keys(patch).length === 0) return { ok: true, updated: true };
+
+  await db.update(eboardChannels).set(patch).where(eq(eboardChannels.id, eboardId));
+  return { ok: true, updated: true };
+}
+
 export type EboardRosterEntry = {
   userId: string;
   name: string;
@@ -265,6 +306,8 @@ export type EboardDetail = {
   clubId: string;
   name: string;
   description: string | null;
+  /** The space's picture, or null for the initial fallback every avatar in the product uses. */
+  image: string | null;
   memberCount: number;
   channelId: string | null;
   viewer: {
@@ -297,6 +340,7 @@ export async function readEboard(
     club_id: string;
     name: string;
     description: string | null;
+    image: string | null;
     member_count: string;
     channel_id: string | null;
     request_pending: boolean;
@@ -305,6 +349,7 @@ export async function readEboard(
            eb.club_id::text AS club_id,
            eb.name,
            eb.description,
+           eb.image,
            (SELECT count(*) FROM eboard_memberships m WHERE m.eboard_id = eb.id) AS member_count,
            ch.id::text AS channel_id,
            EXISTS (
@@ -330,6 +375,7 @@ export async function readEboard(
       clubId: row.club_id,
       name: row.name,
       description: row.description,
+      image: row.image,
       memberCount: Number(row.member_count),
       channelId: isMember ? row.channel_id : null,
       viewer: {

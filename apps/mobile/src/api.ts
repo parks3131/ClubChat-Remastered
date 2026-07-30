@@ -133,6 +133,8 @@ export type ChannelMeta = {
   channelId: string;
   scope: 'club' | 'race' | 'eboard' | 'dm';
   name: string;
+  /** The SCOPE's own picture - a race's, the space's, the peer's - never the club's stand-in. */
+  image: string | null;
   /** The scope the header quick-nav links into. `clubId` is null only for a dm. */
   scopeId: string;
   clubId: string | null;
@@ -330,6 +332,17 @@ export const raceApi = {
 
   remove: (raceId: string) => apiFetch<unknown>(`/races/${raceId}`, { method: 'DELETE' }),
 
+  /**
+   * The race's own identity. An omitted field is left alone; an explicit null clears it.
+   *
+   * The opposite rule to `saveMeetInformation` below, which treats an omitted field as cleared -
+   * the two are one form saved whole versus three facts touched from two different controls.
+   */
+  update: (
+    raceId: string,
+    body: { name?: string; raceDate?: string; image?: string | null },
+  ) => apiFetch<unknown>(`/races/${raceId}`, { method: 'PATCH', body }),
+
   /** All five fields as one form: an absent field is cleared, not kept. */
   saveMeetInformation: (
     raceId: string,
@@ -510,6 +523,12 @@ export const calendarApi = {
 
 export const eboardApi = {
   detail: (eboardId: string) => apiFetch<{ eboard: EboardDetail }>(`/eboards/${eboardId}`),
+
+  /** Members only. A club admin outside the space can read it but not rename it. */
+  update: (
+    eboardId: string,
+    body: { name?: string; description?: string | null; image?: string | null },
+  ) => apiFetch<unknown>(`/eboards/${eboardId}`, { method: 'PATCH', body }),
 
   roster: (eboardId: string) => apiFetch<EboardRoster>(`/eboards/${eboardId}/members`),
 

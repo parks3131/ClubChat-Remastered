@@ -13,7 +13,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { Link, useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { useCurrentClub } from './current-club.tsx';
+import { useCurrentSpace, type SpaceKind } from './current-space.tsx';
 import { RemoteImage } from './media-bubble.tsx';
 import { color, radius, space, type } from './theme.ts';
 
@@ -136,7 +136,7 @@ export function BackAlwaysTo({
  * only to be a back target is a screen the product does not want.
  */
 export function BackToClub() {
-  const { currentClub } = useCurrentClub();
+  const { currentClub } = useCurrentSpace();
   const href = currentClub === null ? '/clubs' : `/clubs/${currentClub.clubId}`;
   const go = useGoBack(href);
 
@@ -153,55 +153,81 @@ export function BackToClub() {
   );
 }
 
+/** Where a space's own profile lives. One definition, because four screens link to it. */
+export function spaceProfileHref(kind: SpaceKind, id: string): string {
+  if (kind === 'race') return `/races/${id}/profile`;
+  if (kind === 'eboard') return `/eboard/${id}/profile`;
+  return `/clubs/${id}/profile`;
+}
+
 /**
- * The club's own identity as a header title: its avatar, then its name, in the accent.
+ * A space's own identity as a header title: its avatar, then its name, in the accent.
  *
- * v1 gives every screen inside a club this header rather than the screen's own name, and the
- * whole thing is tappable through to the club profile. It does two jobs at once - it says which
- * club you are in from four levels deep, and it makes the club's identity reachable from
- * everywhere without a menu.
+ * v1 gives every screen inside a club, a race or Eboard & Council this header rather than the
+ * screen's own name, and the whole thing is tappable through to that space's profile. It does
+ * two jobs at once - it says where you are from four levels deep, and it makes the place's
+ * identity reachable from everywhere without a menu.
  *
- * Reads the club from context rather than props, because the header is configured by the layout
- * and only the screen has the data. The layout knows the route; the row knows the name.
+ * > **`expect` is what stops the header flashing the wrong name**, and it is the reason this
+ * > takes a prop at all rather than trusting the context alone. Walking from a club hub into a
+ * > race pushes the race's screen while the context still says "club" - its own declaration is a
+ * > focus effect, which runs after the first paint. Rendering whatever the context happens to
+ * > hold therefore drew the CLUB's name and face for a frame and then swapped them, which is
+ * > exactly the flicker this was reported for one level up. So the route says which space it is
+ * > drawing, and a declaration for anything else is not ours to draw.
+ *
+ * The context still supplies the name and the picture, because the layout configures the header
+ * and only the screen has the data. The route knows the identity; the context knows the details.
  */
-export function ClubHeaderTitle({ fallback }: { fallback: string }) {
-  const { currentClub } = useCurrentClub();
+export function SpaceHeaderTitle({
+  expect,
+  fallback,
+}: {
+  /** The space this route is for, straight from its params. */
+  expect: { kind: SpaceKind; id: string | undefined };
+  /** Drawn only when nothing at all has been declared, where an empty bar would read as broken. */
+  fallback: string;
+}) {
+  const { currentSpace } = useCurrentSpace();
   const router = useRouter();
 
+  if (currentSpace === null) return <Text style={styles.clubName}>{fallback}</Text>;
+
   /*
-   * Two different unknowns, drawn differently.
+   * Three unknowns, drawn two ways.
    *
-   *  - **Inside a club whose name has not arrived yet** (a cold deep link, a refresh): render
-   *    NOTHING. The name is milliseconds away, and a word that visibly swaps for another word is
-   *    the flicker this screen was reported for. Empty for an instant is quiet; "Club" turning
-   *    into "Binghamton Running Club" is not.
-   *  - **Not inside a club at all**: render the screen's own title, because nothing is coming and
-   *    an empty header really would read as broken.
+   *  - **A declaration for a different space** - the screen below this one, still in the context
+   *    for a frame: render nothing. It is about to be replaced by ours.
+   *  - **Ours, name not yet arrived** (a cold deep link, a refresh): render nothing. The name is
+   *    milliseconds away, and a word that visibly swaps for another word is the flicker. Empty
+   *    for an instant is quiet; "Club" turning into "Binghamton Running Club" is not.
+   *  - **Nothing declared at all**: the screen's own title, handled above, because nothing is
+   *    coming and an empty header really would read as broken.
    */
-  if (currentClub === null) return <Text style={styles.clubName}>{fallback}</Text>;
-  if (currentClub.name.length === 0) return null;
+  if (currentSpace.kind !== expect.kind || currentSpace.id !== expect.id) return null;
+  if (currentSpace.name.length === 0) return null;
 
   return (
     <Pressable
-      onPress={() => router.push(`/clubs/${currentClub.clubId}/profile`)}
+      onPress={() => router.push(spaceProfileHref(currentSpace.kind, currentSpace.id))}
       accessibilityRole="button"
-      accessibilityLabel={`${currentClub.name}, open the club profile`}
+      accessibilityLabel={`${currentSpace.name}, open its profile`}
       style={styles.clubTitle}
     >
-      {currentClub.image === null ? (
+      {currentSpace.image === null ? (
         <View style={styles.clubAvatar}>
-          <Text style={styles.clubInitial}>{currentClub.name.charAt(0).toUpperCase()}</Text>
+          <Text style={styles.clubInitial}>{currentSpace.name.charAt(0).toUpperCase()}</Text>
         </View>
       ) : (
         <RemoteImage
-          mediaId={currentClub.image}
+          mediaId={currentSpace.image}
           variant="thumb"
           style={styles.clubAvatar}
           resizeMode="cover"
         />
       )}
       <Text style={styles.clubName} numberOfLines={1}>
-        {currentClub.name}
+        {currentSpace.name}
       </Text>
     </Pressable>
   );

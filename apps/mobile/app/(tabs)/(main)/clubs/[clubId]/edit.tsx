@@ -26,7 +26,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import type { JoinPolicy } from '@clubchat/shared';
 import { clubApi } from '../../../../../src/api.ts';
-import { useDeclareClub } from '../../../../../src/current-club.tsx';
+import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import { DataScreen } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';

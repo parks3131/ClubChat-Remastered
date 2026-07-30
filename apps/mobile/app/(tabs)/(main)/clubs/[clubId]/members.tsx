@@ -16,7 +16,7 @@
 
 import { useEffect } from 'react';
 import { useLocalSearchParams } from 'expo-router';
-import { useDeclareClub } from '../../../../../src/current-club.tsx';
+import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { clubApi } from '../../../../../src/api.ts';
 import type { ClubRoster, RosterEntry } from '../../../../../src/api-types.ts';
 import { useSession } from '../../../../../src/chat-provider.tsx';

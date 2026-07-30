@@ -13,7 +13,8 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Link, Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { useDeclareClub } from '../../../../../src/current-club.tsx';
+import { useDeclareClub } from '../../../../../src/current-space.tsx';
+import { RemoteImage } from '../../../../../src/media-bubble.tsx';
 import { BackAlwaysTo } from '../../../../../src/nav.tsx';
 import { unreadCount } from '@clubchat/shared';
 import { clubApi, raceApi } from '../../../../../src/api.ts';
@@ -169,11 +170,7 @@ export default function ClubHubScreen() {
                         style={styles.raceRow}
                         accessibilityLabel={`${race.name}${race.hasAccess ? '' : ', no access'}`}
                       >
-                        <View style={styles.raceAvatar}>
-                          <Text style={styles.raceInitial}>
-                            {race.name.charAt(0).toUpperCase()}
-                          </Text>
-                        </View>
+                        <RaceFace race={race} />
                         <Text style={styles.raceName} numberOfLines={1}>
                           {race.name}
                         </Text>
@@ -236,7 +233,13 @@ function RacesSheet({
   onDismiss,
   onPick,
 }: {
-  races: ReadonlyArray<{ id: string; name: string; raceDate: string; hasAccess: boolean }>;
+  races: ReadonlyArray<{
+    id: string;
+    name: string;
+    raceDate: string;
+    image: string | null;
+    hasAccess: boolean;
+  }>;
   query: string;
   onQuery: (next: string) => void;
   onDismiss: () => void;
@@ -280,9 +283,7 @@ function RacesSheet({
                 accessibilityRole="button"
                 accessibilityLabel={`${race.name}${race.hasAccess ? '' : ', no access'}`}
               >
-                <View style={styles.raceAvatar}>
-                  <Text style={styles.raceInitial}>{race.name.charAt(0).toUpperCase()}</Text>
-                </View>
+                <RaceFace race={race} />
                 <View style={styles.sheetRowText}>
                   <Text style={styles.raceName} numberOfLines={1}>
                     {race.name}
@@ -307,6 +308,30 @@ function RacesSheet({
  * The filled circular icon well in its own tint is what stops the three destinations reading as an
  * undifferentiated list - chat on the accent, News on the secondary, Eboard on the tertiary.
  */
+/**
+ * A race's face: its own picture, or its initial.
+ *
+ * One component for the hub preview and the "See all" sheet, which render the same row two
+ * screens apart. When they each had their own copy, adding pictures to one left the other on
+ * initials - which is how this pair drifts every time.
+ */
+function RaceFace({ race }: { race: { name: string; image: string | null } }) {
+  return (
+    <View style={styles.raceAvatar}>
+      {race.image === null ? (
+        <Text style={styles.raceInitial}>{race.name.charAt(0).toUpperCase()}</Text>
+      ) : (
+        <RemoteImage
+          mediaId={race.image}
+          variant="thumb"
+          style={styles.raceAvatarImage}
+          resizeMode="cover"
+        />
+      )}
+    </View>
+  );
+}
+
 function HubRow({
   icon,
   tint,
@@ -415,6 +440,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   raceInitial: { ...type.headline, fontSize: 17, color: color.accent },
+  // Fills the well the initial would sit in, so a race with a picture and one without line up.
+  raceAvatarImage: { width: 44, height: 44, borderRadius: radius.pill },
   raceName: { ...type.body, color: color.textPrimary, flex: 1 },
 
   sheetBackdrop: {
