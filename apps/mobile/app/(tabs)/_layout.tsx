@@ -106,7 +106,7 @@ export default function TabsLayout() {
         options={{
           title: 'Notifications',
           tabBarIcon: ({ focused }) => <TabIcon name="notifications" focused={focused} />,
-          tabBarLabel: ({ focused }) => <BadgedLabel label="Alerts" focused={focused} />,
+          tabBarLabel: ({ focused }) => <BadgedLabel label="Notifications" focused={focused} />,
         }}
       />
       <Tabs.Screen

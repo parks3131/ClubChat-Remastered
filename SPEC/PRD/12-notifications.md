@@ -59,7 +59,24 @@ message would flood the feed with exactly the per-message noise rule 8 rejects. 
    reverse-chronological list, paginated as the user scrolls (~20 per page).
 2. Opening the inbox marks the visible discrete notifications read and clears the badge -
    with two exceptions below.
+
+   2a. **The marking happens on LEAVING the screen, not on arriving at it.** Rows stay in their
+   unread state for the whole visit and are read the *next* time the inbox is opened. Marking on
+   arrival flips every row before the reader can perceive that any of them were new, which
+   defeats the entire purpose of having an unread state - the inbox would always look uniformly
+   read, no matter what had just happened.
+
+   2b. **Unread is a whole-row treatment, not a corner badge.** An unread row is tinted, with an
+   accent-filled icon well, full-strength body text and a dot; a read row is a plain card with a
+   neutral well and secondary text. It has to be legible at a glance down a long list, which a
+   small badge on the right is not.
+
 3. **Chat-unread rows are never cleared by opening the inbox.** Only by opening that chat.
+
+   3a. **So a chat-unread row is always drawn unread**, and its count never comes down by
+   looking at this list. It exists in the feed only while the count is above zero. Glancing at
+   an inbox is not reading 48 messages, and a row that dimmed itself on sight would be claiming
+   it was.
 4. **The three pending join-request types are never cleared by opening the inbox either.**
    They clear only when the relevant roster screen is opened. **This is the "only clears once
    you actually look" rule**: a row representing work waiting on you must not be dismissed by
