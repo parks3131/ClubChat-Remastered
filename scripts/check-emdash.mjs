@@ -11,9 +11,20 @@ import { execFileSync } from 'node:child_process';
 
 const EM_DASH = '—';
 
-// The single legitimate occurrence is the rule's own worked example, which has to
-// contain the character in order to show you what to search for.
-const ALLOWED = new Map([['AGENTS.md', 1]]);
+// Two files legitimately contain the character, both for the same reason: you cannot
+// search for something without naming it.
+//
+//  - AGENTS.md states the rule, and its worked example has to show the character.
+//  - this file is the detector, and EM_DASH above is what it searches for.
+//
+// The budget is exact rather than a blanket exemption, so a SECOND em dash in either
+// file is still caught. Worth noting how this surfaced: the script scans `git ls-files`,
+// so while it was untracked it never scanned itself and reported a clean tree. It only
+// flagged itself once committed.
+const ALLOWED = new Map([
+  ['AGENTS.md', 1],
+  ['scripts/check-emdash.mjs', 1],
+]);
 
 function selfTest() {
   const probe = `a ${EM_DASH} b`;
