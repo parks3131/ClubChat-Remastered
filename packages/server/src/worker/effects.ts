@@ -74,10 +74,22 @@ export type EffectHandler = (event: OutboxEvent, deps: EffectDeps) => Promise<vo
  */
 async function postSystemMessage(
   deps: EffectDeps,
-  args: { channelId: string; body: string; eventId: number; scope?: string },
+  args: {
+    channelId: string;
+    body: string;
+    eventId: number;
+    scope?: string;
+    /** Set when this message is a card, so a later delete can find it. */
+    linkedPollId?: string | null;
+    linkedEventId?: string | null;
+    linkedMeetingId?: string | null;
+  },
 ): Promise<void> {
   const result = await appendMessage(deps.db, {
     channelId: args.channelId,
+    linkedPollId: args.linkedPollId ?? null,
+    linkedEventId: args.linkedEventId ?? null,
+    linkedMeetingId: args.linkedMeetingId ?? null,
     // Never NULL. Postgres treats NULLs as distinct in a unique index, so a null
     // sender would silently defeat the idempotency constraint that makes this handler
     // safe to retry.
@@ -620,6 +632,12 @@ function makeCreationHandler(config: {
   /** Where the chat card goes, if this creation posts one. */
   cardChannel?: (event: OutboxEvent, db: Db) => Promise<string | null>;
   cardBody?: (event: OutboxEvent, ctx: { actorName: string }) => string;
+  /** Which object the card is for, so deleting that object can remove the card. */
+  cardLink?: (event: OutboxEvent) => {
+    linkedPollId?: string | null;
+    linkedEventId?: string | null;
+    linkedMeetingId?: string | null;
+  };
   /** Overrides the default club-wide audience, for scoped things. */
   audience?: (event: OutboxEvent, db: Db) => Promise<string[]>;
 }): EffectHandler {
@@ -682,6 +700,7 @@ function makeCreationHandler(config: {
           body: config.cardBody(event, { actorName }),
           eventId: event.id,
           scope: 'card',
+          ...(config.cardLink ? config.cardLink(event) : {}),
         });
       }
     }
@@ -829,6 +848,56 @@ const onRaceDeleted: EffectHandler = async (event, deps) => {
   }
 };
 
+/**
+ * Remove the chat card for a deleted object.
+ *
+ * **Deleting the underlying poll, event or meeting removes its card**, rather than leaving a
+ * dead link that navigates nowhere.
+ *
+ * The card is soft-deleted like any other message rather than being removed outright: a
+ * message vanishing mid-conversation makes the replies around it unreadable, and that reasoning
+ * does not stop applying just because the message happens to be a card. What the reader sees is
+ * the ordinary "This message was deleted" tombstone.
+ *
+ * Idempotent: the update is scoped to rows not already deleted, so redelivery is a no-op.
+ */
+function makeCardRemover(
+  column: 'linked_poll_id' | 'linked_event_id' | 'linked_meeting_id',
+  payloadKey: string,
+): EffectHandler {
+  return async (event, deps) => {
+    const objectId = event.payload[payloadKey];
+    if (typeof objectId !== 'string') return;
+
+    const removed = await deps.db.execute<{ channel_id: string; seq: number }>(sql`
+      UPDATE messages
+         SET deleted_at = now(), pinned = false, body = NULL
+       WHERE ${sql.identifier(column)} = ${objectId}::uuid
+         AND deleted_at IS NULL
+      RETURNING channel_id, seq
+    `);
+
+    for (const row of removed.rows) {
+      // Published so an open chat drops the card immediately rather than showing a link to
+      // something that no longer exists until the next sync.
+      await deps.redis.publish(
+        `chan:${row.channel_id}`,
+        JSON.stringify({
+          channelId: row.channel_id,
+          seq: row.seq,
+          envelope: { channelId: row.channel_id, seq: row.seq, deletedAt: new Date().toISOString() },
+        }),
+      );
+    }
+
+    deps.log('info', 'card removed for deleted object', {
+      column,
+      objectId,
+      cards: removed.rows.length,
+    });
+  };
+}
+
 export const handlers: Record<string, EffectHandler> = {
   'club.created': onClubCreated,
   'message.created': onMessageCreated,
@@ -911,13 +980,9 @@ export const handlers: Record<string, EffectHandler> = {
       return rows.rows[0]?.id ?? null;
     },
     cardBody: (event, ctx) => `${ctx.actorName} added an event: ${String(event.payload['title'])}`,
+    cardLink: (event) => ({ linkedEventId: String(event.payload['eventId']) }),
   }),
-  'event.deleted': async (event, deps) => {
-    // The card goes with the object, rather than leaving a dead link in the conversation.
-    deps.log('info', 'event.deleted - card removal pending Phase 3 card linkage', {
-      eventId: event.id,
-    });
-  },
+  'event.deleted': makeCardRemover('linked_event_id', 'eventId'),
 
   'meeting.created': makeCreationHandler({
     notificationType: 'meeting_created',
@@ -938,10 +1003,9 @@ export const handlers: Record<string, EffectHandler> = {
       return rows.rows[0]?.id ?? null;
     },
     cardBody: (event, ctx) => `${ctx.actorName} scheduled ${String(event.payload['title'])}`,
+    cardLink: (event) => ({ linkedMeetingId: String(event.payload['meetingId']) }),
   }),
-  'meeting.deleted': async (event, deps) => {
-    deps.log('info', 'meeting.deleted', { eventId: event.id });
-  },
+  'meeting.deleted': makeCardRemover('linked_meeting_id', 'meetingId'),
 
   'news.created': makeCreationHandler({
     notificationType: 'news_post_created',
@@ -968,10 +1032,9 @@ export const handlers: Record<string, EffectHandler> = {
     cardChannel: pollCardChannel,
     cardBody: (event, ctx) =>
       `${ctx.actorName} created a poll: ${String(event.payload['question'])}`,
+    cardLink: (event) => ({ linkedPollId: String(event.payload['pollId']) }),
   }),
-  'poll.deleted': async (event, deps) => {
-    deps.log('info', 'poll.deleted', { eventId: event.id });
-  },
+  'poll.deleted': makeCardRemover('linked_poll_id', 'pollId'),
 };
 
 export async function dispatch(event: OutboxEvent, deps: EffectDeps): Promise<void> {

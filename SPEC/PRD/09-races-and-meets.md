@@ -45,7 +45,12 @@ logistics - replacing the throwaway group chat spun up per race.
     group.
 18. **If the Incharge leaves or is removed, the group's Incharge is cleared automatically and
     every club admin is notified that the group needs a new one.** The rest of the group is
-    untouched.
+    untouched, and the group is not dissolved.
+    *Exception, added 2026-07-29: when the Incharge leaves **the whole club**, the Incharge is
+    still cleared but no notification fires. Leaving a club is a larger event than vacating a
+    car seat, and one "needs a new Incharge" notification per affected group on top of "X left
+    the club" would bury the thing admins actually need to see. The groups show as having no
+    Incharge, which the car-groups screen states plainly.*
 19. **A plain member leaving a group is a non-event** - no notification. Any member can leave
     their own car group without leaving the race.
 20. Every race member can view the groups, including Incharge tags, read-only. Only managers

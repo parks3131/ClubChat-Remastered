@@ -25,6 +25,13 @@ export type AppendMessageInput = {
   type?: MessageType;
   body?: string | null;
   /**
+   * What this message is a card for, if it is one. Set by the worker's card posters so a
+   * later delete can find and remove the card rather than leaving a dead link.
+   */
+  linkedPollId?: string | null | undefined;
+  linkedEventId?: string | null | undefined;
+  linkedMeetingId?: string | null | undefined;
+  /**
    * Extra outbox events to write in the SAME transaction as the message. Used by
    * command handlers that need an effect to be atomic with the message itself.
    */
@@ -160,6 +167,9 @@ export async function appendMessage(
           type: input.type ?? 'text',
           body: input.body ?? null,
           clientMsgId: input.clientMsgId,
+          linkedPollId: input.linkedPollId ?? null,
+          linkedEventId: input.linkedEventId ?? null,
+          linkedMeetingId: input.linkedMeetingId ?? null,
         })
         .returning();
 

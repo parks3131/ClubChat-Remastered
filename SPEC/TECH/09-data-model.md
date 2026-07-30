@@ -94,14 +94,35 @@ read_cursors          user_id, channel_id, last_read_seq, updated_at  PK (user_i
 
 ### Races
 ```
-races                 id, club_id, name, race_date, avatar_media_id, channel_id,
+races                 id, club_id, name, race_date, created_at,
                       meet_description, meet_location_url, meet_hotel_url,
                       meet_photos_url, meet_results_url
+                      -- NO channel_id. The channel references the race, never the
+                      -- reverse: `channels (scope='race', scope_id=<race>)`, which
+                      -- UNIQUE (scope, scope_id) already makes unambiguous. Storing
+                      -- the relationship in both directions gives it two sources of
+                      -- truth and nothing to keep them honest. See ADR-0014.
+                      -- avatar_media_id arrives in Phase 3 with media_objects.
+                      -- race_date is a DATE, not a timestamp: a race has a day, not a
+                      -- time. A date-only value parsed as an ISO string is UTC
+                      -- midnight and renders a day early in negative-offset zones.
+                      -- The five meet* columns live here rather than in their own
+                      -- table because they are edited together as ONE form; a
+                      -- separate table would invite partial saves of something the
+                      -- product treats as atomic.
 race_memberships      race_id, user_id, joined_at    PK (race_id, user_id)   ← sole access truth
 race_join_requests    id, race_id, user_id, status, decided_by, decided_at
 race_pins             race_id, user_id               PK (race_id, user_id)   ← personal
-car_groups            id, race_id, number, incharge_user_id
+car_groups            id, race_id, number, incharge_user_id, created_at
+                      UNIQUE (race_id, number)      -- auto-numbering, one per race
                       UNIQUE (id, race_id)          -- redundant, but see below
+                      -- That second one must be a UNIQUE CONSTRAINT, not a unique
+                      -- index. drizzle-kit emits every foreign key BEFORE every
+                      -- CREATE INDEX, so a composite FK pointing at an index
+                      -- references something that does not exist yet and the
+                      -- migration fails. A table constraint is emitted inline with
+                      -- CREATE TABLE. Found by applying the migration, not by
+                      -- reading it.
 car_group_members     car_group_id, race_id, user_id
                       UNIQUE (race_id, user_id)                             ← invariant 5
                       FOREIGN KEY (car_group_id, race_id)
@@ -116,27 +137,78 @@ car_group_members     car_group_id, race_id, user_id
 
 ### Eboard
 ```
-eboard_channels       id, club_id UNIQUE, name, description, avatar_media_id, channel_id
+eboard_channels       id, club_id UNIQUE, name, description
+                      -- NO channel_id, per ADR-0014. avatar_media_id in Phase 3.
 eboard_memberships    eboard_id, user_id             PK (eboard_id, user_id)
 eboard_join_requests  id, eboard_id, user_id, status, decided_by, decided_at
-meetings              id, eboard_id, creator_id, title, description, starts_at, link
+meetings              id, eboard_id, creator_id, title, description, starts_at, link,
+                      created_at
+                      -- creator_id IS the authorization subject here, not audit
+                      -- metadata: only the creator edits or deletes a meeting. Two
+                      -- explicit founder follow-ups landed on that after meetings
+                      -- first shipped as any-member editable.
 ```
 
 ### Content
 ```
 polls                 id, club_id, scope, scope_id, creator_id, question, allow_multiple,
-                      is_private, closed_at, closes_at, closing_soon_notified_at
+                      is_private, closed_at, closes_at, closing_soon_notified_at,
+                      created_at
+                      UNIQUE (id, allow_multiple)   ← target of poll_votes' composite FK
+                      CHECK (scope IN ('club','race','eboard'))
+                      -- There is deliberately NO is_closed column. Closed-ness is
+                      -- evaluated at READ time as
+                      --   closed_at IS NOT NULL OR closes_at < now()
+                      -- because a passed deadline must read as closed EVERYWHERE
+                      -- without anyone having closed it. A stored boolean would need
+                      -- a job to flip it, and there is deliberately no job that
+                      -- closes polls - the only scheduled job is the closing-soon
+                      -- reminder. PRD/01 previously listed is_closed as a field;
+                      -- corrected there too.
 poll_options          id, poll_id, label, position, vote_count    ← counts public (invariant 6)
-poll_votes            poll_id, option_id, user_id                 ← identity gated
-calendar_events       id, club_id, type, title, starts_at, ends_at, location, description
-routine_workouts      id, club_id, workout_date, activity_type, title, description
-news_posts            id, club_id, author_id, body, media_id, created_at
+poll_votes            poll_id, option_id, user_id, allow_multiple, created_at
+                      PK (option_id, user_id)                     ← identity gated
+                      UNIQUE (poll_id, user_id) WHERE NOT allow_multiple
+                      FOREIGN KEY (poll_id, allow_multiple)
+                          REFERENCES polls (id, allow_multiple)
+                      -- allow_multiple is denormalised from the poll for the same
+                      -- reason race_id is denormalised onto car_group_members, and
+                      -- with the same composite FK keeping it honest. It makes the
+                      -- partial unique index above meaningful, so "tapping a
+                      -- different option MOVES the vote rather than adding a second"
+                      -- is enforced by the database rather than trusted from the
+                      -- handler. Without the FK a vote could claim a setting its poll
+                      -- does not have and escape the index.
+                      -- polls therefore also carries UNIQUE (id, allow_multiple) as
+                      -- the referenced target.
+calendar_events       id, club_id, type, title, starts_at, ends_at, location, description,
+                      created_by, created_at
+                      CHECK (type IN ('race','practice','team_bonding','volunteer','other'))
+                      -- created_by is audit only. Any club admin may edit or delete
+                      -- ANY event, so it is deliberately not the authorization
+                      -- subject - unlike meetings.creator_id, which is.
+routine_workouts      id, club_id, workout_date, activity_type, title, description,
+                      created_by, created_at
+                      CHECK (activity_type IN (10 values))
+                      -- created_by is audit only: any admin edits any workout.
+                      -- workout_date is a DATE. The week view shows one real
+                      -- Monday-to-Sunday week, not a repeating template.
+news_posts            id, club_id, author_id, body, media_id, created_at, updated_at
+                      CHECK (body IS NOT NULL OR media_id IS NOT NULL)
+                      -- The check carries "a post must have body text, a photo, or
+                      -- both" so an empty post cannot exist even if a handler forgets.
+                      -- media_id has no FK yet: media_objects arrives in Phase 3. The
+                      -- column exists now so the check can express the invariant
+                      -- today rather than being retrofitted over historical rows.
+                      -- author_id is audit only: any club admin edits any post.
 news_reactions        post_id, user_id, emoji
 ```
 
 ### Direct messages and member safety
 ```
-dm_conversations      id, user_a, user_b, channel_id, created_at
+dm_conversations      id, user_a, user_b, created_at
+                      -- NO channel_id, per ADR-0014: the channel references the
+                      -- conversation as (scope='dm', scope_id=<conversation>).
                       CHECK (user_a < user_b)      -- canonical order, enforced by the DB
                       UNIQUE (user_a, user_b)      -- exactly one thread per pair, ever
                       -- the CHECK forces the handler to sort the pair before insert, so

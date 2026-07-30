@@ -105,6 +105,7 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0011](decisions/0011-typescript-node-on-fly-with-self-hosted-auth.md) | TypeScript on Node, hosted on Fly.io, with self-hosted auth |
 | [0012](decisions/0012-no-receipts-presence-or-typing-indicators.md) | Ship only a `sent` acknowledgement |
 | [0013](decisions/0013-notifications-store-type-and-params.md) | Store notifications as a type plus params, not a rendered body and route |
+| [0014](decisions/0014-channels-reference-their-scope-one-way.md) | A channel references its scope, and the scope never references the channel |
 
 ## Templates
 

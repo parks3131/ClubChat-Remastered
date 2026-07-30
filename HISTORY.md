@@ -7,6 +7,76 @@ Newest first.
 
 ---
 
+## 2026-07-29 - Phase 2 completion, and a spec reconciliation that was overdue
+
+### The spec debt, admitted and paid
+
+Phase 0 and Phase 1 updated the specs alongside the code. **Phase 2 did not** - it wrote
+`HISTORY.md` entries and left `SPEC/` describing a schema that no longer matched. That is a
+failure of the standing rule ("where a doc disagrees with the repo, the repo is right and the
+doc is the bug - fix it in the same change"), so the divergences were audited by diffing the
+live database against `TECH/09` rather than from memory.
+
+What the audit found, now corrected:
+
+- **`TECH/09` gave every scope owner a `channel_id` column** - `races.channel_id`,
+  `eboard_channels.channel_id`, `dm_conversations.channel_id` - and none of them were built.
+  That is not an omission but a decision, and a structural one affecting four tables, so it is
+  now [ADR-0014](decisions/0014-channels-reference-their-scope-one-way.md): a channel
+  references its scope and the scope never references the channel. Storing the relationship in
+  both directions gives it two sources of truth with nothing keeping them honest, and
+  `UNIQUE (scope, scope_id)` already makes the lookup unambiguous.
+- **`PRD/01` listed `is_closed` on the Poll entity.** There is no such column: closed-ness is
+  evaluated at read time so a passed deadline reads as closed everywhere without anyone having
+  acted. Corrected in the PRD.
+- **`poll_votes` gained `allow_multiple` plus a composite FK** - the same trick as
+  `car_group_members`, and the thing that makes single-choice vote-moving a database guarantee
+  rather than a handler convention. `TECH/09` documented the pattern for one table and not the
+  other; both are now documented.
+- Smaller ones: `created_by` on events and workouts (audit only - any admin edits any of
+  them, unlike `meetings.creator_id` which IS the authorization subject), `updated_at` and the
+  not-empty check on news posts, the `car_groups` unique being a CONSTRAINT rather than an
+  index for FK-ordering reasons, and the omitted `avatar_media_id` columns which arrive with
+  media in Phase 3.
+- **`PRD/09` rule 18 gained its exception**: when the Incharge leaves the whole club the
+  Incharge is cleared but no notification fires, because one per affected group on top of
+  "X left the club" would bury what admins need to see. That was a judgement call sitting only
+  in `HISTORY`; it is product behaviour and belongs in the PRD.
+
+### Card removal, which was the last Phase 2 loose end
+
+`TECH/09` specifies `linked_poll_id`, `linked_event_id` and `linked_meeting_id` on messages.
+Phase 0 never created them, so "deleting the underlying object removes its chat card" had been
+logging instead of working. Added with partial indexes and a check that a card links to at most
+one thing.
+
+The card is **soft-deleted like any other message** rather than removed outright. A message
+vanishing mid-conversation makes the replies around it unreadable, and that reasoning does not
+stop applying because the message happens to be a card - what the reader sees is the ordinary
+tombstone.
+
+Mutation-tested both ways, and the first mutation is the interesting one: replacing the
+tombstone with a hard `DELETE` is caught by the **gapless-seq assertion**, not by the card
+assertion. The tombstone rule and the sequence rule turn out to reinforce each other, which is
+worth knowing - a future change that removed a message row would fail a test about ordering
+rather than one about deletion, and that is the more likely place to look.
+
+### A test bug worth recording, because it is a recurring shape
+
+The card test failed in the full file and **passed in isolation**. The final assertion counted
+live cards across every club, and other tests in the file legitimately create events and
+meetings they never delete - `messages` is not truncated between tests, only `notifications`
+and `outbox` are. Scoped the query to the two objects under test, and added a guard asserting
+those two cards existed in the first place so the narrowed assertion cannot pass vacuously by
+counting nothing.
+
+That is the third time this session an assertion has been too broad rather than the code being
+wrong. The lesson is not "scope your queries" so much as: **when a test fails, check whether it
+passes alone before believing the product is broken** - and when it does pass alone, the
+assertion is usually measuring something wider than the thing it names.
+
+---
+
 ## 2026-07-29 - Phase 2 (part 2): the command handlers
 
 Races, polls, meetings, calendar, routines and news now have working commands on top of the

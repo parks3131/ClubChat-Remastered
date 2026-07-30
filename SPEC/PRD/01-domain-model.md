@@ -67,7 +67,7 @@ abstraction has been broken.
 | **CarGroup** | Auto-numbered ("Group 1", "Group 2"), one optional Incharge who must be a current member of that group. A person is in at most one group per race. |
 | **EboardChannel** | Exactly one per club, created automatically with the club. Name, description, avatar. |
 | **Meeting** | Title, description, datetime, optional link. Creator-only edit/delete. |
-| **Poll** | Question, 2-10 options, `allow_multiple`, `is_private`, `is_closed`, optional `closes_at`. Scope: club, race, or Eboard. |
+| **Poll** | Question, 2-10 options, `allow_multiple`, `is_private`, optional `closes_at`. Scope: club, race, or Eboard. **Closed-ness is not stored** - it is "closed by its creator, or past its deadline", evaluated whenever the poll is read, so a passed deadline reads as closed everywhere without anyone having acted. |
 | **CalendarEvent** | Type (`race` \| `practice` \| `team_bonding` \| `volunteer` \| `other`), title, start datetime, optional end, optional location, optional description. Club-scoped only. The `race` type is a **label only** and has no relationship to a real Race. |
 | **RoutineWorkout** | Date (a real calendar date), activity type (10 values), title, optional description. Club-scoped only. |
 | **NewsPost** | Body text and/or one photo (at least one required), author, timestamp, emoji reactions. |

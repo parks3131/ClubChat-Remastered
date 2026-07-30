@@ -291,6 +291,19 @@ export const messages = pgTable(
     type: text('type').notNull().default('text'),
     body: text('body'),
     clientMsgId: uuid('client_msg_id').notNull(),
+    /**
+     * What this message is a card FOR.
+     *
+     * Exactly one is set on a card message and all three are null on an ordinary one. They
+     * exist so that **deleting the underlying object removes its card** rather than leaving
+     * a dead link in the conversation - without them the effect has no way to find the
+     * message it posted. No foreign key: the card outlives nothing, but the object may be
+     * deleted before the effect runs, and an FK would either block the delete or cascade the
+     * message away without a tombstone.
+     */
+    linkedPollId: uuid('linked_poll_id'),
+    linkedEventId: uuid('linked_event_id'),
+    linkedMeetingId: uuid('linked_meeting_id'),
     pinned: boolean('pinned').notNull().default(false),
     // Soft delete with a tombstone, never a removal: a message vanishing
     // mid-conversation makes the replies unreadable (domain invariant 7).
@@ -315,6 +328,24 @@ export const messages = pgTable(
       .on(t.channelId, t.seq)
       .where(sql`type = 'announcement'`),
     check('messages_seq_positive', sql`seq > 0`),
+    // Partial, because only card messages carry these - the index stays proportional to
+    // the number of cards rather than to the whole log.
+    index('messages_linked_poll')
+      .on(t.linkedPollId)
+      .where(sql`linked_poll_id is not null`),
+    index('messages_linked_event')
+      .on(t.linkedEventId)
+      .where(sql`linked_event_id is not null`),
+    index('messages_linked_meeting')
+      .on(t.linkedMeetingId)
+      .where(sql`linked_meeting_id is not null`),
+    // A card is a card for exactly one thing, or for nothing at all.
+    check(
+      'messages_at_most_one_link',
+      sql`(CASE WHEN linked_poll_id IS NOT NULL THEN 1 ELSE 0 END
+         + CASE WHEN linked_event_id IS NOT NULL THEN 1 ELSE 0 END
+         + CASE WHEN linked_meeting_id IS NOT NULL THEN 1 ELSE 0 END) <= 1`,
+    ),
   ],
 );
 

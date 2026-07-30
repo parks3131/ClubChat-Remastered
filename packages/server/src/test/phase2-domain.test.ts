@@ -28,9 +28,13 @@ import {
   createMeeting,
   createNewsPost,
   createWorkout,
+  deleteEvent,
+  deleteMeeting,
   readRoutineWeek,
   updateMeeting,
 } from '../domain/content.ts';
+import { sendMessage } from '../domain/send-message.ts';
+import { getChannelRef } from '../domain/reads.ts';
 import { readCalendarFeed, readMonthMarkers } from '../domain/calendar.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { drainOnce } from '../worker/drain.ts';
@@ -709,6 +713,149 @@ describe('content notification behaviour', () => {
       title: 'Hijacked',
     });
     expect(result.ok).toBe(false);
+  });
+});
+
+// ===========================================================================
+// Chat cards: posted on create, removed on delete
+// ===========================================================================
+
+describe('chat cards', () => {
+  it('a created poll posts a card linked to it', async () => {
+    const f = await setup();
+    const created = await createPoll(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId, scope: 'club', scopeId: f.clubId,
+      question: 'Carpool or bus?', options: ['Carpool', 'Bus'],
+    });
+    if (!created.ok) throw new Error('poll failed');
+    await drainAll();
+
+    const cards = await h.db.execute<{ seq: number; body: string; linked: string }>(sql`
+      SELECT seq, body, linked_poll_id::text AS linked FROM messages
+       WHERE channel_id = ${f.mainChannelId} AND linked_poll_id IS NOT NULL
+    `);
+    expect(cards.rows).toHaveLength(1);
+    expect(cards.rows[0]?.body).toContain('Carpool or bus?');
+    // The link is what lets a later delete find this message.
+    expect(cards.rows[0]?.linked).toBe(created.pollId);
+  });
+
+  it('deleting the poll removes its card and leaves the conversation intact', async () => {
+    const f = await setup();
+    const ctx = await ctxFor(f.ownerId);
+
+    // An ordinary message on either side of the card, so we can prove they survive.
+    const channel = await getChannelRef(h.db, f.mainChannelId);
+    await sendMessage(h.db, ctx, channel!, {
+      channelId: f.mainChannelId, clientMsgId: crypto.randomUUID(), body: 'before',
+    });
+    const created = await createPoll(h.db, ctx, {
+      clubId: f.clubId, scope: 'club', scopeId: f.clubId,
+      question: 'Doomed poll', options: ['a', 'b'],
+    });
+    if (!created.ok) throw new Error('poll failed');
+    await drainAll();
+    await sendMessage(h.db, ctx, channel!, {
+      channelId: f.mainChannelId, clientMsgId: crypto.randomUUID(), body: 'after',
+    });
+    await drainAll();
+
+    await deletePoll(h.db, ctx, created.pollId);
+    await drainAll();
+
+    const rows = await h.db.execute<{ seq: number; body: string | null; deleted: string | null }>(sql`
+      SELECT seq, body, deleted_at::text AS deleted FROM messages
+       WHERE channel_id = ${f.mainChannelId} ORDER BY seq
+    `);
+
+    const card = rows.rows.find((r) => r.body === null && r.deleted !== null);
+    expect(card, 'the card was not removed').toBeDefined();
+
+    // A tombstone, not a hole. The messages around it are untouched, which is the whole
+    // reason cards are soft-deleted like any other message.
+    expect(rows.rows.some((r) => r.body === 'before' && r.deleted === null)).toBe(true);
+    expect(rows.rows.some((r) => r.body === 'after' && r.deleted === null)).toBe(true);
+    // And no seq was reused or removed.
+    expect(rows.rows.map((r) => r.seq)).toEqual(
+      Array.from({ length: rows.rows.length }, (_, i) => i + 1),
+    );
+  });
+
+  it('removing a card is idempotent across redelivery', async () => {
+    const f = await setup();
+    const created = await createPoll(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId, scope: 'club', scopeId: f.clubId,
+      question: 'Twice deleted', options: ['a', 'b'],
+    });
+    if (!created.ok) throw new Error('poll failed');
+    await drainAll();
+    await deletePoll(h.db, await ctxFor(f.ownerId), created.pollId);
+    await drainAll();
+
+    const firstState = await h.db.execute<{ n: number }>(sql`
+      SELECT COUNT(*)::int AS n FROM messages
+       WHERE channel_id = ${f.mainChannelId} AND deleted_at IS NOT NULL
+    `);
+
+    // Replay the delete event, as a consumer restart would.
+    await h.db.execute(sql`UPDATE outbox SET processed_at = NULL WHERE event_type = 'poll.deleted'`);
+    await drainAll();
+
+    const secondState = await h.db.execute<{ n: number }>(sql`
+      SELECT COUNT(*)::int AS n FROM messages
+       WHERE channel_id = ${f.mainChannelId} AND deleted_at IS NOT NULL
+    `);
+    expect(Number(secondState.rows[0]?.n)).toBe(Number(firstState.rows[0]?.n));
+  });
+
+  it('a deleted event and meeting remove their cards too', async () => {
+    const f = await setup();
+    const ctx = await ctxFor(f.ownerId);
+
+    const event = await createEvent(h.db, ctx, {
+      clubId: f.clubId, type: 'practice', title: 'Doomed event',
+      startsAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    const meeting = await createMeeting(h.db, ctx, {
+      eboardId: f.eboardId, clubId: f.clubId, title: 'Doomed meeting',
+      startsAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    if (!event.ok || !meeting.ok) throw new Error('setup failed');
+    await drainAll();
+
+    // Assert the deletes SUCCEEDED before asserting their effect. Without this a refused
+    // delete looks identical to a card that failed to be removed.
+    const deletedEvent = await deleteEvent(h.db, ctx, event.eventId);
+    const deletedMeeting = await deleteMeeting(h.db, ctx, meeting.meetingId, f.clubId);
+    expect(deletedEvent.ok, 'the event delete was refused').toBe(true);
+    expect(deletedMeeting.ok, 'the meeting delete was refused').toBe(true);
+    await drainAll();
+
+    const parked = await h.db.execute<{ event_type: string; last_error: string | null }>(sql`
+      SELECT event_type, last_error FROM outbox
+       WHERE attempts > 0 AND event_type IN ('event.deleted', 'meeting.deleted')
+    `);
+    expect(parked.rows, `an effect failed: ${JSON.stringify(parked.rows)}`).toHaveLength(0);
+
+    // Scoped to THIS test's two objects. `messages` is not truncated between tests - only
+    // notifications and outbox are - so an unscoped count would pick up the perfectly
+    // legitimate live cards other tests in this file created and never deleted.
+    const live = await h.db.execute<{ n: number }>(sql`
+      SELECT COUNT(*)::int AS n FROM messages
+       WHERE (linked_event_id = ${event.eventId}::uuid
+           OR linked_meeting_id = ${meeting.meetingId}::uuid)
+         AND deleted_at IS NULL
+    `);
+    expect(Number(live.rows[0]?.n), 'a card survived its object being deleted').toBe(0);
+
+    // And prove the cards existed in the first place, so the assertion above cannot pass
+    // vacuously by counting nothing.
+    const total = await h.db.execute<{ n: number }>(sql`
+      SELECT COUNT(*)::int AS n FROM messages
+       WHERE linked_event_id = ${event.eventId}::uuid
+          OR linked_meeting_id = ${meeting.meetingId}::uuid
+    `);
+    expect(Number(total.rows[0]?.n), 'no cards were posted, so nothing was tested').toBe(2);
   });
 });
 
