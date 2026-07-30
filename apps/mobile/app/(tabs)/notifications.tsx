@@ -174,9 +174,32 @@ export default function NotificationsScreen() {
   useFocusEffect(
     useCallback(() => {
       if (authState !== 'signed-in') return;
+
+      /*
+       * Re-read on arrival, and mark read on the way out. Both halves are needed and they do
+       * different jobs.
+       *
+       * The re-read is about the LIVE half of the feed. A chat-unread row is recomputed from the
+       * read cursor on every read, so once that chat has been opened the row is simply gone from
+       * the server's answer - and its "Caught up on N messages" replacement is there instead.
+       * Without this reload the resolved row stayed on screen indefinitely, still claiming unread
+       * messages that had already been read, which is exactly what was reported.
+       *
+       * The re-read does NOT undo the shade rule, because the marking happens on the way OUT. So
+       * a visit loads rows in whatever state they were left in, keeps that state for the whole
+       * visit, and finds them plain on the next visit. The two rules only look like they conflict.
+       */
+      load.reload();
+      setOlder([]);
+      setOlderCursor(null);
+      setExhausted(false);
+
       return () => {
         void inboxApi.markRead().catch(() => undefined);
       };
+      // `load.reload` is deliberately not a dependency: it changes identity on every render, and
+      // depending on it would re-fire this on every render rather than on focus.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [authState]),
   );
 

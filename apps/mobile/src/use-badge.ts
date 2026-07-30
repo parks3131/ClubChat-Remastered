@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { usePathname } from 'expo-router';
 import { inboxApi } from './api.ts';
 import { useSession } from './chat-provider.tsx';
 
@@ -20,6 +21,20 @@ const IDLE_REFRESH_MS = 60_000;
 
 export function useBadge(): number {
   const { authState, revision } = useSession();
+  /*
+   * Re-read on every navigation, as well as on socket events and the idle timer.
+   *
+   * > **Because the things that change this number are mostly NOT socket events.** Approving a
+   * > join request, opening a roster, reading the inbox - all of them are HTTP calls that clear
+   * > notifications server-side and bump no revision, so the badge sat on its old value for up to
+   * > a minute afterwards. Reported as "I accepted the request and it still shows 1", which was
+   * > true on screen and false in the database.
+   *
+   * Keying on the path rather than nudging from each screen is deliberate: a nudge has to be
+   * remembered at every call site that changes notification state, and the one that forgets is
+   * indistinguishable from this bug. Navigation is the one signal every such action shares.
+   */
+  const pathname = usePathname();
   const [count, setCount] = useState(0);
 
   useEffect(() => {
@@ -46,7 +61,7 @@ export function useBadge(): number {
       alive = false;
       clearInterval(timer);
     };
-  }, [authState, revision]);
+  }, [authState, revision, pathname]);
 
   return count;
 }

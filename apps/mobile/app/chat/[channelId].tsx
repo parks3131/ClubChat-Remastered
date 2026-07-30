@@ -392,13 +392,24 @@ export default function ChatScreen() {
     });
   }, [jumpedTo, rows]);
 
-  // Opening a chat marks it read. That is the ONLY thing that clears its unread count -
-  // nothing else does, including opening the notification inbox.
+  /*
+   * Opening a chat marks it read. That is the ONLY thing that clears its unread count - nothing
+   * else does, including opening the notification inbox.
+   *
+   * > **Sent unconditionally, not only when the channel is already in the client's list.** It used
+   * > to look the channel up first and skip the frame when it was missing, which is exactly the
+   * > state a cold open leaves: a deep link, a notification tap or a refresh lands here before the
+   * > channel list has synced, so the one case where the unread most needs clearing was the case
+   * > that silently did nothing.
+   *
+   * The seq is a hint rather than the instruction: the server resolves the channel's own
+   * `last_seq` and marks up to that, so a zero here still marks the whole channel read. Sending
+   * the known value anyway keeps the frame honest about what this client had actually seen.
+   */
   useEffect(() => {
     if (!client || !channelId) return;
     const channel = client.channels.find((entry) => entry.id === channelId);
-    if (channel && channel.lastSeq > 0)
-      client.markRead(channelId, channel.lastSeq);
+    client.markRead(channelId, channel?.lastSeq ?? 0);
   }, [client, channelId, revision]);
 
   if (authState === "checking") {

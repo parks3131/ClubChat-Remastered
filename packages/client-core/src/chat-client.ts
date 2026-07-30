@@ -73,6 +73,8 @@ export class ChatClient {
   displayName: string | null = null;
 
   private socket: SocketLike | null = null;
+  /** Read cursors this client wants advanced, waiting on a socket. Channel -> highest seq. */
+  private readonly pendingReads = new Map<string, number>();
   private readonly waiters = new Map<string, AckWaiter>();
   private authResolved: ((value: void) => void) | null = null;
   private authRejected: ((error: Error) => void) | null = null;
@@ -199,6 +201,9 @@ export class ChatClient {
         this.displayName = (frame.d['displayName'] as string | null | undefined) ?? null;
         this.channels = frame.d['channels'] as ChannelState[];
         this.authResolved?.();
+        // The socket is only usable once the server has accepted the token, so this is the
+        // earliest honest moment to flush anything held while it was down.
+        this.flushReads();
         this.opts.onChange?.();
         break;
       }
@@ -350,8 +355,38 @@ export class ChatClient {
     this.send({ t: 'subscribe', d: { channelIds } });
   }
 
+  /**
+   * Tell the server this channel has been read up to `upToSeq`.
+   *
+   * > **Held and retried, not fire-and-forget.** `send` throws when the socket is not up, and this
+   * > is called from a screen effect the moment a chat mounts - which on a cold open (deep link,
+   * > notification tap, refresh) is reliably *before* the socket has finished connecting. The frame
+   * > was therefore dropped exactly in the case where clearing the unread matters most, and the
+   * > count stayed on the inbox forever because nothing ever tried again.
+   *
+   * So the intent is recorded first and flushed on connect, the same shape as the send outbox: the
+   * cursor is a durable thing the client wants, not a message it happens to be able to deliver.
+   * Keyed by channel with the highest seq winning, so repeated reads while scrolling collapse to
+   * one frame rather than queueing hundreds.
+   */
   markRead(channelId: string, upToSeq: number) {
-    this.send({ t: 'msg.read', d: { channelId, upToSeq } });
+    const held = this.pendingReads.get(channelId) ?? -1;
+    if (upToSeq > held) this.pendingReads.set(channelId, upToSeq);
+    this.flushReads();
+  }
+
+  /** Send whatever reads are outstanding, if the socket can carry them. Silent when it cannot. */
+  private flushReads() {
+    if (!this.socket) return;
+    for (const [channelId, upToSeq] of this.pendingReads) {
+      try {
+        this.send({ t: 'msg.read', d: { channelId, upToSeq } });
+        this.pendingReads.delete(channelId);
+      } catch {
+        // Still down. Leave it pending; the next connect flushes it.
+        return;
+      }
+    }
   }
 
   /**

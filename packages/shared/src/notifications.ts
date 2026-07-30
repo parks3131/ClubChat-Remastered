@@ -392,7 +392,10 @@ export function renderNotification(n: {
       const count = Number(p['count']);
       return {
         title: p['channelName']!,
-        body: `Caught up on ${count} message${count === 1 ? '' : 's'} in ${p['channelName']}`,
+        // Copy deck: "Caught up on {N} messages in {Club} chat". The trailing "chat" matters -
+        // it is what makes this row read as the settled twin of the live "{N} unread messages in
+        // {Club} chat" it replaces, which is the whole point of writing it.
+        body: `Caught up on ${count} message${count === 1 ? '' : 's'} in ${p['channelName']} chat`,
       };
     }
   }
