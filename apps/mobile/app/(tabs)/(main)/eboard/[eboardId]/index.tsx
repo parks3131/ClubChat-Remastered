@@ -15,6 +15,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Redirect, Stack, useLocalSearchParams } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { eboardApi } from '../../../../../src/api.ts';
 import { color, space, type } from '../../../../../src/theme.ts';
 import { Action, Badge, Body, Card, DataScreen, Row, SectionHeader } from '../../../../../src/ui.tsx';
@@ -69,6 +70,9 @@ export default function EboardScreen() {
                     .requestAccess(eboardId)
                     .then(() => setRequested(true))
                     .catch(load.reload);
+  // Inside this club for as long as this screen is mounted. Resolved from the read
+  // rather than a param: a race and an Eboard space each know their own club.
+  useDeclareClub(load.data?.eboard.clubId);
                 }}
               />
             )}

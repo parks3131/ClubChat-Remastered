@@ -6,6 +6,7 @@
  */
 
 import { useLocalSearchParams } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { eboardApi } from '../../../../../src/api.ts';
 import { PollsList } from '../../../../../src/screens/polls.tsx';
 import { DataScreen } from '../../../../../src/ui.tsx';
@@ -22,4 +23,7 @@ export default function EboardPollsScreen() {
       )}
     </DataScreen>
   );
+  // Inside this club for as long as this screen is mounted. Resolved from the read
+  // rather than a param: a race and an Eboard space each know their own club.
+  useDeclareClub(eboard.data?.eboard.clubId);
 }

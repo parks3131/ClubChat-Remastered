@@ -7,6 +7,7 @@
  */
 
 import { useLocalSearchParams } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { clubApi } from '../../../../../src/api.ts';
 import { PollsList } from '../../../../../src/screens/polls.tsx';
 import { DataScreen } from '../../../../../src/ui.tsx';
@@ -14,6 +15,8 @@ import { useLoad } from '../../../../../src/use-load.ts';
 
 export default function ClubPollsScreen() {
   const { clubId } = useLocalSearchParams<{ clubId: string }>();
+  // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
+  useDeclareClub(clubId);
   const club = useLoad(() => clubApi.detail(clubId), [clubId]);
 
   return (

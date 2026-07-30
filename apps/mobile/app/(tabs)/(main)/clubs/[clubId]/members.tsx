@@ -16,6 +16,7 @@
 
 import { useEffect } from 'react';
 import { useLocalSearchParams } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { clubApi } from '../../../../../src/api.ts';
 import type { ClubRoster, RosterEntry } from '../../../../../src/api-types.ts';
 import { useSession } from '../../../../../src/chat-provider.tsx';
@@ -36,6 +37,8 @@ function sectionOf(role: RosterEntry['role']): string {
 
 export default function ClubMembersScreen() {
   const { clubId } = useLocalSearchParams<{ clubId: string }>();
+  // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
+  useDeclareClub(clubId);
   const { userId } = useSession();
 
   const roster = useLoad(() => clubApi.roster(clubId), [clubId]);

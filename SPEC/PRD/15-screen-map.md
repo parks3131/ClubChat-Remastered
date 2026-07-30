@@ -123,6 +123,74 @@ an explicit parent when there is not, which is every screen reached by deep link
 tap or page refresh. Falling back without trying history first is not equivalent: it discards the
 state of the screen being returned to, and it grows the stack instead of unwinding it.
 
+> **It is permanent furniture, never conditional on history.** A native back button renders only
+> when history exists, and refresh, deep link and notification tap all produce none. Designing it
+> as conditional is the single most repeated bug in this project.
+
+The parent is a **fixed property of the screen**, not a guess: always one meaningful level up,
+never "the tab root" and never nothing.
+
+| Screen | Back goes to | | Screen | Back goes to |
+|---|---|---|---|---|
+| Club hub | My Clubs | | Race hub | Races list |
+| Club chat | Club hub | | **Race chat** | **Races list** |
+| Club Highlights | Club chat | | Race Highlights | Race chat |
+| Club calendar | Club hub | | Race roster | Race hub |
+| Events list | Club hub | | Meet Information | Race hub |
+| News feed | Club hub | | Car groups | Race hub |
+| Routines | Club hub | | Race polls | Race hub |
+| Polls list | Club hub | | Eboard hub | Club hub |
+| Races list | Club hub | | **Eboard chat** | **Club hub** |
+| Club profile | Club hub | | Eboard Highlights | Eboard chat |
+| Members | Club profile | | Eboard roster | Eboard hub |
+| Gallery | its chat | | Meetings list | Eboard hub |
+| Poll detail | Calendar | | Eboard polls | Eboard hub |
+
+**The two bold rows are a hard rule, not a preference.** A race hub and an Eboard hub each send a
+real member straight into chat, so if either chat pointed back at its own hub, somebody arriving
+with no history would bounce hub to chat to hub forever.
+
+**Highlights is a view over a conversation, not a destination**, so its back always returns to the
+chat it belongs to, and a row inside it jumps into that chat at that message rather than opening a
+sub-page - there is nothing deeper to come back from.
+
+### The Clubs tab is a two-stage escape hatch
+
+Not a plain "go to the list" tab. Its meaning depends on whether the viewer is **inside a club**,
+which means anywhere in that club's world - the hub, its chat, Highlights, news, calendar,
+routines, polls, the races list, a race hub, a race chat, the Eboard channel, any of it. Not just
+the hub.
+
+| Where | Tapping CLUBS goes to |
+|---|---|
+| Not inside a club (list, Calendar, Notifications, Profile) | My Clubs |
+| Inside a club, on any screen except its hub | **that club's hub**, from any depth |
+| Inside a club, already on its hub | My Clubs |
+
+So the whole gesture is: **tap once to surface at the club's front door, tap again to leave it.**
+Never more than two taps to the root from anywhere. The tab carries **no extra visual state** for
+any of this - same icon, same label, same active tint. The behaviour is contextual; the chrome is
+not. The other destinations are plain: each goes to its own root and keeps its own stack.
+
+The "inside a club" signal is set when a club-scoped screen mounts and cleared when it unmounts,
+which is what makes it survive into race and Eboard chat. **A back arrow on the My Clubs list is a
+bug, not a state** - leaving a club must unwind to the existing root entry rather than stacking a
+second copy of it.
+
+**Two cross-stack jumps override their back arrow entirely**, because popping sends the person
+sideways and then bounces them back:
+
+- A hub reached by the **Clubs tab shortcut** always goes back to My Clubs, whatever history says.
+  Popping would return them to the deep screen they just escaped, which makes the shortcut useless.
+- A hub reached from a **Profile club chip** goes back to Profile, *and* the jump replaces rather
+  than pushes so the Clubs tab already reads as My Clubs underneath. Otherwise tapping Clubs later
+  lands back on that hub whose back bounces to Profile - a live, reproducible loop.
+
+**A screen the viewer may not see redirects to that scope's safe parent** rather than rendering an
+error - a non-admin at the Eboard space lands on the club hub, a non-roster member at race chat on
+the races list - and renders a centred spinner for the frame before the redirect, never a flash of
+the protected content.
+
 **The Calendar destination is club-scoped when a club is active.** Entering a club sets it as
 current, and the Calendar tab then shows that club's feed with the club's name in its header
 (`Ridgeway Calendar`); leaving the club clears it and the tab shows the merged cross-club feed

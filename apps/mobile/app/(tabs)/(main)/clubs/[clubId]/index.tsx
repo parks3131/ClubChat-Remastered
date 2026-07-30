@@ -11,6 +11,8 @@
 
 import { StyleSheet, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
+import { BackAlwaysTo } from '../../../../../src/nav.tsx';
 import { unreadCount } from '@clubchat/shared';
 import { clubApi, raceApi } from '../../../../../src/api.ts';
 import { useSession } from '../../../../../src/chat-provider.tsx';
@@ -22,7 +24,29 @@ import { useLoad } from '../../../../../src/use-load.ts';
 const RACE_PREVIEW = 5;
 
 export default function ClubHubScreen() {
-  const { clubId } = useLocalSearchParams<{ clubId: string }>();
+  const { clubId, from } = useLocalSearchParams<{ clubId: string; from?: string }>();
+  // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
+  useDeclareClub(clubId);
+
+  /*
+   * Where this hub's back control goes, which depends on how the hub was reached.
+   *
+   * Two of the three entries are cross-stack jumps that leave misleading history behind, so both
+   * override the arrow rather than trusting it:
+   *
+   *  - `from=clubsTab`: the Clubs tab's shortcut, which surfaced here from arbitrary depth. Its
+   *    back must be the My Clubs list. Popping would drop the person back into the deep screen
+   *    they just escaped, which makes the shortcut useless.
+   *  - `from=profile`: a club chip on the Profile screen. Its back must be Profile - and the
+   *    Clubs tab underneath must ALREADY read as the My Clubs list, which is why the jump
+   *    replaces rather than pushes. Otherwise tapping Clubs later returns here and back bounces
+   *    to Profile again, which is a live loop rather than a quirk.
+   *
+   * Anything else is an ordinary push from the list, where popping is exactly right.
+   */
+  const jumped = from === 'clubsTab' || from === 'profile';
+  const backHref = from === 'profile' ? '/profile' : '/clubs';
+  const backLabel = from === 'profile' ? 'Profile' : 'Clubs';
   const { channels, revision } = useSession();
 
   const club = useLoad(() => clubApi.detail(clubId), [clubId, revision]);
@@ -46,7 +70,16 @@ export default function ClubHubScreen() {
               The header carries the club's own name rather than the word "Club". Set from the
               screen because only the screen has the data - the layout knows the route, not the row.
             */}
-            <Stack.Screen options={{ title: data.club.name }} />
+            <Stack.Screen
+              options={{
+                title: data.club.name,
+                // Overridden only for the two cross-stack jumps; an ordinary push keeps the
+                // stack's own control, which pops correctly.
+                ...(jumped
+                  ? { headerLeft: () => <BackAlwaysTo href={backHref} label={backLabel} /> }
+                  : {}),
+              }}
+            />
             <Text style={styles.sport}>{data.club.sport}</Text>
             {data.club.description !== null && data.club.description.length > 0 && (
               <Text style={styles.description}>{data.club.description}</Text>

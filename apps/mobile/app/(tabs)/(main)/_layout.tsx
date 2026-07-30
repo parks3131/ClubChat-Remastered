@@ -99,7 +99,10 @@ export default function MainStackLayout() {
       />
       <Stack.Screen
         name="clubs/[clubId]/members"
-        options={parented('Members', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
+        options={parented('Members', (p) => ({
+          href: `/clubs/${p.clubId}/profile`,
+          label: 'Club profile',
+        }))}
       />
       <Stack.Screen
         name="clubs/[clubId]/news"
@@ -152,7 +155,10 @@ export default function MainStackLayout() {
       />
       <Stack.Screen
         name="races/[raceId]/meet"
-        options={parented('Meet Information', (p) => ({ href: `/races/${p.raceId}`, label: 'Race' }))}
+        options={parented('Meet Information', (p) => ({
+          href: `/races/${p.raceId}`,
+          label: 'Race',
+        }))}
       />
       <Stack.Screen
         name="races/[raceId]/car-groups"
@@ -193,6 +199,12 @@ export default function MainStackLayout() {
         name="polls/[pollId]"
         options={{
           title: 'Poll',
+          /*
+            A poll detail knows its own scope only after its read lands, and the back control has
+            to exist before that. So the declared fallback is the Calendar, which every poll
+            genuinely appears on - and with real history the arrow pops to whichever list the
+            person actually came from, which is the common case.
+          */
           headerLeft: () => <BackTo href="/calendar" label="Calendar" />,
         }}
       />

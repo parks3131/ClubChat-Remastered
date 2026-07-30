@@ -13,9 +13,10 @@
  */
 
 import { MaterialIcons } from '@expo/vector-icons';
-import { Tabs } from 'expo-router';
+import { Tabs, usePathname, useRouter } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 import { useSession } from '../../src/chat-provider.tsx';
+import { useCurrentClub } from '../../src/current-club.tsx';
 import { color, radius, space, type } from '../../src/theme.ts';
 import { useBadge } from '../../src/use-badge.ts';
 
@@ -66,6 +67,9 @@ function BadgedLabel({ label, focused }: { label: string; focused: boolean }) {
 
 export default function TabsLayout() {
   const { authState } = useSession();
+  const { currentClub } = useCurrentClub();
+  const pathname = usePathname();
+  const router = useRouter();
 
   return (
     <Tabs
@@ -104,6 +108,47 @@ export default function TabsLayout() {
           headerShown: false,
           tabBarIcon: ({ focused }) => <TabIcon name="clubs" focused={focused} />,
           tabBarLabel: ({ focused }) => <TabLabel label="Clubs" focused={focused} />,
+        }}
+        /*
+          The two-stage escape hatch. `PRD/15`:
+
+            - not inside a club        -> the My Clubs list
+            - inside one, off its hub  -> that club's hub, from arbitrary depth
+            - inside one, ON its hub   -> the My Clubs list
+
+          So the whole gesture is: tap once to surface at the club's front door, tap again to leave
+          the club. Never more than two taps to the root from anywhere.
+
+          The tab carries no extra visual state for any of this - same icon, same label, same
+          active tint. The behaviour is contextual; the chrome is not.
+        */
+        listeners={{
+          tabPress: (event) => {
+            event.preventDefault();
+
+            if (currentClub === null) {
+              router.replace('/clubs');
+              return;
+            }
+
+            const hub = `/clubs/${currentClub.clubId}`;
+            if (pathname === hub) {
+              /*
+                Already at the front door, so this tap means "leave the club".
+
+                `dismissTo` rather than `replace`: replace swaps the top of the stack in place, so
+                a stack of [list, hub] becomes [list, list] - still two deep, leaving a back arrow
+                on what looks like the plain root list. A back arrow on the root is a bug, not a
+                state. `dismissTo` unwinds to the existing entry instead of adding one.
+              */
+              router.dismissTo('/clubs');
+              return;
+            }
+
+            // `from=clubsTab` tells the hub to override its back arrow to the My Clubs list,
+            // regardless of the history this jump leaves behind - see the hub's own note.
+            router.replace(`${hub}?from=clubsTab`);
+          },
         }}
       />
       <Tabs.Screen

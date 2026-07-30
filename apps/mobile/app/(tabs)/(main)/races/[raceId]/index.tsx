@@ -19,6 +19,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Redirect, Stack, useLocalSearchParams } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { raceApi } from '../../../../../src/api.ts';
 import { color, space, type } from '../../../../../src/theme.ts';
 import {
@@ -80,6 +81,9 @@ export default function RaceHubScreen() {
               variant="secondary"
               onPress={() => {
                 void raceApi.setPin(raceId, !viewer.pinned).then(load.reload, load.reload);
+  // Inside this club for as long as this screen is mounted. Resolved from the read
+  // rather than a param: a race and an Eboard space each know their own club.
+  useDeclareClub(load.data?.race.clubId);
               }}
             />
 

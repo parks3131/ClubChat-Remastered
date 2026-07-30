@@ -12,6 +12,7 @@
 import { useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { reactionEmoji, type ReactionEmoji } from '@clubchat/shared';
 import { clubApi, contentApi } from '../../../../../src/api.ts';
 import type { NewsPost } from '../../../../../src/api-types.ts';
@@ -32,6 +33,8 @@ import { useLoad } from '../../../../../src/use-load.ts';
 
 export default function ClubNewsScreen() {
   const { clubId } = useLocalSearchParams<{ clubId: string }>();
+  // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
+  useDeclareClub(clubId);
   const [composing, setComposing] = useState(false);
 
   const feed = useLoad(() => contentApi.news(clubId), [clubId]);

@@ -82,7 +82,14 @@ export default function ProfileScreen() {
                   key={club.id}
                   title={club.name}
                   subtitle={`${club.sport}  ·  ${club.role}`}
-                  href={`/clubs/${club.id}`}
+                  /*
+                    A cross-tab jump, so it carries where it came from AND replaces rather than
+                    pushes. Both halves matter: `from=profile` makes the hub's back arrow return
+                    here, and replacing leaves the Clubs tab reading as the My Clubs list
+                    underneath. Push instead, and tapping Clubs later lands back on this hub whose
+                    back bounces to Profile - a live loop rather than a quirk.
+                  */
+                  onPress={() => router.replace(`/clubs/${club.id}?from=profile`)}
                 />
               ))
             )}

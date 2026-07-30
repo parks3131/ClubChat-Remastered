@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
+import { useDeclareClub } from "../../src/current-club.tsx";
 import {
   reactionEmoji,
   reactionSummary,
@@ -222,6 +223,9 @@ export default function ChatScreen() {
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [meta, setMeta] = useState<ChannelMeta | null>(null);
+  // Chat counts as inside the club, which is what keeps the Clubs tab's shortcut working
+  // from a race or Eboard conversation. Null for a DM, which belongs to no club.
+  useDeclareClub(meta?.clubId);
   const [menuOpen, setMenuOpen] = useState(false);
   /**
    * The seq a long press selected.
@@ -540,12 +544,33 @@ export default function ChatScreen() {
   /**
    * The parent this screen falls back to.
    *
-   * Always explicit and never this conversation's own hub: chat is the home screen of a race
-   * and of an Eboard space, so a fallback pointing at the hub would bounce hub to chat to hub
-   * forever on an entry with no history. A DM's parent is the message list.
+   * > **Never this conversation's own hub, for a race or an Eboard space.** Both hubs send a real
+   * > member straight into chat, so a back control pointing at either would bounce hub to chat to
+   * > hub forever for somebody arriving with no history. That is a hard rule, not a preference.
+   *
+   * So a race falls back to the **races list** and an Eboard space to the **club hub** - one
+   * meaningful level up in each case, and neither is a screen that redirects back here. Club chat
+   * has no such problem: the club hub is a real destination that does not forward.
    */
-  const parent = meta?.scope === "dm" ? "/dm" : "/clubs";
-  const parentLabel = meta?.scope === "dm" ? "Messages" : "Clubs";
+  const parent =
+    meta === null
+      ? "/clubs"
+      : meta.scope === "dm"
+        ? "/dm"
+        : meta.scope === "club"
+          ? `/clubs/${meta.scopeId}`
+          : meta.scope === "race"
+            ? `/clubs/${meta.clubId}/races`
+            : `/clubs/${meta.clubId}`;
+
+  const parentLabel =
+    meta === null
+      ? "Clubs"
+      : meta.scope === "dm"
+        ? "Messages"
+        : meta.scope === "race"
+          ? "Races"
+          : "Club";
 
   const act = async (run: () => Promise<unknown>, message: string) => {
     setMenuOpen(false);

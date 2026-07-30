@@ -15,6 +15,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { raceApi } from '../../../../../src/api.ts';
 import type { CarGroup } from '../../../../../src/api-types.ts';
 import { useSession } from '../../../../../src/chat-provider.tsx';
@@ -34,6 +35,9 @@ export default function CarGroupsScreen() {
   const { raceId } = useLocalSearchParams<{ raceId: string }>();
   const groups = useLoad(() => raceApi.carGroups(raceId), [raceId]);
   const race = useLoad(() => raceApi.detail(raceId), [raceId]);
+  // Inside this club for as long as this screen is mounted. Resolved from the read
+  // rather than a param: a race and an Eboard space each know their own club.
+  useDeclareClub(race.data?.race.clubId);
   const [busy, setBusy] = useState(false);
 
   const isManager = race.data?.race.viewer.isManager === true;

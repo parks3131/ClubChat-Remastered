@@ -24,6 +24,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SessionProvider } from '../src/chat-provider.tsx';
+import { CurrentClubProvider } from '../src/current-club.tsx';
 import { FontGate } from '../src/fonts.tsx';
 import { BackTo } from '../src/nav.tsx';
 import { color, type } from '../src/theme.ts';
@@ -39,6 +40,12 @@ export default function RootLayout() {
       */}
       <FontGate>
         <SessionProvider>
+          {/*
+            Outside the Stack, because the Clubs tab and the Calendar destination both read
+            "which club am I inside" from OTHER tabs - they sit outside the club's own stack
+            entirely and cannot see its params.
+          */}
+          <CurrentClubProvider>
           <Stack
             screenOptions={{
               headerStyle: { backgroundColor: color.chrome },
@@ -80,6 +87,7 @@ export default function RootLayout() {
               }}
             />
           </Stack>
+          </CurrentClubProvider>
         </SessionProvider>
       </FontGate>
     </SafeAreaProvider>

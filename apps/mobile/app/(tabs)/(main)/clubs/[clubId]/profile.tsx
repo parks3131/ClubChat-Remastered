@@ -14,6 +14,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import * as Linking from 'expo-linking';
 import { clubApi } from '../../../../../src/api.ts';
 import { color, space, type } from '../../../../../src/theme.ts';
@@ -31,6 +32,8 @@ import { useLoad } from '../../../../../src/use-load.ts';
 
 export default function ClubProfileScreen() {
   const { clubId } = useLocalSearchParams<{ clubId: string }>();
+  // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
+  useDeclareClub(clubId);
   const router = useRouter();
   const load = useLoad(() => clubApi.detail(clubId), [clubId]);
   const [busy, setBusy] = useState(false);

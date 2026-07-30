@@ -10,28 +10,89 @@
  * goes when there is nowhere to return to.
  */
 
-import { Link } from 'expo-router';
+import { MaterialIcons } from '@expo/vector-icons';
+import { Link, useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { color, radius, space, type } from './theme.ts';
 
 /**
  * An explicit back control, rendered whether or not history exists.
  *
- * `Link` rather than `router.back()` on purpose: `back()` throws when there is nothing to pop,
- * which is every screen reached by a direct link or a refresh (AGENTS.md section 4). A link to
- * the declared parent always works.
+ * **Permanent furniture, never conditional.** A native back button renders only when there is
+ * history, and a refresh, a deep link and a notification tap all produce none - so a screen
+ * relying on it looks correct until somebody arrives from outside. That is the single most
+ * repeated bug in this project's history.
+ *
+ * > **It pops first and falls back second, and the order matters.** Popping returns to the actual
+ * > previous screen with its scroll position and state intact; the declared parent is the answer
+ * > only when there is nothing to pop. An earlier version always navigated to the parent, which
+ * > looks identical on the first tap and is wrong on every subsequent one - it discards the state
+ * > of the screen being returned to and grows the stack instead of unwinding it.
+ *
+ * The parent is a **declared property of the screen**, not a guess: always one meaningful level
+ * up, never "the tab root" and never nothing. See the back-target table in `SPEC/PRD/15`.
  */
-export function BackTo({ href, label }: { href: string; label: string }) {
+export function BackTo({
+  href,
+  label,
+  variant = 'label',
+}: {
+  href: string;
+  label: string;
+  /**
+   * `label` is the standard nested header. `icon` is the bare arrow v1 uses in a header whose
+   * title is the club's own identity, where a worded control would compete with it.
+   */
+  variant?: 'label' | 'icon';
+}) {
+  const router = useRouter();
+
+  const go = () => {
+    // `canGoBack()` rather than a try/catch around `back()`: popping with an empty stack throws,
+    // and a thrown navigation is indistinguishable from a dead control to whoever tapped it.
+    if (router.canGoBack()) router.back();
+    else router.replace(href);
+  };
+
   return (
-    <Link href={href} asChild accessibilityRole="button" accessibilityLabel={`Back to ${label}`}>
-      <Pressable>
-        {/*
-          The screen gutter as horizontal padding. The navigator renders this slot flush to x=0
-          on web, so without it the label touches the edge of the viewport.
-        */}
+    <Pressable
+      onPress={go}
+      accessibilityRole="button"
+      accessibilityLabel={`Back to ${label}`}
+      hitSlop={space.sm}
+      // The screen gutter as horizontal padding. The navigator renders this slot flush to x=0
+      // on web, so without it the control touches the edge of the viewport.
+      style={styles.backWrap}
+    >
+      {variant === 'icon' ? (
+        <MaterialIcons name="arrow-back" size={22} color={color.accent} />
+      ) : (
         <Text style={styles.back}>{label}</Text>
-      </Pressable>
-    </Link>
+      )}
+    </Pressable>
+  );
+}
+
+/**
+ * A back control that ALWAYS goes to its target, ignoring whatever history exists.
+ *
+ * For the two cross-stack jumps where popping is a live loop rather than a convenience: a club hub
+ * opened from Profile's club chips, and one opened by the Clubs tab shortcut. In both the previous
+ * entry is somewhere the person did not come "down" from, so unwinding to it sends them sideways
+ * and then bounces them back. See `SPEC/PRD/15`'s special cases.
+ */
+export function BackAlwaysTo({ href, label }: { href: string; label: string }) {
+  const router = useRouter();
+  return (
+    <Pressable
+      onPress={() => router.replace(href)}
+      accessibilityRole="button"
+      accessibilityLabel={`Back to ${label}`}
+      hitSlop={space.sm}
+      style={styles.backWrap}
+    >
+      <Text style={styles.back}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -98,12 +159,8 @@ export function QuickNav({ items }: { items: ReadonlyArray<{ href: string; label
 }
 
 const styles = StyleSheet.create({
-  back: {
-    ...type.label,
-    color: color.accent,
-    textTransform: 'uppercase',
-    paddingHorizontal: space.md,
-  },
+  backWrap: { paddingHorizontal: space.md, paddingVertical: space.xs },
+  back: { ...type.label, color: color.accent, textTransform: 'uppercase' },
   actionWrap: { paddingHorizontal: space.md, paddingVertical: space.xs },
   action: { ...type.label, color: color.accent, textTransform: 'uppercase' },
   quickNav: {

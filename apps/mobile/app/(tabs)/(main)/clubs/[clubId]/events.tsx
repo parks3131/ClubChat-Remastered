@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { calendarApi, clubApi, contentApi } from '../../../../../src/api.ts';
 import type { EventType, FeedItem } from '../../../../../src/api-types.ts';
 import { bibParts, formatDateOnly, formatInstant } from '../../../../../src/dates.ts';
@@ -33,6 +34,8 @@ const TYPES: readonly EventType[] = ['practice', 'team_bonding', 'volunteer', 'o
 
 export default function ClubEventsScreen() {
   const { clubId, create } = useLocalSearchParams<{ clubId: string; create?: string }>();
+  // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
+  useDeclareClub(clubId);
   const [when, setWhen] = useState<'upcoming' | 'past'>('upcoming');
 
   const feed = useLoad(() => calendarApi.feed({ club: clubId, when }), [clubId, when]);

@@ -16,6 +16,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { clubApi, contentApi } from '../../../../../src/api.ts';
 import type { ActivityType } from '../../../../../src/api-types.ts';
 import { color, space, type } from '../../../../../src/theme.ts';
@@ -61,6 +62,8 @@ function shift(monday: string, weeks: number): string {
 
 export default function RoutinesScreen() {
   const { clubId } = useLocalSearchParams<{ clubId: string }>();
+  // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
+  useDeclareClub(clubId);
   const [monday, setMonday] = useState(() => mondayOf(new Date()));
   const [adding, setAdding] = useState<string | null>(null);
 

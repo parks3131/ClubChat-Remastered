@@ -12,6 +12,7 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { raceApi } from '../../../../../src/api.ts';
 import { color, space, type } from '../../../../../src/theme.ts';
 import { Action, Body, DataScreen, Field, SectionHeader } from '../../../../../src/ui.tsx';
@@ -37,6 +38,9 @@ export default function MeetInformationScreen() {
       }
     </DataScreen>
   );
+  // Inside this club for as long as this screen is mounted. Resolved from the read
+  // rather than a param: a race and an Eboard space each know their own club.
+  useDeclareClub(load.data?.race.clubId);
 }
 
 function MeetForm({

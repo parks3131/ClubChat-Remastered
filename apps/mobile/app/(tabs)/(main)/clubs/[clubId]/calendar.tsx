@@ -7,9 +7,12 @@
  */
 
 import { useLocalSearchParams } from 'expo-router';
+import { useDeclareClub } from '../../../../../src/current-club.tsx';
 import { CalendarView } from '../../../calendar.tsx';
 
 export default function ClubCalendarScreen() {
   const { clubId } = useLocalSearchParams<{ clubId: string }>();
+  // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
+  useDeclareClub(clubId);
   return <CalendarView clubId={clubId} />;
 }
