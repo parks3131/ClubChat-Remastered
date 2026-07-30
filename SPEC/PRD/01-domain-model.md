@@ -71,7 +71,7 @@ abstraction has been broken.
 | **CalendarEvent** | Type (`race` \| `practice` \| `team_bonding` \| `volunteer` \| `other`), title, start datetime, optional end, optional location, optional description. Club-scoped only. The `race` type is a **label only** and has no relationship to a real Race. |
 | **RoutineWorkout** | Date (a real calendar date), activity type (10 values), title, optional description. Club-scoped only. |
 | **NewsPost** | Body text and/or one photo (at least one required), author, timestamp, emoji reactions. |
-| **Notification** | Recipient, actor, club, type (18 values), a fully rendered human-readable body, and a target route. |
+| **Notification** | Recipient, actor, club, type (18 values), and the structured parameters its text and target are rendered from. The wording and the destination are produced when the row is read, not frozen into it when written. |
 
 ### Invariants that must hold in any architecture
 

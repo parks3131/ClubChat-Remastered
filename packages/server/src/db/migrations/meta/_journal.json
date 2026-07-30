@@ -22,6 +22,13 @@
       "when": 1785377825170,
       "tag": "0002_auth_table_id_defaults",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785380197953,
+      "tag": "0003_phase1_notifications_and_push",
+      "breakpoints": true
     }
   ]
 }

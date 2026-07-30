@@ -27,7 +27,8 @@ import {
 import type { Db } from '../db/client.ts';
 import type { Auth } from '../auth.ts';
 import { resolveSessionFromToken } from '../auth.ts';
-import { appendMessage, ChannelGoneError } from '../domain/append-message.ts';
+import { ChannelGoneError } from '../domain/append-message.ts';
+import { sendMessage } from '../domain/send-message.ts';
 import { advanceReadCursor, getChannelRef, listAccessibleChannels } from '../domain/reads.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { isChannelMember } from '../policy/predicates.ts';
@@ -238,6 +239,7 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
       channelId: string;
       type: MessageEnvelope['type'];
       body?: string | null | undefined;
+      mentions?: readonly string[] | undefined;
     },
     correlationId?: string,
   ) => {
@@ -265,23 +267,35 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
     // subscription. A subscription proves what was true when it was granted; a write
     // must be checked when it happens.
     const access = await loadAccessContext(deps.db, state.userId!);
-    if (!isChannelMember(access, channel)) {
-      send(
-        state.socket,
-        { t: 'msg.err', d: { clientMsgId: payload.clientMsgId, code: 'forbidden' } },
-        correlationId,
-      );
-      return;
-    }
 
     try {
-      const result = await appendMessage(deps.db, {
+      // Through the authorized command, not straight to appendMessage. That is where the
+      // membership check and the announcement gate live, so the gateway cannot become a
+      // second path with its own opinion about who may post what.
+      const outcome = await sendMessage(deps.db, access, channel, {
         channelId: payload.channelId,
-        senderId: state.userId!,
         clientMsgId: payload.clientMsgId,
         type: payload.type,
         body: payload.body ?? null,
+        mentions: payload.mentions,
       });
+
+      if (!outcome.ok) {
+        send(
+          state.socket,
+          {
+            t: 'msg.err',
+            d: {
+              clientMsgId: payload.clientMsgId,
+              code: outcome.code === 'invalid_type' ? 'malformed' : outcome.code,
+            },
+          },
+          correlationId,
+        );
+        return;
+      }
+
+      const result = outcome;
 
       // The ack goes out the instant the transaction has committed, BEFORE any
       // fan-out. Perceived send latency is one round trip plus one Postgres commit,

@@ -29,7 +29,10 @@ import {
   syncSince,
 } from '../domain/reads.ts';
 import { loadAccessContext, type AccessContext } from '../policy/context.ts';
-import { isChannelMember } from '../policy/predicates.ts';
+import { isChannelMember, isClubAdmin } from '../policy/predicates.ts';
+import { badgeCount, markInboxRead, markRosterSeen, openChat, readInbox } from '../domain/inbox.ts';
+import { registerDevice } from '../push/dispatch.ts';
+import { Platform } from '@clubchat/shared';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -196,15 +199,90 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         const body = ReadBody.safeParse(request.body);
         if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
 
-        const lastReadSeq = await advanceReadCursor(
-          deps.db,
-          request.userId!,
-          request.params.id,
-          body.data.upToSeq,
-        );
-        return { channelId: request.params.id, lastReadSeq };
+        // Through openChat rather than straight to the cursor: opening a chat with unread
+        // messages must also record a "caught up on N messages" row, so the history of
+        // having caught up survives once the live count is gone.
+        const opened = await openChat(deps.db, request.userId!, request.params.id);
+        // An explicit upToSeq below the head still advances only as far as asked, but the
+        // common case - the client reporting the head it just rendered - is the same thing.
+        if (body.data.upToSeq > opened.lastReadSeq) {
+          await advanceReadCursor(deps.db, request.userId!, request.params.id, body.data.upToSeq);
+        }
+        return {
+          channelId: request.params.id,
+          lastReadSeq: Math.max(opened.lastReadSeq, body.data.upToSeq),
+          caughtUp: opened.caughtUp,
+        };
       },
     );
+
+    // ---------------------------------------------------------------------
+    // The inbox
+    // ---------------------------------------------------------------------
+
+    const InboxQuery = z.object({
+      cursor: z.string().optional(),
+      limit: z.coerce.number().int().positive().max(100).optional(),
+    });
+
+    protectedRoutes.get('/notifications', async (request, reply) => {
+      const query = InboxQuery.safeParse(request.query);
+      if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+      return readInbox(deps.db, request.userId!, query.data);
+    });
+
+    protectedRoutes.get('/notifications/badge', async (request) => ({
+      count: await badgeCount(deps.db, request.userId!),
+    }));
+
+    /**
+     * Opening the inbox.
+     *
+     * Clears the badge, but NOT chat-unread rows (only opening that chat does) and NOT
+     * pending join requests (only opening the relevant roster does). See markInboxRead.
+     */
+    protectedRoutes.post('/notifications/read', async (request) => ({
+      ...(await markInboxRead(deps.db, request.userId!)),
+      badge: await badgeCount(deps.db, request.userId!),
+    }));
+
+    /**
+     * Opening a club's member roster.
+     *
+     * The only thing that clears that club's pending join-request rows. Gated on admin,
+     * since only the admin tier sees those requests in the first place.
+     */
+    protectedRoutes.post<{ Params: { id: string } }>(
+      '/clubs/:id/members/seen',
+      async (request, reply) => {
+        if (!isClubAdmin(request.access!, request.params.id)) {
+          return reply.code(404).send({ error: 'not_found' });
+        }
+        return markRosterSeen(deps.db, request.userId!, {
+          kind: 'club',
+          clubId: request.params.id,
+        });
+      },
+    );
+
+    // ---------------------------------------------------------------------
+    // Devices
+    // ---------------------------------------------------------------------
+
+    const DeviceBody = z.object({
+      pushToken: z.string().min(1).max(400),
+      platform: Platform,
+    });
+
+    protectedRoutes.post('/devices', async (request, reply) => {
+      const body = DeviceBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+      const device = await registerDevice(deps.db, {
+        userId: request.userId!,
+        ...body.data,
+      });
+      return reply.code(201).send(device);
+    });
 
     /**
      * The reconnect and foreground path.

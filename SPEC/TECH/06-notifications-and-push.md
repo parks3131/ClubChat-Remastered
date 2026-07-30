@@ -30,6 +30,19 @@ outbox event  →  worker  →  audience (respecting access + mute)
 Push targeting is **per device**, suppression is **per member via the read cursor** ([Message flows](03-message-flows.md)). The
 connection registry is not consulted.
 
+**Built in Phase 1.** Two details the sketch below does not name, both discovered while
+implementing:
+
+- **A `push_deliveries` ledger, keyed `(outbox_event_id, device_id)`.** The spec calls for
+  deduping on that pair without saying where the record lives. It needs its own table rather
+  than a column, and it must **outlive the outbox row**, which is pruned nightly - otherwise
+  pruning makes an already-sent push re-sendable. A duplicated database row can be cleaned
+  up; a duplicated push has already buzzed somebody's phone.
+- **Both `notifications.outbox_event_id` and the ledger's are plain `bigint`, not
+  `bigserial`.** They reference an outbox row rather than generating a value, and a serial
+  default would silently hand out sequence numbers to an insert that forgot to supply one -
+  defeating the very idempotency index it sits in.
+
 ```sql
 CREATE TABLE devices (
   id            uuid PRIMARY KEY,

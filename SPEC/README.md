@@ -104,6 +104,7 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0010](decisions/0010-link-only-invites.md) | Invite by share link only, with no typed invite code |
 | [0011](decisions/0011-typescript-node-on-fly-with-self-hosted-auth.md) | TypeScript on Node, hosted on Fly.io, with self-hosted auth |
 | [0012](decisions/0012-no-receipts-presence-or-typing-indicators.md) | Ship only a `sent` acknowledgement |
+| [0013](decisions/0013-notifications-store-type-and-params.md) | Store notifications as a type plus params, not a rendered body and route |
 
 ## Templates
 

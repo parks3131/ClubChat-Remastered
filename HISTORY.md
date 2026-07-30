@@ -7,6 +7,102 @@ Newest first.
 
 ---
 
+## 2026-07-29 - Phase 1: effects, notifications and push
+
+**The gate passes.** An announcement in club chat reaches a backgrounded phone as a push that
+deep-links to the right message, asserted through a `RecordingPushSender` that captures the
+payload and its target - the only way to check the deep link carries the correct `seq` rather
+than merely opening the conversation.
+
+164 tests green across four packages. 28 constraint assertions, all proved by attempting the
+violation in SQL.
+
+### Decisions taken
+
+**ADR-0013: notifications store `(type, params)` and render at read time.** `TECH/09` and
+`PRD/01` both specified a stored English `body` and a stored `target` route string, inherited
+from v1. Two recorded defects trace to that shape: pitfall 8 (a stored route left approvals
+permanently unresolved for eight migrations) and debt 11 (a stored body is unlocalizable, and
+retrofitting means rewriting every historical row - with an explicit instruction to design it in
+now). Dropping both columns closes both, and Phase 1 was the last moment it was cheap. The
+rejected alternative worth naming is storing params *and* a rendered body: two representations
+of one string, which drift the moment a renderer changes, and which answer "which is
+authoritative?" with "whichever the reader used".
+
+Params are a jsonb column, so the contract has no database-level shape. Each type declares a Zod
+schema, validated at write time, which is the compensating control for having dropped the
+rendered column: a malformed param fails the write rather than surfacing as broken text in
+somebody's inbox months later.
+
+**A `push_deliveries` ledger, outliving the outbox.** `TECH/06` says to dedupe on
+`(outbox_event_id, device_id)` without saying where that record lives. It needs its own table,
+and it must survive the nightly outbox prune - otherwise pruning makes an already-sent push
+re-sendable. The asymmetry is the reason: a duplicated database row can be cleaned up, a
+duplicated push has already buzzed a phone.
+
+### Bugs hit, with root causes
+
+1. **`bigserial` where a reference belonged.** `notifications.outbox_event_id` and the ledger's
+   were declared `bigserial`, which attaches a sequence default - so an insert that forgot to
+   supply the id would silently receive a sequence number and defeat the very idempotency index
+   it sits in. Caught by reading the generated SQL before applying it. Corrected to `bigint` by
+   regenerating, which was legitimate because the migration had not yet been applied; had it
+   been, this would have needed a corrective migration instead.
+
+2. **`db.execute` does not apply Drizzle's column type coercion.** A typed `select()` returns a
+   `Date` for a timestamptz; raw `execute()` returns the driver's **string**. The hand-written
+   row type said `Date`, TypeScript agreed, and the failure surfaced as
+   `row.created_at.toISOString is not a function` at the call site rather than at the lie.
+   Probed the actual runtime type rather than patching defensively, then made the types say
+   `string`. Grepped for the same mistake elsewhere: contained to the one file. Recorded as
+   `AGENTS.md` 5.3 entry 7.
+
+3. **Test isolation, not a product bug.** Four gate tests failed with 27 rows where 1 was
+   expected, because they share one container and several assertions query `notifications`
+   unfiltered. The unfiltered form is the stronger assertion - a filtered query cannot catch a
+   notification sent to the *wrong* person - so the fix was to truncate between tests rather
+   than to weaken them.
+
+### Verification worth noting
+
+Three behaviours were mutation-tested, on the standing principle that a check which cannot fail
+is worse than no check:
+
+- **Cursor suppression** (ADR-0008). Disabling it - reverting to the liveness-based design that
+  ADR rejects - fails exactly the three suppression tests and nothing else.
+- **The pending-request clearing exception.** Replacing the filter with the naive "opening the
+  inbox marks everything read" - one line of SQL that passes any badge-only test - fails exactly
+  the exception-1 test. This is the rule the founder lost real join requests to.
+- **The notification renderer.** Exhaustive over the type union and swept by iterating
+  `notificationTypes` rather than a hand-written list, with a guard asserting the fixture map
+  covers every type. A hand-written list is precisely what would omit the next type someone adds.
+
+Worth recording that **exception 2 survives the mutation**, and that is not a gap. Chat-unread
+rows are *derived* from `last_seq - last_read_seq` rather than stored, so there is nothing for
+`markInboxRead` to clear even if it tried. That exception is enforced by the data model rather
+than by a filter, which is the stronger of the two.
+
+### Scope, honestly
+
+Delivered: the notification catalogue as typed contracts, the audience function (with the
+admin-tier and race-roster invariants enforced by construction), announcements and pinning with
+the column-level authority split, mentions, the push pipeline with cursor suppression and the
+8-second deferral, the device registry, the inbox with its merged feed and badge, and both
+clearing exceptions.
+
+**Not delivered: the membership commands.** Join by policy, approve/deny, add, remove,
+promote/demote, transfer ownership, leave and delete-club are the triggers most of the remaining
+catalogue hangs off, along with the cascades and the force-unsubscribe that ADR-0007 obliges.
+The machinery they need now exists; they are the next task rather than a redesign.
+
+**A spec ordering inconsistency was found and recorded rather than silently worked around.**
+`TECH/16` listed "the scheduled job" in Phase 1, but that job is poll closing-soon and polls
+arrive in Phase 2, so it had nothing to select. Most of the 18 notification types are in the
+same position - a race-created notification needs races. Phase 1 therefore delivers the
+mechanism plus the events Phase 0's surface can actually raise. `TECH/16` now says so.
+
+---
+
 ## 2026-07-29 - Phase 0: skeleton and the vertical slice
 
 Built the monorepo, the channel log, the policy module, the API, the gateway, the worker, the

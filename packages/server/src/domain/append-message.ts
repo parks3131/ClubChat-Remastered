@@ -182,6 +182,10 @@ export async function appendMessage(
             seq: row.seq,
             senderId: row.senderId,
             type: row.type,
+            // Carried on the event so the effect does not have to read the message back.
+            // Truncated here because the only consumer is a notification preview, and a
+            // push payload has a size limit that a long message would blow past.
+            preview: (row.body ?? '').slice(0, 140),
           },
         },
         ...(input.extraOutbox ?? []).map((event) => ({

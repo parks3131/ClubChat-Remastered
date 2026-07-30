@@ -12,13 +12,17 @@
  * `UNIQUE (channel_id, sender_id, client_msg_id)` on redelivery.
  */
 
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { SYSTEM_ACTOR_ID } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { users } from '../db/schema.ts';
 import { appendMessage, deriveClientMsgId } from '../domain/append-message.ts';
 import { publishToChannel } from '../bus/redis.ts';
+import { resolveAudience } from './audience.ts';
+import { writeNotifications } from './notify.ts';
+import { dispatchPush, PUSH_DEFERRAL_MS } from '../push/dispatch.ts';
+import type { PushSender } from '../push/sender.ts';
 
 export type OutboxEvent = {
   id: number;
@@ -30,8 +34,31 @@ export type OutboxEvent = {
 export type EffectDeps = {
   db: Db;
   redis: Redis;
+  push: PushSender;
   log: (level: 'info' | 'warn' | 'error', message: string, extra?: unknown) => void;
+  /**
+   * Schedule the deferred push evaluation.
+   *
+   * Injected so tests can run it immediately instead of waiting eight seconds. The
+   * deferral is real in production and exists to lose a race against the recipient's own
+   * read acknowledgement - see PUSH_DEFERRAL_MS.
+   */
+  defer?: ((fn: () => Promise<void>, ms: number) => void) | undefined;
 };
+
+function schedule(deps: EffectDeps, fn: () => Promise<void>) {
+  if (deps.defer) {
+    deps.defer(fn, PUSH_DEFERRAL_MS);
+    return;
+  }
+  setTimeout(() => {
+    void fn().catch((error) =>
+      deps.log('error', 'deferred push evaluation failed', {
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
+  }, PUSH_DEFERRAL_MS).unref?.();
+}
 
 export type EffectHandler = (event: OutboxEvent, deps: EffectDeps) => Promise<void>;
 
@@ -114,12 +141,164 @@ const onClubCreated: EffectHandler = async (event, deps) => {
  * path.
  */
 const onMessageCreated: EffectHandler = async (event, deps) => {
-  deps.log('info', 'message.created (no effects until Phase 1)', {
-    eventId: event.id,
-    channelId: event.partitionKey,
-    seq: event.payload['seq'],
-  });
+  const channelId = String(event.payload['channelId'] ?? event.partitionKey);
+  const seq = Number(event.payload['seq']);
+  const senderId = String(event.payload['senderId'] ?? '');
+  const type = String(event.payload['type'] ?? 'text');
+
+  // Only two message types notify anyone. **Pinning notifies nobody; announcing always
+  // does** - a pin is reference, an announcement is interruption. An ordinary text
+  // message produces no discrete notification at all: its unread count is derived from
+  // the log, never stored.
+  const isAnnouncement = type === 'announcement';
+  const mentioned = await mentionedUsers(deps.db, channelId, seq);
+
+  if (!isAnnouncement && mentioned.length === 0) return;
+
+  const context = await channelContext(deps.db, channelId);
+  if (!context) {
+    deps.log('warn', 'message.created for a channel that no longer exists', { channelId });
+    return;
+  }
+
+  const actorName = await displayName(deps.db, senderId);
+  const preview = String(event.payload['preview'] ?? '').slice(0, 140);
+
+  if (isAnnouncement) {
+    const recipients = await resolveAudience(deps.db, {
+      type: 'announcement',
+      actorId: senderId,
+      clubId: context.clubId,
+      channelId,
+    });
+
+    const params = {
+      clubId: context.clubId,
+      channelId,
+      channelName: context.name,
+      seq,
+      preview,
+      actorName,
+    };
+
+    const { created } = await writeNotifications(deps.db, {
+      outboxEventId: event.id,
+      type: 'announcement',
+      params,
+      recipients,
+      actorId: senderId,
+      clubId: context.clubId,
+    });
+
+    deps.log('info', 'announcement notifications written', {
+      eventId: event.id,
+      recipients: recipients.length,
+      created,
+    });
+
+    // Deferred, then the cursor is re-read. Scheduling happens regardless of `created`,
+    // because the push ledger - not the notification insert - is what makes the buzz
+    // idempotent, and a redelivery after a crash between the two must still push.
+    schedule(deps, async () => {
+      const outcome = await dispatchPush(deps.db, deps.push, {
+        outboxEventId: event.id,
+        type: 'announcement',
+        params,
+        recipients,
+        channelId,
+        seq,
+      });
+      deps.log('info', 'announcement push dispatched', { eventId: event.id, ...outcome });
+    });
+  }
+
+  if (mentioned.length > 0) {
+    // A mention notifies the named member individually, and only if they can access the
+    // chat - already guaranteed, because sendMessage filtered the list before storing it.
+    const params = {
+      clubId: context.clubId,
+      channelId,
+      channelName: context.name,
+      seq,
+      preview,
+      actorName,
+    };
+
+    const recipients = await resolveAudience(deps.db, {
+      type: 'mentioned',
+      actorId: senderId,
+      clubId: context.clubId,
+      channelId,
+      explicitRecipients: mentioned,
+    });
+
+    await writeNotifications(deps.db, {
+      // Offset so a message that is BOTH an announcement and a mention does not have its
+      // two notifications collide on the idempotency key.
+      outboxEventId: event.id * 2 + 1,
+      type: 'mentioned',
+      params,
+      recipients,
+      actorId: senderId,
+      clubId: context.clubId,
+    });
+
+    schedule(deps, async () => {
+      const outcome = await dispatchPush(deps.db, deps.push, {
+        outboxEventId: event.id * 2 + 1,
+        type: 'mentioned',
+        params,
+        recipients,
+        channelId,
+        seq,
+      });
+      deps.log('info', 'mention push dispatched', { eventId: event.id, ...outcome });
+    });
+  }
 };
+
+/** The people named in a message, as stored. */
+async function mentionedUsers(db: Db, channelId: string, seq: number): Promise<string[]> {
+  const rows = await db.execute<{ user_id: string }>(sql`
+    SELECT mm.user_id
+      FROM message_mentions mm
+      JOIN messages m ON m.id = mm.message_id
+     WHERE m.channel_id = ${channelId} AND m.seq = ${seq}
+  `);
+  return rows.rows.map((r) => r.user_id);
+}
+
+/**
+ * The channel's club and display name.
+ *
+ * The name is what a push notification's title shows, so it comes from the owning club,
+ * race or Eboard rather than being invented at the call site.
+ */
+async function channelContext(
+  db: Db,
+  channelId: string,
+): Promise<{ clubId: string | null; name: string } | null> {
+  const rows = await db.execute<{
+    club_id: string | null;
+    name: string | null;
+  }>(sql`
+    SELECT c.club_id,
+           COALESCE(e.name, cl.name) AS name
+      FROM channels c
+      LEFT JOIN clubs cl ON cl.id = c.club_id
+      LEFT JOIN eboard_channels e ON c.scope = 'eboard' AND e.id = c.scope_id
+     WHERE c.id = ${channelId}
+  `);
+  const row = rows.rows[0];
+  if (!row) return null;
+  return { clubId: row.club_id, name: row.name ?? 'ClubChat' };
+}
+
+async function displayName(db: Db, userId: string): Promise<string> {
+  if (!userId) return 'Someone';
+  const rows = await db.select({ name: users.name }).from(users).where(eq(users.id, userId)).limit(1);
+  return rows[0]?.name ?? 'Someone';
+}
 
 export const handlers: Record<string, EffectHandler> = {
   'club.created': onClubCreated,

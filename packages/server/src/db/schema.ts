@@ -13,6 +13,7 @@
  */
 
 import {
+  bigint,
   bigserial,
   boolean,
   check,
@@ -352,4 +353,166 @@ export const outbox = pgTable(
       .on(t.partitionKey, t.id)
       .where(sql`processed_at is null`),
   ],
+);
+
+// ---------------------------------------------------------------------------
+// Notifications, devices and mutes  (Phase 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Discrete notifications.
+ *
+ * **No `body` column and no `target` column, deliberately.** Both the display text and
+ * the navigation destination are derived at READ time from `(type, params)`. A stored
+ * route string left approvals permanently unresolved for eight migrations in v1
+ * (engineering pitfall 8), and a stored English body is unlocalizable and correctable
+ * only by rewriting history (roadmap debt 11). See ADR-0013.
+ *
+ * `params` is validated against a per-type Zod schema at write time, so a malformed
+ * param fails the write rather than surfacing as broken text in an inbox months later.
+ *
+ * The other row kind in the inbox - a chat unread - is **not stored at all**. It is
+ * derived from `channel.last_seq - cursor.last_read_seq`, because a stored count drifts
+ * and a computed one cannot.
+ */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    recipientId: uuid('recipient_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // Nullable: not every notification has a human actor (a deadline passing has none).
+    actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
+    // Nullable for dm-scoped notifications, since a DM belongs to no club. Every
+    // audience query has to tolerate it.
+    clubId: uuid('club_id').references(() => clubs.id, { onDelete: 'cascade' }),
+    type: text('type').notNull(),
+    params: jsonb('params').notNull(),
+    // bigint, NOT bigserial. This references an outbox row's id; it is not a value
+    // this table generates. bigserial would attach a sequence default, so an insert
+    // that forgot to supply the id would silently get a sequence number and defeat
+    // the idempotency index below rather than failing loudly.
+    //
+    // There is deliberately NO foreign key to outbox: the outbox is pruned nightly
+    // after 7 days, and a cascade would delete a member's notification history along
+    // with it. This column is an idempotency key, not a relationship.
+    outboxEventId: bigint('outbox_event_id', { mode: 'number' }).notNull(),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // At-least-once safety. Outbox delivery WILL redeliver, and without this a
+    // redelivered event fans out a second copy of every notification it produced.
+    uniqueIndex('notifications_idempotency').on(t.outboxEventId, t.recipientId),
+    // The inbox feed: newest first, per recipient.
+    index('notifications_feed').on(t.recipientId, t.createdAt.desc()),
+    // The badge counts unread rows only, so keep the index to those.
+    index('notifications_unread')
+      .on(t.recipientId)
+      .where(sql`read_at is null`),
+  ],
+);
+
+/**
+ * Registered push targets.
+ *
+ * Push is targeted per DEVICE while suppression is per MEMBER via the read cursor. A
+ * member with a laptop open and a phone in their pocket has not read the message, so
+ * both devices are pushed and the phone rings; once they read it anywhere, the cursor
+ * suppresses for that member everywhere at once. That is the behaviour you want, and it
+ * is why this table exists separately from any notion of "is a socket alive".
+ */
+export const devices = pgTable(
+  'devices',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // Unique so re-registering the same physical device updates rather than duplicates,
+    // which is what stops one phone receiving N copies of every push.
+    pushToken: text('push_token').notNull().unique(),
+    platform: text('platform').notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    // Set when the provider reports the token dead. Kept rather than deleted so a
+    // dedupe key referencing it stays resolvable.
+    invalidatedAt: timestamp('invalidated_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check('devices_platform_valid', sql`platform in ('ios', 'android', 'web')`),
+    // The audience query walks a member's live devices.
+    index('devices_live_for_user')
+      .on(t.userId)
+      .where(sql`invalidated_at is null`),
+  ],
+);
+
+/**
+ * Push dedupe ledger.
+ *
+ * At-least-once delivery means the worker will re-evaluate an event it has already
+ * pushed. Without a record of what already went out, a redelivered event buzzes every
+ * phone a second time - and unlike a duplicated database row, that one is impossible to
+ * take back. Keyed exactly as SPEC/TECH/06 specifies.
+ */
+export const pushDeliveries = pgTable(
+  'push_deliveries',
+  {
+    // bigint for the same reason as on notifications: a reference, not a generated
+    // value, and no FK because outbox rows are pruned while this ledger must outlive
+    // them - a pruned outbox row must never make an already-sent push re-sendable.
+    outboxEventId: bigint('outbox_event_id', { mode: 'number' }).notNull(),
+    deviceId: uuid('device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'cascade' }),
+    sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.outboxEventId, t.deviceId] })],
+);
+
+/**
+ * Per-conversation mute.
+ *
+ * A muted conversation produces no push but its unread count still accrues - mute is
+ * not "mark as read". Read by the push audience function and applying to EVERY scope,
+ * not just dm: this is the "per-user mute and notification preferences" that had
+ * nowhere to live before the audience function existed.
+ */
+export const channelMutes = pgTable(
+  'channel_mutes',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => channels.id, { onDelete: 'cascade' }),
+    // NULL means muted indefinitely, rather than "not muted" - the row's existence is
+    // the mute.
+    mutedUntil: timestamp('muted_until', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.channelId] })],
+);
+
+/**
+ * Mentions.
+ *
+ * A mention notifies the mentioned member individually, and **only if they can actually
+ * access that chat** - the audience function re-checks, because a client could name
+ * anyone.
+ */
+export const messageMentions = pgTable(
+  'message_mentions',
+  {
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => messages.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+  },
+  (t) => [primaryKey({ columns: [t.messageId, t.userId] })],
 );

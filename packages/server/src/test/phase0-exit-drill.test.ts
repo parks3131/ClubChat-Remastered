@@ -26,6 +26,7 @@ import { createAuth, type Auth } from '../auth.ts';
 import type { Config } from '../config.ts';
 import { createDb, createPool, type Db } from '../db/client.ts';
 import { createRateLimiter, createRedis } from '../bus/redis.ts';
+import { RecordingPushSender } from '../push/sender.ts';
 import { buildApp } from '../api/app.ts';
 import { createGateway, type Gateway } from '../gateway/server.ts';
 import { createClub } from '../domain/create-club.ts';
@@ -161,7 +162,9 @@ describe('Phase 0 exit drill', () => {
     // Drain the bootstrap effect so the club's system message occupies a real seq.
     // Including it makes the drill stronger: a redelivered outbox event that posted a
     // duplicate system message would show up in the count assertions below.
-    const drainDeps = { db, redis, log: silent };
+    // A recording sender, so the drill cannot reach the network. It asserts nothing about
+    // push - that is the Phase 1 gate's job - but the drain now needs the port.
+    const drainDeps = { db, redis, push: new RecordingPushSender(), log: silent };
     await drainOnce(db, drainDeps);
 
     const channelId = club.mainChannelId;

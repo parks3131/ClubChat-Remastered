@@ -223,4 +223,83 @@ SELECT pg_temp.assert_rejected(
   $$INSERT INTO eboard_channels (club_id)
     VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')$$);
 
+-- ---------------------------------------------------------------------------
+-- Phase 1: notifications, devices, mutes
+-- ---------------------------------------------------------------------------
+
+INSERT INTO notifications (recipient_id, actor_id, club_id, type, params, outbox_event_id)
+VALUES ('11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        'announcement', '{"preview":"hi"}'::jsonb, 4242);
+
+-- At-least-once delivery WILL redeliver an outbox event. Without this the second pass
+-- fans out a duplicate of every notification the first pass produced.
+SELECT pg_temp.assert_rejected(
+  'notifications - the same outbox event fanning out twice to one recipient',
+  $$INSERT INTO notifications (recipient_id, type, params, outbox_event_id)
+    VALUES ('11111111-1111-4111-8111-111111111111',
+            'announcement', '{"preview":"hi again"}'::jsonb, 4242)$$);
+
+-- The same event reaching a DIFFERENT recipient is a different notification, so the
+-- index must be scoped per recipient rather than per event.
+SELECT pg_temp.assert_accepted(
+  'notifications - the same event to a different recipient is distinct',
+  $$INSERT INTO notifications (recipient_id, type, params, outbox_event_id)
+    VALUES ('22222222-2222-4222-8222-222222222222',
+            'announcement', '{"preview":"hi"}'::jsonb, 4242)$$);
+
+-- outbox_event_id must be supplied, not defaulted. It was bigserial in the first draft
+-- of this migration, which would have silently handed out sequence values and defeated
+-- the idempotency index above.
+SELECT pg_temp.assert_rejected(
+  'notifications - outbox_event_id has no default to fall back on',
+  $$INSERT INTO notifications (recipient_id, type, params)
+    VALUES ('11111111-1111-4111-8111-111111111111', 'announcement', '{}'::jsonb)$$);
+
+INSERT INTO devices (id, user_id, push_token, platform) VALUES
+  ('dddd0000-dddd-4ddd-8ddd-dddddddddddd',
+   '11111111-1111-4111-8111-111111111111', 'ExponentPushToken[aaa]', 'ios');
+
+-- One physical device, one row. Otherwise re-registering the same token gives that
+-- phone N copies of every push.
+SELECT pg_temp.assert_rejected(
+  'devices - the same push token registered twice',
+  $$INSERT INTO devices (user_id, push_token, platform)
+    VALUES ('22222222-2222-4222-8222-222222222222', 'ExponentPushToken[aaa]', 'android')$$);
+
+SELECT pg_temp.assert_rejected(
+  'devices - an invented platform',
+  $$INSERT INTO devices (user_id, push_token, platform)
+    VALUES ('11111111-1111-4111-8111-111111111111', 'ExponentPushToken[bbb]', 'blackberry')$$);
+
+INSERT INTO push_deliveries (outbox_event_id, device_id)
+VALUES (4242, 'dddd0000-dddd-4ddd-8ddd-dddddddddddd');
+
+-- A duplicated database row can be cleaned up. A duplicated push has already buzzed
+-- somebody's phone and cannot be taken back, which is why this ledger exists.
+SELECT pg_temp.assert_rejected(
+  'push_deliveries - pushing the same event to the same device twice',
+  $$INSERT INTO push_deliveries (outbox_event_id, device_id)
+    VALUES (4242, 'dddd0000-dddd-4ddd-8ddd-dddddddddddd')$$);
+
+INSERT INTO channel_mutes (user_id, channel_id)
+VALUES ('11111111-1111-4111-8111-111111111111', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+
+SELECT pg_temp.assert_rejected(
+  'channel_mutes - one mute per (user, channel)',
+  $$INSERT INTO channel_mutes (user_id, channel_id)
+    VALUES ('11111111-1111-4111-8111-111111111111',
+            'cccccccc-cccc-4ccc-8ccc-cccccccccccc')$$);
+
+INSERT INTO message_mentions (message_id, user_id)
+SELECT id, '22222222-2222-4222-8222-222222222222' FROM messages
+ WHERE channel_id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' AND seq = 1;
+
+SELECT pg_temp.assert_rejected(
+  'message_mentions - mentioning the same person twice in one message',
+  $$INSERT INTO message_mentions (message_id, user_id)
+    SELECT id, '22222222-2222-4222-8222-222222222222' FROM messages
+     WHERE channel_id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' AND seq = 1$$);
+
 ROLLBACK;

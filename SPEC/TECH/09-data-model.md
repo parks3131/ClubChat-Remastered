@@ -157,9 +157,18 @@ channel_mutes         user_id, channel_id, muted_until NULL  PK (user_id, channe
 ```
 media_objects         id, owner_type, owner_id, bucket, object_key, mime, bytes, status,
                       variants jsonb, created_at
-notifications         id, recipient_id, actor_id, club_id NULL, type, body, target,
+notifications         id, recipient_id, actor_id NULL, club_id NULL, type, params jsonb,
                       outbox_event_id, read_at, created_at
                       UNIQUE (outbox_event_id, recipient_id)       ← at-least-once safety
+                      -- NO body and NO target column, deliberately. Both the display
+                      -- text and the navigation target are derived at READ time from
+                      -- (type, params). A stored route string left approvals
+                      -- permanently unresolved for eight migrations in v1 (pitfall 8),
+                      -- and a stored English body is unlocalizable and can only be
+                      -- corrected by rewriting history (debt 11). See ADR-0013.
+                      -- params is validated against a per-type Zod schema at write
+                      -- time, so a malformed param cannot reach someone's inbox.
+                      -- actor_id nullable: some notifications have no human actor.
                       -- club_id nullable for dm-scoped notifications; every audience
                       -- query must tolerate it. See [Channel log](02-channel-log.md).
 outbox                id, partition_key, event_type, payload, processed_at, attempts, last_error

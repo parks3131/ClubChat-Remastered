@@ -2,6 +2,14 @@
 
 One cross-club inbox answering "what did I miss, and what needs me".
 
+**How a row is stored.** A notification records its **type and the structured parameters
+its text and destination are rendered from** - not a finished sentence and not a route. The
+wording and the target are produced when the row is read. That keeps the text localisable
+without rewriting history, and it means changing where a notification points is one mapping
+function rather than a migration over every row ever sent. See
+[ADR-0013](../decisions/0013-notifications-store-type-and-params.md). The "Links to" column
+below therefore describes a destination, not a stored string.
+
 **Two kinds of row**
 
 | | Discrete notification | Chat unread |

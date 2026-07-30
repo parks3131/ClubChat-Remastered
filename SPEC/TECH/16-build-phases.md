@@ -56,8 +56,18 @@ both the system-message duplication bug ([Message flows](03-message-flows.md)) a
 delivery-only gate is half a test.
 
 **Phase 1 - Effects, notifications, push.**
-The full [Server event catalogue](12-server-event-catalogue.md) catalogue in the worker. Notification rows, the inbox, the badge, and the
-clearing rules including the two exceptions. Device registry and Expo Push. The scheduled job.
+The [Server event catalogue](12-server-event-catalogue.md) in the worker, for every event whose
+triggering feature exists. Notification rows, the inbox, the badge, and the clearing rules
+including the two exceptions. Device registry and Expo Push.
+
+> **Ordering correction, found while building Phase 1.** This phase originally also listed
+> "the scheduled job", meaning poll closing-soon - but polls do not exist until Phase 2, so
+> the job has nothing to select. The same applies to most of the 18 notification types: a
+> race-created notification needs races. Phase 1 therefore delivers the *mechanism* (the
+> audience function, the notification rows, the inbox and its clearing rules, the device
+> registry and the push pipeline) plus the events Phase 0's surface can raise - announcements
+> and mentions. Each remaining type becomes one call into machinery that already exists, and
+> the scheduled job arrives with the polls it is for.
 *Done when: an announcement in club chat reaches a backgrounded phone as a push that deep-links
 to the right message.*
 

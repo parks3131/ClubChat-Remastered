@@ -56,7 +56,16 @@
       "mcp__playwright__browser_take_screenshot",
       "Bash(echo \"  all PASS, exit $?\")",
       "Bash(grep -E '\\\\.env$')",
-      "Bash(git status *)"
+      "Bash(git status *)",
+      "Bash(git fetch *)",
+      "Bash(xargs -I{} sh -c 'test {} -eq 0 && echo \"  clean: 0 trailers\" || echo \"  !! {} trailer\\(s\\) found\"')",
+      "Bash(echo \"proof exit: $?\")",
+      "Bash(node --env-file=.env /private/tmp/claude-501/-Users-parksrpk-Developer-ClubChat-Remastered/fa083e70-0e83-4f48-ae4b-450d8644447a/scratchpad/probe.mjs)",
+      "Bash(cat)",
+      "Bash(cp /private/tmp/claude-501/-Users-parksrpk-Developer-ClubChat-Remastered/fa083e70-0e83-4f48-ae4b-450d8644447a/scratchpad/probe.ts ./probe.ts)",
+      "Bash(node --env-file=../../.env probe.ts)",
+      "Bash(rm -f probe.ts)",
+      "Bash(xargs -I{} sh -c 'test {} -eq 0 && echo \"  no trailer\" || echo \"  !! trailer\"')"
     ]
   }
 }

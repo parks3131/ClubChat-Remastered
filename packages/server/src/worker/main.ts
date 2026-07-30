@@ -8,6 +8,7 @@ import { createDb, createPool } from '../db/client.ts';
 import { createRedis } from '../bus/redis.ts';
 import { startDrainLoop } from './drain.ts';
 import type { EffectDeps } from './effects.ts';
+import { ExpoPushSender } from '../push/sender.ts';
 
 const config = loadConfig();
 const logger = pino({ level: config.LOG_LEVEL, name: 'worker' });
@@ -21,6 +22,8 @@ const controller = new AbortController();
 const deps: EffectDeps = {
   db,
   redis,
+  // One adapter, three platforms: Expo Push fronts APNs, FCM and web push.
+  push: new ExpoPushSender(),
   log: (level, message, extra) => logger[level](extra ?? {}, message),
 };
 

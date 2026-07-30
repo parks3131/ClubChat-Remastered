@@ -303,7 +303,17 @@ that records how to recognise the class._
    doubly so because the caller logs and continues on the principle that realtime is an
    enhancement.
 
-7. **A bundle-time resolution failure cannot be caught by a runtime `try`/`catch`.** Symptom:
+7. **`db.execute` does not apply Drizzle's column type coercion.** Symptom:
+   `row.created_at.toISOString is not a function`, from code that typechecked cleanly. Root
+   cause: a typed `select()` hands back a `Date` for a timestamptz, but raw `execute()`
+   hands back the driver's value, which is a **string**. The hand-written row type said
+   `Date`, TypeScript believed it, and the lie surfaced at the call site rather than at the
+   declaration. **Rule: row types for `db.execute` must say `string` for timestamps.** More
+   generally, a hand-maintained type over a raw query is an assertion, not a check - which
+   is why section 2.3 puts "a type failure here is often a docs bug" first: the type passing
+   proves only that you and the compiler agree, not that either of you is right.
+
+8. **A bundle-time resolution failure cannot be caught by a runtime `try`/`catch`.** Symptom:
    the web app hung forever on a spinner after sign-up. Root cause: `expo-sqlite`'s web build
    imports a `.wasm` binary that Metro does not resolve by default, so the *whole bundle*
    failed - and the graceful in-memory fallback inside `openMessageStore` never ran, because
