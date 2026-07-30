@@ -230,16 +230,18 @@ export function QuickNav({ items }: { items: ReadonlyArray<{ href: string; label
 const styles = StyleSheet.create({
   backWrap: { paddingHorizontal: space.md, paddingVertical: space.xs },
   clubTitle: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  // 40px, which is v1's. The club's identity is the whole title here, so it carries the weight
+  // an app masthead would elsewhere rather than sitting as a small ornament beside the name.
   clubAvatar: {
-    width: 32,
-    height: 32,
+    width: 40,
+    height: 40,
     borderRadius: radius.pill,
     backgroundColor: color.cardSunken,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  clubInitial: { ...type.label, fontSize: 14, color: color.accent },
-  clubName: { ...type.headerTitle, fontSize: 17, lineHeight: 22, color: color.accent },
+  clubInitial: { ...type.label, fontSize: 16, color: color.accent },
+  clubName: { ...type.headerTitle, fontSize: 19, lineHeight: 24, color: color.accent },
   back: { ...type.label, color: color.accent, textTransform: 'uppercase' },
   actionWrap: { paddingHorizontal: space.md, paddingVertical: space.xs },
   action: { ...type.label, color: color.accent, textTransform: 'uppercase' },

@@ -25,13 +25,15 @@
  * the Calendar destination both sit outside the club's stack entirely and cannot see its params.
  */
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { useFocusEffect } from 'expo-router';
 
 export type CurrentClub = { clubId: string; name: string } | null;
 
 type Store = {
   currentClub: CurrentClub;
-  setCurrentClub: (club: CurrentClub) => void;
+  /** Takes an updater so a caller can decide based on what is already known. */
+  setCurrentClub: (next: CurrentClub | ((previous: CurrentClub) => CurrentClub)) => void;
 };
 
 const CurrentClubContext = createContext<Store>({
@@ -60,11 +62,30 @@ export function useCurrentClub(): Store {
 export function useDeclareClub(clubId: string | undefined | null, name?: string | undefined): void {
   const { setCurrentClub } = useCurrentClub();
 
-  useEffect(() => {
-    if (clubId === undefined || clubId === null || clubId.length === 0) return;
-    setCurrentClub({ clubId, name: name ?? '' });
-    // Cleared on unmount: walking out of the club's world is what ends "inside a club", and
-    // leaving it set would make the Clubs tab jump into a club the viewer already left.
-    return () => setCurrentClub(null);
-  }, [clubId, name, setCurrentClub]);
+  /*
+   * On FOCUS, not on mount.
+   *
+   * A pushed screen does not unmount the one beneath it, so a mount-only declaration is made once
+   * and never again. Going hub -> chat -> back therefore left the context cleared by chat's own
+   * unmount with nothing to restore it, and the header fell back to the word "Club" on a screen
+   * that had shown the club's name a moment earlier. Focus is the event that actually matches
+   * "this screen is the one you are looking at".
+   */
+  useFocusEffect(
+    useCallback(() => {
+      if (clubId === undefined || clubId === null || clubId.length === 0) return;
+      setCurrentClub((previous) => ({
+        clubId,
+        /*
+         * A declaration without a name never erases one already known for the same club.
+         *
+         * Chat knows its club id from the channel meta but not the club's name, so it declared an
+         * empty one and blanked the header for every screen after it. A screen that does not know
+         * the name is saying "I am in this club", not "this club has no name".
+         */
+        name: name ?? (previous?.clubId === clubId ? previous.name : ''),
+      }));
+      return () => setCurrentClub(null);
+    }, [clubId, name, setCurrentClub]),
+  );
 }
