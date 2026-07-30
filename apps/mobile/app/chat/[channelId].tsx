@@ -509,7 +509,8 @@ export default function ChatScreen() {
    */
   const attach = async (
     pick: () => Promise<PickedAttachment | null>,
-    kind: UploadKind,
+    // Narrower than `UploadKind`, which also covers avatars - a conversation has no use for one.
+    kind: 'photo' | 'document',
   ) => {
     setAttachOpen(false);
     if (!client || !channelId || uploading) return;

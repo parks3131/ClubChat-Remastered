@@ -13,21 +13,48 @@
  */
 
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Link, Redirect, useRouter } from 'expo-router';
-import { accountApi, ApiError, clubApi } from '../../src/api.ts';
-import { useSession } from '../../src/chat-provider.tsx';
-import { formatDateOfBirth } from '../../src/dates.ts';
-import { color, radius, space, type } from '../../src/theme.ts';
-import { Action, Card, DataScreen, Field, Row, SearchField, SectionHeader } from '../../src/ui.tsx';
-import { useLoad } from '../../src/use-load.ts';
+import { accountApi, ApiError, clubApi } from '../../../../src/api.ts';
+import { useSession } from '../../../../src/chat-provider.tsx';
+import { formatDateOfBirth } from '../../../../src/dates.ts';
+import { pickPhoto, uploadAvatar, UploadError } from '../../../../src/upload.ts';
+import { color, radius, space, type } from '../../../../src/theme.ts';
+import { Action, Card, DataScreen, Field, Row, SearchField, SectionHeader } from '../../../../src/ui.tsx';
+import { useLoad } from '../../../../src/use-load.ts';
 
 export default function ProfileScreen() {
   const { authState, userId, signOut, revision } = useSession();
   const router = useRouter();
-  const [editing, setEditing] = useState(false);
   const [clubsOpen, setClubsOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [pictureError, setPictureError] = useState<string | null>(null);
+
+  /*
+   * The pencil opens the photo picker directly rather than the edit form.
+   *
+   * Changing a picture is one gesture and has nothing to do with the text fields, so routing it
+   * through a form would make the badge a link to somewhere the picture is not. Identity media is
+   * public and needs no channel - the only gate is being signed in.
+   */
+  const changePicture = async () => {
+    setPictureError(null);
+    const picked = await pickPhoto();
+    if (!picked) return;
+    setUploading(true);
+    try {
+      const mediaId = await uploadAvatar(picked);
+      await accountApi.saveProfile({ image: mediaId });
+      profile.reload();
+    } catch (error) {
+      setPictureError(
+        error instanceof UploadError ? error.message : 'Could not update your picture.',
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
   const [clubSearch, setClubSearch] = useState('');
 
   const profile = useLoad(
@@ -45,18 +72,8 @@ export default function ProfileScreen() {
 
   return (
     <DataScreen load={profile}>
-      {(data) =>
-        editing ? (
-          <EditProfile
-            initial={data.profile}
-            onDone={() => {
-              setEditing(false);
-              profile.reload();
-            }}
-            onCancel={() => setEditing(false)}
-          />
-        ) : (
-          <ScrollView contentContainerStyle={styles.body}>
+      {(data) => (
+        <ScrollView contentContainerStyle={styles.body}>
             {/*
               Identity, centred and at the top: this screen is about a person, so it opens with
               their face rather than with a settings list they happen to own.
@@ -69,17 +86,23 @@ export default function ProfileScreen() {
               </View>
               <Pressable
                 style={styles.editPic}
-                onPress={() => setEditing(true)}
+                onPress={() => void changePicture()}
+                disabled={uploading}
                 accessibilityRole="button"
                 accessibilityLabel="Change your picture"
               >
-                <MaterialIcons name="edit" size={18} color={color.onAccent} />
+                {uploading ? (
+                  <ActivityIndicator size="small" color={color.onAccent} />
+                ) : (
+                  <MaterialIcons name="edit" size={18} color={color.onAccent} />
+                )}
               </Pressable>
             </View>
 
             <Text style={styles.name}>{data.profile.name || 'ClubChat member'}</Text>
             {identity.data !== null && <Text style={styles.email}>{identity.data.email}</Text>}
             <Text style={styles.bioLine}>{data.profile.bio || 'No bio yet.'}</Text>
+            {pictureError !== null && <Text style={styles.error}>{pictureError}</Text>}
 
             <View style={styles.section}>
               <View style={styles.sectionHead}>
@@ -143,11 +166,7 @@ export default function ProfileScreen() {
             </View>
 
             <View style={styles.card}>
-              <LinkRow
-                icon="manage-accounts"
-                label="Edit Profile"
-                onPress={() => setEditing(true)}
-              />
+              <LinkRow icon="manage-accounts" label="Edit Profile" href="/profile/edit" />
               <View style={styles.linkDivider} />
               <LinkRow icon="lock" label="Privacy Policy" href="/legal/privacy" />
               <View style={styles.linkDivider} />
@@ -181,9 +200,8 @@ export default function ProfileScreen() {
                 }}
               />
             )}
-          </ScrollView>
-        )
-      }
+        </ScrollView>
+      )}
     </DataScreen>
   );
 }
@@ -318,81 +336,6 @@ function ClubsSheet({
   );
 }
 
-function EditProfile({
-  initial,
-  onDone,
-  onCancel,
-}: {
-  initial: { name: string; bio: string | null; city: string | null; school: string | null; dob?: string | null };
-  onDone: () => void;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState(initial.name);
-  const [bio, setBio] = useState(initial.bio ?? '');
-  const [city, setCity] = useState(initial.city ?? '');
-  const [school, setSchool] = useState(initial.school ?? '');
-  const [dob, setDob] = useState(initial.dob ?? '');
-  const [failed, setFailed] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const save = async () => {
-    setBusy(true);
-    setFailed(null);
-    try {
-      await accountApi.saveProfile({
-        name: name.trim(),
-        // An empty field is an explicit null: the member cleared it, which is different from
-        // not having touched it.
-        bio: bio.trim().length > 0 ? bio.trim() : null,
-        city: city.trim().length > 0 ? city.trim() : null,
-        school: school.trim().length > 0 ? school.trim() : null,
-        dob: dob.trim().length > 0 ? dob.trim() : null,
-      });
-      onDone();
-    } catch (caught) {
-      setFailed(
-        caught instanceof ApiError && caught.status === 400
-          ? 'Check the fields: a name is required, and a date of birth must be YYYY-MM-DD.'
-          : 'Could not save. Check your connection and try again.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <View style={styles.body}>
-      <SectionHeader title="Edit profile" />
-      <Field label="Full name" value={name} onChangeText={setName} />
-      <Field label="Bio" value={bio} onChangeText={setBio} multiline />
-      <Field label="City" value={city} onChangeText={setCity} />
-      <Field label="School" value={school} onChangeText={setSchool} />
-      <Field label="Date of birth" value={dob} onChangeText={setDob} placeholder="1999-04-01" />
-      <Text style={styles.meta}>
-        Your date of birth is never shown to other members. Email is used for sign-in only.
-      </Text>
-      {failed !== null && <Text style={styles.error}>{failed}</Text>}
-      <View style={styles.actions}>
-        <Action label="Cancel" variant="secondary" onPress={onCancel} style={styles.actionButton} />
-        <Action
-          label={busy ? 'Saving' : 'Save'}
-          onPress={() => void save()}
-          disabled={busy || name.trim().length === 0}
-          style={styles.actionButton}
-        />
-      </View>
-    </View>
-  );
-}
-
-/**
- * Delete account: confirmation-gated, and honest about the precondition.
- *
- * > **`Alert` is a no-op on web**, which is `PRD/16` rule 6 and shipped as a real defect in v1: a
- * > delete button reported success, logged nothing, and did nothing. So confirmation is a rendered
- * > two-step here rather than a native dialog, on every platform. The same code path runs
- * > everywhere, which is the only way the web behaviour cannot diverge.
- */
 function DeleteAccount({ ownedClubs }: { ownedClubs: Array<{ id: string; name: string }> }) {
   const { signOut } = useSession();
   const router = useRouter();

@@ -178,9 +178,11 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="profile"
+        name="(profile)"
         options={{
           title: 'Profile',
+          // Supplies its own headers from the stack inside it, like (main).
+          headerShown: false,
           tabBarIcon: ({ focused }) => <TabIcon name="profile" focused={focused} />,
           tabBarLabel: ({ focused }) => <TabLabel label="Profile" focused={focused} />,
         }}

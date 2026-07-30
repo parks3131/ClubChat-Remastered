@@ -34,7 +34,7 @@ export type PickedAttachment = {
   name?: string;
 };
 
-export type UploadKind = 'photo' | 'document';
+export type UploadKind = 'photo' | 'document' | 'avatar';
 
 export type UploadedAttachment = {
   mediaId: string;
@@ -171,8 +171,21 @@ async function resolveBlob(uri: string): Promise<Blob> {
  * Does **not** send the message. The caller sends it, so a failed send can be retried from the
  * outbox without re-uploading bytes that are already durable and already verified.
  */
+/**
+ * Upload a new profile picture and return its media id.
+ *
+ * Identity media rather than channel content: it goes to the public bucket and the only gate is
+ * being signed in, because you may always replace your own face and the object carries nothing
+ * private. That is why this takes no channel - the server's `avatar` kind has no channel to check.
+ */
+export async function uploadAvatar(picked: PickedAttachment): Promise<string> {
+  const uploaded = await uploadAttachment(null, picked, 'avatar');
+  return uploaded.mediaId;
+}
+
 export async function uploadAttachment(
-  channelId: string,
+  /** Null for an avatar, which belongs to a person rather than to a conversation. */
+  channelId: string | null,
   picked: PickedAttachment,
   kind: UploadKind,
 ): Promise<UploadedAttachment> {
@@ -196,7 +209,9 @@ export async function uploadAttachment(
         kind,
         mime,
         bytes,
-        channelId,
+        // Omitted entirely for an avatar: the server's schema takes an optional uuid, and a
+        // literal null fails it where an absent key passes.
+        ...(channelId === null ? {} : { channelId }),
         ...(kind === 'document' && picked.name ? { documentName: picked.name } : {}),
       },
     });
