@@ -172,7 +172,9 @@ export default function ClubProfileScreen() {
             {club.channelId !== null && (
               <Pressable
                 style={styles.card}
-                onPress={() => router.push(`/channels/${club.channelId}/gallery`)}
+                onPress={() => router.push(
+                    `/channels/${club.channelId}/gallery?parent=/clubs/${clubId}/profile`,
+                  )}
                 accessibilityRole="button"
                 accessibilityLabel="Gallery"
               >

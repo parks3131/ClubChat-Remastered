@@ -38,7 +38,6 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Redirect, useFocusEffect } from 'expo-router';
-import { useClearClub } from '../../src/current-space.tsx';
 import type { NotificationTarget } from '@clubchat/shared';
 import { inboxApi } from '../../src/api.ts';
 import type { InboxRow } from '../../src/api-types.ts';
@@ -125,8 +124,6 @@ const ICON_BY_TYPE: Readonly<Record<string, IconName>> = {
 type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
 
 export default function NotificationsScreen() {
-  // Outside every club: leaving one is declared here rather than inferred from a blur.
-  useClearClub();
   const { authState, revision } = useSession();
   const load = useLoad(() => inboxApi.page(), [revision]);
 

@@ -142,7 +142,9 @@ export default function EboardProfileScreen() {
             {eboard.channelId !== null && (
               <Pressable
                 style={styles.card}
-                onPress={() => router.push(`/channels/${eboard.channelId}/gallery`)}
+                onPress={() => router.push(
+                    `/channels/${eboard.channelId}/gallery?parent=/eboard/${eboardId}/profile`,
+                  )}
                 accessibilityRole="button"
                 accessibilityLabel="Gallery"
               >

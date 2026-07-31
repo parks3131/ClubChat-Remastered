@@ -239,9 +239,17 @@ export default function MainStackLayout() {
           };
         }}
       />
+      {/*
+        The roster's parent is the race PROFILE, not the race hub, which is where the contract
+        puts it and where it is actually reached from - the Members row on the profile. It
+        pointed at the hub only because the profile did not exist yet.
+      */}
       <Stack.Screen
         name="races/[raceId]/roster"
-        options={parented('Roster', (p) => ({ href: `/races/${p.raceId}`, label: 'Race' }))}
+        options={parented('Roster', (p) => ({
+          href: `/races/${p.raceId}/profile`,
+          label: 'Race profile',
+        }))}
       />
       <Stack.Screen
         name="races/[raceId]/meet"
@@ -294,7 +302,10 @@ export default function MainStackLayout() {
       />
       <Stack.Screen
         name="eboard/[eboardId]/members"
-        options={parented('Roster', (p) => ({ href: `/eboard/${p.eboardId}`, label: 'Eboard' }))}
+        options={parented('Roster', (p) => ({
+          href: `/eboard/${p.eboardId}/profile`,
+          label: 'Eboard profile',
+        }))}
       />
       <Stack.Screen
         name="eboard/[eboardId]/meetings"
@@ -361,9 +372,22 @@ export default function MainStackLayout() {
 
       {/* Highlights draws its own glass header, matching the chat it hangs off. */}
       <Stack.Screen name="channels/[channelId]/highlights" options={{ headerShown: false }} />
+      {/*
+        The gallery belongs to its scope's PROFILE - club, race or Eboard - and the contract
+        names all three. It cannot work that out from its own route: it is keyed by a channel id,
+        which names a conversation rather than the thing that owns it, and the declared parent has
+        to exist before any read could resolve one.
+
+        So whoever links here says where back goes, as `parent`. The three profile screens each
+        pass their own, and the chat fallback is for a cold arrival - a shared link or a refresh -
+        where the conversation is the honest answer and is one tap from the profile anyway.
+      */}
       <Stack.Screen
         name="channels/[channelId]/gallery"
-        options={parented('Gallery', (p) => ({ href: `/chat/${p.channelId}`, label: 'Chat' }))}
+        options={parented('Gallery', (p) => ({
+          href: p['parent'] ?? `/chat/${p['channelId']}`,
+          label: p['parent'] === undefined ? 'Chat' : 'Profile',
+        }))}
       />
 
       {/*

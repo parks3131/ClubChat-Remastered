@@ -27,7 +27,19 @@ import { useLoad } from '../../../../src/use-load.ts';
 type Mode = 'list' | 'create' | 'join';
 
 export default function ClubsScreen() {
-  // Outside every club: leaving one is declared here rather than inferred from a blur.
+  /*
+   * The one screen that is outside every club, and therefore the ONLY one that clears it.
+   *
+   * > **Leaving a club is an act, not a side effect of glancing at another tab.** Calendar,
+   * > Notifications and Profile each used to clear it too, and that broke the Clubs tab's whole
+   * > purpose: stepping across to the Calendar and tapping CLUBS dropped you on this list instead
+   * > of surfacing at the club's front door, which is what rule 2 of the navigation contract
+   * > exists to give you. Worse, it did it inconsistently - the clear and the tab press raced, so
+   * > the same two taps went two different places.
+   *
+   * The rule is now one sentence: you are inside a club until you come here. Which also makes
+   * the club-scoped Calendar possible at all - it follows whichever club you are in.
+   */
   useClearClub();
   const { authState, channels, client, revision } = useSession();
   const router = useRouter();

@@ -154,7 +154,9 @@ export default function RaceProfileScreen() {
             {viewer.channelId !== null && (
               <Pressable
                 style={styles.card}
-                onPress={() => router.push(`/channels/${viewer.channelId}/gallery`)}
+                onPress={() => router.push(
+                    `/channels/${viewer.channelId}/gallery?parent=/races/${raceId}/profile`,
+                  )}
                 accessibilityRole="button"
                 accessibilityLabel="Gallery"
               >

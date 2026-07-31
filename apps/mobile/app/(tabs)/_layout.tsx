@@ -14,6 +14,7 @@
 
 import { MaterialIcons } from '@expo/vector-icons';
 import { Tabs, usePathname, useRouter } from 'expo-router';
+import { useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useSession } from '../../src/chat-provider.tsx';
 import { useCurrentSpace } from '../../src/current-space.tsx';
@@ -81,6 +82,26 @@ export default function TabsLayout() {
   const pathname = usePathname();
   const router = useRouter();
 
+  /*
+   * The two values the Clubs tab decides on, held in refs and read at PRESS time.
+   *
+   * > **`listeners` is a prop, so its closure is frozen at whatever the last render saw.** React
+   * > Navigation keeps the handler it was given; if this component does not re-render between the
+   * > club changing and the tap, the tap decides on a stale club and a stale path - sending
+   * > somebody to the My Clubs list when they are standing inside a club, or to a hub they have
+   * > already left.
+   *
+   * It used to re-render often enough to hide this: the club context stored a fresh object on
+   * every focus, so any navigation anywhere re-rendered this layout. That was accidental, and it
+   * stopped being true when the context started skipping updates that change nothing - which is
+   * the right thing for it to do, and turned a latent staleness into a visible one. Refs make the
+   * handler read the present rather than the last render.
+   */
+  const clubRef = useRef(currentClub);
+  clubRef.current = currentClub;
+  const pathRef = useRef(pathname);
+  pathRef.current = pathname;
+
   return (
     <Tabs
       screenOptions={{
@@ -135,14 +156,23 @@ export default function TabsLayout() {
         listeners={{
           tabPress: (event) => {
             event.preventDefault();
+            const club = clubRef.current;
 
-            if (currentClub === null) {
-              router.replace('/clubs');
+            if (club === null) {
+              /*
+                Not in a club, so this is a plain "go to the list" - and it must UNWIND to the
+                list rather than stack a second copy on top of whatever the Clubs stack was left
+                showing. `replace` on a stack of [list, hub] gives [list, list]: still two deep,
+                and the navigator draws a back arrow on what looks like the root. A back arrow on
+                My Clubs is a bug, not a state (PRD/15).
+              */
+              if (router.canDismiss()) router.dismissTo('/clubs');
+              else router.replace('/clubs');
               return;
             }
 
-            const hub = `/clubs/${currentClub.clubId}`;
-            if (pathname === hub) {
+            const hub = `/clubs/${club.clubId}`;
+            if (pathRef.current === hub) {
               /*
                 Already at the front door, so this tap means "leave the club".
 

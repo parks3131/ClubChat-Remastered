@@ -1,5 +1,6 @@
 /**
- * The Calendar destination: the cross-club merged feed.
+ * The Calendar destination: this club's feed when you are inside one, the merged cross-club feed
+ * when you are not.
  *
  * Two views over one read, which is the server's design and therefore this screen's: a month grid
  * for "what is happening when", and a tapped day's items beneath it. There is no calendar table for
@@ -18,11 +19,11 @@
  *     does nothing.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Redirect, useRouter } from 'expo-router';
-import { useClearClub } from '../../src/current-space.tsx';
+import { Redirect, useNavigation, useRouter } from 'expo-router';
+import { useCurrentSpace } from '../../src/current-space.tsx';
 import { calendarApi } from '../../src/api.ts';
 import type { FeedItem } from '../../src/api-types.ts';
 import { useSession } from '../../src/chat-provider.tsx';
@@ -40,13 +41,45 @@ function todayParts(): { year: number; month: number } {
   return { year: now.getFullYear(), month: now.getMonth() + 1 };
 }
 
+/**
+ * The destination, which follows whichever club you are inside.
+ *
+ * > **It reads the current club and does NOT clear it**, which is the whole rule: `PRD/15` says
+ * > the Calendar destination is club-scoped while a club is active, showing that club's feed under
+ * > its name, and reverts to the merged feed once the club has been left. Stepping across to
+ * > another tab is not leaving the club - the Clubs tab is still one tap from its hub.
+ *
+ * It cleared the club instead, which broke two things at once and only sometimes. The scoping the
+ * rule asks for never happened, so this always drew the cross-club feed. And clearing raced the
+ * Clubs tab's own handler: whether tapping CLUBS afterwards surfaced at the club's front door or
+ * dropped you on the My Clubs list depended on which ran first. Leaving a club is declared by the
+ * My Clubs list, which is the screen that actually IS outside one.
+ */
 export default function CalendarScreen() {
-  // Outside every club: leaving one is declared here rather than inferred from a blur.
-  useClearClub();
+  const { currentClub } = useCurrentSpace();
   const { authState } = useSession();
+  const navigation = useNavigation();
+
+  /*
+   * Only the header TITLE changes between the two.
+   *
+   * The tab bar label stays "Calendar" either way, so the destination never appears to move when
+   * a club becomes current. Set through the navigator rather than a `<Stack.Screen>` element,
+   * because this screen's parent is the tab navigator and a Stack element would be addressed to a
+   * stack that is not above it.
+   */
+  const title =
+    currentClub === null || currentClub.name.length === 0
+      ? 'Calendar'
+      : `${currentClub.name} Calendar`;
+  useEffect(() => {
+    navigation.setOptions({ title });
+  }, [navigation, title]);
+
   if (authState === 'checking') return <View style={styles.flex} />;
   if (authState === 'signed-out') return <Redirect href="/sign-in" />;
-  return <CalendarView />;
+
+  return <CalendarView {...(currentClub === null ? {} : { clubId: currentClub.clubId })} />;
 }
 
 /**
