@@ -634,11 +634,31 @@ export const canSeePollVoters = (ctx: AccessContext, poll: PollRef): boolean => 
 /** Any Eboard member creates a meeting. No further role distinction inside the space. */
 export const canCreateMeeting = isEboardMember;
 
-/** Only the meeting's creator edits or deletes it. Everyone else is view-only. */
-export const canManageMeeting = (
+/**
+ * **Only the meeting's creator EDITS it.** Everyone else in the space is view-only.
+ *
+ * Not an accident and not symmetrical with cancelling below. Meetings first shipped as
+ * any-member editable and two explicit founder follow-ups took that away, which is why
+ * `creatorId` is the authorization subject here rather than audit metadata. PRD/10 rule 7.
+ */
+export const canEditMeeting = (
   ctx: AccessContext,
   meeting: { creatorId: string },
 ): boolean => meeting.creatorId === ctx.userId;
+
+/**
+ * **Any member of the space CANCELS a meeting, not only the one who scheduled it.**
+ *
+ * The deliberate asymmetry with editing above, and the pair only looks inconsistent until you
+ * ask what each one is for. Editing rewrites somebody's record of what they called; cancelling
+ * says a thing is not happening, which is a fact about the board's week rather than about its
+ * author. A meeting nobody but one absent member can call off is the failure this avoids.
+ *
+ * What makes it safe to open is that cancelling is **narrated**: deleting posts "X cancelled
+ * <title>" into board chat, so the space sees who did it. An unaccountable open delete is a
+ * different proposition, and is not what this is.
+ */
+export const canCancelMeeting = isEboardMember;
 
 /** Calendar events, routines and news: any club admin, any item. Not only its author. */
 export const canManageClubContent = isClubAdmin;

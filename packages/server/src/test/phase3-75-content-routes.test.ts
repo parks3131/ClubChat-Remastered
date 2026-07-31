@@ -15,6 +15,8 @@ import { createAuth, type Auth } from '../auth.ts';
 import type { Config } from '../config.ts';
 import { clubMemberships } from '../db/schema.ts';
 import { FakeMediaStore } from '../media/store.ts';
+import { RecordingPushSender } from '../push/sender.ts';
+import { drainOnce } from '../worker/drain.ts';
 import { startTestDb, type TestDb } from './harness.ts';
 
 let h: TestDb;
@@ -92,6 +94,46 @@ async function outboxTypes(clubId: string): Promise<string[]> {
   return rows.rows.map((r) => r.event_type);
 }
 
+/**
+ * Run the effects the routes queued.
+ *
+ * Most tests in this file assert on the outbox ROW, which is the right level for "does creating
+ * this notify anybody". The cancellation line is not like that: it is a message in a channel that
+ * only exists once the handler has run, so this drains for real.
+ *
+ * The Redis stub records nothing and is never asserted on - it is here because publishing is how
+ * an open chat learns about the line, and a handler that publishes must not be able to throw for
+ * want of a bus.
+ */
+async function drainOutbox(): Promise<Array<{ topic: string; payload: string }>> {
+  const published: Array<{ topic: string; payload: string }> = [];
+  await drainOnce(h.db, {
+    db: h.db,
+    redis: {
+      publish: async (topic: string, payload: string) => {
+        published.push({ topic, payload });
+        return 0;
+      },
+    } as never,
+    push: new RecordingPushSender(),
+    log: () => undefined,
+    // Pushes are deferred by eight real seconds in production. Dropped here: this test is about
+    // what lands in the channel, and nothing about it depends on a push having gone out.
+    defer: () => undefined,
+  });
+  return published;
+}
+
+/** The Eboard space's own chat channel, which is where its cards and lines land. */
+async function eboardChannelOf(eboardId: string): Promise<string> {
+  const rows = await h.db.execute<{ id: string }>(
+    sql`SELECT id::text AS id FROM channels WHERE scope = 'eboard' AND scope_id = ${eboardId}::uuid`,
+  );
+  const id = rows.rows[0]?.id;
+  if (!id) throw new Error('eboard channel not found');
+  return id;
+}
+
 beforeAll(async () => {
   h = await startTestDb();
   auth = createAuth(h.db, {
@@ -108,7 +150,12 @@ afterAll(async () => {
 });
 
 describe('meetings', () => {
-  it('lets any Eboard member create one and only the creator edit or delete it', async () => {
+  /*
+   * Three rules in one test, because the interesting part is where they DIFFER:
+   * create is open to the space, edit is creator-only, and cancel is open to the space again.
+   * Testing them apart is what let the middle one quietly become the rule for all three.
+   */
+  it('lets any Eboard member create and cancel, but only the creator edit', async () => {
     const owner = await signUp('MeetingOwner');
     const secondAdmin = await signUp('MeetingAdmin');
     const member = await signUp('MeetingMember');
@@ -129,7 +176,8 @@ describe('meetings', () => {
     expect(created.status).toBe(201);
     const meetingId = created.body.meetingId;
 
-    // The owner is in the space and did not create it: view-only, and told so distinguishably.
+    // The owner is in the space and did not create it: cannot EDIT it, and told so
+    // distinguishably - 403 rather than 404, because they can plainly see the thing.
     const asOwner = await as(owner, 'GET', `/meetings/${meetingId}`);
     expect(asOwner.status).toBe(200);
     expect(asOwner.body.meeting.isCreator).toBe(false);
@@ -137,7 +185,6 @@ describe('meetings', () => {
     expect((await as(owner, 'PATCH', `/meetings/${meetingId}`, { title: 'Hijack' })).status).toBe(
       403,
     );
-    expect((await as(owner, 'DELETE', `/meetings/${meetingId}`)).status).toBe(403);
 
     // An ordinary member has no visibility of the space at all.
     expect((await as(member, 'GET', `/meetings/${meetingId}`)).status).toBe(404);
@@ -149,7 +196,7 @@ describe('meetings', () => {
       })).status,
     ).toBe(404);
 
-    // The creator can.
+    // The creator can edit.
     const patched = await as(secondAdmin, 'PATCH', `/meetings/${meetingId}`, {
       title: 'Budget review (moved)',
     });
@@ -159,8 +206,82 @@ describe('meetings', () => {
     // An absent field kept its value rather than clearing it.
     expect(after.body.meeting.startsAt).toBeTruthy();
 
-    expect((await as(secondAdmin, 'DELETE', `/meetings/${meetingId}`)).status).toBe(200);
+    /*
+     * And ANYBODY in the space cancels it - here the owner, who did not create it and was
+     * refused the edit four lines up. The pair of expectations is the rule: a meeting only its
+     * absent author could call off is what opening this avoids.
+     */
+    expect((await as(owner, 'DELETE', `/meetings/${meetingId}`)).status).toBe(200);
     expect((await as(secondAdmin, 'GET', `/meetings/${meetingId}`)).status).toBe(404);
+  });
+
+  /**
+   * Cancelling narrates itself into board chat, and that is the reason it may be open.
+   *
+   * The card goes - it would otherwise link to nothing - and "X cancelled <title>" takes its
+   * place. A card that silently disappeared would tell a board that planned around the meeting
+   * nothing about why their calendar changed.
+   */
+  it('replaces the card with a cancellation line naming who called it off', async () => {
+    const owner = await signUp('CancelOwner');
+    const other = await signUp('CancelOther');
+    const { clubId } = await createClubAs(owner);
+    const eboardId = await eboardIdOf(clubId);
+
+    await as(owner, 'POST', `/clubs/${clubId}/members`, { userId: other.userId });
+    await as(owner, 'PATCH', `/clubs/${clubId}/members/${other.userId}/role`, { role: 'admin' });
+
+    const created = await as(owner, 'POST', `/eboards/${eboardId}/meetings`, {
+      title: 'Budget review',
+      startsAt: '2027-03-01T18:00:00.000Z',
+    });
+    expect(created.status).toBe(201);
+
+    await drainOutbox();
+
+    const channelId = await eboardChannelOf(eboardId);
+    const cards = await h.db.execute<{ id: string; type: string; body: string }>(sql`
+      SELECT id::text AS id, type, body FROM messages
+       WHERE channel_id = ${channelId}::uuid AND linked_meeting_id = ${created.body.meetingId}::uuid
+    `);
+    expect(cards.rows).toHaveLength(1);
+    expect(cards.rows[0]?.type).toBe('meeting');
+
+    // Cancelled by the OTHER member, not its creator - which is the whole point of the line.
+    expect((await as(other, 'DELETE', `/meetings/${created.body.meetingId}`)).status).toBe(200);
+    const published = await drainOutbox();
+
+    const afterCard = await h.db.execute<{ deleted_at: string | null }>(sql`
+      SELECT deleted_at FROM messages WHERE id = ${cards.rows[0]?.id}::uuid
+    `);
+    expect(afterCard.rows[0]?.deleted_at).not.toBeNull();
+
+    /*
+     * The removal has to go out as an UPDATE frame, and this asserts the SHAPE rather than
+     * merely that something was published.
+     *
+     * `Published` treats a payload with no `kind` as a whole new message, so the hand-rolled
+     * frame this used to send arrived claiming to be a message and carrying three fields of one.
+     * No client could read it, and because history syncs forward from the last seq a device
+     * holds, a cached card is never re-read - so a cancelled meeting kept its card forever, on
+     * every device, across reloads. Nothing failed; it just silently never happened.
+     */
+    const updates = published
+      .map((p) => JSON.parse(p.payload) as { kind?: string; seq?: number; update?: unknown })
+      .filter((p) => p.kind === 'update');
+    expect(updates).toContainEqual(
+      expect.objectContaining({
+        kind: 'update',
+        update: expect.objectContaining({ deletedAt: expect.any(String), pinned: false }),
+      }),
+    );
+
+    const lines = await h.db.execute<{ body: string }>(sql`
+      SELECT body FROM messages
+       WHERE channel_id = ${channelId}::uuid AND type = 'system' AND deleted_at IS NULL
+       ORDER BY seq DESC LIMIT 1
+    `);
+    expect(lines.rows[0]?.body).toBe('CancelOther cancelled Budget review');
   });
 
   it('splits upcoming from past by the clock, with nothing stored', async () => {

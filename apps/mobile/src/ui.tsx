@@ -224,12 +224,22 @@ export function ConfirmDialog({
   title,
   body,
   confirmLabel,
+  /**
+   * The way OUT. "Cancel" everywhere except where the destructive action is itself a
+   * cancellation.
+   *
+   * > **"Cancel" beside "Cancel meeting" is a coin toss, not a choice.** Both buttons start with
+   * > the same word and one of them means "do nothing" - which is exactly the moment a dialog
+   * > has to be unambiguous. That screen passes "Keep it".
+   */
+  dismissLabel = 'Cancel',
   onConfirm,
   onCancel,
 }: {
   title: string;
   body: string;
   confirmLabel: string;
+  dismissLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -247,7 +257,7 @@ export function ConfirmDialog({
           <Text style={styles.confirmBody}>{body}</Text>
           <View style={styles.confirmActions}>
             <Action
-              label="Cancel"
+              label={dismissLabel}
               variant="secondary"
               style={styles.confirmAction}
               onPress={onCancel}

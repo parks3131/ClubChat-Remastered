@@ -37,6 +37,7 @@ import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { Avatar } from "../../src/ui.tsx";
 import { ChatEventCard } from "../../src/screens/events.tsx";
+import { ChatMeetingCard } from "../../src/screens/meetings.tsx";
 import { ChatPollCard } from "../../src/screens/polls.tsx";
 import { QuickNav, spaceProfileHref, useGoBack } from "../../src/nav.tsx";
 import { color, radius, space, type } from "../../src/theme.ts";
@@ -1149,9 +1150,31 @@ export default function ChatScreen() {
               );
             }
 
-            // A soft-deleted message leaves a tombstone rather than a hole, so the
-            // replies around it stay readable.
+            /*
+             * A card bubble, of any of the three kinds.
+             *
+             * Poll, event and meeting cards differ in everything except this: each holds its own
+             * press targets, so the bubble around them must hold none. Asking `linkedPollId !==
+             * null` in the places that decide it is how the event card shipped without the
+             * long-press suppression the poll card has - failure mode 17 all over again.
+             */
+            const cardId =
+              message.linkedPollId ?? message.linkedEventId ?? message.linkedMeetingId;
+
             if (message.deletedAt !== null) {
+              /*
+               * A deleted CARD leaves nothing at all; a deleted MESSAGE leaves a tombstone.
+               *
+               * The tombstone exists for one reason - a message vanishing mid-conversation makes
+               * the replies around it unreadable (domain invariant 7). A card has no replies: it
+               * is a thing the server posted about an object, and when the object goes there is
+               * no conversation left with a hole in it.
+               *
+               * It would also read as a contradiction. Cancelling a meeting posts "X cancelled
+               * <title>" in the card's place, and a tombstone directly above that line says the
+               * same event twice while claiming somebody deleted a message.
+               */
+              if (cardId !== null) return null;
               return (
                 <View style={styles.systemRow}>
                   <Text style={styles.tombstone}>This message was deleted</Text>
@@ -1160,15 +1183,6 @@ export default function ChatScreen() {
             }
 
             const mine = message.senderId === userId;
-            /*
-             * A card bubble, of either kind.
-             *
-             * Poll and event cards differ in everything except this: both hold their own press
-             * targets, so the bubble around them must hold none. Asking `linkedPollId !== null` in
-             * the three places that decide it is how the event card shipped without the long-press
-             * suppression the poll card has - which is failure mode 17 all over again.
-             */
-            const cardId = message.linkedPollId ?? message.linkedEventId;
             // Marked so a reader can see WHICH message a jump sent them to. Without it the screen
             // has silently scrolled somewhere and the target is indistinguishable from its
             // neighbours, which is most of the value of jumping.
@@ -1290,7 +1304,7 @@ export default function ChatScreen() {
                             pollId={message.linkedPollId}
                             authorName={message.senderName}
                           />
-                        ) : (
+                        ) : message.linkedEventId !== null ? (
                           /*
                             An event card, drawn in its creator's bubble exactly as a poll is -
                             v1's card, with the calendar glyph, the date, the location and View
@@ -1301,7 +1315,10 @@ export default function ChatScreen() {
                             this bubble only because the bubble declares `accessibilityRole="none"`
                             above, which is what stops react-native-web rendering it as a <button>.
                           */
-                          <ChatEventCard eventId={cardId} />
+                          <ChatEventCard eventId={message.linkedEventId} />
+                        ) : (
+                          /* A meeting card. The event card's twin, and navigates the same way. */
+                          <ChatMeetingCard meetingId={cardId} />
                         )}
                         {/*
                           The card bubble cannot be long-pressed - its contents are buttons, and

@@ -956,7 +956,13 @@ const onRaceDeleted: EffectHandler = async (event, deps) => {
  *
  * Idempotent: the update is scoped to rows not already deleted, so redelivery is a no-op.
  */
-function makeCardRemover(
+/**
+ * Soft-delete the card a creation posted, so a deleted object leaves no dead link.
+ *
+ * Usable both as a whole handler and as a step inside a larger one - `meeting.deleted` removes
+ * its card AND narrates the cancellation, and calls this for the first half.
+ */
+function removeCards(
   column: 'linked_poll_id' | 'linked_event_id' | 'linked_meeting_id',
   payloadKey: string,
 ): EffectHandler {
@@ -973,16 +979,30 @@ function makeCardRemover(
     `);
 
     for (const row of removed.rows) {
-      // Published so an open chat drops the card immediately rather than showing a link to
-      // something that no longer exists until the next sync.
-      await deps.redis.publish(
-        `chan:${row.channel_id}`,
-        JSON.stringify({
-          channelId: row.channel_id,
-          seq: row.seq,
-          envelope: { channelId: row.channel_id, seq: row.seq, deletedAt: new Date().toISOString() },
-        }),
-      );
+      /*
+       * Published as an UPDATE, the same frame `message.deleted` sends.
+       *
+       * > **This was a hand-rolled `redis.publish` with an envelope that nothing could read**,
+       * > and the effect was worse than no publish at all. `Published` treats a payload with no
+       * > `kind` as a new MESSAGE, so a frame carrying only `{channelId, seq, deletedAt}` went
+       * > out claiming to be a whole message and arrived as one that could not be parsed. The
+       * > deletion reached no client.
+       * >
+       * > And because history syncs forward from the last seq a client holds, a card already in
+       * > the cache is never re-read - so the publish is the ONLY route this can travel, and a
+       * > cancelled meeting kept its card indefinitely, on every device, including across a
+       * > reload. Found by cancelling one and watching the card outlive it.
+       *
+       * The reactions and pin are cleared alongside, exactly as a deleted message clears them,
+       * so nobody is left holding pills for a card that is gone.
+       */
+      await publishUpdate(deps.redis, row.channel_id, {
+        channelId: row.channel_id,
+        seq: row.seq,
+        reactions: [],
+        pinned: false,
+        deletedAt: new Date().toISOString(),
+      });
     }
 
     deps.log('info', 'card removed for deleted object', {
@@ -1134,7 +1154,7 @@ export const handlers: Record<string, EffectHandler> = {
     cardBody: (event, ctx) => `${ctx.actorName} added an event: ${String(event.payload['title'])}`,
     cardLink: (event) => ({ linkedEventId: String(event.payload['eventId']) }),
   }),
-  'event.deleted': makeCardRemover('linked_event_id', 'eventId'),
+  'event.deleted': removeCards('linked_event_id', 'eventId'),
 
   'meeting.created': makeCreationHandler({
     cardType: 'meeting',
@@ -1158,7 +1178,54 @@ export const handlers: Record<string, EffectHandler> = {
     cardBody: (event, ctx) => `${ctx.actorName} scheduled ${String(event.payload['title'])}`,
     cardLink: (event) => ({ linkedMeetingId: String(event.payload['meetingId']) }),
   }),
-  'meeting.deleted': makeCardRemover('linked_meeting_id', 'meetingId'),
+  /**
+   * A meeting was cancelled.
+   *
+   * **The card goes and a line takes its place.** Every other deletion in the product just
+   * removes its card, which is right for a poll or an event: those are things that existed and
+   * now do not. A meeting is different because the space PLANNED AROUND it - members were
+   * notified, it sat on their calendar, and somebody may have kept the slot free. A card that
+   * silently disappears tells them none of that happened.
+   *
+   * So the conversation says who called it off, by name. Any member may cancel any meeting, and
+   * this line is what makes that rule accountable rather than merely permissive - the two were
+   * decided together and should not be separated.
+   */
+  'meeting.deleted': async (event, deps) => {
+    await removeCards('linked_meeting_id', 'meetingId')(event, deps);
+
+    const eboardId = event.payload['eboardId'];
+    const title = event.payload['title'];
+    if (typeof eboardId !== 'string') return;
+
+    const rows = await deps.db.execute<{ id: string }>(sql`
+      SELECT id FROM channels WHERE scope = 'eboard' AND scope_id = ${eboardId}::uuid
+    `);
+    const channelId = rows.rows[0]?.id;
+    if (!channelId) return;
+
+    const actorId = event.payload['actorId'];
+    const actorName =
+      typeof actorId === 'string' ? await displayName(deps.db, actorId) : 'Someone';
+
+    await postSystemMessage(deps, {
+      channelId,
+      // Names the meeting, not just "the meeting": a board with two on the calendar cannot act
+      // on a line that does not say which one is off.
+      body:
+        typeof title === 'string' && title.length > 0
+          ? `${actorName} cancelled ${title}`
+          : `${actorName} cancelled a meeting`,
+      eventId: event.id,
+      /*
+       * Its OWN idempotency scope, distinct from the 'card' scope the creation used. Both derive
+       * their client message id from the outbox event id, so sharing a scope across two different
+       * events would be fine - but sharing one within a redelivery of THIS event is what keeps a
+       * retry from posting the line twice.
+       */
+      scope: 'cancel',
+    });
+  },
 
   'news.created': makeCreationHandler({
     notificationType: 'news_post_created',
@@ -1188,7 +1255,7 @@ export const handlers: Record<string, EffectHandler> = {
       `${ctx.actorName} created a poll: ${String(event.payload['question'])}`,
     cardLink: (event) => ({ linkedPollId: String(event.payload['pollId']) }),
   }),
-  'poll.deleted': makeCardRemover('linked_poll_id', 'pollId'),
+  'poll.deleted': removeCards('linked_poll_id', 'pollId'),
 
   /**
    * Derive thumbnails for a completed upload.

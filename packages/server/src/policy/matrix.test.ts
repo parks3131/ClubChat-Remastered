@@ -39,7 +39,8 @@ import {
   canManageClubContent,
   canManageEboardMembers,
   canManageJoinRequests,
-  canManageMeeting,
+  canCancelMeeting,
+  canEditMeeting,
   canManagePoll,
   canManageRace,
   canPinInChannel,
@@ -562,10 +563,24 @@ const eboardMatrix: EboardRow[] = [
     clubMember: false,
   },
   {
-    action: "Edit/delete somebody else's meeting (creator only)",
-    run: (c) => canManageMeeting(c, meetingByOther),
+    action: "Edit somebody else's meeting (creator only)",
+    run: (c) => canEditMeeting(c, meetingByOther),
     eboardMember: false,
     ownerInside: false,
+    adminOutside: false,
+    clubMember: false,
+  },
+  {
+    /*
+     * The deliberate asymmetry with the row above, and the reason both rows exist rather than
+     * one: cancelling is open to the whole space where editing is not. A meeting only its
+     * absent author could call off is the failure that buys. The cancellation is narrated into
+     * board chat by name, which is what keeps an open delete accountable.
+     */
+    action: "Cancel somebody else's meeting (any member of the space)",
+    run: (c) => canCancelMeeting(c, EBOARD),
+    eboardMember: true,
+    ownerInside: true,
     adminOutside: false,
     clubMember: false,
   },
@@ -601,11 +616,11 @@ describe('PRD/02 matrix: Eboard and Council', () => {
   }
 
   it('covers every row of the spec table', () => {
-    expect(eboardMatrix).toHaveLength(10);
+    expect(eboardMatrix).toHaveLength(11);
   });
 
-  it('lets a meeting creator manage their own meeting', () => {
-    expect(canManageMeeting(eboardActors.eboardMember, { creatorId: ADMIN })).toBe(true);
+  it('lets a meeting creator edit their own meeting', () => {
+    expect(canEditMeeting(eboardActors.eboardMember, { creatorId: ADMIN })).toBe(true);
   });
 
   it('how Eboard differs from Race, stated as a test', () => {
@@ -903,8 +918,10 @@ describe('the gate itself', () => {
       dmMatrix.length * DM_ACTORS.length;
     // A guard against the suite quietly shrinking: deleting a row or an actor column fails
     // here rather than silently reducing coverage.
-    expect(cells).toBe(7 * 3 + 14 * 5 + 10 * 4 + 11 * 4);
-    expect(cells).toBe(175);
+    // The Eboard table is 11 rows since cancelling a meeting became its own rule, separate from
+    // editing one - the two differ, so they are two rows rather than one.
+    expect(cells).toBe(7 * 3 + 14 * 5 + 11 * 4 + 11 * 4);
+    expect(cells).toBe(179);
   });
 
   it('asserts at least one deny in every matrix', () => {

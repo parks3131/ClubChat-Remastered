@@ -29,9 +29,10 @@ import {
 } from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
+  canCancelMeeting,
   canCreateMeeting,
+  canEditMeeting,
   canManageClubContent,
-  canManageMeeting,
   canReadClubContent,
   isEboardMember,
 } from '../policy/predicates.ts';
@@ -95,7 +96,7 @@ export async function createMeeting(
 }
 
 /**
- * Edit or delete a meeting. **Creator only.**
+ * Edit a meeting. **Creator only** - unlike cancelling it, which any member may do.
  *
  * Two explicit founder follow-ups landed on this after meetings first shipped as any-member
  * editable, which is why `creatorId` here is the authorization subject rather than audit
@@ -120,7 +121,7 @@ export async function updateMeeting(
   if (!meeting) return { ok: false, code: 'not_found' };
   // Membership of the space is required to see it at all; creatorship to change it.
   if (!isEboardMember(ctx, meeting.eboardId)) return { ok: false, code: 'not_found' };
-  if (!canManageMeeting(ctx, meeting)) return { ok: false, code: 'forbidden' };
+  if (!canEditMeeting(ctx, meeting)) return { ok: false, code: 'forbidden' };
 
   await db
     .update(meetings)
@@ -135,6 +136,17 @@ export async function updateMeeting(
   return { ok: true, updated: true };
 }
 
+/**
+ * Cancel a meeting. **Any member of the space, not only the one who scheduled it.**
+ *
+ * The deliberate asymmetry with `updateMeeting` above: a meeting nobody but one absent member
+ * could call off is the failure this avoids, where editing somebody else's record is the failure
+ * the creator-only rule avoids. See `canCancelMeeting`.
+ *
+ * The title rides along in the payload because the effect narrates the cancellation into board
+ * chat as "X cancelled <title>", and by the time that handler runs the row is gone - so this is
+ * the last moment the title exists to be read.
+ */
 export async function deleteMeeting(
   db: Db,
   ctx: AccessContext,
@@ -145,14 +157,23 @@ export async function deleteMeeting(
   const meeting = rows[0];
   if (!meeting) return { ok: false, code: 'not_found' };
   if (!isEboardMember(ctx, meeting.eboardId)) return { ok: false, code: 'not_found' };
-  if (!canManageMeeting(ctx, meeting)) return { ok: false, code: 'forbidden' };
+  // The same predicate as the line above, stated anyway: "who can see this" and "who can cancel
+  // it" are two rules that happen to coincide, and collapsing them would hide that they do.
+  if (!canCancelMeeting(ctx, meeting.eboardId)) return { ok: false, code: 'forbidden' };
 
   await db.transaction(async (tx) => {
-    // Deleting the meeting removes its chat card rather than leaving a dead link.
+    // Deleting the meeting removes its chat card and leaves a cancellation line in its place,
+    // rather than having the card silently vanish from the conversation.
     await tx.insert(outbox).values({
       partitionKey: clubId,
       eventType: 'meeting.deleted',
-      payload: { clubId, meetingId, eboardId: meeting.eboardId, actorId: ctx.userId },
+      payload: {
+        clubId,
+        meetingId,
+        eboardId: meeting.eboardId,
+        title: meeting.title,
+        actorId: ctx.userId,
+      },
     });
     await tx.delete(meetings).where(eq(meetings.id, meetingId));
   });

@@ -109,7 +109,8 @@ DELETE /eboards/:id/members/:uid             ← leaving is free; removing is Ow
 
 GET    /eboards/:id/meetings?when=upcoming|past
 POST   /eboards/:id/meetings                 ← any member of the space
-GET    /meetings/:id · PATCH · DELETE        ← creator only for the last two
+GET    /meetings/:id · PATCH                 ← PATCH is the creator only
+DELETE /meetings/:id                         ← ANY member of the space; posts "X cancelled Y"
 
 POST   /clubs/:id/polls · /races/:id/polls · /eboards/:id/polls
 GET    /clubs/:id/polls · /races/:id/polls · /eboards/:id/polls

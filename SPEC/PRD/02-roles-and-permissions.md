@@ -103,7 +103,8 @@ in both directions, by the permission-matrix test suite.
 | Request to join / be added | - | ✅ | ❌ |
 | Approve requests, add members | ✅ | ❌ | ❌ |
 | Create a meeting or a poll | ✅ | ❌ | ❌ |
-| Edit/delete a meeting | creator only | ❌ | ❌ |
+| Edit a meeting | creator only | ❌ | ❌ |
+| Cancel a meeting | ✅ any member | ❌ | ❌ |
 | Remove another Eboard member | **Club Owner only** | ❌ | ❌ |
 | Leave the Eboard space | ✅ | - | - |
 | Delete the space | ✅ | ❌ | ❌ |
