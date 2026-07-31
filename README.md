@@ -13,17 +13,18 @@ is the remaster: a full rebuild driven by a written postmortem of v1's architect
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/screenshots/01-club-hub.jpg" alt="Club hub" /></td>
-    <td width="33%"><img src="docs/screenshots/02-club-chat.jpg" alt="Club chat" /></td>
-    <td width="33%"><img src="docs/screenshots/03-race-poll.jpg" alt="Race chat with a poll card" /></td>
+    <td width="33%"><img src="docs/screenshots/01-my-clubs.jpg" alt="My Clubs" /></td>
+    <td width="33%"><img src="docs/screenshots/02-club-hub.jpg" alt="Club hub" /></td>
+    <td width="33%"><img src="docs/screenshots/03-club-chat.jpg" alt="Club chat" /></td>
   </tr>
   <tr>
+    <td valign="top"><sub><b>My Clubs.</b> Four clubs, one account, each with its own identity, its
+      sport, and the role held in it. Avatars are the only media served from a public bucket, and a
+      club without one falls back to its initial.</sub></td>
     <td valign="top"><sub><b>The club hub.</b> The three spaces a club owns, and its races nested one
       level down. This one screen is the whole product bet.</sub></td>
     <td valign="top"><sub><b>Club chat.</b> System messages and mentions in the durable log, with a tray
       that turns a poll or an event into a first-class object.</sub></td>
-    <td valign="top"><sub><b>A race, with its poll card.</b> Created elsewhere, posted back into chat as a
-      live card, alongside the sub-features a nested space owns.</sub></td>
   </tr>
 </table>
 
@@ -111,13 +112,36 @@ iOS, Android and web from one Expo codebase, phone-first and portrait only.
 
 ## Inside the app
 
-Four more screens, and the thing each one is really showing. All screenshots are the app running
+Six more screens, and the thing each one is really showing. All screenshots are the app running
 on a physical Android device.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/04-message-actions.jpg" alt="Message actions" /></td>
-    <td width="50%"><img src="docs/screenshots/05-calendar.jpg" alt="Calendar" /></td>
+    <td width="50%"><img src="docs/screenshots/04-race-poll.jpg" alt="Race chat with a poll card" /></td>
+    <td width="50%"><img src="docs/screenshots/05-announcement.jpg" alt="An announcement in chat" /></td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <b>A race, with its poll card</b><br />
+      <sub>A poll created anywhere posts itself back into chat as a live card carrying its tally.
+      <b>The card is a real row in the channel log</b>, written by the worker off the outbox rather
+      than synthesised by the client, so it has a sequence number, survives a reinstall, and
+      deleting the poll finds and removes the card instead of leaving a dead link. The overflow
+      menu is what a nested space owns: its own roster, its own polls, and car groups for who is
+      driving whom.</sub>
+    </td>
+    <td valign="top">
+      <b>Announcements</b><br />
+      <sub>Rendered differently because it <i>is</i> different. <b>A pin is reference and notifies
+      nobody; an announcement is interruption and notifies everyone</b>, so they are two predicates
+      rather than one flag. <code>canAnnounceInChannel</code> is admin-only and constant-false in a
+      DM, where nobody holds that authority over anybody. Keeping them separate is what lets pin
+      stay available to both participants in a DM without handing either one a megaphone.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/06-message-actions.jpg" alt="Message actions" /></td>
+    <td width="50%"><img src="docs/screenshots/07-calendar.jpg" alt="Calendar" /></td>
   </tr>
   <tr>
     <td valign="top">
@@ -141,8 +165,8 @@ on a physical Android device.
     </td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/06-notifications.jpg" alt="Notifications" /></td>
-    <td width="50%"><img src="docs/screenshots/07-profile.jpg" alt="Profile" /></td>
+    <td width="50%"><img src="docs/screenshots/08-notifications.jpg" alt="Notifications" /></td>
+    <td width="50%"><img src="docs/screenshots/09-profile.jpg" alt="Profile" /></td>
   </tr>
   <tr>
     <td valign="top">
