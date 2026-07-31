@@ -182,6 +182,9 @@ export const MessageEnvelope = z.object({
    * this poll from learning its contents through a card.
    */
   linkedPollId: Uuid.nullable().default(null),
+  /** The same, for an event card and a meeting card. One of the three at most is ever set. */
+  linkedEventId: Uuid.nullable().default(null),
+  linkedMeetingId: Uuid.nullable().default(null),
   deletedAt: z.string().datetime().nullable(),
   createdAt: z.string().datetime(),
 });

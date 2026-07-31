@@ -155,7 +155,7 @@ function createActions(meta: ChannelMeta): Array<{
         },
         {
           label: "Event",
-          href: `/clubs/${meta.scopeId}/events?create=1`,
+          href: `/clubs/${meta.scopeId}/events?create=1&from=${backToChat}`,
           icon: "event",
           tint: color.error,
         },
@@ -180,7 +180,7 @@ function createActions(meta: ChannelMeta): Array<{
         },
         {
           label: "Meeting",
-          href: `/eboard/${meta.scopeId}/meetings?create=1`,
+          href: `/eboard/${meta.scopeId}/meetings?create=1&from=${backToChat}`,
           icon: "groups",
           tint: color.error,
         },
@@ -1090,17 +1090,6 @@ export default function ChatScreen() {
               return (
                 <View style={styles.systemRow}>
                   <Text style={styles.systemText}>{message.body}</Text>
-                  {/*
-                    A poll card renders the poll itself, votable in place, under the sentence
-                    announcing it. The sentence stays: it says who asked and survives on its own
-                    if the poll is gone or this reader may not see it, which is what the card
-                    falls back to.
-                  */}
-                  {message.linkedPollId !== null && (
-                    <View style={styles.cardWrap}>
-                      <ChatPollCard pollId={message.linkedPollId} />
-                    </View>
-                  )}
                 </View>
               );
             }
@@ -1146,16 +1135,35 @@ export default function ChatScreen() {
                   // Long press, not a visible button: reporting is rare and a tap target on
                   // every bubble would be noise. Own messages are excluded because nobody can
                   // report themselves.
-                  onLongPress={() => {
-                    setSelected(message.seq);
-                    setConfirmingReport(null);
-                  }}
+                  //
+                  // > **A card bubble is not long-pressable, and must not be.** Its contents are
+                  // > controls - vote, see voters, close, delete - and a pressable wrapping them
+                  // > is failure mode 17: invalid on web, where the browser says "<button> cannot
+                  // > contain a nested <button>", and on native the outer gesture swallows the
+                  // > vote. So the card owns its own taps and the bubble owns none. The cost is
+                  // > that a poll card cannot be reacted to by holding it, which is the right way
+                  // > round: voting on it is what it is for.
+                  onLongPress={
+                    message.linkedPollId !== null
+                      ? undefined
+                      : () => {
+                          setSelected(message.seq);
+                          setConfirmingReport(null);
+                        }
+                  }
                   delayLongPress={400}
-                  accessibilityRole="button"
+                  // `none`, not `button`, and that is what actually fixes the nesting: react-native-web
+                  // renders a Pressable as a real <button> ONLY when its role says so, and a plain
+                  // <div> wrapper can hold the card's controls legally. `disabled` was the first
+                  // attempt and was worse than the bug - a disabled button disables its descendants,
+                  // so every option inside went dead and the card could not be voted on at all.
+                  accessibilityRole={message.linkedPollId !== null ? "none" : "button"}
                   accessibilityLabel={
-                    mine
-                      ? "Press and hold to react to your message"
-                      : "Press and hold to react to or report this message"
+                    message.linkedPollId !== null
+                      ? undefined
+                      : mine
+                        ? "Press and hold to react to your message"
+                        : "Press and hold to react to or report this message"
                   }
                   // The gesture stays on the OUTERMOST element and the gradient sits inside it,
                   // so the bubble's fill can be a LinearGradient without the pressable becoming
@@ -1202,13 +1210,28 @@ export default function ChatScreen() {
                         mine={mine}
                       />
                     )}
-                    {/* A photo may carry a caption, and usually does not. */}
-                    {message.body !== null && message.body.length > 0 && (
-                      <Text
-                        style={mine ? styles.sentText : styles.receivedText}
-                      >
-                        {message.body}
-                      </Text>
+                    {/*
+                      A poll card, drawn inside the bubble of the person who made it - which is
+                      what it is. v1 does the same, on an explicit founder request that the
+                      bubble look and behave like the full poll rather than a link out of the
+                      conversation, so it votes, closes and deletes in place.
+
+                      The body sentence is suppressed alongside it: the card already says who
+                      asked what, and repeating it above is the same line twice.
+                    */}
+                    {message.linkedPollId !== null ? (
+                      <ChatPollCard
+                        pollId={message.linkedPollId}
+                        authorName={message.senderName}
+                      />
+                    ) : (
+                      /* A photo may carry a caption, and usually does not. */
+                      message.body !== null &&
+                      message.body.length > 0 && (
+                        <Text style={mine ? styles.sentText : styles.receivedText}>
+                          {message.body}
+                        </Text>
+                      )
                     )}
                     <Text style={mine ? styles.sentMeta : styles.receivedMeta}>
                       {new Date(message.createdAt).toLocaleTimeString([], {

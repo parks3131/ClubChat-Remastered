@@ -10,7 +10,7 @@
 
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { contentApi } from '../../../../../src/api.ts';
 import { color, space, type } from '../../../../../src/theme.ts';
 import {
@@ -27,7 +27,12 @@ import {
 import { useLoad } from '../../../../../src/use-load.ts';
 
 export default function MeetingsScreen() {
-  const { eboardId, create } = useLocalSearchParams<{ eboardId: string; create?: string }>();
+  const { eboardId, create, from } = useLocalSearchParams<{
+    eboardId: string;
+    create?: string;
+    from?: string;
+  }>();
+  const router = useRouter();
   const [when, setWhen] = useState<'upcoming' | 'past'>('upcoming');
   /*
    * `?create=1` opens straight into the composer, which is how chat's "+" menu offers "Meeting".
@@ -39,15 +44,31 @@ export default function MeetingsScreen() {
    */
   const [composing, setComposing] = useState(create === '1');
 
+  /*
+   * Where to go once it exists. Chat's "+" menu sends `from=/chat/:channelId`, and a thing made
+   * there belongs back there: the creation posts its own card into that conversation.
+   *
+   * **Only an in-app chat path is honoured**, because `from` arrives in a URL and a URL is user
+   * input - an unchecked one is an open redirect a deep link could point anywhere.
+   */
+  const returnTo = from?.startsWith('/chat/') === true ? from : null;
+
   const load = useLoad(() => contentApi.meetings(eboardId, when), [eboardId, when]);
 
   if (composing) {
     return (
       <NewMeeting
         eboardId={eboardId}
-        onCancel={() => setComposing(false)}
+        onCancel={() => {
+          if (returnTo !== null) router.replace(returnTo);
+          else setComposing(false);
+        }}
         onCreated={() => {
           setComposing(false);
+          if (returnTo !== null) {
+            router.replace(returnTo);
+            return;
+          }
           load.reload();
         }}
       />

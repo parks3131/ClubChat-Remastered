@@ -649,11 +649,22 @@ describe('content notification behaviour', () => {
     expect(rows[0]?.recipientId).toBe(f.memberId);
     expect(rows[0]?.type).toBe('event_created');
 
-    const cards = await h.db.execute<{ body: string }>(sql`
-      SELECT body FROM messages
-       WHERE channel_id = ${f.mainChannelId} AND type = 'system' AND body LIKE '%Track night%'
+    /*
+     * The card is typed `event` and authored by the person who made it, NOT `system`.
+     *
+     * Both halves matter to the client. The type is what tells chat to draw the object inline
+     * instead of a sentence, and the sender is what puts it in that member's own bubble rather
+     * than in the unattributed centre column with "X joined the club". A card is somebody
+     * putting something to the room, so it is from them.
+     */
+    const cards = await h.db.execute<{ body: string; sender_id: string; type: string }>(sql`
+      SELECT body, sender_id::text AS sender_id, type FROM messages
+       WHERE channel_id = ${f.mainChannelId} AND linked_event_id IS NOT NULL
     `);
     expect(cards.rows).toHaveLength(1);
+    expect(cards.rows[0]?.body).toContain('Track night');
+    expect(cards.rows[0]?.type).toBe('event');
+    expect(cards.rows[0]?.sender_id).toBe(f.ownerId);
   });
 
   it('a news post notifies members but posts no chat card', async () => {

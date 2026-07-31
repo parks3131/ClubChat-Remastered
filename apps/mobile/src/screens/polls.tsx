@@ -23,7 +23,7 @@
  */
 
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { pollApi, type PollScope } from '../api.ts';
@@ -609,10 +609,16 @@ function PollBody({
   poll,
   busy,
   onVote,
+  byline,
+  onSeeVoters,
 }: {
   poll: PollView;
   busy: boolean;
   onVote: (optionId: string) => void;
+  /** "Created by X", on the chat card. The detail screen has the header for that job. */
+  byline?: string | null;
+  /** Present on the chat card, where each option carries its own eye rather than one button. */
+  onSeeVoters?: (optionId: string) => void;
 }) {
   const total = poll.options.reduce((sum, option) => sum + option.voteCount, 0);
 
@@ -621,6 +627,7 @@ function PollBody({
       <StatusRow closed={poll.closed} closesAt={poll.closesAt} />
       <Text style={styles.detailQuestion}>{poll.question}</Text>
       <Text style={styles.meta}>
+        {byline != null && byline.length > 0 ? `Created by ${byline}  ·  ` : ''}
         {poll.allowMultiple ? 'Multiple choice' : 'Single choice'}
         {poll.isPrivate ? '  ·  Private vote' : ''}
         {poll.closesAt !== null
@@ -630,38 +637,64 @@ function PollBody({
 
       <View style={styles.options}>
         {poll.options.map((option) => (
-          <Pressable
+          /*
+            A View wrapping two SIBLING pressables, never one inside the other.
+            Voting and opening the voter list are different actions on the same row, and
+            nesting their controls is failure mode 17: invalid on web, and on native the outer
+            one swallows the inner. So the row owns the border and the two targets sit in it.
+          */
+          <View
             key={option.id}
             style={[styles.option, option.votedByMe && styles.optionChosen]}
-            disabled={poll.closed || busy}
-            onPress={() => onVote(option.id)}
-            accessibilityRole="button"
-            accessibilityState={{ selected: option.votedByMe, disabled: poll.closed }}
-            accessibilityLabel={
-              poll.closed
-                ? `${option.label}, ${option.voteCount} votes, poll closed`
-                : option.votedByMe
-                  ? `Withdraw your vote for ${option.label}`
-                  : `Vote for ${option.label}`
-            }
           >
-            <View style={styles.optionHead}>
-              <Text style={styles.optionLabel}>
-                {option.votedByMe ? '✓  ' : ''}
-                {option.label}
-              </Text>
-              {/* Public on every poll, including one whose voters are hidden. */}
-              <Text style={styles.optionCount}>{option.voteCount}</Text>
-            </View>
-            <View style={styles.barTrack}>
-              <View
-                style={[
-                  styles.barFill,
-                  { width: total === 0 ? 0 : `${(option.voteCount / total) * 100}%` },
-                ]}
-              />
-            </View>
-          </Pressable>
+            <Pressable
+              style={styles.optionTap}
+              disabled={poll.closed || busy}
+              onPress={() => onVote(option.id)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: option.votedByMe, disabled: poll.closed }}
+              accessibilityLabel={
+                poll.closed
+                  ? `${option.label}, ${option.voteCount} votes, poll closed`
+                  : option.votedByMe
+                    ? `Withdraw your vote for ${option.label}`
+                    : `Vote for ${option.label}`
+              }
+            >
+              <View style={styles.optionHead}>
+                <Text style={styles.optionLabel}>
+                  {option.votedByMe ? '✓  ' : ''}
+                  {option.label}
+                </Text>
+                {/* Public on every poll, including one whose voters are hidden. */}
+                <Text style={styles.optionCount}>{option.voteCount}</Text>
+              </View>
+              <View style={styles.barTrack}>
+                <View
+                  style={[
+                    styles.barFill,
+                    { width: total === 0 ? 0 : `${(option.voteCount / total) * 100}%` },
+                  ]}
+                />
+              </View>
+            </Pressable>
+
+            {/*
+              The eye, only where identities may be seen. `voters === null` is "not allowed to
+              see", which is a different thing from nobody having voted - so the control is
+              absent rather than opening an empty sheet.
+            */}
+            {onSeeVoters !== undefined && option.voters !== null && option.voteCount > 0 && (
+              <Pressable
+                style={styles.optionEye}
+                onPress={() => onSeeVoters(option.id)}
+                accessibilityRole="button"
+                accessibilityLabel={`See who voted for ${option.label}`}
+              >
+                <MaterialIcons name="visibility" size={16} color={color.textSecondary} />
+              </Pressable>
+            )}
+          </View>
         ))}
       </View>
     </>
@@ -679,8 +712,9 @@ function PollBody({
  * other half: a member who may not see this poll gets nothing back, and the card renders as its
  * sentence alone rather than leaking a question through chat.
  */
-export function ChatPollCard({ pollId }: { pollId: string }) {
+export function ChatPollCard({ pollId, authorName }: { pollId: string; authorName: string | null }) {
   const [busy, setBusy] = useState(false);
+  const [votersFor, setVotersFor] = useState<string | null>(null);
   const load = useLoad(() => pollApi.detail(pollId), [pollId]);
 
   const vote = async (optionId: string) => {
@@ -696,6 +730,7 @@ export function ChatPollCard({ pollId }: { pollId: string }) {
   // No spinner and no error text: this is a bubble in a conversation, and a failed or pending
   // read should leave the message reading as it did before cards existed, not shout in the log.
   if (load.data === null) return null;
+  const poll = load.data.poll;
 
   /*
    * A View, never a Pressable.
@@ -708,7 +743,43 @@ export function ChatPollCard({ pollId }: { pollId: string }) {
    */
   return (
     <View style={styles.chatPollCard}>
-      <PollBody poll={load.data.poll} busy={busy} onVote={(id) => void vote(id)} />
+      <PollBody
+        poll={poll}
+        busy={busy}
+        onVote={(id) => void vote(id)}
+        byline={authorName}
+        onSeeVoters={setVotersFor}
+      />
+
+      {/* Creator only, and inline: leaving the conversation to close your own poll is a detour. */}
+      {poll.isCreator && (
+        <View style={styles.chatPollActions}>
+          <Action
+            label={poll.closed ? 'Reopen Poll' : 'Close Poll'}
+            style={styles.chatPollAction}
+            onPress={() => {
+              void pollApi.setClosed(pollId, !poll.closed).then(load.reload, load.reload);
+            }}
+          />
+          <Action
+            label="Delete"
+            variant="danger"
+            style={styles.chatPollAction}
+            onPress={() => {
+              void pollApi.remove(pollId).then(load.reload, load.reload);
+            }}
+          />
+        </View>
+      )}
+
+      {votersFor !== null && (
+        <VoterSheet
+          poll={poll}
+          optionId={votersFor}
+          onPick={setVotersFor}
+          onDismiss={() => setVotersFor(null)}
+        />
+      )}
     </View>
   );
 }
@@ -816,17 +887,27 @@ function VoterSheet({
   onPick: (id: string) => void;
   onDismiss: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   const chosen = poll.options.find((option) => option.id === optionId) ?? poll.options[0];
   const voters = chosen?.voters ?? null;
 
+  /*
+   * A Modal, so the sheet escapes whatever drew it.
+   *
+   * `sheetBackdrop` is absolutely positioned, which fills the SCREEN from the detail screen and
+   * fills a chat bubble from the poll card - so opening voters from a card produced a sheet
+   * squeezed inside the bubble. A modal has no parent to be trapped by. v1 uses one for the same
+   * reason.
+   */
   return (
-    <View style={styles.sheetBackdrop}>
-      <Pressable
-        style={styles.sheetScrim}
-        onPress={onDismiss}
-        accessibilityRole="button"
-        accessibilityLabel="Close"
-      />
+    <Modal visible transparent animationType="fade" onRequestClose={onDismiss}>
+      <View style={styles.sheetBackdrop}>
+        <Pressable
+          style={styles.sheetScrim}
+          onPress={onDismiss}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+        />
       <View style={styles.sheet}>
         <View style={styles.sheetHead}>
           <Text style={styles.sheetTitle}>Voters</Text>
@@ -840,27 +921,47 @@ function VoterSheet({
           </Pressable>
         </View>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.sheetPicker}>
-          {poll.options.map((option) => (
-            <Pressable
-              key={option.id}
-              style={[styles.pickerChip, option.id === optionId && styles.pickerChipActive]}
-              onPress={() => onPick(option.id)}
-              accessibilityRole="button"
-              accessibilityState={{ selected: option.id === optionId }}
-              accessibilityLabel={`${option.label}, ${option.voteCount} votes`}
-            >
-              <Text
-                style={[
-                  styles.pickerChipLabel,
-                  option.id === optionId && styles.pickerChipLabelActive,
-                ]}
+        {/*
+          v1's control exactly: a collapsed row naming the option you are looking at, which
+          expands into every option with its count. A horizontal chip rail was here before and
+          is not what shipped - with long option labels it scrolls sideways and hides the ones
+          off-screen, which is the opposite of a picker.
+        */}
+        <Pressable
+          style={styles.dropdownHead}
+          onPress={() => setOpen((v) => !v)}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: open }}
+          accessibilityLabel={`Showing voters for ${chosen?.label ?? ''}. Change option`}
+        >
+          <Text style={styles.dropdownHeadLabel}>{chosen?.label ?? ''}</Text>
+          <MaterialIcons
+            name={open ? 'arrow-drop-up' : 'arrow-drop-down'}
+            size={22}
+            color={color.textPrimary}
+          />
+        </Pressable>
+
+        {open && (
+          <View style={styles.dropdownList}>
+            {poll.options.map((option) => (
+              <Pressable
+                key={option.id}
+                style={styles.dropdownItem}
+                onPress={() => {
+                  onPick(option.id);
+                  setOpen(false);
+                }}
+                accessibilityRole="button"
+                accessibilityState={{ selected: option.id === optionId }}
+                accessibilityLabel={`${option.label}, ${option.voteCount} votes`}
               >
-                {option.label}  {option.voteCount}
-              </Text>
-            </Pressable>
-          ))}
-        </ScrollView>
+                <Text style={styles.dropdownItemLabel}>{option.label}</Text>
+                <Text style={styles.dropdownItemCount}>{option.voteCount}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
 
         <ScrollView style={styles.sheetList}>
           {voters === null ? (
@@ -876,8 +977,9 @@ function VoterSheet({
             ))
           )}
         </ScrollView>
+        </View>
       </View>
-    </View>
+    </Modal>
   );
 }
 
@@ -1071,6 +1173,38 @@ const styles = StyleSheet.create({
   createButtonOff: { opacity: 0.6 },
   createButtonLabel: { ...type.headerTitle, fontSize: 16, color: color.onAccent },
 
+  optionTap: { flex: 1, gap: space.sm },
+  optionEye: { paddingLeft: space.sm, paddingVertical: space.xs },
+  chatPollActions: { flexDirection: 'row', gap: space.sm },
+  chatPollAction: { flex: 1 },
+  dropdownHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: color.cardSunken,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm + 2,
+  },
+  dropdownHeadLabel: { ...type.body, color: color.textPrimary },
+  dropdownList: {
+    borderWidth: 1,
+    borderColor: color.hairline,
+    borderRadius: radius.md,
+    overflow: 'hidden',
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm + 2,
+    borderBottomWidth: 1,
+    borderBottomColor: color.hairline,
+  },
+  dropdownItemLabel: { ...type.body, color: color.textPrimary },
+  dropdownItemCount: { ...type.bodySmall, color: color.accent },
+
   /* The poll bubble in chat. Full width, so the options are votable targets rather than a teaser. */
   chatPollCard: {
     backgroundColor: color.card,
@@ -1179,6 +1313,10 @@ const styles = StyleSheet.create({
   detailQuestion: { ...type.title, color: color.textPrimary },
   options: { gap: space.sm },
   option: {
+    // A row: the vote target takes the width and the eye sits beside it on the same line,
+    // rather than wrapping under the bar where it reads as a separate control.
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: color.card,
     borderRadius: radius.lg,
     borderWidth: 1,
@@ -1204,7 +1342,11 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    justifyContent: 'flex-end',
+    // Centred, which is what v1 draws: a card floating over the conversation rather than a
+    // bottom sheet clinging to the composer.
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: space.md,
     zIndex: 100,
   },
   sheetScrim: {
@@ -1216,12 +1358,15 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)',
   },
   sheet: {
+    // Rounded on all four corners now that it floats in the middle rather than rising from the
+    // bottom edge, and width-bounded so it does not stretch edge to edge on a tablet.
     backgroundColor: color.card,
-    borderTopLeftRadius: radius.xl,
-    borderTopRightRadius: radius.xl,
+    borderRadius: radius.xl,
     padding: space.md,
-    paddingBottom: space.xl,
+    width: '100%',
+    maxWidth: 460,
     maxHeight: '70%',
+    gap: space.sm,
   },
   sheetHead: {
     flexDirection: 'row',

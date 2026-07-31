@@ -98,6 +98,8 @@ function toEnvelope(
     documentName: row.documentName,
     documentSize: row.documentSize,
     linkedPollId: row.linkedPollId,
+    linkedEventId: row.linkedEventId,
+    linkedMeetingId: row.linkedMeetingId,
     deletedAt: row.deletedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };

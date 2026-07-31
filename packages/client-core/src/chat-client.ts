@@ -251,6 +251,8 @@ export class ChatClient {
             // Always null: a card is written by the worker, never sent from a client, so nothing
             // this outbox ever acknowledges is one.
             linkedPollId: null,
+            linkedEventId: null,
+            linkedMeetingId: null,
             deletedAt: null,
             createdAt: frame.d['createdAt'] as string,
           },

@@ -33,7 +33,21 @@ import { useLoad } from '../../../../../src/use-load.ts';
 const TYPES: readonly EventType[] = ['practice', 'team_bonding', 'volunteer', 'other', 'race'];
 
 export default function ClubEventsScreen() {
-  const { clubId, create } = useLocalSearchParams<{ clubId: string; create?: string }>();
+  const { clubId, create, from } = useLocalSearchParams<{
+    clubId: string;
+    create?: string;
+    from?: string;
+  }>();
+  const backRouter = useRouter();
+
+  /*
+   * Where to go once it exists. Chat's "+" menu sends `from=/chat/:channelId`, and an event made
+   * there belongs back there: the creation posts its own card into that conversation.
+   *
+   * **Only an in-app chat path is honoured**, because `from` arrives in a URL and a URL is user
+   * input - an unchecked one is an open redirect a deep link could point anywhere.
+   */
+  const returnTo = from?.startsWith('/chat/') === true ? from : null;
   // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
   useDeclareClub(clubId);
   const [when, setWhen] = useState<'upcoming' | 'past'>('upcoming');
@@ -59,9 +73,16 @@ export default function ClubEventsScreen() {
     return (
       <CreateEvent
         clubId={clubId}
-        onCancel={() => setCreating(false)}
+        onCancel={() => {
+          if (returnTo !== null) backRouter.replace(returnTo);
+          else setCreating(false);
+        }}
         onCreated={() => {
           setCreating(false);
+          if (returnTo !== null) {
+            backRouter.replace(returnTo);
+            return;
+          }
           feed.reload();
         }}
       />

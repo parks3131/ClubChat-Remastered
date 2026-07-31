@@ -14,7 +14,7 @@
 
 import { eq, sql } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
-import { SYSTEM_ACTOR_ID } from '@clubchat/shared';
+import { SYSTEM_ACTOR_ID, type MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { users } from '../db/schema.ts';
 import { appendMessage, deriveClientMsgId } from '../domain/append-message.ts';
@@ -84,6 +84,16 @@ async function postSystemMessage(
     body: string;
     eventId: number;
     scope?: string;
+    /**
+     * Who the message is FROM. Defaults to the system actor.
+     *
+     * A card names the person who made the thing, so it is posted as them and renders as their
+     * bubble - which is what it is. A plain system line ("X joined the club") stays unattributed,
+     * because nobody said it.
+     */
+    senderId?: string;
+    /** `poll`, `event` or `meeting` for a card; `system` for a narration line. */
+    type?: MessageType;
     /** Set when this message is a card, so a later delete can find it. */
     linkedPollId?: string | null;
     linkedEventId?: string | null;
@@ -98,9 +108,9 @@ async function postSystemMessage(
     // Never NULL. Postgres treats NULLs as distinct in a unique index, so a null
     // sender would silently defeat the idempotency constraint that makes this handler
     // safe to retry.
-    senderId: SYSTEM_ACTOR_ID,
+    senderId: args.senderId ?? SYSTEM_ACTOR_ID,
     clientMsgId: deriveClientMsgId(args.scope ?? 'outbox', args.eventId),
-    type: 'system',
+    type: args.type ?? 'system',
     body: args.body,
   });
 
@@ -704,6 +714,8 @@ function makeCreationHandler(config: {
   ) => Record<string, unknown>;
   /** Where the chat card goes, if this creation posts one. */
   cardChannel?: (event: OutboxEvent, db: Db) => Promise<string | null>;
+  /** The card's message type, which is what tells the client to draw the object inline. */
+  cardType?: MessageType;
   cardBody?: (event: OutboxEvent, ctx: { actorName: string }) => string;
   /** Which object the card is for, so deleting that object can remove the card. */
   cardLink?: (event: OutboxEvent) => {
@@ -773,6 +785,16 @@ function makeCreationHandler(config: {
           body: config.cardBody(event, { actorName }),
           eventId: event.id,
           scope: 'card',
+          /*
+           * From the person who created it, and typed as what it is.
+           *
+           * A card is somebody putting a question to the room, so it belongs in their bubble
+           * rather than in the unattributed centre column with "X joined the club". `actorId`
+           * is null only for a creation nobody performed, which is not a case that exists
+           * today; the system actor is the honest fallback if one ever appears.
+           */
+          senderId: actorId ?? SYSTEM_ACTOR_ID,
+          ...(config.cardType ? { type: config.cardType } : {}),
           ...(config.cardLink ? config.cardLink(event) : {}),
         });
       }
@@ -1093,6 +1115,7 @@ export const handlers: Record<string, EffectHandler> = {
   'race.incharge_left': onInchargeLeft,
 
   'event.created': makeCreationHandler({
+    cardType: 'event',
     notificationType: 'event_created',
     buildParams: (event, ctx) => ({
       clubId: String(event.payload['clubId']),
@@ -1114,6 +1137,7 @@ export const handlers: Record<string, EffectHandler> = {
   'event.deleted': makeCardRemover('linked_event_id', 'eventId'),
 
   'meeting.created': makeCreationHandler({
+    cardType: 'meeting',
     notificationType: 'meeting_created',
     audience: eboardAudience,
     buildParams: (event, ctx) => ({
@@ -1149,6 +1173,7 @@ export const handlers: Record<string, EffectHandler> = {
   }),
 
   'poll.created': makeCreationHandler({
+    cardType: 'poll',
     notificationType: 'poll_created',
     audience: pollScopeAudience,
     buildParams: (event, ctx) => ({

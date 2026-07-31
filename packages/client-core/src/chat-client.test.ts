@@ -59,6 +59,8 @@ function envelope(seq: number, overrides: Partial<MessageEnvelope> = {}): Messag
     reactions: [],
     mediaId: null,
     linkedPollId: null,
+    linkedEventId: null,
+    linkedMeetingId: null,
     documentName: null,
     documentSize: null,
     deletedAt: null,

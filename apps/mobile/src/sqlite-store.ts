@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS messages (
   document_name  TEXT,
   document_size  INTEGER,
   linked_poll_id TEXT,
+  linked_event_id TEXT,
+  linked_meeting_id TEXT,
   deleted_at     TEXT,
   created_at     TEXT NOT NULL,
   PRIMARY KEY (channel_id, seq)
@@ -67,6 +69,8 @@ const MIGRATIONS: ReadonlyArray<{ column: string; statements: readonly string[] 
    * this affects only card messages, and degrades to exactly what shipped before.
    */
   { column: 'linked_poll_id', statements: [`ALTER TABLE messages ADD COLUMN linked_poll_id TEXT`] },
+  { column: 'linked_event_id', statements: [`ALTER TABLE messages ADD COLUMN linked_event_id TEXT`] },
+  { column: 'linked_meeting_id', statements: [`ALTER TABLE messages ADD COLUMN linked_meeting_id TEXT`] },
   {
     column: 'sender_name',
     statements: [
@@ -118,6 +122,8 @@ type Row = {
   document_name: string | null;
   document_size: number | null;
   linked_poll_id: string | null;
+  linked_event_id: string | null;
+  linked_meeting_id: string | null;
   deleted_at: string | null;
   created_at: string;
 };
@@ -158,6 +164,8 @@ const toEnvelope = (row: Row): MessageEnvelope => ({
   documentName: row.document_name,
   documentSize: row.document_size,
   linkedPollId: row.linked_poll_id,
+  linkedEventId: row.linked_event_id,
+  linkedMeetingId: row.linked_meeting_id,
   deletedAt: row.deleted_at,
   createdAt: row.created_at,
 });
@@ -188,8 +196,8 @@ class SqliteMessageStore implements MessageStore {
         await this.db.runAsync(
           `INSERT INTO messages
              (channel_id, seq, id, sender_id, sender_name, type, body, client_msg_id, pinned, reactions,
-              media_id, document_name, document_size, linked_poll_id, deleted_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              media_id, document_name, document_size, linked_poll_id, linked_event_id, linked_meeting_id, deleted_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (channel_id, seq) DO UPDATE SET
              id = excluded.id,
              sender_id = excluded.sender_id,
@@ -203,6 +211,8 @@ class SqliteMessageStore implements MessageStore {
              document_name = excluded.document_name,
              document_size = excluded.document_size,
              linked_poll_id = excluded.linked_poll_id,
+             linked_event_id = excluded.linked_event_id,
+             linked_meeting_id = excluded.linked_meeting_id,
              deleted_at = excluded.deleted_at,
              created_at = excluded.created_at`,
           message.channelId,
@@ -219,6 +229,8 @@ class SqliteMessageStore implements MessageStore {
           message.documentName,
           message.documentSize,
           message.linkedPollId,
+          message.linkedEventId,
+          message.linkedMeetingId,
           message.deletedAt,
           message.createdAt,
         );
