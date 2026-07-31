@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS messages (
   media_id       TEXT,
   document_name  TEXT,
   document_size  INTEGER,
+  linked_poll_id TEXT,
   deleted_at     TEXT,
   created_at     TEXT NOT NULL,
   PRIMARY KEY (channel_id, seq)
@@ -57,6 +58,15 @@ const MIGRATIONS: ReadonlyArray<{ column: string; statements: readonly string[] 
   { column: 'media_id', statements: [`ALTER TABLE messages ADD COLUMN media_id TEXT`] },
   { column: 'document_name', statements: [`ALTER TABLE messages ADD COLUMN document_name TEXT`] },
   { column: 'document_size', statements: [`ALTER TABLE messages ADD COLUMN document_size INTEGER`] },
+  /*
+   * No `DELETE FROM messages` here, unlike `sender_name` below.
+   *
+   * A null `linked_poll_id` on a cached row is not wrong, it is just incomplete: the card still
+   * renders its sentence, and the row gains its link the next time a sync overwrites it. The
+   * name column had to wipe because an unattributed bubble is a visible defect on every message;
+   * this affects only card messages, and degrades to exactly what shipped before.
+   */
+  { column: 'linked_poll_id', statements: [`ALTER TABLE messages ADD COLUMN linked_poll_id TEXT`] },
   {
     column: 'sender_name',
     statements: [
@@ -107,6 +117,7 @@ type Row = {
   media_id: string | null;
   document_name: string | null;
   document_size: number | null;
+  linked_poll_id: string | null;
   deleted_at: string | null;
   created_at: string;
 };
@@ -146,6 +157,7 @@ const toEnvelope = (row: Row): MessageEnvelope => ({
   mediaId: row.media_id,
   documentName: row.document_name,
   documentSize: row.document_size,
+  linkedPollId: row.linked_poll_id,
   deletedAt: row.deleted_at,
   createdAt: row.created_at,
 });
@@ -176,8 +188,8 @@ class SqliteMessageStore implements MessageStore {
         await this.db.runAsync(
           `INSERT INTO messages
              (channel_id, seq, id, sender_id, sender_name, type, body, client_msg_id, pinned, reactions,
-              media_id, document_name, document_size, deleted_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              media_id, document_name, document_size, linked_poll_id, deleted_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (channel_id, seq) DO UPDATE SET
              id = excluded.id,
              sender_id = excluded.sender_id,
@@ -190,6 +202,7 @@ class SqliteMessageStore implements MessageStore {
              media_id = excluded.media_id,
              document_name = excluded.document_name,
              document_size = excluded.document_size,
+             linked_poll_id = excluded.linked_poll_id,
              deleted_at = excluded.deleted_at,
              created_at = excluded.created_at`,
           message.channelId,
@@ -205,6 +218,7 @@ class SqliteMessageStore implements MessageStore {
           message.mediaId,
           message.documentName,
           message.documentSize,
+          message.linkedPollId,
           message.deletedAt,
           message.createdAt,
         );

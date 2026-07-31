@@ -167,6 +167,21 @@ export const MessageEnvelope = z.object({
   /** Shown on a document bubble. A photo carries neither. */
   documentName: z.string().nullable().default(null),
   documentSize: z.number().int().nonnegative().nullable().default(null),
+  /**
+   * What this `card` message is a card FOR.
+   *
+   * > **The same defect as `mediaId` above, found the same way.** `linked_poll_id` has been
+   * > stored on `messages` since Phase 2 so that deleting a poll can find and remove its card,
+   * > but it was never put on the wire - so a client receiving a poll card had a sentence of
+   * > text and no way to reach the poll it announced. The card rendered as a system line, and
+   * > the whole point of a card is that it is not one.
+   *
+   * An id, not the poll: the tally moves after the card is written, so a card carrying a copy
+   * of it would be wrong by the first vote. The client resolves the id through the same
+   * authorized read the poll screen uses, which is also what keeps a member who may not see
+   * this poll from learning its contents through a card.
+   */
+  linkedPollId: Uuid.nullable().default(null),
   deletedAt: z.string().datetime().nullable(),
   createdAt: z.string().datetime(),
 });

@@ -58,6 +58,7 @@ function envelope(seq: number, overrides: Partial<MessageEnvelope> = {}): Messag
     pinned: false,
     reactions: [],
     mediaId: null,
+    linkedPollId: null,
     documentName: null,
     documentSize: null,
     deletedAt: null,

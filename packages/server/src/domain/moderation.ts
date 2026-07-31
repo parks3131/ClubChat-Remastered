@@ -366,6 +366,7 @@ export async function readReportedContext(
       media_id: string | null;
       document_name: string | null;
       document_size: number | null;
+      linked_poll_id: string | null;
       deleted_at: string | null;
       created_at: string;
     }>(sql`
@@ -375,6 +376,7 @@ export async function readReportedContext(
              u.full_name AS sender_name,
              m.type, m.body, m.client_msg_id::text AS client_msg_id, m.pinned,
              m.media_id::text AS media_id, m.document_name, m.document_size,
+             m.linked_poll_id::text AS linked_poll_id,
              m.deleted_at::text AS deleted_at, m.created_at::text AS created_at
         FROM messages m
         LEFT JOIN users u ON u.id = m.sender_id
@@ -414,6 +416,7 @@ export async function readReportedContext(
       mediaId: row.media_id,
       documentName: row.document_name,
       documentSize: row.document_size === null ? null : Number(row.document_size),
+      linkedPollId: row.linked_poll_id,
       // Strings, not Dates: db.execute does not apply Drizzle's column coercion, so a row type
       // claiming Date here would typecheck and fail at the call site.
       deletedAt: row.deleted_at === null ? null : new Date(row.deleted_at).toISOString(),

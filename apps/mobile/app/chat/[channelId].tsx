@@ -36,6 +36,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { Avatar } from "../../src/ui.tsx";
+import { ChatPollCard } from "../../src/screens/polls.tsx";
 import { QuickNav, spaceProfileHref, useGoBack } from "../../src/nav.tsx";
 import { color, radius, space, type } from "../../src/theme.ts";
 
@@ -130,12 +131,25 @@ function createActions(meta: ChannelMeta): Array<{
   icon: MaterialIconName;
   tint: string;
 }> {
+  /*
+   * Where the composer should land when it is done, encoded into the link that opened it.
+   *
+   * **Creating from the "+" menu is a chat gesture, so it has to end in chat.** The creation
+   * already posts its own card into this conversation, so leaving the member on the polls list
+   * strands them one back-tap away from the thing they just made, looking at a screen they never
+   * asked for. v1 solved it the same way and for the same reason.
+   *
+   * The channel id travels rather than being re-derived, because a scope has more than one
+   * channel and "the club's chat" is not a lookup this menu should be doing.
+   */
+  const backToChat = encodeURIComponent(`/chat/${meta.channelId}`);
+
   switch (meta.scope) {
     case "club":
       return [
         {
           label: "Poll",
-          href: `/clubs/${meta.scopeId}/polls?create=1`,
+          href: `/clubs/${meta.scopeId}/polls?create=1&from=${backToChat}`,
           icon: "how-to-vote",
           tint: color.inverseSurface,
         },
@@ -151,7 +165,7 @@ function createActions(meta: ChannelMeta): Array<{
       return [
         {
           label: "Poll",
-          href: `/races/${meta.scopeId}/polls?create=1`,
+          href: `/races/${meta.scopeId}/polls?create=1&from=${backToChat}`,
           icon: "how-to-vote",
           tint: color.inverseSurface,
         },
@@ -160,7 +174,7 @@ function createActions(meta: ChannelMeta): Array<{
       return [
         {
           label: "Poll",
-          href: `/eboard/${meta.scopeId}/polls?create=1`,
+          href: `/eboard/${meta.scopeId}/polls?create=1&from=${backToChat}`,
           icon: "how-to-vote",
           tint: color.inverseSurface,
         },
@@ -1076,6 +1090,17 @@ export default function ChatScreen() {
               return (
                 <View style={styles.systemRow}>
                   <Text style={styles.systemText}>{message.body}</Text>
+                  {/*
+                    A poll card renders the poll itself, votable in place, under the sentence
+                    announcing it. The sentence stays: it says who asked and survives on its own
+                    if the poll is gone or this reader may not see it, which is what the card
+                    falls back to.
+                  */}
+                  {message.linkedPollId !== null && (
+                    <View style={styles.cardWrap}>
+                      <ChatPollCard pollId={message.linkedPollId} />
+                    </View>
+                  )}
                 </View>
               );
             }
@@ -1673,6 +1698,8 @@ const styles = StyleSheet.create({
   sentMeta: { ...type.label, color: color.onAccent, opacity: 0.8 },
   receivedMeta: { ...type.label, color: color.textSecondary },
   systemRow: { alignItems: "center", paddingVertical: space.xs },
+  /* Full width under the sentence, so the options are real targets rather than a preview. */
+  cardWrap: { alignSelf: "stretch", paddingHorizontal: space.md, paddingTop: space.sm },
   systemText: {
     ...type.bodySmall,
     color: color.textSecondary,

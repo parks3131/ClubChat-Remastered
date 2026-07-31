@@ -109,9 +109,22 @@ export function PollsList({
    * Guarded by `canCreate` so the param cannot conjure a composer for somebody who may not use
    * it - a URL is user input, and this one arrives from a deep link as readily as from chat.
    */
-  const { create } = useLocalSearchParams<{ create?: string }>();
+  const { create, from } = useLocalSearchParams<{ create?: string; from?: string }>();
   const [composing, setComposing] = useState(create === '1' && canCreate);
   const load = useLoad(() => pollApi.list(scope, scopeId), [scope, scopeId]);
+  const router = useRouter();
+
+  /*
+   * Where to go once the poll exists.
+   *
+   * Chat's "+" menu sends `from=/chat/:channelId`, and a poll made there belongs back there: the
+   * creation posts its own card into that conversation, so the list is a detour past the thing
+   * the member actually wanted to see.
+   *
+   * **Only an in-app chat path is honoured.** `from` arrives in a URL, and a URL is user input -
+   * an unchecked one turns this into an open redirect that a deep link could point anywhere.
+   */
+  const returnTo = from?.startsWith('/chat/') === true ? from : null;
 
   /*
    * The composer owns the whole screen, header included.
@@ -136,9 +149,21 @@ export function PollsList({
         <CreatePoll
           scope={scope}
           scopeId={scopeId}
-          onCancel={() => setComposing(false)}
+          onCancel={() => {
+            // Backing out of a composer opened from chat returns there too, empty-handed.
+            if (returnTo !== null) router.replace(returnTo);
+            else setComposing(false);
+          }}
           onCreated={() => {
             setComposing(false);
+            if (returnTo !== null) {
+              /*
+               * `replace`, not `push`: the composer is spent, and leaving it on the stack means
+               * back from chat walks into an empty form rather than out of the conversation.
+               */
+              router.replace(returnTo);
+              return;
+            }
             load.reload();
           }}
         />
@@ -569,11 +594,127 @@ function Setting({
 }
 
 /**
- * One poll, with inline voting.
+ * A poll's status, question and votable options.
+ *
+ * Extracted so the **chat card and the detail screen are the same view**, rather than a full
+ * screen and a condensed link-out that drift apart. v1 did the same, on an explicit founder
+ * request that chat's poll bubble look and behave like the real thing; the remaster inherits both
+ * the arrangement and the reason.
  *
  * Tapping an option is the only write: it casts, moves or withdraws depending on what is already
  * there, and the server decides which. Deciding here would be a read-then-write across the network
  * racing the other device the same member is holding.
+ */
+function PollBody({
+  poll,
+  busy,
+  onVote,
+}: {
+  poll: PollView;
+  busy: boolean;
+  onVote: (optionId: string) => void;
+}) {
+  const total = poll.options.reduce((sum, option) => sum + option.voteCount, 0);
+
+  return (
+    <>
+      <StatusRow closed={poll.closed} closesAt={poll.closesAt} />
+      <Text style={styles.detailQuestion}>{poll.question}</Text>
+      <Text style={styles.meta}>
+        {poll.allowMultiple ? 'Multiple choice' : 'Single choice'}
+        {poll.isPrivate ? '  ·  Private vote' : ''}
+        {poll.closesAt !== null
+          ? `  ·  ${poll.closed ? 'Closed' : 'Closes'} ${formatInstant(poll.closesAt)}`
+          : ''}
+      </Text>
+
+      <View style={styles.options}>
+        {poll.options.map((option) => (
+          <Pressable
+            key={option.id}
+            style={[styles.option, option.votedByMe && styles.optionChosen]}
+            disabled={poll.closed || busy}
+            onPress={() => onVote(option.id)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: option.votedByMe, disabled: poll.closed }}
+            accessibilityLabel={
+              poll.closed
+                ? `${option.label}, ${option.voteCount} votes, poll closed`
+                : option.votedByMe
+                  ? `Withdraw your vote for ${option.label}`
+                  : `Vote for ${option.label}`
+            }
+          >
+            <View style={styles.optionHead}>
+              <Text style={styles.optionLabel}>
+                {option.votedByMe ? '✓  ' : ''}
+                {option.label}
+              </Text>
+              {/* Public on every poll, including one whose voters are hidden. */}
+              <Text style={styles.optionCount}>{option.voteCount}</Text>
+            </View>
+            <View style={styles.barTrack}>
+              <View
+                style={[
+                  styles.barFill,
+                  { width: total === 0 ? 0 : `${(option.voteCount / total) * 100}%` },
+                ]}
+              />
+            </View>
+          </Pressable>
+        ))}
+      </View>
+    </>
+  );
+}
+
+/**
+ * The poll card that sits in chat, for a `card` message carrying a `linkedPollId`.
+ *
+ * **It votes in place.** A poll created from chat posts itself here, and making the reader leave
+ * the conversation to answer it is most of the reason the card exists at all.
+ *
+ * The poll is fetched by id rather than carried on the message, because the tally moves after the
+ * card is written and a copy would be stale by the first vote. That the read is authorized is the
+ * other half: a member who may not see this poll gets nothing back, and the card renders as its
+ * sentence alone rather than leaking a question through chat.
+ */
+export function ChatPollCard({ pollId }: { pollId: string }) {
+  const [busy, setBusy] = useState(false);
+  const load = useLoad(() => pollApi.detail(pollId), [pollId]);
+
+  const vote = async (optionId: string) => {
+    setBusy(true);
+    try {
+      await pollApi.vote(optionId);
+    } finally {
+      load.reload();
+      setBusy(false);
+    }
+  };
+
+  // No spinner and no error text: this is a bubble in a conversation, and a failed or pending
+  // read should leave the message reading as it did before cards existed, not shout in the log.
+  if (load.data === null) return null;
+
+  /*
+   * A View, never a Pressable.
+   *
+   * **Failure mode 17: a pressable inside a pressable.** Every option in `PollBody` is its own
+   * button, so wrapping the card in one nests them - invalid HTML on web, where React logs
+   * "<button> cannot contain a nested <button>", and on native the outer press swallows the
+   * gesture so tapping an option votes for nothing. The card needs no press target of its own
+   * anyway: voting in place is the whole point of it, and the sentence above it is the link.
+   */
+  return (
+    <View style={styles.chatPollCard}>
+      <PollBody poll={load.data.poll} busy={busy} onVote={(id) => void vote(id)} />
+    </View>
+  );
+}
+
+/**
+ * One poll, with inline voting.
  *
  * **Opening the voter list casts nothing** - it is the same read that drew the screen.
  */
@@ -599,57 +740,11 @@ export function PollDetail({ pollId }: { pollId: string }) {
     <DataScreen load={load}>
       {(data) => {
         const poll = data.poll;
-        const total = poll.options.reduce((sum, option) => sum + option.voteCount, 0);
 
         return (
           <View style={styles.flex}>
             <Body>
-              <StatusRow closed={poll.closed} closesAt={poll.closesAt} />
-              <Text style={styles.detailQuestion}>{poll.question}</Text>
-              <Text style={styles.meta}>
-                {poll.allowMultiple ? 'Multiple choice' : 'Single choice'}
-                {poll.isPrivate ? '  ·  Private vote' : ''}
-                {poll.closesAt !== null
-                  ? `  ·  ${poll.closed ? 'Closed' : 'Closes'} ${formatInstant(poll.closesAt)}`
-                  : ''}
-              </Text>
-
-              <View style={styles.options}>
-                {poll.options.map((option) => (
-                  <Pressable
-                    key={option.id}
-                    style={[styles.option, option.votedByMe && styles.optionChosen]}
-                    disabled={poll.closed || busy}
-                    onPress={() => void vote(option.id)}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: option.votedByMe, disabled: poll.closed }}
-                    accessibilityLabel={
-                      poll.closed
-                        ? `${option.label}, ${option.voteCount} votes, poll closed`
-                        : option.votedByMe
-                          ? `Withdraw your vote for ${option.label}`
-                          : `Vote for ${option.label}`
-                    }
-                  >
-                    <View style={styles.optionHead}>
-                      <Text style={styles.optionLabel}>
-                        {option.votedByMe ? '✓  ' : ''}
-                        {option.label}
-                      </Text>
-                      {/* Public on every poll, including one whose voters are hidden. */}
-                      <Text style={styles.optionCount}>{option.voteCount}</Text>
-                    </View>
-                    <View style={styles.barTrack}>
-                      <View
-                        style={[
-                          styles.barFill,
-                          { width: total === 0 ? 0 : `${(option.voteCount / total) * 100}%` },
-                        ]}
-                      />
-                    </View>
-                  </Pressable>
-                ))}
-              </View>
+              <PollBody poll={poll} busy={busy} onVote={(id) => void vote(id)} />
 
               {/*
                 Null is "you may not see this", which is a different thing from nobody having
@@ -975,6 +1070,16 @@ const styles = StyleSheet.create({
   },
   createButtonOff: { opacity: 0.6 },
   createButtonLabel: { ...type.headerTitle, fontSize: 16, color: color.onAccent },
+
+  /* The poll bubble in chat. Full width, so the options are votable targets rather than a teaser. */
+  chatPollCard: {
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.divider,
+    padding: space.md,
+    gap: space.sm,
+  },
 
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   activePill: {

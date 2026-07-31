@@ -55,6 +55,7 @@ function toEnvelope(row: MessageRow): MessageEnvelope {
     mediaId: row.mediaId,
     documentName: row.documentName,
     documentSize: row.documentSize,
+    linkedPollId: row.linkedPollId,
     deletedAt: row.deletedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };

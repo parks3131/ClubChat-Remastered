@@ -248,6 +248,9 @@ export class ChatClient {
             mediaId: this.outbox.get(clientMsgId)?.mediaId ?? null,
             documentName: this.outbox.get(clientMsgId)?.documentName ?? null,
             documentSize: this.outbox.get(clientMsgId)?.documentSize ?? null,
+            // Always null: a card is written by the worker, never sent from a client, so nothing
+            // this outbox ever acknowledges is one.
+            linkedPollId: null,
             deletedAt: null,
             createdAt: frame.d['createdAt'] as string,
           },
