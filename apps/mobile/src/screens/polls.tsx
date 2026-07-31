@@ -35,6 +35,7 @@ import {
   Avatar,
   Body,
   Card,
+  ConfirmDialog,
   DataScreen,
   EmptyState,
   Fab,
@@ -715,6 +716,7 @@ function PollBody({
 export function ChatPollCard({ pollId, authorName }: { pollId: string; authorName: string | null }) {
   const [busy, setBusy] = useState(false);
   const [votersFor, setVotersFor] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const load = useLoad(() => pollApi.detail(pollId), [pollId]);
 
   const vote = async (optionId: string) => {
@@ -761,15 +763,27 @@ export function ChatPollCard({ pollId, authorName }: { pollId: string; authorNam
               void pollApi.setClosed(pollId, !poll.closed).then(load.reload, load.reload);
             }}
           />
+          {/* Asks first. Deleting takes every vote with it and cannot be undone. */}
           <Action
             label="Delete"
             variant="danger"
             style={styles.chatPollAction}
-            onPress={() => {
-              void pollApi.remove(pollId).then(load.reload, load.reload);
-            }}
+            onPress={() => setConfirmingDelete(true)}
           />
         </View>
+      )}
+
+      {confirmingDelete && (
+        <ConfirmDialog
+          title="Delete this poll?"
+          body={`"${poll.question}" and every vote cast in it go with it, and its card disappears from this conversation. This cannot be undone.`}
+          confirmLabel="Delete poll"
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={() => {
+            setConfirmingDelete(false);
+            void pollApi.remove(pollId).then(load.reload, load.reload);
+          }}
+        />
       )}
 
       {votersFor !== null && (

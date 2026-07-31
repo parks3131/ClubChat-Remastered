@@ -209,6 +209,62 @@ export function ThemedSwitch(props: SwitchProps) {
   );
 }
 
+/**
+ * "Are you sure?", for something that cannot be undone.
+ *
+ * > **Deliberately in-app, and not `Alert.alert` or `window.confirm`.** `PRD/00` says any
+ * > behaviour must work identically on iOS, Android and web, and names confirmation dialogs as
+ * > one of the things that behaves differently on each and "has caused a shipped bug". A native
+ * > alert also blocks the JavaScript thread on web, which makes the flow untestable in a browser.
+ *
+ * The destructive button carries the verb - "Delete poll", not "OK" - so the last thing read
+ * before the tap is what is about to happen.
+ */
+export function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.pickerBackdrop}>
+        <Pressable
+          style={styles.pickerScrim}
+          onPress={onCancel}
+          accessibilityRole="button"
+          accessibilityLabel="Cancel"
+        />
+        <View style={styles.confirmSheet}>
+          <Text style={styles.confirmTitle}>{title}</Text>
+          <Text style={styles.confirmBody}>{body}</Text>
+          <View style={styles.confirmActions}>
+            <Action
+              label="Cancel"
+              variant="secondary"
+              style={styles.confirmAction}
+              onPress={onCancel}
+            />
+            <Action
+              label={confirmLabel}
+              variant="danger"
+              style={styles.confirmAction}
+              onPress={onConfirm}
+            />
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Date and time
 // ---------------------------------------------------------------------------
@@ -912,6 +968,18 @@ const styles = StyleSheet.create({
     gap: space.sm,
   },
   pickerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  confirmSheet: {
+    backgroundColor: color.card,
+    borderRadius: radius.xl,
+    padding: space.md,
+    width: '100%',
+    maxWidth: 380,
+    gap: space.sm,
+  },
+  confirmTitle: { ...type.headerTitle, fontSize: 18, color: color.textPrimary },
+  confirmBody: { ...type.body, color: color.textSecondary },
+  confirmActions: { flexDirection: 'row', gap: space.sm, paddingTop: space.sm },
+  confirmAction: { flex: 1 },
   pickerMonth: { ...type.headerTitle, fontSize: 18, color: color.textPrimary },
   pickerClear: { ...type.label, color: color.accent, textAlign: 'center', paddingTop: space.sm },
   weekRow: { flexDirection: 'row' },

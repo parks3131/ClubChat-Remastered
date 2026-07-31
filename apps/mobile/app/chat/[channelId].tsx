@@ -1220,10 +1220,38 @@ export default function ChatScreen() {
                       asked what, and repeating it above is the same line twice.
                     */}
                     {message.linkedPollId !== null ? (
-                      <ChatPollCard
-                        pollId={message.linkedPollId}
-                        authorName={message.senderName}
-                      />
+                      <>
+                        <ChatPollCard
+                          pollId={message.linkedPollId}
+                          authorName={message.senderName}
+                        />
+                        {/*
+                          The card bubble cannot be long-pressed - its contents are buttons, and
+                          wrapping them in one is failure mode 17 - so the menu gets a visible
+                          control instead. v1 draws the same dots in the same corner. Without it,
+                          a poll card is the one message in the log nobody can react to or report.
+                        */}
+                        <Pressable
+                          style={styles.cardMenu}
+                          onPress={() => {
+                            setSelected(message.seq);
+                            setConfirmingReport(null);
+                          }}
+                          hitSlop={space.sm}
+                          accessibilityRole="button"
+                          accessibilityLabel={
+                            mine
+                              ? "React to your poll"
+                              : "React to or report this poll"
+                          }
+                        >
+                          <MaterialIcons
+                            name="more-vert"
+                            size={18}
+                            color={mine ? color.onAccent : color.textSecondary}
+                          />
+                        </Pressable>
+                      </>
                     ) : (
                       /* A photo may carry a caption, and usually does not. */
                       message.body !== null &&
@@ -1723,6 +1751,7 @@ const styles = StyleSheet.create({
   systemRow: { alignItems: "center", paddingVertical: space.xs },
   /* Full width under the sentence, so the options are real targets rather than a preview. */
   cardWrap: { alignSelf: "stretch", paddingHorizontal: space.md, paddingTop: space.sm },
+  cardMenu: { alignSelf: "flex-end", paddingTop: space.xs, paddingHorizontal: space.xs },
   systemText: {
     ...type.bodySmall,
     color: color.textSecondary,
