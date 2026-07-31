@@ -57,6 +57,16 @@ type Row =
       documentSize?: number | undefined;
     };
 
+/**
+ * How far from the bottom still counts as being AT the bottom, in pixels.
+ *
+ * Not zero. A list settles a pixel or two short of its own end after a layout pass - measured at
+ * 16px here on a freshly opened chat - and a strict comparison would decide the reader had walked
+ * away from the tail when they had not moved at all. A row is taller than this, so it cannot
+ * swallow a whole message the reader has scrolled past.
+ */
+const TAIL_SLACK = 48;
+
 /** What the disabled composer says, per reason. */
 const DENIED_TEXT: Record<
   NonNullable<ChannelMeta["postDeniedReason"]>,
@@ -301,6 +311,25 @@ export default function ChatScreen() {
   const [uploading, setUploading] = useState(false);
   const listRef = useRef<FlatList<Row>>(null);
   /**
+   * Whether the reader is sitting at the live tail.
+   *
+   * > **This is what makes the scroll-to-end conditional, and it has to be.** The list scrolls to
+   * > the end on every content size change, which is right for a new message and catastrophic for
+   * > everything else that changes a row's height after it is laid out. A card fetches its subject
+   * > by id and renders nothing until that lands, so it grows by ~180px a moment after the row
+   * > appears; a photo does the same when its bytes arrive. Scrolling up to read history and
+   * > having any of those resolve used to yank the log back to the bottom, repeatedly, because
+   * > every card resolves on its own schedule.
+   *
+   * So the rule is the standard one: **pin to the tail only if we were already at the tail.**
+   * Starts true so the first layout still opens at the newest message, which is chat's whole
+   * arrival behaviour.
+   *
+   * A ref rather than state on purpose - it is read inside scroll handlers that fire at frame
+   * rate, and re-rendering the entire log on each one would be its own defect.
+   */
+  const atTailRef = useRef(true);
+  /**
    * The message a jump landed on, if any.
    *
    * Held in state rather than read from the param on every render because it does two jobs: it
@@ -483,6 +512,12 @@ export default function ChatScreen() {
     const body = draft.trim();
     if (body.length === 0 || !client || !channelId || !canPost) return;
     setDraft("");
+    /*
+      Sending is a deliberate return to the tail, wherever the reader had scrolled to.
+      Posting from halfway up the history and being left there, unable to see what you just
+      said, is the one case where NOT following the tail would be the wrong answer.
+    */
+    atTailRef.current = true;
     // Disarmed as the message goes, so the NEXT one is an ordinary message. An announcement
     // toggle that stays armed is how somebody posts three of them by accident, and each one
     // notifies the whole space.
@@ -578,6 +613,8 @@ export default function ChatScreen() {
       if (!picked) return;
 
       const uploaded = await uploadAttachment(channelId, picked, kind);
+      // Same deliberate return to the tail as a typed message. See `send`.
+      atTailRef.current = true;
       await client.sendWithRetry(channelId, "", {
         type: kind,
         mediaId: uploaded.mediaId,
@@ -998,13 +1035,30 @@ export default function ChatScreen() {
           }
           contentContainerStyle={styles.list}
           /*
-            Chat opens at the tail - except when a jump sent us somewhere specific, where scrolling
-            to the end would immediately undo the jump. `jumpedTo` is the one thing that suppresses
-            it.
+            Chat opens at the tail, and follows it while the reader is AT the tail.
+
+            Two things suppress the scroll, and they suppress different mistakes. `jumpedTo` is the
+            deliberate one: a jump sent us somewhere specific and scrolling to the end would
+            immediately undo it. `atTailRef` is the one that was missing - without it this fires on
+            every content size change, including a card resolving its fetch 200ms after its row was
+            laid out, which drags a reader who is halfway up the history back down to the bottom.
           */
           onContentSizeChange={() => {
-            if (jumpedTo === null)
+            if (jumpedTo === null && atTailRef.current)
               listRef.current?.scrollToEnd({ animated: false });
+          }}
+          /*
+            Recomputed as the reader moves, so the rule above knows whether following the tail is
+            what they want. The threshold is deliberately not zero: a list can sit a pixel or two
+            short of the bottom after a layout pass, and "near enough the tail" is what the reader
+            experiences as being at it.
+          */
+          scrollEventThrottle={16}
+          onScroll={(event) => {
+            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+            const fromBottom =
+              contentSize.height - layoutMeasurement.height - contentOffset.y;
+            atTailRef.current = fromBottom <= TAIL_SLACK;
           }}
           /*
             A row whose height has not been measured yet cannot be scrolled to, which is exactly the
