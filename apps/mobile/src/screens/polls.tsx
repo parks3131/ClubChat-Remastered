@@ -23,9 +23,9 @@
  */
 
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { pollApi, type PollScope } from '../api.ts';
 import type { PollSummary, PollView } from '../api-types.ts';
 import { formatCountdown, formatInstant } from '../dates.ts';
@@ -38,10 +38,10 @@ import {
   DataScreen,
   EmptyState,
   Fab,
-  Field,
   ScreenHeading,
   SectionHeader,
   Tabs,
+  ThemedSwitch,
 } from '../ui.tsx';
 import { useLoad } from '../use-load.ts';
 
@@ -113,22 +113,42 @@ export function PollsList({
   const [composing, setComposing] = useState(create === '1' && canCreate);
   const load = useLoad(() => pollApi.list(scope, scopeId), [scope, scopeId]);
 
+  /*
+   * The composer owns the whole screen, header included.
+   *
+   * `(main)/_layout` gives every screen inside a club that club's avatar and name as its title,
+   * which is right for a screen you are reading and wrong for one you are filling in: it leaves
+   * two headers and two back arrows stacked, and the top one walks out of polls entirely rather
+   * than back to the list.
+   *
+   * > **Rendered in both branches, driven by `composing`, and not only in the composing one.**
+   *   `<Stack.Screen options>` is `navigation.setOptions` under the hood, so it MUTATES the
+   *   route and does not roll back when the element unmounts. Setting `headerShown: false` on
+   *   the way in and then simply not rendering it on the way out left the list with no header at
+   *   all until the route was remounted. The option has to be stated in both directions.
+   */
+  const header = <Stack.Screen options={{ headerShown: !composing }} />;
+
   if (composing) {
     return (
-      <CreatePoll
-        scope={scope}
-        scopeId={scopeId}
-        onCancel={() => setComposing(false)}
-        onCreated={() => {
-          setComposing(false);
-          load.reload();
-        }}
-      />
+      <>
+        {header}
+        <CreatePoll
+          scope={scope}
+          scopeId={scopeId}
+          onCancel={() => setComposing(false)}
+          onCreated={() => {
+            setComposing(false);
+            load.reload();
+          }}
+        />
+      </>
     );
   }
 
   return (
     <View style={styles.flex}>
+      {header}
       <ScreenHeading eyebrow="Community voice" title="Active conversations" />
 
       <View style={styles.tabsWrap}>
@@ -248,6 +268,51 @@ function NewPollPrompt({ onPress }: { onPress: () => void }) {
   );
 }
 
+/**
+ * The Ends chips, and the units behind Custom. Both are v1's, verbatim.
+ *
+ * Everything is expressed in **minutes** because the server takes `closesInMinutes` and computes
+ * the instant itself. v1 sent an absolute `closesAt` computed on the device, which makes the
+ * deadline depend on the phone's clock agreeing with the server's - a handset an hour fast
+ * silently creates a poll that closes an hour early. The duration crosses the wire instead, and
+ * the only clock that matters is the one that writes the row.
+ *
+ * > v1's own note on why this section exists at all is worth keeping: the Stitch create-poll
+ * > mockup had no deadline field, and relative duration chips rather than an absolute date and
+ * > time picker was a decision confirmed with the founder before it was designed.
+ */
+const ENDS_CHIPS = [
+  { key: 'none', label: 'No deadline', minutes: null },
+  { key: '1d', label: '1 Day', minutes: 24 * 60 },
+  { key: '3d', label: '3 Days', minutes: 3 * 24 * 60 },
+  { key: '1w', label: '1 Week', minutes: 7 * 24 * 60 },
+  { key: 'custom', label: 'Custom', minutes: null },
+] as const;
+
+type EndsChoice = (typeof ENDS_CHIPS)[number]['key'];
+
+const CUSTOM_UNITS = [
+  { key: 'minutes', label: 'Min', minutes: 1 },
+  { key: 'hours', label: 'Hrs', minutes: 60 },
+  { key: 'days', label: 'Days', minutes: 24 * 60 },
+] as const;
+
+type CustomUnit = (typeof CUSTOM_UNITS)[number]['key'];
+
+/**
+ * The composer, in v1's shape: four cards, then the call to action.
+ *
+ * **Every control here maps to a column that already existed.** `allowMultiple`, `isPrivate` and
+ * `closesAt` were in the schema and on the wire before this screen drew them, so the whole of
+ * this is a client change - no migration, no new route.
+ *
+ * Two deliberate departures from v1's file, both for reasons that outlive the look:
+ *
+ *  1. **The deadline goes over the wire as a duration, not a date.** See `ENDS_CHIPS`.
+ *  2. **The back control lives in the screen.** v1 had a create route of its own and leaned on the
+ *     navigation header; here the composer replaces the list inside one route, so a header back
+ *     button would leave polls entirely rather than return to them.
+ */
 function CreatePoll({
   scope,
   scopeId,
@@ -261,13 +326,32 @@ function CreatePoll({
 }) {
   const [question, setQuestion] = useState('');
   const [options, setOptions] = useState<string[]>(['', '']);
+  const [ends, setEnds] = useState<EndsChoice>('none');
+  const [customAmount, setCustomAmount] = useState('');
+  const [customUnit, setCustomUnit] = useState<CustomUnit>('hours');
   const [multiple, setMultiple] = useState(false);
   const [isPrivate, setPrivate] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const filled = options.map((o) => o.trim()).filter((o) => o.length > 0);
-  const valid = question.trim().length > 0 && filled.length >= MIN_OPTIONS;
+
+  /*
+   * Parsed once and used for both the enabled state and the payload, so what the button says is
+   * possible and what actually gets sent can never disagree.
+   */
+  const amount = Number(customAmount);
+  const customValid = Number.isInteger(amount) && amount >= 1;
+
+  const valid =
+    question.trim().length > 0 && filled.length >= MIN_OPTIONS && (ends !== 'custom' || customValid);
+
+  const closesInMinutes =
+    ends === 'custom'
+      ? customValid
+        ? amount * (CUSTOM_UNITS.find((u) => u.key === customUnit)?.minutes ?? 60)
+        : null
+      : (ENDS_CHIPS.find((c) => c.key === ends)?.minutes ?? null);
 
   const submit = async () => {
     setBusy(true);
@@ -275,9 +359,11 @@ function CreatePoll({
     try {
       await pollApi.create(scope, scopeId, {
         question: question.trim(),
+        // `filled`, not `options`: a blank row between two answers is a typo, not an option.
         options: filled,
         allowMultiple: multiple,
         isPrivate,
+        closesInMinutes,
       });
       onCreated();
     } catch {
@@ -288,68 +374,197 @@ function CreatePoll({
   };
 
   return (
-    <Body>
-      <SectionHeader title="New poll" />
-      <Field label="Question" value={question} onChangeText={setQuestion} multiline />
-
-      {options.map((option, index) => (
-        <Field
-          key={index}
-          label={`Option ${index + 1}`}
-          value={option}
-          onChangeText={(next) =>
-            setOptions((current) => current.map((o, i) => (i === index ? next : o)))
-          }
-        />
-      ))}
-
-      {/* Two minimum, ten maximum. An eleventh cannot be added rather than being rejected later. */}
-      {options.length < MAX_OPTIONS && (
-        <Action
-          label="Add an option"
-          variant="secondary"
-          onPress={() => setOptions((current) => [...current, ''])}
-        />
-      )}
-
-      <View style={styles.toggles}>
-        <Toggle label="Allow multiple choices" on={multiple} onChange={setMultiple} />
-        <Toggle label="Hide who voted" on={isPrivate} onChange={setPrivate} />
+    <View style={styles.flex}>
+      <View style={styles.composerHeader}>
+        <Pressable
+          onPress={onCancel}
+          style={styles.composerBack}
+          accessibilityRole="button"
+          accessibilityLabel="Discard this poll and go back"
+        >
+          <MaterialIcons name="arrow-back" size={22} color={color.accent} />
+        </Pressable>
+        <Text style={styles.composerTitle}>New poll</Text>
       </View>
-      <Text style={styles.meta}>
-        Counts are always visible. Hiding voters keeps names private from everyone but you.
-      </Text>
 
-      {failed !== null && <Text style={styles.error}>{failed}</Text>}
-      <View style={styles.actions}>
-        <Action label="Cancel" variant="secondary" style={styles.actionButton} onPress={onCancel} />
-        <Action
-          label={busy ? 'Creating' : 'Create'}
-          style={styles.actionButton}
+      <ScrollView
+        style={styles.flex}
+        contentContainerStyle={styles.composerBody}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.composerCard}>
+          <Text style={styles.composerLabel}>Question</Text>
+          <TextInput
+            style={styles.questionInput}
+            value={question}
+            onChangeText={setQuestion}
+            placeholder="What should we do for the team social?"
+            placeholderTextColor={color.textSecondary}
+            multiline
+            accessibilityLabel="Poll question"
+          />
+        </View>
+
+        <View style={styles.composerCard}>
+          <View style={styles.composerCardHead}>
+            <Text style={styles.composerCardTitle}>Options</Text>
+            {/* Counts what would actually be sent, so a blank row never inflates it. */}
+            <Text style={styles.optionsCount}>{filled.length} Options Added</Text>
+          </View>
+
+          {options.map((option, index) => (
+            <View key={index} style={styles.optionRow}>
+              <TextInput
+                style={styles.optionInput}
+                value={option}
+                onChangeText={(next) =>
+                  setOptions((current) => current.map((o, i) => (i === index ? next : o)))
+                }
+                placeholder={`Option ${index + 1}`}
+                placeholderTextColor={color.textSecondary}
+                accessibilityLabel={`Option ${index + 1}`}
+              />
+              {/* Only past the minimum: removing down to one answer is not a poll. */}
+              {options.length > MIN_OPTIONS && (
+                <Pressable
+                  style={styles.removeOption}
+                  onPress={() => setOptions((current) => current.filter((_, i) => i !== index))}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove option ${index + 1}`}
+                >
+                  <MaterialIcons name="close" size={16} color={color.onErrorContainer} />
+                </Pressable>
+              )}
+            </View>
+          ))}
+
+          {/* Two minimum, ten maximum. An eleventh cannot be added rather than being rejected later. */}
+          {options.length < MAX_OPTIONS && (
+            <Pressable
+              onPress={() => setOptions((current) => [...current, ''])}
+              style={styles.addOption}
+              accessibilityRole="button"
+              accessibilityLabel="Add another option"
+            >
+              <Text style={styles.addOptionLabel}>+ ADD OPTION</Text>
+            </Pressable>
+          )}
+        </View>
+
+        <View style={styles.composerCard}>
+          <Text style={styles.composerCardTitle}>Ends</Text>
+          <View style={styles.chipRow}>
+            {ENDS_CHIPS.map((chip) => {
+              const on = ends === chip.key;
+              return (
+                <Pressable
+                  key={chip.key}
+                  onPress={() => setEnds(chip.key)}
+                  style={[styles.chip, on && styles.chipOn]}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: on }}
+                  accessibilityLabel={`Ends: ${chip.label}`}
+                >
+                  <Text style={[styles.chipLabel, on && styles.chipLabelOn]}>{chip.label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {/*
+            Revealed rather than always present: a field that only matters under one chip is
+            noise under the other four.
+          */}
+          {ends === 'custom' && (
+            <View style={styles.customRow}>
+              <TextInput
+                style={styles.customInput}
+                value={customAmount}
+                onChangeText={setCustomAmount}
+                placeholder="30"
+                placeholderTextColor={color.textSecondary}
+                keyboardType="number-pad"
+                accessibilityLabel="How long until this poll closes"
+              />
+              <View style={styles.unitRow}>
+                {CUSTOM_UNITS.map((unit) => {
+                  const on = customUnit === unit.key;
+                  return (
+                    <Pressable
+                      key={unit.key}
+                      onPress={() => setCustomUnit(unit.key)}
+                      style={[styles.unitChip, on && styles.chipOn]}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: on }}
+                      accessibilityLabel={unit.label}
+                    >
+                      <Text style={[styles.chipLabel, on && styles.chipLabelOn]}>{unit.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.composerCard}>
+          <Text style={styles.composerCardTitle}>Poll Settings</Text>
+          <Setting
+            title="Allow selecting multiple options"
+            body="Voters can pick more than one choice"
+            on={multiple}
+            onChange={setMultiple}
+          />
+          <View style={styles.settingDivider} />
+          {/*
+            "Only you" is literally true: counts stay public on a private poll, and its creator is
+            the only person who may see identities. See the read rules at the top of this file.
+          */}
+          <Setting
+            title="Private vote"
+            body="Only you can see who voted for each option"
+            on={isPrivate}
+            onChange={setPrivate}
+          />
+        </View>
+
+        {failed !== null && <Text style={styles.composerError}>{failed}</Text>}
+
+        <Pressable
+          style={[styles.createButton, (!valid || busy) && styles.createButtonOff]}
           disabled={!valid || busy}
           onPress={() => void submit()}
-        />
-      </View>
-    </Body>
+          accessibilityRole="button"
+          accessibilityLabel="Create poll"
+          accessibilityState={{ disabled: !valid || busy }}
+        >
+          <Text style={styles.createButtonLabel}>{busy ? 'CREATING' : 'CREATE POLL'}</Text>
+        </Pressable>
+      </ScrollView>
+    </View>
   );
 }
 
-function Toggle({
-  label,
+/** One settings row: what it does, what that means, and the switch. */
+function Setting({
+  title,
+  body,
   on,
   onChange,
 }: {
-  label: string;
+  title: string;
+  body: string;
   on: boolean;
   onChange: (next: boolean) => void;
 }) {
   return (
-    <Action
-      label={`${on ? 'On' : 'Off'}  ${label}`}
-      variant="secondary"
-      onPress={() => onChange(!on)}
-      accessibilityLabel={`${label}, currently ${on ? 'on' : 'off'}`}
-    />
+    <View style={styles.setting}>
+      <View style={styles.settingText}>
+        <Text style={styles.settingTitle}>{title}</Text>
+        <Text style={styles.settingBody}>{body}</Text>
+      </View>
+      <ThemedSwitch value={on} onValueChange={onChange} accessibilityLabel={title} />
+    </View>
   );
 }
 
@@ -624,9 +839,142 @@ const styles = StyleSheet.create({
   tabsWrap: { padding: space.md, paddingBottom: 0 },
   meta: { ...type.bodySmall, color: color.textSecondary },
   error: { ...type.bodySmall, color: color.error },
-  toggles: { gap: space.sm },
   actions: { flexDirection: 'row', gap: space.sm },
   actionButton: { flex: 1 },
+
+  // -------------------------------------------------------------------------
+  // The composer. v1's PollCreateScreen, expressed in this app's tokens.
+  // -------------------------------------------------------------------------
+  composerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    backgroundColor: color.chrome,
+    borderBottomWidth: 1,
+    borderBottomColor: color.divider,
+  },
+  composerBack: { padding: space.xs },
+  composerTitle: { ...type.headerTitle, color: color.textPrimary },
+  /* The trailing space clears the tab bar: without it CREATE POLL sits under it and is half a button. */
+  composerBody: { padding: space.md, paddingBottom: space.xl, gap: space.md },
+  composerCard: {
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.divider,
+    padding: space.md,
+    gap: space.sm,
+  },
+  /* Uppercased in style rather than in the string, so the label stays readable to a screen reader. */
+  composerLabel: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
+  composerCardTitle: { ...type.headerTitle, fontSize: 18, lineHeight: 24, color: color.textPrimary },
+  composerCardHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  composerError: { ...type.bodySmall, color: color.error, textAlign: 'center' },
+
+  questionInput: {
+    ...type.body,
+    backgroundColor: color.cardSunken,
+    borderRadius: radius.md,
+    padding: space.md,
+    color: color.textPrimary,
+    minHeight: 72,
+    textAlignVertical: 'top',
+  },
+
+  optionsCount: {
+    ...type.label,
+    fontSize: 11,
+    color: color.textSecondary,
+    backgroundColor: color.cardRaised,
+    borderRadius: radius.sm,
+    paddingHorizontal: space.sm,
+    paddingVertical: 2,
+    letterSpacing: 0,
+  },
+  optionRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  optionInput: {
+    ...type.body,
+    flex: 1,
+    backgroundColor: color.cardSunken,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm + 2,
+    color: color.textPrimary,
+  },
+  removeOption: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.pill,
+    backgroundColor: color.errorContainer,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addOption: { alignSelf: 'flex-start' },
+  addOptionLabel: { ...type.label, color: color.accent },
+
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
+  chip: {
+    borderWidth: 1,
+    borderColor: color.divider,
+    borderRadius: radius.pill,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    backgroundColor: color.cardSunken,
+  },
+  chipOn: { backgroundColor: color.accent, borderColor: color.accent },
+  chipLabel: { ...type.label, color: color.textSecondary, letterSpacing: 0 },
+  chipLabelOn: { color: color.onAccent },
+  customRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: space.sm,
+    marginTop: space.sm,
+  },
+  customInput: {
+    ...type.body,
+    width: 64,
+    textAlign: 'center',
+    backgroundColor: color.cardSunken,
+    borderRadius: radius.md,
+    paddingVertical: space.sm + 2,
+    color: color.textPrimary,
+  },
+  unitRow: { flexDirection: 'row', gap: 6 },
+  unitChip: {
+    borderWidth: 1,
+    borderColor: color.divider,
+    borderRadius: radius.md,
+    paddingHorizontal: space.sm + 2,
+    paddingVertical: space.sm,
+    backgroundColor: color.cardSunken,
+  },
+
+  setting: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: space.md,
+  },
+  settingText: { flex: 1 },
+  settingTitle: { ...type.headline, fontSize: 15, color: color.textPrimary },
+  settingBody: { ...type.label, fontSize: 11, color: color.textSecondary, letterSpacing: 0 },
+  settingDivider: { height: 1, backgroundColor: color.divider },
+
+  createButton: {
+    backgroundColor: color.accent,
+    borderRadius: radius.pill,
+    paddingVertical: space.md,
+    alignItems: 'center',
+  },
+  createButtonOff: { opacity: 0.6 },
+  createButtonLabel: { ...type.headerTitle, fontSize: 16, color: color.onAccent },
 
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   activePill: {

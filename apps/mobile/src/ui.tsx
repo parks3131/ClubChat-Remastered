@@ -10,16 +10,18 @@
  * built from `<Action>` cannot ship without a label because the prop is required.
  */
 
-import type { ComponentProps, ReactNode } from 'react';
+import type { ComponentProps, ComponentType, ReactNode } from 'react';
 import {
   ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
   type StyleProp,
+  type SwitchProps,
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
@@ -174,6 +176,34 @@ export function Field({
         accessibilityLabel={label}
       />
     </View>
+  );
+}
+
+/**
+ * A switch that is the accent colour on every platform.
+ *
+ * > **`activeThumbColor` is not optional, and leaving it out is not a cosmetic bug.**
+ * > react-native-web supports `activeThumbColor` and `ios_backgroundColor` at runtime, but
+ * > React Native's own bundled types do not declare them, hence the cast. Without
+ * > `activeThumbColor` set explicitly, **react-native-web's "on" thumb silently defaults to
+ * > teal regardless of `trackColor`** - so a toggle that is correct on a phone turns green on
+ * > the web build, in an app that has exactly one accent.
+ *
+ * This is v1's `ThemedSwitch`, carried over with its reason. It was found there the expensive
+ * way: a founder flagged an announcement toggle turning green, having been read as correct in
+ * review because the native build was fine.
+ */
+const AnySwitch = Switch as ComponentType<Record<string, unknown>>;
+
+export function ThemedSwitch(props: SwitchProps) {
+  return (
+    <AnySwitch
+      trackColor={{ false: color.cardSunken, true: color.accent }}
+      thumbColor={color.onAccent}
+      activeThumbColor={color.onAccent}
+      ios_backgroundColor={color.cardSunken}
+      {...props}
+    />
   );
 }
 
