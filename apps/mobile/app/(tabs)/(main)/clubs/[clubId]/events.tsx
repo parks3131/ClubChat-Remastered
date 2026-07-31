@@ -10,27 +10,28 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { calendarApi, clubApi, contentApi } from '../../../../../src/api.ts';
-import type { EventType, FeedItem } from '../../../../../src/api-types.ts';
+import type { FeedItem } from '../../../../../src/api-types.ts';
 import { bibParts, formatDateOnly, formatInstant } from '../../../../../src/dates.ts';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import {
   Action,
   Body,
   DataScreen,
+  DateField,
   EmptyState,
   Fab,
   Field,
   SectionHeader,
   Tabs,
+  TimeField,
 } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
-const TYPES: readonly EventType[] = ['practice', 'team_bonding', 'volunteer', 'other', 'race'];
 
 export default function ClubEventsScreen() {
   const { clubId, create, from } = useLocalSearchParams<{
@@ -69,8 +70,18 @@ export default function ClubEventsScreen() {
     if (create === '1' && isAdmin) setCreating(true);
   }, [create, isAdmin]);
 
+  /*
+   * The composer owns the screen, header included - and the option is stated in BOTH directions.
+   * `<Stack.Screen options>` is `navigation.setOptions` underneath, so it mutates the route and
+   * does not roll back on unmount; setting it only on the way in left the list with no header.
+   * Same reasoning as the poll composer.
+   */
+  const header = <Stack.Screen options={{ headerShown: !creating }} />;
+
   if (creating) {
     return (
+      <>
+        {header}
       <CreateEvent
         clubId={clubId}
         onCancel={() => {
@@ -85,12 +96,14 @@ export default function ClubEventsScreen() {
           }
           feed.reload();
         }}
-      />
+        />
+      </>
     );
   }
 
   return (
     <View style={styles.flex}>
+      {header}
       <View style={styles.tabsWrap}>
         <Tabs
           tabs={[
@@ -218,23 +231,79 @@ function CreateEvent({
   onCreated: () => void;
 }) {
   const [title, setTitle] = useState('');
-  const [starts, setStarts] = useState('');
   const [location, setLocation] = useState('');
-  const [kind, setKind] = useState<EventType>('practice');
+  const [description, setDescription] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [startTime, setStartTime] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [endTime, setEndTime] = useState('');
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 
-  const valid = title.trim().length > 0 && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(starts.trim());
+  /*
+   * A date and a time are separate fields and one instant.
+   *
+   * They are joined WITHOUT a timezone suffix, so `new Date()` reads them in the device's own
+   * zone - which is what "practice at 5pm" means to the person typing it. Appending `Z` would
+   * book it in UTC and move it by the offset, and that is the classic way a 5pm session shows
+   * up at midnight for half the club.
+   */
+  const instant = (date: string, time: string): string | null => {
+    if (date.length === 0 || time.length === 0) return null;
+    const parsed = new Date(`${date}T${time}`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  };
+
+  const startsAt = instant(startDate, startTime);
+  const endsAt = instant(endDate, endTime);
+
+  /*
+   * Two rules, checked here and stated to the member rather than left to a failed save.
+   *
+   *  1. **An event cannot start in the past.** Scheduling backwards is never what anyone meant,
+   *     and a club that "has" a session which already happened is noise on every calendar.
+   *  2. **It cannot end before it starts.** An end date is optional; an end BEFORE the start is
+   *     not a shorter event, it is a typo.
+   *
+   * A half-filled end counts as unset rather than invalid, so picking a date and not yet a time
+   * does not shout at somebody mid-way through filling the form in.
+   */
+  const endHalfFilled =
+    (endDate.length > 0) !== (endTime.length > 0);
+  const startsInPast = startsAt !== null && new Date(startsAt).getTime() <= Date.now();
+  const endsBeforeStart =
+    startsAt !== null && endsAt !== null && new Date(endsAt).getTime() <= new Date(startsAt).getTime();
+
+  const problem = startsInPast
+    ? 'That start is in the past. Pick a date and time still to come.'
+    : endsBeforeStart
+      ? 'The end has to come after the start.'
+      : endHalfFilled
+        ? 'An end needs both a date and a time, or neither.'
+        : null;
+
+  const valid = title.trim().length > 0 && startsAt !== null && problem === null;
 
   const submit = async () => {
+    if (startsAt === null) return;
     setBusy(true);
     setFailed(null);
     try {
       await contentApi.createEvent(clubId, {
-        type: kind,
+        /*
+         * Always `other`, because this screen no longer asks.
+         *
+         * `calendar_events.type` is NOT NULL under a check constraint, so something has to go in
+         * it. `other` is the honest value for "uncategorised" - picking `practice` on the
+         * member's behalf would file every event under a category nobody chose. The column and
+         * its constraint stay, so a type selector can come back without a migration.
+         */
+        type: 'other',
         title: title.trim(),
-        startsAt: new Date(starts.trim()).toISOString(),
+        startsAt,
+        endsAt,
         location: location.trim().length > 0 ? location.trim() : null,
+        description: description.trim().length > 0 ? description.trim() : null,
       });
       onCreated();
     } catch {
@@ -245,48 +314,187 @@ function CreateEvent({
   };
 
   return (
-    <Body>
-      <SectionHeader title="New event" />
-      <Field label="Title" value={title} onChangeText={setTitle} placeholder="Track session" />
-      <Field label="Starts" value={starts} onChangeText={setStarts} placeholder="2027-04-01T17:00" />
-      <Field label="Location" value={location} onChangeText={setLocation} />
-
-      <SectionHeader title="Type" />
-      <View style={styles.types}>
-        {TYPES.map((option) => (
-          <Action
-            key={option}
-            label={option.replace('_', ' ')}
-            variant={option === kind ? 'primary' : 'secondary'}
-            onPress={() => setKind(option)}
-          />
-        ))}
+    <View style={styles.flex}>
+      <View style={styles.composerHeader}>
+        <Pressable
+          onPress={onCancel}
+          style={styles.composerBack}
+          accessibilityRole="button"
+          accessibilityLabel="Discard this event and go back"
+        >
+          <MaterialIcons name="arrow-back" size={22} color={color.accent} />
+        </Pressable>
+        <Text style={styles.composerTitle}>New event</Text>
       </View>
-      {kind === 'race' && (
-        // A label only, with no relationship to a real Race. Whether the type should exist at all
-        // is an open question in PRD/17; saying so here stops somebody expecting a roster.
-        <Text style={styles.meta}>
-          A "race" event is a calendar label. It does not create a Race with a roster and chat - use
-          Races & Meets for that.
-        </Text>
-      )}
 
-      <Text style={styles.meta}>Creating an event tells every other member of the club.</Text>
-      {failed !== null && <Text style={styles.error}>{failed}</Text>}
-      <View style={styles.actions}>
-        <Action label="Cancel" variant="secondary" style={styles.actionButton} onPress={onCancel} />
-        <Action
-          label={busy ? 'Creating' : 'Create'}
-          style={styles.actionButton}
+      <ScrollView
+        style={styles.flex}
+        contentContainerStyle={styles.composerBody}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* v1's heading: the name at display weight over a short accent rule. */}
+        <View>
+          <Text style={styles.composerHeading}>NEW EVENT</Text>
+          <View style={styles.composerRule} />
+        </View>
+
+        <Text style={styles.composerLabel}>Event Title</Text>
+        <TextInput
+          style={styles.composerInput}
+          value={title}
+          onChangeText={setTitle}
+          placeholder="e.g. Morning Sprint Championship"
+          placeholderTextColor={color.textSecondary}
+          accessibilityLabel="Event title"
+        />
+
+        <Text style={styles.composerLabel}>Location</Text>
+        <View style={styles.composerInputRow}>
+          <MaterialIcons name="place" size={18} color={color.textSecondary} />
+          <TextInput
+            style={styles.composerInputInline}
+            value={location}
+            onChangeText={setLocation}
+            placeholder="Where's it happening?"
+            placeholderTextColor={color.textSecondary}
+            accessibilityLabel="Location"
+          />
+        </View>
+
+        <Text style={styles.composerLabel}>Description</Text>
+        <TextInput
+          style={[styles.composerInput, styles.composerInputTall]}
+          value={description}
+          onChangeText={setDescription}
+          placeholder="Tell the team what to bring, the schedule, and any requirements..."
+          placeholderTextColor={color.textSecondary}
+          multiline
+          accessibilityLabel="Description"
+        />
+
+        <View style={styles.scheduleCard}>
+          <Text style={styles.scheduleTitle}>SCHEDULE</Text>
+
+          <Text style={styles.scheduleLabel}>Starts</Text>
+          <View style={styles.scheduleRow}>
+            <View style={styles.scheduleDate}>
+              <DateField label="start date" value={startDate} onChange={setStartDate} />
+            </View>
+            <View style={styles.scheduleTime}>
+              <TimeField label="Start time" value={startTime} onChange={setStartTime} />
+            </View>
+          </View>
+
+          <Text style={styles.scheduleLabel}>Ends (optional)</Text>
+          <View style={styles.scheduleRow}>
+            <View style={styles.scheduleDate}>
+              <DateField label="end date" value={endDate} onChange={setEndDate} optional />
+            </View>
+            <View style={styles.scheduleTime}>
+              <TimeField label="End time" value={endTime} onChange={setEndTime} />
+            </View>
+          </View>
+        </View>
+
+        <Text style={styles.meta}>Creating an event tells every other member of the club.</Text>
+        {/* The reason SAVE EVENT is refusing, said before it is pressed rather than after. */}
+        {problem !== null && <Text style={styles.error}>{problem}</Text>}
+        {failed !== null && <Text style={styles.error}>{failed}</Text>}
+
+        <Pressable
+          style={[styles.saveButton, (!valid || busy) && styles.saveButtonOff]}
           disabled={!valid || busy}
           onPress={() => void submit()}
-        />
-      </View>
-    </Body>
+          accessibilityRole="button"
+          accessibilityLabel="Save event"
+          accessibilityState={{ disabled: !valid || busy }}
+        >
+          <Text style={styles.saveButtonLabel}>{busy ? 'SAVING' : 'SAVE EVENT'}</Text>
+          <MaterialIcons name="arrow-forward" size={18} color={color.onAccent} />
+        </Pressable>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  composerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    backgroundColor: color.chrome,
+    borderBottomWidth: 1,
+    borderBottomColor: color.divider,
+  },
+  composerBack: { padding: space.xs },
+  composerTitle: { ...type.headerTitle, color: color.textPrimary },
+  composerBody: { padding: space.md, paddingBottom: space.xl, gap: space.sm },
+  composerHeading: { ...type.title, color: color.textPrimary },
+  composerRule: {
+    height: 3,
+    width: 88,
+    backgroundColor: color.accent,
+    borderRadius: radius.pill,
+    marginTop: space.xs,
+    marginBottom: space.sm,
+  },
+  /* The field labels are accent-coloured in v1, which is what separates them from body copy. */
+  composerLabel: { ...type.label, color: color.accent, marginTop: space.sm },
+  composerInput: {
+    ...type.body,
+    backgroundColor: color.card,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm + 4,
+    color: color.textPrimary,
+  },
+  composerInputTall: { minHeight: 104, textAlignVertical: 'top' },
+  composerInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    backgroundColor: color.card,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+  },
+  composerInputInline: {
+    ...type.body,
+    flex: 1,
+    paddingVertical: space.sm + 4,
+    color: color.textPrimary,
+  },
+  scheduleCard: {
+    backgroundColor: color.chrome,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.divider,
+    padding: space.md,
+    gap: space.sm,
+    marginTop: space.md,
+  },
+  scheduleTitle: { ...type.headerTitle, fontSize: 18, color: color.textPrimary },
+  scheduleLabel: { ...type.headline, fontSize: 14, color: color.textPrimary },
+  scheduleRow: { flexDirection: 'row', gap: space.sm },
+  scheduleDate: { flex: 2 },
+  scheduleTime: { flex: 1 },
+  saveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: space.sm,
+    backgroundColor: color.accent,
+    borderRadius: radius.pill,
+    paddingVertical: space.md,
+    marginTop: space.md,
+  },
+  saveButtonOff: { opacity: 0.6 },
+  saveButtonLabel: { ...type.headerTitle, fontSize: 16, color: color.onAccent },
   flex: { flex: 1, backgroundColor: color.appBackground },
   tabsWrap: { padding: space.md, paddingBottom: 0 },
   row: {

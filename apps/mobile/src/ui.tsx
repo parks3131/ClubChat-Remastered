@@ -10,12 +10,14 @@
  * built from `<Action>` cannot ship without a label because the prop is required.
  */
 
+import { useState } from 'react';
 import type { ComponentProps, ComponentType, ReactNode } from 'react';
 import {
   ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
+  Modal,
   Switch,
   Text,
   TextInput,
@@ -204,6 +206,246 @@ export function ThemedSwitch(props: SwitchProps) {
       ios_backgroundColor={color.cardSunken}
       {...props}
     />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Date and time
+// ---------------------------------------------------------------------------
+
+const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'] as const;
+
+/** `YYYY-MM-DD` from a Date, in LOCAL time. `toISOString` would shift the day across midnight. */
+function isoDate(date: Date): string {
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/**
+ * A date, chosen from a month grid rather than typed.
+ *
+ * > **`YYYY-MM-DD` in a text box is a format quiz.** It was one here, and the validity check
+ * > rejected everything a person would naturally type. A grid cannot produce an invalid date.
+ *
+ * Built rather than pulled in: the app has no date-picker dependency, and the one screen that
+ * already draws a month is the calendar tab, so this is that grid at field size. It also keeps
+ * iOS, Android and web identical, which a platform-native picker would not.
+ */
+export function DateField({
+  label,
+  value,
+  onChange,
+  optional = false,
+}: {
+  label: string;
+  /** `YYYY-MM-DD`, or empty for unset. */
+  value: string;
+  onChange: (next: string) => void;
+  optional?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [cursor, setCursor] = useState(() => (value ? new Date(`${value}T00:00`) : new Date()));
+
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+  const first = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const lead = first.getDay();
+  const cells: Array<number | null> = [
+    ...Array.from({ length: lead }, () => null),
+    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+  ];
+
+  return (
+    <>
+      <Pressable
+        style={styles.pickerField}
+        onPress={() => setOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel={value ? `${label}, ${value}. Change` : `Choose ${label}`}
+      >
+        <Text style={value ? styles.pickerValue : styles.pickerPlaceholder}>
+          {value || 'YYYY-MM-DD'}
+        </Text>
+        <MaterialIcons name="calendar-today" size={18} color={color.accent} />
+      </Pressable>
+
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <View style={styles.pickerBackdrop}>
+          <Pressable
+            style={styles.pickerScrim}
+            onPress={() => setOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+          />
+          <View style={styles.pickerSheet}>
+            <View style={styles.pickerHead}>
+              <Pressable
+                onPress={() => setCursor(new Date(year, month - 1, 1))}
+                hitSlop={space.sm}
+                accessibilityRole="button"
+                accessibilityLabel="Previous month"
+              >
+                <MaterialIcons name="chevron-left" size={26} color={color.textPrimary} />
+              </Pressable>
+              <Text style={styles.pickerMonth}>
+                {cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+              </Text>
+              <Pressable
+                onPress={() => setCursor(new Date(year, month + 1, 1))}
+                hitSlop={space.sm}
+                accessibilityRole="button"
+                accessibilityLabel="Next month"
+              >
+                <MaterialIcons name="chevron-right" size={26} color={color.textPrimary} />
+              </Pressable>
+            </View>
+
+            <View style={styles.weekRow}>
+              {WEEKDAYS.map((day, index) => (
+                <Text key={index} style={styles.weekday}>
+                  {day}
+                </Text>
+              ))}
+            </View>
+
+            <View style={styles.dayGrid}>
+              {cells.map((day, index) => {
+                if (day === null) return <View key={`pad-${index}`} style={styles.dayCell} />;
+                const iso = isoDate(new Date(year, month, day));
+                const chosen = iso === value;
+                return (
+                  <Pressable
+                    key={iso}
+                    style={[styles.dayCell, chosen && styles.dayCellOn]}
+                    onPress={() => {
+                      onChange(iso);
+                      setOpen(false);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: chosen }}
+                    accessibilityLabel={iso}
+                  >
+                    <Text style={[styles.dayLabel, chosen && styles.dayLabelOn]}>{day}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Only where the field may legitimately be empty, so it cannot clear a required one. */}
+            {optional && value.length > 0 && (
+              <Pressable
+                onPress={() => {
+                  onChange('');
+                  setOpen(false);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`Clear ${label}`}
+              >
+                <Text style={styles.pickerClear}>CLEAR</Text>
+              </Pressable>
+            )}
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+}
+
+const HOURS = Array.from({ length: 24 }, (_, i) => `${i}`.padStart(2, '0'));
+const MINUTES = Array.from({ length: 12 }, (_, i) => `${i * 5}`.padStart(2, '0'));
+
+/**
+ * A time, chosen from two wheels, the way a phone's alarm does it.
+ *
+ * Minutes step by five deliberately: a club meets at half past, not at 17:23, and twelve targets
+ * are reachable where sixty are a scroll hunt.
+ */
+export function TimeField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  /** `HH:MM`, or empty for unset. */
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [hour, minute] = value.split(':');
+
+  /*
+   * `||`, not `??`.
+   *
+   * An unset field splits to `['']`, so the hour is the EMPTY STRING rather than undefined - and
+   * `?? '00'` does not catch an empty string. Picking the minutes first therefore produced ":00"
+   * with no hour at all, which parsed to an invalid date and silently disabled the save button
+   * with nothing on screen explaining why.
+   */
+  const commit = (nextHour: string, nextMinute: string) =>
+    onChange(`${nextHour || '00'}:${nextMinute || '00'}`);
+
+  return (
+    <>
+      <Pressable
+        style={styles.pickerField}
+        onPress={() => setOpen(true)}
+        accessibilityRole="button"
+        accessibilityLabel={value ? `${label}, ${value}. Change` : `Choose ${label}`}
+      >
+        <Text style={value ? styles.pickerValue : styles.pickerPlaceholder}>
+          {value || 'HH:MM'}
+        </Text>
+        <MaterialIcons name="schedule" size={18} color={color.accent} />
+      </Pressable>
+
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <View style={styles.pickerBackdrop}>
+          <Pressable
+            style={styles.pickerScrim}
+            onPress={() => setOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+          />
+          <View style={styles.pickerSheet}>
+            <Text style={styles.pickerMonth}>{label}</Text>
+            <View style={styles.wheels}>
+              <ScrollView style={styles.wheel} showsVerticalScrollIndicator={false}>
+                {HOURS.map((h) => (
+                  <Pressable
+                    key={h}
+                    style={[styles.wheelItem, h === hour && styles.wheelItemOn]}
+                    onPress={() => commit(h, minute ?? '')}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: h === hour }}
+                    accessibilityLabel={`${h} hours`}
+                  >
+                    <Text style={[styles.wheelLabel, h === hour && styles.wheelLabelOn]}>{h}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+              <Text style={styles.wheelColon}>:</Text>
+              <ScrollView style={styles.wheel} showsVerticalScrollIndicator={false}>
+                {MINUTES.map((m) => (
+                  <Pressable
+                    key={m}
+                    style={[styles.wheelItem, m === minute && styles.wheelItemOn]}
+                    onPress={() => commit(hour ?? '', m)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: m === minute }}
+                    accessibilityLabel={`${m} minutes`}
+                  >
+                    <Text style={[styles.wheelLabel, m === minute && styles.wheelLabelOn]}>{m}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+            <Action label="Done" onPress={() => setOpen(false)} />
+          </View>
+        </View>
+      </Modal>
+    </>
   );
 }
 
@@ -629,6 +871,74 @@ export const textStyles: Record<string, StyleProp<TextStyle>> = {
 };
 
 const styles = StyleSheet.create({
+  pickerField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: color.card,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm + 4,
+    gap: space.sm,
+  },
+  pickerValue: { ...type.body, color: color.textPrimary },
+  pickerPlaceholder: { ...type.body, color: color.textSecondary },
+  pickerBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: space.md,
+  },
+  pickerScrim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  pickerSheet: {
+    backgroundColor: color.card,
+    borderRadius: radius.xl,
+    padding: space.md,
+    width: '100%',
+    maxWidth: 360,
+    gap: space.sm,
+  },
+  pickerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  pickerMonth: { ...type.headerTitle, fontSize: 18, color: color.textPrimary },
+  pickerClear: { ...type.label, color: color.accent, textAlign: 'center', paddingTop: space.sm },
+  weekRow: { flexDirection: 'row' },
+  weekday: {
+    ...type.label,
+    color: color.textSecondary,
+    width: `${100 / 7}%`,
+    textAlign: 'center',
+  },
+  dayGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  dayCell: {
+    width: `${100 / 7}%`,
+    aspectRatio: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.pill,
+  },
+  dayCellOn: { backgroundColor: color.accent },
+  dayLabel: { ...type.body, color: color.textPrimary },
+  dayLabelOn: { color: color.onAccent },
+  wheels: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space.sm },
+  wheel: { maxHeight: 190, width: 76 },
+  wheelItem: { paddingVertical: space.sm, alignItems: 'center', borderRadius: radius.md },
+  wheelItemOn: { backgroundColor: color.accentSoft },
+  wheelLabel: { ...type.numeric, color: color.textSecondary },
+  wheelLabelOn: { color: color.accent },
+  wheelColon: { ...type.numeric, color: color.textPrimary },
   centered: {
     flex: 1,
     alignItems: 'center',
