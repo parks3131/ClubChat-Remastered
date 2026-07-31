@@ -21,6 +21,7 @@ import {
   deleteNewsPost,
   deleteWorkout,
   listMeetings,
+  readEvent,
   readMeeting,
   readNewsFeed,
   readNewsPost,
@@ -164,6 +165,19 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
     });
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return reply.code(201).send(result);
+  });
+
+  /**
+   * One event. **Every club member**, not only the admins who create them.
+   *
+   * Creating an event notifies the whole club and posts a card into club chat, and both of those
+   * are links to this. Gating the read at admin would leave every member holding a notification
+   * that opens nothing.
+   */
+  app.get<{ Params: { id: string } }>('/events/:id', async (request, reply) => {
+    const result = await readEvent(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
   });
 
   app.delete<{ Params: { id: string } }>('/events/:id', async (request, reply) => {

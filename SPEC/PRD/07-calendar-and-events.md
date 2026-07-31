@@ -24,11 +24,23 @@ Two views over **one merged feed**: a month grid for "what is happening when", a
    race access. Tapping through without access leads to the race preview, not the race.
 9. Only an admin can create, edit, or delete an event. Creating one notifies every other club
    member.
-10. **A created event posts a card into club chat** with its title, date, and location.
+10. **A created event posts a card into club chat** with its title, date, and location, and
+    **View Event** on it opens the event's detail screen.
 11. An event carries a type, a title, a date and time, an optional location, and an optional
     description.
 12. **Creating an event from chat's "+" returns to chat afterwards**, not to the new event's
     detail screen - the chat card already confirms it.
+13. **An event has a detail screen of its own**, and all four routes to it lead there: the
+    Upcoming/Past list, the calendar's day popup, the chat card, and the notification. It shows
+    the title, when it runs, the location, the description, and **who added it**.
+14. **Every club member can open an event; only an admin can delete one.** The read is
+    deliberately wider than the write: creating an event notifies the whole club, so a read
+    gated at admin would hand every member a notification that opens nothing.
+15. **Any admin deletes any event, not only the one who added it** - which is the opposite of a
+    poll (`PRD/11`), where only the creator can. The two sit side by side and neither is a
+    mistake: a poll is a question somebody asked, and an event is club business on a shared
+    calendar. A cancelled practice that only its absent author could remove is the failure rule
+    15 avoids, and "Added by <name>" on the screen is what keeps it legible.
 
 **Edge cases.** A month with nothing renders with no markers and no error. Loading keeps the
 grid at a **fixed height** so paging months does not make the page jump. An event deleted

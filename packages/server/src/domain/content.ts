@@ -683,6 +683,93 @@ export async function readMeeting(
   };
 }
 
+export type EventDetail = {
+  id: string;
+  clubId: string;
+  type: EventType;
+  title: string;
+  startsAt: string;
+  endsAt: string | null;
+  location: string | null;
+  description: string | null;
+  /** Null once the creator's account is gone - `created_by` is `on delete set null`. */
+  creatorId: string | null;
+  creatorName: string | null;
+  /**
+   * Whether this viewer may delete it. **Any club admin, not only the creator** - which is the
+   * exact opposite of a poll, where only its creator can.
+   *
+   * The asymmetry is deliberate rather than an oversight in one of the two. A poll is a question
+   * somebody asked and the answer belongs to them; an event is club business on a shared
+   * calendar, and a cancelled practice nobody but the absent creator can remove is the failure
+   * that rule avoids. Both live in `PRD/07`.
+   */
+  canManage: boolean;
+};
+
+/**
+ * One event, for the screen a notification and a chat card open.
+ *
+ * Readable by **every club member**, not only the admins who create them: an event is announced
+ * to the whole club, so a notification that could not be opened by the people it was sent to
+ * would be the more surprising rule. Managing it is the narrower gate, returned beside the row.
+ */
+export async function readEvent(
+  db: Db,
+  ctx: AccessContext,
+  eventId: string,
+): Promise<Result<{ event: EventDetail }>> {
+  const rows = await db.execute<{
+    id: string;
+    club_id: string;
+    type: string;
+    title: string;
+    starts_at: string;
+    ends_at: string | null;
+    location: string | null;
+    description: string | null;
+    created_by: string | null;
+    full_name: string | null;
+  }>(sql`
+    SELECT e.id::text AS id,
+           e.club_id::text AS club_id,
+           e.type,
+           e.title,
+           ${isoUtc('e.starts_at')} AS starts_at,
+           ${isoUtc('e.ends_at')} AS ends_at,
+           e.location,
+           e.description,
+           e.created_by::text AS created_by,
+           u.full_name
+      FROM calendar_events e
+      -- LEFT, because created_by is nullable: an inner join would make the event itself
+      -- disappear the moment the person who added it deleted their account.
+      LEFT JOIN users u ON u.id = e.created_by
+     WHERE e.id = ${eventId}
+  `);
+
+  const row = rows.rows[0];
+  if (!row) return { ok: false, code: 'not_found' };
+  if (!canReadClubContent(ctx, row.club_id)) return { ok: false, code: 'not_found' };
+
+  return {
+    ok: true,
+    event: {
+      id: row.id,
+      clubId: row.club_id,
+      type: row.type as EventType,
+      title: row.title,
+      startsAt: row.starts_at,
+      endsAt: row.ends_at,
+      location: row.location,
+      description: row.description,
+      creatorId: row.created_by,
+      creatorName: row.full_name,
+      canManage: canManageClubContent(ctx, row.club_id),
+    },
+  };
+}
+
 export const NEWS_PAGE_SIZE = 20;
 
 export type NewsPostView = {

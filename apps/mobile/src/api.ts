@@ -27,6 +27,7 @@ import type {
   ClubSearchResult,
   EboardDetail,
   EboardRoster,
+  EventDetail,
   EventType,
   FeedItem,
   GalleryPage,
@@ -474,6 +475,9 @@ export const contentApi = {
       description?: string | null;
     },
   ) => apiFetch<{ eventId: string }>(`/clubs/${clubId}/events`, { method: 'POST', body }),
+
+  /** Every club member, not only the admins who create them. `canManage` rides along. */
+  event: (eventId: string) => apiFetch<{ event: EventDetail }>(`/events/${eventId}`),
 
   deleteEvent: (eventId: string) => apiFetch<unknown>(`/events/${eventId}`, { method: 'DELETE' }),
 

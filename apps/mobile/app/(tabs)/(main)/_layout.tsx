@@ -25,6 +25,21 @@
  * the route's own params - a screen inside a club goes back to that club, not to the clubs list.
  * That is what `parented()` does. A screen added without one is a screen somebody can get
  * stranded on.
+ *
+ * ---
+ *
+ * > **It is an ARROW on every screen here, never a word.** The leaf screens - poll, meeting,
+ * > event, post, profile, DMs - used to render their parent's NAME instead, on the theory that a
+ * > worded control was the standard nested header and the bare arrow was reserved for headers
+ * > wearing a space's identity. Reported on the event screen the moment it shipped, in the
+ * > plainest possible terms: *the back button is missing*.
+ * >
+ * > It was not missing. "CALENDAR" was sitting immediately left of the title "Event", in the same
+ * > uppercase label style, and read as an eyebrow rather than as a control - two labels where
+ * > there should have been a control and a heading. v1 draws `arrow-back` on every nested screen
+ * > and never a word, which `parented()` below has said all along; the leaf screens were simply
+ * > the ones that had never been held to it. The destination is not lost - it is still what the
+ * > control announces to a screen reader, as "Back to Calendar".
  */
 
 import { Stack } from 'expo-router';
@@ -130,7 +145,7 @@ export default function MainStackLayout() {
         name="dm/index"
         options={{
           title: 'Messages',
-          headerLeft: () => <BackTo href="/clubs" label="Clubs" />,
+          headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
         }}
       />
 
@@ -345,28 +360,40 @@ export default function MainStackLayout() {
             genuinely appears on - and with real history the arrow pops to whichever list the
             person actually came from, which is the common case.
           */
-          headerLeft: () => <BackTo href="/calendar" label="Calendar" />,
+          headerLeft: () => <BackTo href="/calendar" label="Calendar" variant="icon" />,
         }}
       />
       <Stack.Screen
         name="meetings/[meetingId]"
         options={{
           title: 'Meeting',
-          headerLeft: () => <BackTo href="/calendar" label="Calendar" />,
+          headerLeft: () => <BackTo href="/calendar" label="Calendar" variant="icon" />,
+        }}
+      />
+      {/*
+        An event is reached from three places - the club's events list, the calendar, and the card
+        in club chat - so like a poll it falls back to the Calendar rather than guessing which. Its
+        club is only known after the read lands, and the control has to exist before that.
+      */}
+      <Stack.Screen
+        name="events/[eventId]"
+        options={{
+          title: 'Event',
+          headerLeft: () => <BackTo href="/calendar" label="Calendar" variant="icon" />,
         }}
       />
       <Stack.Screen
         name="news/[postId]"
         options={{
           title: 'Post',
-          headerLeft: () => <BackTo href="/clubs" label="Clubs" />,
+          headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
         }}
       />
       <Stack.Screen
         name="users/[userId]"
         options={{
           title: 'Profile',
-          headerLeft: () => <BackTo href="/clubs" label="Clubs" />,
+          headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
         }}
       />
 
@@ -398,7 +425,7 @@ export default function MainStackLayout() {
         name="join/[token]"
         options={{
           title: 'Join',
-          headerLeft: () => <BackTo href="/clubs" label="Clubs" />,
+          headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
         }}
       />
     </Stack>

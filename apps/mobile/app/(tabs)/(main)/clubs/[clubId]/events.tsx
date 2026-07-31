@@ -163,6 +163,7 @@ function EventRow({ item, faded }: { item: FeedItem; faded: boolean }) {
   const router = useRouter();
   const tint = tintFor(item.kind);
   const bib = item.kind === 'poll' || item.at === null ? null : bibParts(item.at);
+  // Every kind on this merged feed has a screen now, events included - so every row opens.
   const target =
     item.kind === 'poll'
       ? `/polls/${item.id}`
@@ -170,7 +171,7 @@ function EventRow({ item, faded }: { item: FeedItem; faded: boolean }) {
         ? `/races/${item.id}`
         : item.kind === 'meeting'
           ? `/meetings/${item.id}`
-          : undefined;
+          : `/events/${item.id}`;
 
   const body = (
     <>
@@ -204,10 +205,6 @@ function EventRow({ item, faded }: { item: FeedItem; faded: boolean }) {
       <MaterialIcons name="chevron-right" size={22} color={color.border} />
     </>
   );
-
-  if (target === undefined) {
-    return <View style={[styles.row, faded && styles.rowFaded]}>{body}</View>;
-  }
 
   return (
     <Pressable

@@ -187,16 +187,15 @@ function badgeTint(kind: FeedItem['kind']): { background: string; text: string }
   }
 }
 
-function targetFor(item: FeedItem): string | undefined {
+/** Every kind on this feed now has somewhere to land, so this returns a string in every case. */
+function targetFor(item: FeedItem): string {
   return item.kind === 'poll'
     ? `/polls/${item.id}`
     : item.kind === 'race'
       ? `/races/${item.id}`
       : item.kind === 'meeting'
         ? `/meetings/${item.id}`
-        : // An event has no screen of its own: it lives in the club's merged events list, which
-          // is where PRD/07 puts it.
-          undefined;
+        : `/events/${item.id}`;
 }
 
 /** One item under the selected day. */
@@ -219,8 +218,6 @@ function DayRow({ item, showClub }: { item: FeedItem; showClub: boolean }) {
       {item.at !== null && <Text style={styles.meta}>{formatTimeOfDay(item.at)}</Text>}
     </>
   );
-
-  if (target === undefined) return <View style={styles.dayRow}>{body}</View>;
 
   return (
     <Pressable

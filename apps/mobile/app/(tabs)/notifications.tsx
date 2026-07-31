@@ -80,9 +80,7 @@ function hrefFor(target: NotificationTarget): string | undefined {
     case 'poll':
       return `/polls/${target.pollId}`;
     case 'event':
-      // An event has no screen of its own: it lives in the club's merged events list, which is
-      // where PRD/07 puts it. Routed to the club rather than invented.
-      return undefined;
+      return `/events/${target.eventId}`;
     case 'meeting':
       return `/meetings/${target.meetingId}`;
     case 'news':

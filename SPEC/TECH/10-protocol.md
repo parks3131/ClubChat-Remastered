@@ -119,6 +119,7 @@ POST   /polls/:id/closed                     ← body { closed }; the creator on
 DELETE /polls/:id
 
 POST   /clubs/:id/events · DELETE /events/:id
+GET    /events/:id                           ← any club member; `canManage` says who may delete
 POST   /clubs/:id/workouts · DELETE /workouts/:id
 GET    /clubs/:id/routines?monday=YYYY-MM-DD ← the Monday is required, never guessed
 GET    /clubs/:id/news · POST /clubs/:id/news

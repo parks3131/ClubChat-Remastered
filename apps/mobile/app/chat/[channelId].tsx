@@ -36,6 +36,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
 import { MaterialIcons } from "@expo/vector-icons";
 import { Avatar } from "../../src/ui.tsx";
+import { ChatEventCard } from "../../src/screens/events.tsx";
 import { ChatPollCard } from "../../src/screens/polls.tsx";
 import { QuickNav, spaceProfileHref, useGoBack } from "../../src/nav.tsx";
 import { color, radius, space, type } from "../../src/theme.ts";
@@ -1105,6 +1106,15 @@ export default function ChatScreen() {
             }
 
             const mine = message.senderId === userId;
+            /*
+             * A card bubble, of either kind.
+             *
+             * Poll and event cards differ in everything except this: both hold their own press
+             * targets, so the bubble around them must hold none. Asking `linkedPollId !== null` in
+             * the three places that decide it is how the event card shipped without the long-press
+             * suppression the poll card has - which is failure mode 17 all over again.
+             */
+            const cardId = message.linkedPollId ?? message.linkedEventId;
             // Marked so a reader can see WHICH message a jump sent them to. Without it the screen
             // has silently scrolled somewhere and the target is indistinguishable from its
             // neighbours, which is most of the value of jumping.
@@ -1144,7 +1154,7 @@ export default function ChatScreen() {
                   // > that a poll card cannot be reacted to by holding it, which is the right way
                   // > round: voting on it is what it is for.
                   onLongPress={
-                    message.linkedPollId !== null
+                    cardId !== null
                       ? undefined
                       : () => {
                           setSelected(message.seq);
@@ -1157,9 +1167,9 @@ export default function ChatScreen() {
                   // <div> wrapper can hold the card's controls legally. `disabled` was the first
                   // attempt and was worse than the bug - a disabled button disables its descendants,
                   // so every option inside went dead and the card could not be voted on at all.
-                  accessibilityRole={message.linkedPollId !== null ? "none" : "button"}
+                  accessibilityRole={cardId !== null ? "none" : "button"}
                   accessibilityLabel={
-                    message.linkedPollId !== null
+                    cardId !== null
                       ? undefined
                       : mine
                         ? "Press and hold to react to your message"
@@ -1219,17 +1229,31 @@ export default function ChatScreen() {
                       The body sentence is suppressed alongside it: the card already says who
                       asked what, and repeating it above is the same line twice.
                     */}
-                    {message.linkedPollId !== null ? (
+                    {cardId !== null ? (
                       <>
-                        <ChatPollCard
-                          pollId={message.linkedPollId}
-                          authorName={message.senderName}
-                        />
+                        {message.linkedPollId !== null ? (
+                          <ChatPollCard
+                            pollId={message.linkedPollId}
+                            authorName={message.senderName}
+                          />
+                        ) : (
+                          /*
+                            An event card, drawn in its creator's bubble exactly as a poll is -
+                            v1's card, with the calendar glyph, the date, the location and View
+                            Event out to the event's own screen.
+
+                            It carries no controls of its own, so unlike the poll card it is a
+                            single press target: the whole card navigates. That is legal inside
+                            this bubble only because the bubble declares `accessibilityRole="none"`
+                            above, which is what stops react-native-web rendering it as a <button>.
+                          */
+                          <ChatEventCard eventId={cardId} />
+                        )}
                         {/*
                           The card bubble cannot be long-pressed - its contents are buttons, and
                           wrapping them in one is failure mode 17 - so the menu gets a visible
                           control instead. v1 draws the same dots in the same corner. Without it,
-                          a poll card is the one message in the log nobody can react to or report.
+                          a card is the one message in the log nobody can react to or report.
                         */}
                         <Pressable
                           style={styles.cardMenu}
@@ -1241,8 +1265,8 @@ export default function ChatScreen() {
                           accessibilityRole="button"
                           accessibilityLabel={
                             mine
-                              ? "React to your poll"
-                              : "React to or report this poll"
+                              ? "React to your card"
+                              : "React to or report this card"
                           }
                         >
                           <MaterialIcons

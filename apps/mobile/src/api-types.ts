@@ -243,6 +243,22 @@ export type RoutineDay = {
 
 export type EventType = 'race' | 'practice' | 'team_bonding' | 'volunteer' | 'other';
 
+export type EventDetail = {
+  id: string;
+  clubId: string;
+  type: EventType;
+  title: string;
+  startsAt: string;
+  endsAt: string | null;
+  location: string | null;
+  description: string | null;
+  /** Null once the creator's account is gone. The event outlives them. */
+  creatorId: string | null;
+  creatorName: string | null;
+  /** **Any club admin**, not only the creator - the opposite of a poll, deliberately. */
+  canManage: boolean;
+};
+
 // ---------------------------------------------------------------------------
 // Calendar
 // ---------------------------------------------------------------------------

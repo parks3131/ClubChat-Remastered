@@ -63,8 +63,13 @@ export function BackTo({
   href: string;
   label: string;
   /**
-   * `label` is the standard nested header. `icon` is the bare arrow v1 uses in a header whose
-   * title is the club's own identity, where a worded control would compete with it.
+   * **`icon` is the nested header, everywhere.** v1 draws `arrow-back` and never a word.
+   *
+   * `label` renders the parent's NAME as the control and is now used by nothing in the app. It
+   * survives because the failure is worth being able to point at: a word in the header's label
+   * style sits beside the title reading as an eyebrow, not as a button, and the first person to
+   * see one reported the back button as missing. Reach for it only if a header ever genuinely
+   * needs its destination spelled out - and expect that report again if you do.
    */
   variant?: 'label' | 'icon';
 }) {

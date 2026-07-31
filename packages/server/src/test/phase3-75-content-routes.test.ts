@@ -213,6 +213,84 @@ describe('calendar events', () => {
     expect((await as(owner, 'DELETE', `/events/${created.body.eventId}`)).status).toBe(200);
   });
 
+  /*
+   * The read is WIDER than the write, and that asymmetry is the point of this test.
+   *
+   * Creating an event notifies every member of the club and posts a card into club chat. If the
+   * read were admin-gated to match the write, every one of those notifications would open a 404
+   * for the people it was sent to - which is exactly what the screen-less version of this feature
+   * did, by routing the tap somewhere else entirely.
+   */
+  it('lets any member read an event, and tells only admins they can manage it', async () => {
+    const owner = await signUp('EventReadOwner');
+    const member = await signUp('EventReadMember');
+    const outsider = await signUp('EventReadOutsider');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, member);
+
+    const created = await as(owner, 'POST', `/clubs/${clubId}/events`, {
+      type: 'practice' as const,
+      title: 'Hill repeats',
+      startsAt: '2027-04-01T17:00:00.000Z',
+      endsAt: '2027-04-01T19:00:00.000Z',
+      location: 'The reservoir',
+      description: 'Bring a headlamp.',
+    });
+    expect(created.status).toBe(201);
+    const eventId = created.body.eventId;
+
+    const asMember = await as(member, 'GET', `/events/${eventId}`);
+    expect(asMember.status).toBe(200);
+    expect(asMember.body.event.title).toBe('Hill repeats');
+    expect(asMember.body.event.location).toBe('The reservoir');
+    expect(asMember.body.event.description).toBe('Bring a headlamp.');
+    expect(asMember.body.event.clubId).toBe(clubId);
+    // Who added it, which is what makes admin-only deletion legible rather than arbitrary.
+    expect(asMember.body.event.creatorName).toBe(owner.name);
+    // ISO 8601, not Postgres's own format - the `::text` trap `isoUtc` exists to avoid.
+    expect(asMember.body.event.startsAt).toBe('2027-04-01T17:00:00.000Z');
+    expect(asMember.body.event.endsAt).toBe('2027-04-01T19:00:00.000Z');
+    // A member reads it and cannot manage it, which is what the delete screen keys off.
+    expect(asMember.body.event.canManage).toBe(false);
+
+    const asOwner = await as(owner, 'GET', `/events/${eventId}`);
+    expect(asOwner.body.event.canManage).toBe(true);
+
+    // 404 rather than 403 outside the club: the event's existence is club information too.
+    expect((await as(outsider, 'GET', `/events/${eventId}`)).status).toBe(404);
+
+    expect((await as(owner, 'DELETE', `/events/${eventId}`)).status).toBe(200);
+    expect((await as(member, 'GET', `/events/${eventId}`)).status).toBe(404);
+  });
+
+  /**
+   * **Any club admin deletes any event, not only the one who added it** - the opposite of a poll.
+   *
+   * A cancelled practice that only its absent author could remove is the failure this avoids, and
+   * `canManage` has to say so or the second admin's screen hides a button they are allowed to
+   * press.
+   */
+  it('lets a second admin manage an event they did not create', async () => {
+    const owner = await signUp('EventAdminOne');
+    const secondAdmin = await signUp('EventAdminTwo');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, secondAdmin, 'admin');
+
+    const created = await as(owner, 'POST', `/clubs/${clubId}/events`, {
+      type: 'other' as const,
+      title: 'Team dinner',
+      startsAt: '2027-04-02T17:00:00.000Z',
+    });
+    expect(created.status).toBe(201);
+
+    const seen = await as(secondAdmin, 'GET', `/events/${created.body.eventId}`);
+    expect(seen.status).toBe(200);
+    expect(seen.body.event.canManage).toBe(true);
+    // An optional end is absent rather than invented.
+    expect(seen.body.event.endsAt).toBe(null);
+    expect((await as(secondAdmin, 'DELETE', `/events/${created.body.eventId}`)).status).toBe(200);
+  });
+
   it('rejects an invented event type at the route', async () => {
     const owner = await signUp('TypeOwner');
     const { clubId } = await createClubAs(owner);
@@ -411,6 +489,7 @@ describe('the session boundary', () => {
       ['PATCH', `/meetings/${id}`],
       ['DELETE', `/meetings/${id}`],
       ['POST', `/clubs/${id}/events`],
+      ['GET', `/events/${id}`],
       ['DELETE', `/events/${id}`],
       ['POST', `/clubs/${id}/workouts`],
       ['GET', `/clubs/${id}/routines`],
