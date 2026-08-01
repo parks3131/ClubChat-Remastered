@@ -13,6 +13,155 @@ Newest first.
 
 ---
 
+## 2026-08-01 - The first session run on real hardware, and what only hardware found
+
+Started as one screen: the member profile did not look like v1's. Ended as the session that put
+the app on a physical iPhone for the first time and found that **it had never run on one at all**.
+
+The through-line is uncomfortable and worth stating plainly. Every check the repo had was green
+throughout. Typecheck, 638 tests, the em-dash gate, the runtime-import gate, and a browser the
+work had been verified in all the way. None of them could see any of the four defects below,
+because all four live in a runtime nothing had ever executed.
+
+### The member profile, and one field deliberately not restored
+
+v1's screen is a centred 96px avatar, the name under it, then label-over-value details. The
+remaster had an avatar-and-name row jammed left with the details boxed in a card. Rebuilt to v1's
+shape, with `DetailLine` gaining a `labelCase` prop rather than being forked - design-system rule
+5, since a second copy is how the two drift.
+
+**The date of birth stays gone**, and that is a product decision rather than an omission. v1 showed
+every member every other member's birthday; `readProfile` withholds `dob` from everybody but its
+owner, so it is absent from the response rather than hidden in the markup. PRD/03 lists public
+profiles as an explicitly rejected alternative - "clubs are small and often include minors".
+
+The `Avatar` initial also stopped being a fixed 17px and became `size * 0.42`, which is the ratio
+the 40px default already had. At 96px it had been a speck adrift in a circle.
+
+### Avatars were written and almost never read
+
+The upload had worked since the phase it shipped in. **Two reads out of nine projected the
+column.** Own profile let you set a picture and then drew your initial forever; the club roster,
+chat, news, polls, the add-member search and every join-request queue did the same.
+
+Half the fix was client-only - the payload already carried `image` and the screen dropped it. The
+other half was five server reads that never selected the column, plus `senderImage` on the shared
+`MessageEnvelope` (joined at read time beside `senderName`, for that field's reasons), a
+`sender_image` column in the client's SQLite cache, and `displayImage` on `auth.ok` so a sender's
+own optimistic bubble draws their face rather than being the one letter in the conversation.
+
+The `sender_image` migration deliberately does **not** wipe the cache the way `sender_name` did. A
+null there draws the letter placeholder, which is what shipped before and is correct anyway for
+anybody with no picture, so a full backfill would cost every user a refetch to replace something
+that already looks right.
+
+### A moderation screen that had never worked
+
+Found while wiring an avatar into it. `ReportRow` in the client described **a response the server
+has never sent**: it declared `reportId`, `reporterName` and a nested `message` object, where
+`GET /channels/:id/reports` returns `messageId`, a `reporters` array and the message's fields
+inline. Every field the Reports tab read was `undefined`, so every card rendered "Unknown sender"
+over "This message was deleted", and Dismiss posted to `/moderation/reports/undefined/dismiss` and
+404'd - silently, since the screen reloads either way.
+
+It typechecked perfectly for its entire life, because the client restated the shape instead of
+being handed it. Failure mode 12, and the reason the new tests assert field *names*.
+
+`deletedAt` was added to the payload at the same time: `body` alone cannot distinguish a deleted
+message from a photo, so a reported photo was being labelled as one an admin had already dealt
+with.
+
+### The app did not run on iOS. At all.
+
+`crypto.randomUUID()` at `chat-provider.tsx:73`, building the `ChatClient` during sign-in.
+**Hermes has no `crypto`.** The call threw, `start()` rejected, auth never resolved, and the app
+sat on its loading spinner forever - PRD/03's "never hang on a spinner", violated on the primary
+platform. A second call site generated `clientMsgId` for every send.
+
+Neither was new and neither was touched by this session's work. Web has the global, so every
+browser check passed. It took a simulator to see, and one screenshot to diagnose.
+
+`randomUuid` is now a **required** `ChatClientOptions` field rather than optional-with-a-default,
+following `createSocket`'s precedent. A default reaching for the global would keep working on web
+and keep failing on native, which is the bug restated rather than repaired.
+
+### Four bugs that only a physical device could produce
+
+The simulator shares the Mac's network stack, so it hid an entire class of problem. On a real
+phone `localhost` means the phone.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| "Could not connect to the server" | `EXPO_PUBLIC_API_URL` inlined by whichever Metro serves the bundle, and that one had defaults | Metro restarted with the LAN address |
+| "Photo unavailable" everywhere | `MEDIA_CDN_BASE_URL` / `S3_ENDPOINT` on `localhost:9000` | pointed at the LAN address |
+| Status bar sitting on the chat header | `chat/[channelId].tsx` had **no** `useSafeAreaInsets` at all | inset added |
+| Attachments refused | see below | file streamed instead of a blob |
+
+The header one is worth noting: `highlights.tsx`, the screen chat's header is deliberately styled
+to match, has had the inset since it was written. Chat is the copy that lost it, and neither web
+nor the simulator could show it.
+
+### "The upload did not arrive intact" - four attempts, three wrong
+
+The one that cost the most, and the one with the most to learn from.
+
+Attaching a photo failed with `mismatch`: `completeUpload` HEADs the object and compares its
+length against what was declared with **no tolerance**, by design.
+
+1. **In-memory blob.** Reasoning: the blob is file-backed, so it measures one thing and sends
+   another. React Native's `Blob` constructor rejects an `ArrayBuffer` outright and threw before
+   the upload intent was even requested, which made things worse rather than different.
+2. **`expo-blob`.** The runtime's own warning recommends it: RN's Blob "reads it back through
+   base64 encoding". Installed it, rebuilt the native app. `Response.blob()` kept using RN's
+   implementation regardless and the byte count did not move.
+3. **Filesystem size.** Declare `File(uri).size` instead of `blob.size`. They turned out to be
+   the same number, which was itself the useful result: nothing was being mis-measured.
+4. **Stream the file.** `UploadTask` with `BINARY_CONTENT` PUTs the file "as-is in the request
+   body", no blob anywhere. This worked.
+
+> **The diagnosis underneath attempts 1 to 3 was built on a measurement error, and it is the
+> lesson worth keeping.**
+>
+> The whole "96 extra bytes" theory came from comparing the declared size against MinIO's
+> `part.1` on disk. That file is **not the object** - it carries MinIO's own block header, which
+> is also the "binary junk before the PNG signature" that looked so much like corruption. The
+> successful upload has exactly the same +96 on disk. Every number in that chain of reasoning was
+> real; the thing being measured was not the thing that mattered.
+
+Two changes went in close together, so **which one fixed it is not established**: the S3 client
+also gained `requestChecksumCalculation: 'WHEN_REQUIRED'`. That change is defensible on its own -
+the SDK's default signs `x-amz-checksum-crc32` over a body that does not exist yet when
+presigning, and the URLs carried the CRC32 of nothing - but it should not be recorded as the fix.
+
+### Tests, and what they are worth
+
+`npm test` went from 638 to 654, and both new files were **mutation-tested rather than trusted**:
+reverting each fix was confirmed to fail the test that covers it.
+
+- `avatars-on-reads.test.ts` - one case per read that returns a name, asserting the picture rides
+  along. Reverting the join-request and report projections failed exactly the right two, with
+  `expected undefined to be '<media id>'`, the symptom the real bug produced.
+- `sqlite-schema.test.ts` - the client cache's migrations against Node's built-in SQLite, from
+  every prior schema shape including a half-applied one. This needed the SQL split out of
+  `sqlite-store.ts`, which imports `expo-sqlite` and therefore could never be tested. Deleting the
+  `sender_image` step - the "works on every new install, breaks every upgrade" mistake - fails
+  four of them.
+
+`apps/mobile` had no test runner before this; it has vitest now, picked up by the root `npm test`
+through `--workspaces --if-present`. The migration was **also** verified on the device itself: the
+on-device table was forced back to its pre-`sender_image` shape with a row in it, the app
+relaunched, and the column came back appended at the end - `ALTER TABLE`, not a recreate - with
+the cached row intact.
+
+### The standing lesson
+
+`AGENTS.md` already says to verify on each platform separately. This session is the receipt.
+**Every defect above except the profile layout was invisible to a green suite and a working
+browser**, and the two that stop the product dead - no iOS launch, no attachments - needed a real
+phone on a real network to produce at all.
+
+---
+
 ## 2026-07-30 - Reading v1 for the things a screenshot cannot show
 
 A session spent porting v1's shared screens, which turned into a session spent reading v1's

@@ -389,10 +389,14 @@ export default function MainStackLayout() {
           headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
         }}
       />
+      {/*
+        "Member", not "Profile", which is v1's title and is the one that distinguishes this screen
+        from the Profile tab. The name is on the page itself, so the header does not repeat it.
+      */}
       <Stack.Screen
         name="users/[userId]"
         options={{
-          title: 'Profile',
+          title: 'Member',
           headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
         }}
       />

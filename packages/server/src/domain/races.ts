@@ -917,6 +917,8 @@ export type RaceRequestEntry = {
   requestId: string;
   userId: string;
   name: string;
+  /** Their picture, on the same terms as a roster entry's - the queue draws the same person. */
+  image: string | null;
   requestedAt: string;
 };
 
@@ -981,11 +983,13 @@ export async function readRaceRoster(
     id: string;
     user_id: string;
     full_name: string;
+    image: string | null;
     created_at: string;
   }>(sql`
     SELECT jr.id::text AS id,
            u.id::text AS user_id,
            u.full_name,
+           u.image,
            ${isoUtc('jr.created_at')} AS created_at
       FROM race_join_requests jr
       JOIN users u ON u.id = jr.user_id
@@ -1000,6 +1004,7 @@ export async function readRaceRoster(
       requestId: row.id,
       userId: row.user_id,
       name: row.full_name,
+      image: row.image,
       requestedAt: row.created_at,
     })),
   };

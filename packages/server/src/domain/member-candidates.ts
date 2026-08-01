@@ -42,7 +42,12 @@ import type { AccessContext } from '../policy/context.ts';
 import { canApproveEboardRequest, canManageRace, isClubAdmin } from '../policy/predicates.ts';
 import { clubIdOfEboard, clubIdOfRace } from './scopes.ts';
 
-export type MemberCandidate = { userId: string; name: string };
+export type MemberCandidate = {
+  userId: string;
+  name: string;
+  /** Their picture. A search result draws the same person the roster it feeds will. */
+  image: string | null;
+};
 
 export type CandidateTarget =
   | { kind: 'club'; clubId: string }
@@ -69,8 +74,8 @@ export async function searchMemberCandidates(
   const query = (opts.query ?? '').trim();
   const blocked = [...ctx.blockedEither];
 
-  const rows = await db.execute<{ id: string; full_name: string }>(sql`
-    SELECT DISTINCT u.id::text AS id, u.full_name
+  const rows = await db.execute<{ id: string; full_name: string; image: string | null }>(sql`
+    SELECT DISTINCT u.id::text AS id, u.full_name, u.image
       FROM users u
      WHERE u.id IN ${resolved.pool}
        AND u.id NOT IN ${resolved.already}
@@ -86,7 +91,14 @@ export async function searchMemberCandidates(
      LIMIT ${limit}
   `);
 
-  return { ok: true, candidates: rows.rows.map((row) => ({ userId: row.id, name: row.full_name })) };
+  return {
+    ok: true,
+    candidates: rows.rows.map((row) => ({
+      userId: row.id,
+      name: row.full_name,
+      image: row.image,
+    })),
+  };
 }
 
 /**

@@ -17,90 +17,19 @@ import {
   type MessagePatch,
   type MessageStore,
 } from '@clubchat/client-core';
-
-const SCHEMA = `
-PRAGMA journal_mode = WAL;
-CREATE TABLE IF NOT EXISTS messages (
-  channel_id     TEXT NOT NULL,
-  seq            INTEGER NOT NULL,
-  id             TEXT NOT NULL,
-  sender_id      TEXT NOT NULL,
-  sender_name    TEXT,
-  type           TEXT NOT NULL,
-  body           TEXT,
-  client_msg_id  TEXT NOT NULL,
-  pinned         INTEGER NOT NULL DEFAULT 0,
-  reactions      TEXT NOT NULL DEFAULT '[]',
-  media_id       TEXT,
-  document_name  TEXT,
-  document_size  INTEGER,
-  linked_poll_id TEXT,
-  linked_event_id TEXT,
-  linked_meeting_id TEXT,
-  deleted_at     TEXT,
-  created_at     TEXT NOT NULL,
-  PRIMARY KEY (channel_id, seq)
-);
-`;
-
-/**
- * Bring an already-created local database up to the current shape.
- *
- * > **`CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists**, so a device
- * > that has run any earlier build has the old columns and would fail every insert the moment
- * > a new one is referenced. The server has numbered migrations for exactly this; the client
- * > needs the same discipline in miniature.
- *
- * Additive and idempotent: each step is safe to re-run, and a failure on one column does not
- * abort the rest. The cache is disposable - worst case it is rebuilt by a sync - but a store
- * that throws on every write is not a degraded cache, it is a broken app.
+/*
+ * The schema and its migrations live in a module that imports nothing native, so the suite can
+ * run them against a real SQLite engine. This file is the driver half: it does the I/O and owns
+ * no SQL of its own beyond the statements below.
  */
-const MIGRATIONS: ReadonlyArray<{ column: string; statements: readonly string[] }> = [
-  { column: 'reactions', statements: [`ALTER TABLE messages ADD COLUMN reactions TEXT NOT NULL DEFAULT '[]'`] },
-  { column: 'media_id', statements: [`ALTER TABLE messages ADD COLUMN media_id TEXT`] },
-  { column: 'document_name', statements: [`ALTER TABLE messages ADD COLUMN document_name TEXT`] },
-  { column: 'document_size', statements: [`ALTER TABLE messages ADD COLUMN document_size INTEGER`] },
-  /*
-   * No `DELETE FROM messages` here, unlike `sender_name` below.
-   *
-   * A null `linked_poll_id` on a cached row is not wrong, it is just incomplete: the card still
-   * renders its sentence, and the row gains its link the next time a sync overwrites it. The
-   * name column had to wipe because an unattributed bubble is a visible defect on every message;
-   * this affects only card messages, and degrades to exactly what shipped before.
-   */
-  { column: 'linked_poll_id', statements: [`ALTER TABLE messages ADD COLUMN linked_poll_id TEXT`] },
-  { column: 'linked_event_id', statements: [`ALTER TABLE messages ADD COLUMN linked_event_id TEXT`] },
-  { column: 'linked_meeting_id', statements: [`ALTER TABLE messages ADD COLUMN linked_meeting_id TEXT`] },
-  {
-    column: 'sender_name',
-    statements: [
-      `ALTER TABLE messages ADD COLUMN sender_name TEXT`,
-      /*
-       * And discard what is cached, which is the only way those rows ever get a name.
-       *
-       * `syncChannel` pulls strictly ABOVE the local max seq, so a message already held is never
-       * fetched again - an added column stays null on every existing row for as long as the row
-       * survives. Emptying the table drops the local max to zero, which turns the next sync into
-       * a full backfill that writes the name in.
-       *
-       * Safe because this cache is disposable and the server holds the only durable copy. It
-       * costs one refetch, once, on the build that adds the column. The pending send outbox is
-       * NOT touched: it lives in memory, not here, so nothing unsent is at risk.
-       */
-      `DELETE FROM messages`,
-    ],
-  },
-];
+import { pendingMigrations, SCHEMA } from './sqlite-schema.ts';
 
 async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
   const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(messages)');
-  const held = new Set(columns.map((column) => column.name));
-  // Driven per column by what the table actually has, rather than by a stored version number,
-  // so a database in ANY prior state converges - including one a failed earlier run left half
-  // done. A single "if the newest column is missing, run everything" check would break exactly
-  // there, which is why each step carries the column it adds.
-  for (const migration of MIGRATIONS) {
-    if (held.has(migration.column)) continue;
+  // Which steps are outstanding is decided by `pendingMigrations`, from what the table actually
+  // has rather than from a stored version number - so a database in ANY prior state converges,
+  // including one a failed earlier run left half done. This function is only the I/O around it.
+  for (const migration of pendingMigrations(columns.map((column) => column.name))) {
     for (const statement of migration.statements) {
       await db.execAsync(statement);
     }
@@ -113,6 +42,7 @@ type Row = {
   id: string;
   sender_id: string;
   sender_name: string | null;
+  sender_image: string | null;
   type: string;
   body: string | null;
   client_msg_id: string;
@@ -155,6 +85,9 @@ const toEnvelope = (row: Row): MessageEnvelope => ({
   // Cached with the message so an offline chat still says who is talking. A row written before
   // this column existed reads null and renders unattributed until the next sync fills it.
   senderName: row.sender_name,
+  // Null on a row cached before this column existed, which draws the letter - the same thing
+  // that shipped before, and correct anyway for anybody with no picture.
+  senderImage: row.sender_image,
   type: row.type as MessageEnvelope['type'],
   body: row.body,
   clientMsgId: row.client_msg_id,
@@ -195,13 +128,14 @@ class SqliteMessageStore implements MessageStore {
       for (const message of messages) {
         await this.db.runAsync(
           `INSERT INTO messages
-             (channel_id, seq, id, sender_id, sender_name, type, body, client_msg_id, pinned, reactions,
+             (channel_id, seq, id, sender_id, sender_name, sender_image, type, body, client_msg_id, pinned, reactions,
               media_id, document_name, document_size, linked_poll_id, linked_event_id, linked_meeting_id, deleted_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (channel_id, seq) DO UPDATE SET
              id = excluded.id,
              sender_id = excluded.sender_id,
              sender_name = excluded.sender_name,
+             sender_image = excluded.sender_image,
              type = excluded.type,
              body = excluded.body,
              client_msg_id = excluded.client_msg_id,
@@ -220,6 +154,7 @@ class SqliteMessageStore implements MessageStore {
           message.id,
           message.senderId,
           message.senderName,
+          message.senderImage,
           message.type,
           message.body,
           message.clientMsgId,

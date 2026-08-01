@@ -34,6 +34,7 @@ import {
 } from "../../src/upload.ts";
 import { LinearGradient } from "expo-linear-gradient";
 import { BlurView } from "expo-blur";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
 import { Avatar } from "../../src/ui.tsx";
 import { ChatEventCard } from "../../src/screens/events.tsx";
@@ -257,6 +258,8 @@ export default function ChatScreen() {
   }>();
   const { authState, client, userId, revision, offline } = useSession();
   const router = useRouter();
+  // The status bar's height, for the header below. Zero on web, ~59pt on a Dynamic Island phone.
+  const insets = useSafeAreaInsets();
   const [rows, setRows] = useState<Row[]>([]);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
@@ -702,7 +705,19 @@ export default function ChatScreen() {
         target: a control that only appears when history exists is a bug, because direct
         URL entry and page refresh leave no history on any screen.
       */}
-      <BlurView intensity={80} tint="light" style={styles.header}>
+      {/*
+        The status-bar inset is padding on the header itself, not a wrapper.
+
+        Without it this row started at y=0 and the clock, Dynamic Island and battery sat on top
+        of the back control - which web never showed, because a browser has no status bar, and
+        which Expo Go on the simulator hid behind its own chrome. Highlights, the screen this
+        header is meant to match, had it from the start; chat is the copy that lost it.
+      */}
+      <BlurView
+        intensity={80}
+        tint="light"
+        style={[styles.header, { paddingTop: insets.top + space.sm }]}
+      >
         <Pressable
           onPress={goBack}
           accessibilityRole="button"
@@ -1187,6 +1202,47 @@ export default function ChatScreen() {
             // has silently scrolled somewhere and the target is indistinguishable from its
             // neighbours, which is most of the value of jumping.
             const isJumpTarget = jumpedTo === message.seq;
+
+            /*
+             * An announcement, which is v1's card rather than a bubble.
+             *
+             * > **This branch did not exist, and its absence made the whole feature look broken.**
+             * > Arming the megaphone worked, the send carried `type: 'announcement'`, the row
+             * > stored as one and the Highlights tab listed it - and in the conversation it drew
+             * > as an ordinary message, identical to the one before it. An announcement notifies
+             * > everybody in the channel, so a reader who cannot tell one from ordinary chatter is
+             * > the entire point of the feature going missing.
+             *
+             * Full width rather than a sided bubble, because it is addressed to the room rather
+             * than said to it - so it is not `mine`-aware and carries no avatar.
+             */
+            if (message.type === "announcement") {
+              return (
+                <View
+                  style={[styles.announcementWrap, isJumpTarget && styles.jumpTarget]}
+                >
+                  <View style={styles.announcementCard}>
+                    {/* Oversized, clipped and nearly transparent: texture, not a label. */}
+                    <Text style={styles.announcementWatermark}>INFO</Text>
+                    <View style={styles.announcementHeadlineRow}>
+                      <View style={styles.announcementAccentBar} />
+                      <Text style={styles.announcementHeadline}>{message.body}</Text>
+                    </View>
+                    {/* A hyphen, not v1's em dash: standing instruction 1 covers UI text too. */}
+                    <Text style={styles.announcementSender}>
+                      {"- "}
+                      {message.senderName ?? "Deleted member"}
+                    </Text>
+                    <Text style={styles.announcementTime}>
+                      {new Date(message.createdAt).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </Text>
+                  </View>
+                </View>
+              );
+            }
             return (
               <View
                 style={[
@@ -1207,7 +1263,11 @@ export default function ChatScreen() {
                   accessibilityLabel={`Open ${message.senderName ?? "this member"}'s profile`}
                   hitSlop={space.xs}
                 >
-                  <Avatar name={message.senderName ?? "?"} size={32} />
+                  <Avatar
+                    name={message.senderName ?? "?"}
+                    image={message.senderImage}
+                    size={32}
+                  />
                 </Pressable>
                 <Pressable
                   // Long press, not a visible button: reporting is rare and a tap target on
@@ -1784,6 +1844,57 @@ const styles = StyleSheet.create({
   // where its tail would be. The sent bubble carries no backgroundColor because its fill is the
   // gradient in BubbleContainer.
   bubble: { padding: space.sm + 4, gap: space.xs },
+  /*
+   * v1's announcement card, which is deliberately not a bubble.
+   *
+   * Full width and unsided, because an announcement is addressed to the room rather than said to
+   * it - so there is no avatar and no mine/theirs distinction. The left border and the accent bar
+   * beside the headline are what carry "this is different" at a glance down a scrolling list; the
+   * oversized INFO is clipped texture rather than a label anyone is meant to read.
+   */
+  announcementWrap: { alignItems: "center", paddingHorizontal: space.sm, paddingVertical: space.xs },
+  announcementCard: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: color.card,
+    borderLeftWidth: 4,
+    borderLeftColor: color.accent,
+    borderRadius: radius.lg,
+    padding: space.md,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
+  },
+  announcementWatermark: {
+    position: "absolute",
+    right: -10,
+    bottom: -20,
+    ...type.display,
+    fontSize: 80,
+    lineHeight: 88,
+    color: "rgba(255,77,0,0.05)",
+  },
+  announcementHeadlineRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    marginBottom: space.sm,
+  },
+  announcementAccentBar: { width: 4, height: 28, backgroundColor: color.accent },
+  announcementHeadline: {
+    ...type.headline,
+    fontSize: 18,
+    color: color.textPrimary,
+    textTransform: "uppercase",
+    fontStyle: "italic",
+    flexShrink: 1,
+  },
+  announcementSender: { ...type.bodySmall, fontSize: 13, color: color.textSecondary },
+  announcementTime: { ...type.bodySmall, fontSize: 11, color: color.textSecondary },
+
   /**
    * v1's message row: avatar and bubble side by side, bottom-aligned so the avatar sits level
    * with the last line of a multi-line bubble rather than floating beside its first.

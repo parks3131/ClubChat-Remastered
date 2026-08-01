@@ -279,7 +279,7 @@ export type PollView = {
     /** The viewer's own vote. Always visible to them, whatever the privacy setting. */
     votedByMe: boolean;
     /** Null when the viewer may not see identities. Absent is different from empty. */
-    voters: Array<{ userId: string; name: string }> | null;
+    voters: Array<{ userId: string; name: string; image: string | null }> | null;
   }>;
 };
 
@@ -319,17 +319,25 @@ export async function readPoll(
 
   const showVoters = canSeePollVoters(ctx, ref);
   const voterRows = showVoters
-    ? await db.execute<{ option_id: string; user_id: string; name: string }>(sql`
-        SELECT pv.option_id, pv.user_id, u.full_name AS name
+    ? await db.execute<{
+        option_id: string;
+        user_id: string;
+        name: string;
+        image: string | null;
+      }>(sql`
+        SELECT pv.option_id, pv.user_id, u.full_name AS name, u.image
           FROM poll_votes pv JOIN users u ON u.id = pv.user_id
          WHERE pv.poll_id = ${pollId}
       `)
     : null;
 
-  const votersByOption = new Map<string, Array<{ userId: string; name: string }>>();
+  const votersByOption = new Map<
+    string,
+    Array<{ userId: string; name: string; image: string | null }>
+  >();
   for (const row of voterRows?.rows ?? []) {
     const list = votersByOption.get(row.option_id) ?? [];
-    list.push({ userId: row.user_id, name: row.name });
+    list.push({ userId: row.user_id, name: row.name, image: row.image });
     votersByOption.set(row.option_id, list);
   }
 

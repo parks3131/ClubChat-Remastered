@@ -165,7 +165,7 @@ export default function HighlightsScreen() {
               <View style={styles.list}>
                 {data.reports.map((report) => (
                   <ReportCard
-                    key={report.reportId}
+                    key={report.messageId}
                     report={report}
                     channelId={channelId}
                     onResolved={reports.reload}
@@ -199,7 +199,7 @@ function HighlightRow({ message, pinned }: { message: MessageEnvelope; pinned: b
         accessibilityLabel={`Open ${name}'s profile`}
         hitSlop={space.xs}
       >
-        <Avatar name={name} size={36} />
+        <Avatar name={name} image={message.senderImage} size={36} />
       </Pressable>
       <View style={styles.rowBody}>
         <View style={styles.rowHead}>
@@ -225,6 +225,20 @@ function preview(message: MessageEnvelope): string {
 }
 
 /**
+ * Who reported it, named rather than counted.
+ *
+ * Reports are grouped by message, so a row can carry several - and an admin deciding what to do
+ * about a message wants to know it was three different people rather than one person three times,
+ * which a bare count cannot say. Names the first two, then counts the rest.
+ */
+function describeReporters(reporters: ReportRow['reporters']): string {
+  const names = reporters.map((r) => r.name);
+  if (names.length === 1) return names[0]!;
+  if (names.length === 2) return `${names[0]!} and ${names[1]!}`;
+  return `${names[0]!}, ${names[1]!} and ${names.length - 2} more`;
+}
+
+/**
  * A reported message, and the two ways to resolve it.
  *
  * **Deleting also dismisses.** They are separate server actions on purpose - one says "this is
@@ -242,7 +256,10 @@ function ReportCard({
 }) {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const deleted = report.message === null;
+  // The message's own deletion, not "the payload had no body" - a reported photo has no body
+  // either, and calling that deleted told an admin the job was already done.
+  const deleted = report.deletedAt !== null;
+  const reportedBy = describeReporters(report.reporters);
 
   const run = async (work: () => Promise<unknown>) => {
     setBusy(true);
@@ -257,15 +274,16 @@ function ReportCard({
 
   return (
     <View style={styles.row}>
-      <Avatar name={report.message?.senderName ?? '?'} size={36} />
+      <Avatar name={report.senderName} image={report.senderImage} size={36} />
       <View style={styles.rowBody}>
         <View style={styles.rowHead}>
-          <Text style={styles.sender}>{report.message?.senderName ?? 'Unknown sender'}</Text>
-          <Text style={styles.reportedBy}>reported by {report.reporterName}</Text>
-          <Text style={styles.time}>{formatClock(report.createdAt)}</Text>
+          <Text style={styles.sender}>{report.senderName}</Text>
+          <Text style={styles.reportedBy}>reported by {reportedBy}</Text>
+          {/* The first report is when this landed in the queue. `reporters` is never empty. */}
+          <Text style={styles.time}>{formatClock(report.reporters[0]!.createdAt)}</Text>
         </View>
-        <Text style={deleted ? styles.deleted : styles.body}>
-          {report.message?.body ?? 'This message was deleted'}
+        <Text style={deleted || report.body === null ? styles.deleted : styles.body}>
+          {deleted ? 'This message was deleted' : (report.body ?? 'No text')}
         </Text>
 
         {report.dismissedAt !== null ? (
@@ -288,7 +306,7 @@ function ReportCard({
                 onPress={() =>
                   void run(async () => {
                     await channelApi.deleteMessage(channelId, report.seq);
-                    await channelApi.dismissReport(report.reportId);
+                    await channelApi.dismissReport(report.messageId);
                   })
                 }
                 accessibilityRole="button"
@@ -312,7 +330,7 @@ function ReportCard({
             )}
             <Pressable
               disabled={busy}
-              onPress={() => void run(() => channelApi.dismissReport(report.reportId))}
+              onPress={() => void run(() => channelApi.dismissReport(report.messageId))}
               accessibilityRole="button"
               accessibilityLabel="Dismiss this report"
             >

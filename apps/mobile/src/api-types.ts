@@ -58,6 +58,8 @@ export type JoinRequestEntry = {
   requestId: string;
   userId: string;
   name: string;
+  /** Their picture. The queue draws the same person the roster below it will. */
+  image: string | null;
   requestedAt: string;
 };
 
@@ -175,7 +177,7 @@ export type PollView = {
     voteCount: number;
     votedByMe: boolean;
     /** Null when the viewer may not see identities. Not the same as nobody voting. */
-    voters: Array<{ userId: string; name: string }> | null;
+    voters: Array<{ userId: string; name: string; image: string | null }> | null;
   }>;
 };
 
@@ -380,15 +382,34 @@ export type AroundWindow = {
   hasAfter: boolean;
 };
 
+/**
+ * One reported message, grouped by message rather than by report.
+ *
+ * > **This type used to describe a response the server has never sent.** It declared a
+ * > `reportId`, a `reporterName` and a nested `message` object; `GET /channels/:id/reports`
+ * > returns a `messageId`, a `reporters` array and the message's fields inline. Every field the
+ * > Reports tab read was therefore `undefined` at runtime - so every card rendered "Unknown
+ * > sender" over "This message was deleted", and Dismiss posted to
+ * > `/moderation/reports/undefined/dismiss` and 404'd. It typechecked perfectly the whole time,
+ * > which is failure mode 12: the client restating a server type instead of being handed one.
+ *
+ * Grouped by message is the server's shape and the right one: three people reporting the same
+ * message is one decision for an admin, not three.
+ */
 export type ReportRow = {
-  reportId: string;
+  /** What `dismissReport` takes. The route calls it `:id`; it is a message id. */
+  messageId: string;
   channelId: string;
   seq: number;
-  reporterId: string;
-  reporterName: string;
-  createdAt: string;
+  /** Null for a deleted message AND for a photo - read `deletedAt` to tell them apart. */
+  body: string | null;
+  senderId: string;
+  senderName: string;
+  senderImage: string | null;
+  deletedAt: string | null;
+  /** Ordered oldest first, and never empty: a row exists because somebody reported it. */
+  reporters: Array<{ userId: string; name: string; createdAt: string }>;
   dismissedAt: string | null;
-  message: { body: string | null; senderId: string; senderName: string } | null;
 };
 
 export type GalleryEntry = {

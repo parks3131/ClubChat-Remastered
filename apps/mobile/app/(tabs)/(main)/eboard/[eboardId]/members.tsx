@@ -57,6 +57,7 @@ export default function EboardMembersScreen() {
         const rows: MemberRow[] = data.members.map((member) => ({
           userId: member.userId,
           name: member.name,
+          image: member.image,
           tag: member.role,
           section: 'Members',
           isSelf: member.userId === userId,

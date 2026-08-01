@@ -29,7 +29,7 @@ export default function NewsPostScreen() {
           <Body>
             <Card>
               <View style={styles.author}>
-                <Avatar name={post.authorName} />
+                <Avatar name={post.authorName} image={post.authorImage} />
                 <View style={styles.authorText}>
                   <Text style={styles.name}>{post.authorName}</Text>
                   <Text style={styles.meta}>

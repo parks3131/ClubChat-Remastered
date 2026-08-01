@@ -985,7 +985,7 @@ function VoterSheet({
           ) : (
             voters.map((voter) => (
               <View key={voter.userId} style={styles.voterRow}>
-                <Avatar name={voter.name} size={32} />
+                <Avatar name={voter.name} image={voter.image} size={32} />
                 <Text style={styles.voterName}>{voter.name}</Text>
               </View>
             ))

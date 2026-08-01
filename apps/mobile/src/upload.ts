@@ -23,7 +23,10 @@
  * blob is resolved up front and its own `size` is what gets declared.
  */
 
+import { Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
+import { File, UploadTask } from 'expo-file-system';
+import { UploadType } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { apiFetch, ApiError } from './api.ts';
 
@@ -158,11 +161,61 @@ export async function pickDocument(): Promise<PickedAttachment | null> {
  * React Native a `file:` URI, and `fetch` reads both. Deliberately not branching on platform to
  * use a native file API - an unverified second path is worse than one path with a known
  * verification boundary, and this one is exercised on web.
+ *
+ * > **`blob.size` is correct on every platform, and this file is not where the byte count can
+ * > go wrong.** Worth stating, because it looked like the culprit for a while: photos attached
+ * > from a phone were refused as `mismatch`, a 3,002,684-byte file reaching storage as 3,002,780.
+ * > Both the blob and `expo-file-system` agreed the file was 3,002,684. The extra 96 bytes were
+ * > `aws-chunked` framing added by the SIGNING side - see the checksum note in
+ * > `server/media/store.ts`. Nothing the uploader could measure differently would have helped.
  */
 async function resolveBlob(uri: string): Promise<Blob> {
   const response = await fetch(uri);
   if (!response.ok) throw new UploadError('unreadable', 'That file could not be read.');
   return response.blob();
+}
+
+/**
+ * PUT the bytes to storage. **The one place this file branches on platform, and it has to.**
+ *
+ * > **React Native's Blob does not transmit a file faithfully.** Sending one as a `fetch` body
+ * > inserted 96 bytes into every attachment from a phone: a 3,002,684-byte PNG arrived as
+ * > 3,002,780, with binary junk ahead of the PNG signature and the image itself intact behind it.
+ * > `completeUpload` HEADs the object and compares its length against what was declared with no
+ * > tolerance, so all of them were refused - "the upload did not arrive intact", which for once
+ * > was exactly true.
+ * >
+ * > The corruption is in the blob layer, not in the measurement: the blob and the filesystem both
+ * > reported 3,002,684, which is what the file really is. So native does not use a blob at all.
+ * > `UploadTask` streams the file from disk "as-is in the request body", which is the only way to
+ * > be sure the bytes on disk are the bytes in the object.
+ *
+ * Web keeps the `fetch` path: a browser Blob is already the bytes, and it is the path the whole
+ * upload flow was originally verified against.
+ */
+async function putBytes(
+  url: string,
+  headers: Record<string, string>,
+  uri: string,
+  blob: Blob,
+): Promise<void> {
+  if (Platform.OS === 'web') {
+    const put = await fetch(url, { method: 'PUT', headers, body: blob });
+    if (!put.ok) {
+      throw new UploadError('put_failed', 'The upload was rejected by storage. Try again.');
+    }
+    return;
+  }
+
+  const task = new UploadTask(new File(uri), url, {
+    httpMethod: 'PUT',
+    uploadType: UploadType.BINARY_CONTENT,
+    headers,
+  });
+  const result = await task.uploadAsync();
+  if (result.status < 200 || result.status >= 300) {
+    throw new UploadError('put_failed', 'The upload was rejected by storage. Try again.');
+  }
 }
 
 /**
@@ -221,16 +274,10 @@ export async function uploadAttachment(
 
   // Straight to object storage, not through the API. The whole point of a presigned PUT is that
   // the bytes never traverse the application server.
-  const put = await fetch(intent.uploadUrl, {
-    method: 'PUT',
-    // The headers the presign was computed over. Changing or adding to them invalidates the
-    // signature, so they are passed through exactly as handed back.
-    headers: intent.headers,
-    body: blob,
-  });
-  if (!put.ok) {
-    throw new UploadError('put_failed', 'The upload was rejected by storage. Try again.');
-  }
+  //
+  // The headers the presign was computed over are passed through exactly as handed back, on both
+  // paths: changing or adding to them invalidates the signature.
+  await putBytes(intent.uploadUrl, intent.headers, picked.uri, blob);
 
   try {
     // The step that makes the object real. Until this succeeds the row is `pending` and a send

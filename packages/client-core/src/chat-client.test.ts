@@ -51,7 +51,8 @@ function envelope(seq: number, overrides: Partial<MessageEnvelope> = {}): Messag
     channelId: CHANNEL,
     seq,
     senderName: null,
-  senderId: 'someone-else',
+    senderImage: null,
+    senderId: 'someone-else',
     type: 'text',
     body: `message ${seq}`,
     clientMsgId: crypto.randomUUID(),
@@ -102,6 +103,7 @@ async function setup(): Promise<Fixture> {
     deviceId: '22222222-2222-4222-8222-222222222222',
     platform: 'ios',
     createSocket: () => socket,
+    randomUuid: () => crypto.randomUUID(),
     fetchImpl,
   });
 

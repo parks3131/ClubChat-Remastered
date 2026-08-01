@@ -66,6 +66,7 @@ export default function ClubMembersScreen() {
         const rows: MemberRow[] = data.members.map((member) => ({
           userId: member.userId,
           name: member.name,
+          image: member.image,
           // The section heading already says "Owner", so repeating it beside the name is noise.
           tag: null,
           section: sectionOf(member.role),

@@ -179,6 +179,28 @@ export class S3MediaStore implements MediaStore {
             secretAccessKey: this.config.secretAccessKey,
           },
           forcePathStyle: true,
+          /*
+           * **`WHEN_REQUIRED`, because the SDK's default silently corrupts a presigned upload.**
+           *
+           * The default is `WHEN_SUPPORTED`, which adds a flexible checksum to a PUT. On a
+           * presigned URL that goes wrong twice over: the checksum is computed when the URL is
+           * SIGNED, over a body that does not exist yet - the signature carried
+           * `x-amz-checksum-crc32=AAAAAA==`, the CRC32 of nothing - and it puts the transfer into
+           * `aws-chunked` framing. The uploader is a plain `fetch` that knows none of this, so the
+           * chunk header and trailing checksum land in the object as data.
+           *
+           * The effect: a 3,002,684-byte photo was stored as 3,002,780. Exactly 96 bytes of
+           * framing, on every attachment sent from a phone. `completeUpload` compares the declared
+           * count against the object's real length with no tolerance, so all of them were refused
+           * as `mismatch` - "the upload did not arrive intact" - and the bytes really had been
+           * altered, just by us rather than by the network.
+           *
+           * Turning it off does not weaken anything. Integrity here is `completeUpload` HEADing
+           * the object and re-checking size and type against what was declared, which is a
+           * stronger guarantee than a checksum the client computes about itself.
+           */
+          requestChecksumCalculation: 'WHEN_REQUIRED',
+          responseChecksumValidation: 'WHEN_REQUIRED',
         });
         return { client, lib, presign };
       })();

@@ -118,6 +118,8 @@ function makeClient(token: string, platform: 'ios' | 'web'): ChatClient {
     deviceId: crypto.randomUUID(),
     platform,
     createSocket,
+    // Node has the global; a device does not, which is the whole reason this is injected.
+    randomUuid: () => crypto.randomUUID(),
     maxSendAttempts: 8,
     log: silent,
   });

@@ -44,6 +44,24 @@ export type ChatClientOptions = {
   deviceId: string;
   platform: 'ios' | 'android' | 'web';
   createSocket: (url: string) => SocketLike;
+  /**
+   * A fresh UUID, for the `clientMsgId` that makes a send idempotent.
+   *
+   * > **Injected, and deliberately not defaulted to `crypto.randomUUID()`.** This module used to
+   * > call that global directly, which works in every browser and in Node and **does not exist in
+   * > Hermes** - so on iOS the call threw, `start()` rejected, and the app sat on its loading
+   * > spinner forever. Web was green throughout, which is exactly why the bug survived: the one
+   * > runtime without the global was the one nothing ran on.
+   *
+   * Required rather than optional for the same reason `createSocket` is. A default reaching for
+   * the global would keep working on web and keep failing on native, silently, which is the bug
+   * rather than the fix; making every construction site name its source means a platform that
+   * cannot supply one cannot compile.
+   *
+   * Must be collision-free in practice - it is an idempotency key, and a repeat would make the
+   * server treat a new message as a retry of an old one and drop it.
+   */
+  randomUuid: () => string;
   fetchImpl?: typeof fetch;
   store?: MessageStore;
   /** Attempts before a queued send is surfaced as failed. */
@@ -71,6 +89,15 @@ export class ChatClient {
    * sync replaces the locally built envelope with the server's.
    */
   displayName: string | null = null;
+
+  /**
+   * Their own avatar's media id, learned at auth beside the name.
+   *
+   * Same trip and the same purpose: without it, the one bubble whose avatar the client could
+   * always have drawn - its own - is the only letter placeholder in the conversation, until a
+   * sync replaces the locally built envelope.
+   */
+  displayImage: string | null = null;
 
   private socket: SocketLike | null = null;
   /** Read cursors this client wants advanced, waiting on a socket. Channel -> highest seq. */
@@ -199,6 +226,7 @@ export class ChatClient {
       case 'auth.ok': {
         this.userId = frame.d['userId'] as string;
         this.displayName = (frame.d['displayName'] as string | null | undefined) ?? null;
+        this.displayImage = (frame.d['displayImage'] as string | null | undefined) ?? null;
         this.channels = frame.d['channels'] as ChannelState[];
         this.authResolved?.();
         // The socket is only usable once the server has accepted the token, so this is the
@@ -234,6 +262,7 @@ export class ChatClient {
             // the same string on every send. Null only before auth completes, which cannot happen
             // here: an ack arrives on an authenticated socket.
             senderName: this.displayName,
+            senderImage: this.displayImage,
             // The outbox knows what was sent. Hardcoding 'text' here stored a photo as a
             // text message locally until the next sync overwrote it.
             type: this.outbox.get(clientMsgId)?.type ?? 'text',
@@ -414,7 +443,7 @@ export class ChatClient {
       documentSize?: number;
     } = {},
   ): string {
-    const clientMsgId = opts.clientMsgId ?? crypto.randomUUID();
+    const clientMsgId = opts.clientMsgId ?? this.opts.randomUuid();
     this.outbox.set(clientMsgId, {
       clientMsgId,
       channelId,

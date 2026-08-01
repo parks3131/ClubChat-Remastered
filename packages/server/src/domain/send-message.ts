@@ -172,14 +172,20 @@ async function filterReachableMentions(
 export type ModerationRefusal = { ok: false; code: 'forbidden' | 'not_found' };
 export type ModerationResult = { ok: true; message: MessageEnvelope } | ModerationRefusal;
 
-/** The sender's display name, for an envelope built from a message that already exists. */
-async function senderNameOf(db: Db, senderId: string): Promise<string | null> {
+/**
+ * The sender's display name and picture, for an envelope built from a message that already
+ * exists. Both from the one row: an avatar is not a second query.
+ */
+async function senderIdentityOf(
+  db: Db,
+  senderId: string,
+): Promise<{ name: string | null; image: string | null }> {
   const rows = await db
-    .select({ name: users.name })
+    .select({ name: users.name, image: users.image })
     .from(users)
     .where(eq(users.id, senderId))
     .limit(1);
-  return rows[0]?.name ?? null;
+  return { name: rows[0]?.name ?? null, image: rows[0]?.image ?? null };
 }
 
 async function loadMessage(db: Db, channelId: string, seq: number) {
@@ -193,14 +199,15 @@ async function loadMessage(db: Db, channelId: string, seq: number) {
 
 function toEnvelope(
   row: typeof messages.$inferSelect,
-  senderName: string | null,
+  sender: { name: string | null; image: string | null },
 ): MessageEnvelope {
   return {
     id: row.id,
     channelId: row.channelId,
     seq: row.seq,
     senderId: row.senderId,
-    senderName,
+    senderName: sender.name,
+    senderImage: sender.image,
     type: row.type as MessageType,
     body: row.body,
     clientMsgId: row.clientMsgId,
@@ -270,7 +277,7 @@ export async function setPinned(
     payload: { channelId: channel.id, seq, pinned },
   });
 
-  return { ok: true, message: toEnvelope(row, await senderNameOf(db, row.senderId)) };
+  return { ok: true, message: toEnvelope(row, await senderIdentityOf(db, row.senderId)) };
 }
 
 /**
@@ -324,5 +331,5 @@ export async function softDeleteMessage(
   });
 
   if (!updated) return { ok: false, code: 'not_found' };
-  return { ok: true, message: toEnvelope(updated, await senderNameOf(db, updated.senderId)) };
+  return { ok: true, message: toEnvelope(updated, await senderIdentityOf(db, updated.senderId)) };
 }

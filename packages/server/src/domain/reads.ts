@@ -27,7 +27,10 @@ export const SYNC_PAGE_SIZE = 500;
  * The name is **joined, never stored on the message** - so a rename changes it everywhere at once,
  * and a deleted account's history reads "Deleted member" without anything having to rewrite it.
  */
-type MessageRow = typeof messages.$inferSelect & { senderName: string | null };
+type MessageRow = typeof messages.$inferSelect & {
+  senderName: string | null;
+  senderImage: string | null;
+};
 
 /**
  * Every read in this module selects the message columns plus the sender's name.
@@ -36,7 +39,11 @@ type MessageRow = typeof messages.$inferSelect & { senderName: string | null };
  * missing, which turns a data problem into a hole in the conversation - and a hole is exactly what
  * the gapless log exists to make impossible. A null name renders as unattributed instead.
  */
-const messageColumns = { ...getTableColumns(messages), senderName: users.name };
+const messageColumns = {
+  ...getTableColumns(messages),
+  senderName: users.name,
+  senderImage: users.image,
+};
 
 function toEnvelope(row: MessageRow): MessageEnvelope {
   return {
@@ -45,6 +52,7 @@ function toEnvelope(row: MessageRow): MessageEnvelope {
     seq: row.seq,
     senderId: row.senderId,
     senderName: row.senderName,
+    senderImage: row.senderImage,
     type: row.type as MessageType,
     body: row.body,
     clientMsgId: row.clientMsgId,

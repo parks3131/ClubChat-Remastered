@@ -19,6 +19,7 @@ import { Link, Redirect, useRouter } from 'expo-router';
 import { accountApi, ApiError, clubApi } from '../../../../src/api.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { formatDateOfBirth } from '../../../../src/dates.ts';
+import { RemoteImage } from '../../../../src/media-bubble.tsx';
 import { pickPhoto, uploadAvatar, UploadError } from '../../../../src/upload.ts';
 import { color, radius, space, type } from '../../../../src/theme.ts';
 import { Action, Card, DataScreen, Field, Row, SearchField, SectionHeader } from '../../../../src/ui.tsx';
@@ -79,11 +80,27 @@ export default function ProfileScreen() {
               their face rather than with a settings list they happen to own.
             */}
             <View style={styles.avatarWrap}>
-              <View style={styles.avatar}>
-                <Text style={styles.avatarInitial}>
-                  {data.profile.name.charAt(0).toUpperCase() || '?'}
-                </Text>
-              </View>
+              {/*
+                Your own picture, which this screen is the only place to set - and which it did
+                not draw at all until now: the upload succeeded, the id was saved, and the letter
+                stayed. The ring is drawn by the wrapper rather than the image so both states
+                sit in the same frame.
+              */}
+              {data.profile.image === null ? (
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarInitial}>
+                    {data.profile.name.charAt(0).toUpperCase() || '?'}
+                  </Text>
+                </View>
+              ) : (
+                <RemoteImage
+                  mediaId={data.profile.image}
+                  variant="display"
+                  style={styles.avatar}
+                  resizeMode="cover"
+                  accessibilityLabel="Your picture"
+                />
+              )}
               <Pressable
                 style={styles.editPic}
                 onPress={() => void changePicture()}
@@ -435,6 +452,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 4,
     borderColor: color.fallback,
+    // Shared with the uploaded picture, which has to be clipped to the same circle.
+    overflow: 'hidden',
   },
   avatarInitial: { ...type.display, fontSize: 40, lineHeight: 46, color: color.accent },
   editPic: {

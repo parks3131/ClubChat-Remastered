@@ -118,7 +118,7 @@ export type DmCandidate = { userId: string; name: string };
  * Same shape for all three scopes, because the server answers all three from one query - the
  * pool and the exclusion differ, the row does not.
  */
-export type MemberCandidate = { userId: string; name: string };
+export type MemberCandidate = { userId: string; name: string; image: string | null };
 
 /**
  * Whether the composer is live, and why not.
@@ -641,8 +641,14 @@ export const channelApi = {
    * a screen that deletes should dismiss too, or the report sits in the queue forever with
    * nothing left to act on.
    */
-  dismissReport: (reportId: string) =>
-    apiFetch<unknown>(`/moderation/reports/${reportId}/dismiss`, { method: 'POST', body: {} }),
+  /*
+   * Takes a MESSAGE id, despite the path segment. `dismissReport` clears every report on that
+   * message in one update - which is the right grain, since three reports of one message is one
+   * decision. The parameter was named `reportId` here and passed a field that did not exist, so
+   * every dismiss 404'd.
+   */
+  dismissReport: (messageId: string) =>
+    apiFetch<unknown>(`/moderation/reports/${messageId}/dismiss`, { method: 'POST', body: {} }),
 
   /** The window jump-to-message needs. Paging back from the tail cannot do it in one tap. */
   around: (channelId: string, around: number, radius?: number) =>

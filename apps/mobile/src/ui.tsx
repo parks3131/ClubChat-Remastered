@@ -680,6 +680,13 @@ export function Avatar({
   }
 
   const initial = name.trim().slice(0, 1).toUpperCase() || '?';
+  /*
+   * The initial scales with the circle, for the same reason the radius does. A fixed size read
+   * as a full-height letter in a 28px stack avatar and as a speck adrift in a 96px profile one -
+   * the ratio is what makes it look like the same placeholder at every size. 0.42 is the ratio
+   * the 40px default already had, so no avatar already in the app changes.
+   */
+  const initialSize = Math.round(size * 0.42);
   return (
     <View
       style={[
@@ -691,7 +698,9 @@ export function Avatar({
       accessibilityElementsHidden
       importantForAccessibility="no"
     >
-      <Text style={styles.avatarLabel}>{initial}</Text>
+      <Text style={[styles.avatarLabel, { fontSize: initialSize, lineHeight: Math.round(initialSize * 1.25) }]}>
+        {initial}
+      </Text>
     </View>
   );
 }
@@ -912,16 +921,27 @@ export function DetailLine({
   label,
   value,
   placeholder,
+  labelCase = 'upper',
 }: {
   label: string;
   value: string | null;
   /** Shown when empty INSTEAD of hiding the row. Photos and results do this; hotel does not. */
   placeholder?: string;
+  /**
+   * Uppercase by default, matching every detail card in the app.
+   *
+   * `title` is for a person's profile, where the labels sit on the page rather than inside a
+   * card and read as prose - "Date of birth", not "DATE OF BIRTH". Parametrized rather than
+   * forked, per design-system rule 5: a second copy of this line is how the two drift apart.
+   */
+  labelCase?: 'upper' | 'title';
 }) {
   if ((value === null || value.trim().length === 0) && placeholder === undefined) return null;
   return (
     <View style={styles.detailLine}>
-      <Text style={styles.detailLabel}>{label}</Text>
+      <Text style={[styles.detailLabel, labelCase === 'title' && styles.detailLabelTitleCase]}>
+        {label}
+      </Text>
       <Text style={value ? styles.detailValue : styles.detailPlaceholder}>
         {value && value.trim().length > 0 ? value : placeholder}
       </Text>
@@ -1228,6 +1248,7 @@ const styles = StyleSheet.create({
 
   detailLine: { gap: space.xs, paddingVertical: space.xs },
   detailLabel: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
+  detailLabelTitleCase: { textTransform: 'none', letterSpacing: 0, fontSize: 13, lineHeight: 18 },
   detailValue: { ...type.body, color: color.textPrimary },
   detailPlaceholder: { ...type.body, color: color.textSecondary, fontStyle: 'italic' },
 });

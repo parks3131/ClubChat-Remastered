@@ -188,7 +188,7 @@ export default function CreateRaceScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={`Add ${member.name}`}
                 >
-                  <Avatar name={member.name} size={32} />
+                  <Avatar name={member.name} image={member.image} size={32} />
                   <Text style={styles.resultName}>{member.name}</Text>
                 </Pressable>
               ))}

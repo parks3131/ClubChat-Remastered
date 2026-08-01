@@ -17,7 +17,16 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
+/*
+ * `expo-crypto`, not the `crypto` global.
+ *
+ * Hermes has no `crypto`, so `crypto.randomUUID()` here threw on every iOS launch - the promise
+ * rejected before the client was built, auth never resolved, and the app held its loading spinner
+ * indefinitely. PRD/03's "never hang on a spinner" was being violated on the primary platform,
+ * and only ever on the primary platform: web has the global, so every browser check passed.
+ */
+import { randomUUID } from 'expo-crypto';
 import { ChatClient, type SocketLike } from '@clubchat/client-core';
 import type { ChannelState } from '@clubchat/shared';
 import { config } from './config.ts';
@@ -70,10 +79,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         wsUrl: config.wsUrl,
         apiUrl: config.apiUrl,
         token,
-        deviceId: crypto.randomUUID(),
-        platform: 'web',
+        deviceId: randomUUID(),
+        /*
+         * The platform we are actually on, not a hardcoded 'web'.
+         *
+         * It rides on the auth frame and is what a device registration and any per-platform
+         * push routing key off, so an iPhone announcing itself as a browser is wrong in the
+         * one place it is expensive to notice later.
+         */
+        platform: Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
         // The RN and browser global WebSocket already matches the interface.
         createSocket: (url) => new WebSocket(url) as unknown as SocketLike,
+        randomUuid: randomUUID,
         store,
         onChange: bump,
         log: (message, extra) => console.log('[chat]', message, extra ?? ''),

@@ -54,6 +54,7 @@ export default function RaceRosterScreen() {
         const rows: MemberRow[] = data.members.map((member) => ({
           userId: member.userId,
           name: member.name,
+          image: member.image,
           // Both facts on one line: who manages, and which car they are in. The car group is the
           // question this roster gets asked most, and it rides along on the same read.
           tag: [

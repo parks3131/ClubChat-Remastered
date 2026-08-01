@@ -257,6 +257,8 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
           // moment they are acked, rather than rendering them anonymously until a sync brings
           // the server's copy back. See AccessContext.displayName.
           displayName: access.displayName,
+          /* Same trip, same reason: their own acked bubble draws their face, not a letter. */
+          displayImage: access.displayImage,
           serverTime: new Date().toISOString(),
           channels,
         },

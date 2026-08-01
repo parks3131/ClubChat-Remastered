@@ -47,6 +47,11 @@ export type AccessContext = {
    * Null only if the row vanished between authentication and this read.
    */
   readonly displayName: string | null;
+  /**
+   * Their avatar's media id, carried for the same reason as the name beside it and null when
+   * they have not set one. See the note on `display_image` in the query below.
+   */
+  readonly displayImage: string | null;
   /** Club id -> this user's role in it. Absent means not a member. */
   readonly clubRole: ReadonlyMap<string, ClubRole>;
   /** Eboard ids this user is a member of. */
@@ -177,6 +182,14 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
            NULL::boolean AS flag
       FROM users u
      WHERE u.id = ${userId}
+    UNION ALL
+    -- The picture, on the same terms and from the same row as the name above: a client that
+    -- attributes its own acked message by name has to draw its face too, or its own bubble is
+    -- the one avatar in the conversation that stays a letter until the next sync.
+    SELECT 'display_image'::text AS kind, u.id::text AS id, u.image AS detail,
+           NULL::boolean AS flag
+      FROM users u
+     WHERE u.id = ${userId} AND u.image IS NOT NULL
   `);
 
   const clubRole = new Map<string, ClubRole>();
@@ -187,6 +200,7 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
   let isPlatformModerator = false;
   let signinBlocked = false;
   let displayName: string | null = null;
+  let displayImage: string | null = null;
 
   for (const row of rows.rows) {
     if (row.kind === 'club' && row.detail !== null) {
@@ -209,12 +223,15 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
       signinBlocked = true;
     } else if (row.kind === 'display_name') {
       displayName = row.detail;
+    } else if (row.kind === 'display_image') {
+      displayImage = row.detail;
     }
   }
 
   return {
     userId,
     displayName,
+    displayImage,
     clubRole,
     eboardMember,
     raceRoster,
@@ -241,6 +258,7 @@ export function accessContextOf(init: {
   isPlatformModerator?: boolean;
   signinBlocked?: boolean;
   displayName?: string | null;
+  displayImage?: string | null;
 }): AccessContext {
   const dmThreads = new Map<string, DmThread>();
   for (const thread of init.dmThreads ?? []) {
@@ -254,6 +272,7 @@ export function accessContextOf(init: {
   return {
     userId: init.userId,
     displayName: init.displayName ?? null,
+    displayImage: init.displayImage ?? null,
     clubRole: new Map(init.clubRole ?? []),
     eboardMember: new Set(init.eboardMember ?? []),
     raceRoster: new Set(init.raceRoster ?? []),

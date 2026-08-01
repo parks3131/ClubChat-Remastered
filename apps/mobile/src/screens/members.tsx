@@ -40,6 +40,8 @@ import { Action, Avatar, Card, EmptyState, SearchField, SheetMenu } from '../ui.
 export type MemberRow = {
   userId: string;
   name: string;
+  /** Their picture. Null - the common case - draws the letter instead, same as everywhere else. */
+  image: string | null;
   /** Shown as a tag beside the name. Null draws none. */
   tag: string | null;
   /** Which section this row belongs under. Sections render in the order given to the screen. */
@@ -59,6 +61,7 @@ export type PendingRequest = {
   requestId: string;
   userId: string;
   name: string;
+  image: string | null;
   requestedAt: string;
 };
 
@@ -142,7 +145,7 @@ export function MembersScreen({
             {pendingRequests.map((request) => (
               <Card key={request.requestId}>
                 <View style={styles.person}>
-                  <Avatar name={request.name} />
+                  <Avatar name={request.name} image={request.image} />
                   <View style={styles.personText}>
                     <Text style={styles.name}>{request.name}</Text>
                     <Text style={styles.meta}>asked {timeAgo(request.requestedAt)}</Text>
@@ -217,7 +220,7 @@ export function MembersScreen({
                         accessibilityRole="button"
                         accessibilityLabel={`Open ${row.name}'s profile`}
                       >
-                        <Avatar name={row.name} />
+                        <Avatar name={row.name} image={row.image} />
                         <View style={styles.personText}>
                           <Text style={styles.name}>{row.name}</Text>
                           {row.tag !== null && <Text style={styles.tag}>{row.tag}</Text>}
@@ -401,7 +404,7 @@ function AddMembers({
           accessibilityRole="button"
           accessibilityLabel={`Add ${candidate.name}`}
         >
-          <Avatar name={candidate.name} size={32} />
+          <Avatar name={candidate.name} image={candidate.image} size={32} />
           <Text style={styles.name}>{candidate.name}</Text>
           {busy === candidate.userId && <ActivityIndicator color={color.accent} />}
         </Pressable>

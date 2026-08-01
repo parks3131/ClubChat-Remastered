@@ -111,6 +111,15 @@ export type ReportRow = {
   body: string | null;
   senderId: string;
   senderName: string;
+  /** Their picture, so the queue draws the same face the channel does. */
+  senderImage: string | null;
+  /**
+   * When the message itself was deleted, or null.
+   *
+   * `body` alone cannot answer this: it is also null for a photo, so a client reading "no body"
+   * as "deleted" mislabels every reported photo as one an admin has already dealt with.
+   */
+  deletedAt: string | null;
   reporters: Array<{ userId: string; name: string; createdAt: string }>;
   dismissedAt: string | null;
 };
@@ -141,6 +150,8 @@ export async function listChannelReports(
     body: string | null;
     sender_id: string;
     sender_name: string;
+    sender_image: string | null;
+    deleted_at: string | null;
     dismissed_at: string | null;
     reporters: Array<{ userId: string; name: string; createdAt: string }>;
   }>(sql`
@@ -149,6 +160,8 @@ export async function listChannelReports(
            m.body,
            m.sender_id::text AS sender_id,
            sender.full_name AS sender_name,
+           sender.image AS sender_image,
+           m.deleted_at::text AS deleted_at,
            MAX(r.dismissed_at)::text AS dismissed_at,
            json_agg(
              json_build_object('userId', reporter.id::text,
@@ -162,7 +175,7 @@ export async function listChannelReports(
       JOIN users reporter ON reporter.id = r.reporter_id
      WHERE m.channel_id = ${channel.id}
        ${opts.includeDismissed ? sql`` : sql`AND r.dismissed_at IS NULL`}
-     GROUP BY m.id, m.seq, m.body, m.sender_id, sender.full_name
+     GROUP BY m.id, m.seq, m.body, m.sender_id, sender.full_name, sender.image, m.deleted_at
      ORDER BY m.seq DESC
   `);
 
@@ -175,6 +188,8 @@ export async function listChannelReports(
       body: row.body,
       senderId: row.sender_id,
       senderName: row.sender_name,
+      senderImage: row.sender_image,
+      deletedAt: row.deleted_at === null ? null : new Date(row.deleted_at).toISOString(),
       reporters: row.reporters.map((r) => ({
         userId: r.userId,
         name: r.name,
@@ -359,6 +374,7 @@ export async function readReportedContext(
       seq: number;
       sender_id: string;
       sender_name: string | null;
+      sender_image: string | null;
       type: string;
       body: string | null;
       client_msg_id: string;
@@ -376,6 +392,7 @@ export async function readReportedContext(
              m.sender_id::text AS sender_id,
              -- Who said what. A moderation transcript without names is not evidence.
              u.full_name AS sender_name,
+             u.image AS sender_image,
              m.type, m.body, m.client_msg_id::text AS client_msg_id, m.pinned,
              m.media_id::text AS media_id, m.document_name, m.document_size,
              m.linked_poll_id::text AS linked_poll_id,
@@ -411,6 +428,7 @@ export async function readReportedContext(
       seq: Number(row.seq),
       // The moderation window shows who said what: an unattributed transcript is not evidence.
       senderName: row.sender_name ?? null,
+      senderImage: row.sender_image ?? null,
       senderId: row.sender_id,
       type: row.type as MessageType,
       body: row.body,

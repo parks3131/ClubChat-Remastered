@@ -146,6 +146,24 @@ export const MessageEnvelope = z.object({
    * compiler forcing every construction site to answer, which is how all eight of them were found.
    */
   senderName: z.string().nullable(),
+  /**
+   * Their picture, as a media id. Null draws the letter placeholder instead.
+   *
+   * Rides beside `senderName` for every one of that field's reasons, and they are not decorative
+   * here: a name resolved per message would be one request per distinct sender on a screen that
+   * scrolls, and an avatar resolved that way would be the same again. Both are joined once, at
+   * read time, and both are therefore in the offline cache.
+   *
+   * **A media id, never a URL.** Turning it into bytes is the authorized `/media/:id` hop, which
+   * re-checks access on every request - the same rule the attached-media note below states. An
+   * avatar is identity media and readable by any signed-in member, but it travels as an id all
+   * the same, because a URL on the envelope is a capability leaking into history.
+   *
+   * Defaulted to null rather than required, unlike `senderName`. The name had eight construction
+   * sites that each needed a deliberate answer; this one has a single honest default - a bubble
+   * built before any round trip has no avatar to show either.
+   */
+  senderImage: z.string().nullable().default(null),
   type: MessageType,
   body: z.string().nullable(),
   clientMsgId: Uuid,

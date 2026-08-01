@@ -88,6 +88,14 @@ export const AuthOk = z.object({
    * connection. The client needs it to attribute its own messages the instant they are acked.
    */
   displayName: z.string().nullable(),
+  /**
+   * The connecting user's own avatar, as a media id. Null when they have not set one.
+   *
+   * Beside the name and for the same reason: their own acked bubble is the one the client builds
+   * locally, so without this it draws a letter while every other bubble in the conversation
+   * shows a face.
+   */
+  displayImage: z.string().nullable().default(null),
   serverTime: z.string().datetime(),
   channels: z.array(ChannelState),
 });

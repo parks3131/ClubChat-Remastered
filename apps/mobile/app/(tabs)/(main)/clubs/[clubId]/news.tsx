@@ -104,7 +104,7 @@ function PostCard({
   return (
     <Card>
       <View style={styles.author}>
-        <Avatar name={post.authorName} />
+        <Avatar name={post.authorName} image={post.authorImage} />
         <View style={styles.authorText}>
           {/* Every post shows its creator's name and post time. */}
           <Text style={styles.name}>{post.authorName}</Text>
