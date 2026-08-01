@@ -427,6 +427,12 @@ that records how to recognise the class._
     The generalisation of entry 7, one layer up: the type passing proves you and the compiler agree,
     not that either of you is right.
 
+    **Closed for the WebSocket surface on 2026-08-01**, after entry 18 below showed what it costs:
+    both ends now parse frames against the shared schemas rather than casting to them, so a field
+    a producer omits is filled from the contract's own default instead of reaching the database as
+    `undefined`. The REST surface is not closed - `apps/mobile/src/api-types.ts` still restates
+    response shapes by hand.
+
 17. **A nested pressable is invalid HTML on web and swallows the outer gesture on native.**
     Symptom: React reporting `<button> cannot contain a nested <button>` and warning of a
     hydration error, from a photo bubble rendered inside the message bubble's own long-press

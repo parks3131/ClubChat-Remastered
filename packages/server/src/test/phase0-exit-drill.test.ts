@@ -25,7 +25,7 @@ import { ChatClient, findGaps, type SocketLike } from '@clubchat/client-core';
 import { createAuth, type Auth } from '../auth.ts';
 import type { Config } from '../config.ts';
 import { createDb, createPool, type Db } from '../db/client.ts';
-import { createRateLimiter, createRedis } from '../bus/redis.ts';
+import { channelTopic, createRateLimiter, createRedis } from '../bus/redis.ts';
 import { RecordingPushSender } from '../push/sender.ts';
 import { FakeMediaStore } from '../media/store.ts';
 import { buildApp } from '../api/app.ts';
@@ -211,6 +211,115 @@ describe('the read frame the app actually sends', () => {
 
     await aliceClient.close();
     await bobClient.close();
+  }, 30_000);
+
+  /**
+   * **A frame from a producer that predates a field is repaired on the way through.**
+   *
+   * The bug this guards, in full. A worker process that had been up since before `mentions` was
+   * added to the envelope published a card without it. The gateway relayed the payload verbatim
+   * - it was typed `ServerFrame` but only ever `JSON.parse`d, so the type was a claim nothing
+   * checked - and on every client `JSON.stringify(undefined)` bound SQL NULL into a NOT NULL
+   * column. The insert died, the card was never cached, and creating a poll or an event looked
+   * like it silently did nothing.
+   *
+   * Only cards, because they are the one message the worker publishes rather than the gateway;
+   * and a reload fixed it, because the same message then came through `/sync`, whose envelopes
+   * are built elsewhere. Both of those pointed away from the cause.
+   *
+   * Published as a raw object rather than through `publishToChannel`, because the typed helper
+   * cannot express the defect - which is the point: this reproduces an OLDER process, and no
+   * amount of typing in the current one can.
+   */
+  it('repairs an envelope published without a field the schema defaults', async () => {
+    const alice = await signUp('RepairAlice');
+    const club = await createClub(db, {
+      name: 'Repair Club',
+      sport: 'running',
+      creatorId: alice.userId,
+    });
+
+    /*
+     * A RAW socket, deliberately, rather than `ChatClient`.
+     *
+     * The client parses arriving frames too, so driving this through it would pass whether or
+     * not the gateway repairs anything - which a mutation test confirmed. Reading the bytes the
+     * gateway actually emits is the only way to assert the server's own half.
+     *
+     * And that half matters on its own: a client already installed on somebody's phone cannot
+     * be fixed retroactively, so a server that relays a broken frame breaks every old build in
+     * the field. The fix has to hold at both ends for different reasons.
+     */
+    const socket = new WebSocket(`ws://127.0.0.1:${gatewayPort}`);
+    const frames: Array<{ t: string; d: Record<string, unknown> }> = [];
+    socket.on('message', (data: unknown) =>
+      frames.push(JSON.parse(String(data)) as { t: string; d: Record<string, unknown> }),
+    );
+    await new Promise((resolve) => socket.once('open', resolve));
+
+    const waitForFrame = async (type: string) => {
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const found = frames.find((frame) => frame.t === type);
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new Error(`no ${type} frame arrived`);
+    };
+
+    socket.send(
+      JSON.stringify({
+        t: 'auth',
+        d: { token: alice.token, deviceId: crypto.randomUUID(), platform: 'ios' },
+      }),
+    );
+    await waitForFrame('auth.ok');
+    // Connecting authenticates; RECEIVING needs the subscription, which is what puts this
+    // socket in the gateway's per-channel fan-out map.
+    socket.send(JSON.stringify({ t: 'subscribe', d: { channelIds: [club.mainChannelId] } }));
+    await waitForFrame('subscribed');
+
+    // An envelope exactly as an OLD producer would publish it: no `mentions`, no `replyTo`.
+    // Published as a raw object rather than through `publishToChannel`, because the typed
+    // helper cannot express the defect - which is the point. This reproduces an older process,
+    // and no amount of typing in the current one can.
+    await redis.publish(
+      channelTopic(club.mainChannelId),
+      JSON.stringify({
+        channelId: club.mainChannelId,
+        seq: 1,
+        envelope: {
+          id: crypto.randomUUID(),
+          channelId: club.mainChannelId,
+          seq: 1,
+          senderId: alice.userId,
+          senderName: 'RepairAlice',
+          senderImage: null,
+          type: 'text',
+          body: 'from a process that predates mentions',
+          clientMsgId: crypto.randomUUID(),
+          pinned: false,
+          pinnedAt: null,
+          reactions: [],
+          mediaId: null,
+          documentName: null,
+          documentSize: null,
+          linkedPollId: null,
+          linkedEventId: null,
+          linkedMeetingId: null,
+          deletedAt: null,
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    );
+
+    const relayed = await waitForFrame('msg.new');
+    // The bytes on the wire, repaired. Without the parse these are simply absent, and the
+    // client that receives them writes `undefined` into a NOT NULL column and loses the message.
+    expect(relayed.d['mentions'], 'the gateway relayed an envelope with no mentions').toEqual([]);
+    expect(relayed.d['replyTo']).toBeNull();
+    expect(relayed.d['body']).toBe('from a process that predates mentions');
+
+    socket.close();
   }, 30_000);
 });
 

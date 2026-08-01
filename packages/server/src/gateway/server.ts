@@ -21,7 +21,8 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { Redis } from 'ioredis';
 import {
   ClientFrame,
-  type MessageEnvelope,
+  MessageEnvelope,
+  MsgUpdate,
   type MsgSendFrame,
   type ServerFrame,
 } from '@clubchat/shared';
@@ -196,10 +197,38 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
     // exists (a pin, a tombstone, a reaction). `kind` is absent on anything published by a
     // process that predates updates, which is why the default is 'message' rather than a
     // required tag - a rolling restart must not drop frames.
+    //
+    /*
+     * > **Validated on the way through, not merely typed.** `published` arrives from Redis as a
+     * > `JSON.parse` cast, so `ServerFrame` here was a claim about a payload nothing had checked
+     * > - and on 2026-08-01 that claim was false: a worker process older than the `mentions`
+     * > field published an envelope without it, this relayed it verbatim, and every client's
+     * > cache rejected the insert and lost the message.
+     * >
+     * > Parsing repairs rather than rejects, which is the point of doing it HERE. The schema's
+     * > own defaults fill in what an older producer omitted, so a rolling restart stays safe -
+     * > the same reason `kind` is defaulted above. Only a payload that cannot be repaired is
+     * > dropped, and it is dropped loudly.
+     */
+    const relayed =
+      published.kind === 'update'
+        ? MsgUpdate.safeParse(published.update)
+        : MessageEnvelope.safeParse(published.envelope);
+    if (!relayed.success) {
+      deps.log('warn', 'unrelayable publish payload', {
+        topic,
+        kind: published.kind ?? 'message',
+        channelId: published.channelId,
+        seq: published.seq,
+        issues: relayed.error.issues,
+      });
+      return;
+    }
+
     const frame: ServerFrame =
       published.kind === 'update'
-        ? { t: 'msg.update', d: published.update }
-        : { t: 'msg.new', d: published.envelope };
+        ? { t: 'msg.update', d: relayed.data as MsgUpdate }
+        : { t: 'msg.new', d: relayed.data as MessageEnvelope };
     const encoded = JSON.stringify(frame);
     for (const socket of sockets) {
       if (socket.readyState === socket.OPEN) socket.send(encoded);

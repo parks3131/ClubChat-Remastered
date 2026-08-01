@@ -137,12 +137,48 @@ The deeper cause is failure mode 16 again: `msg.new` is `frame.d as unknown as M
 cast rather than a parse, so nothing checks that an arriving payload matches the contract it
 claims to satisfy.
 
+### Then the class, rather than the instance
+
+The card bug's root was not the missing field, it was that **nothing checked**. Three separate
+casts sat on the socket path, all typechecking perfectly, none of them knowledge:
+
+- the gateway declared its send handler's payload by hand instead of importing `MsgSendFrame`
+- the client read every field as `frame.d['x'] as T`
+- the gateway relayed whatever `JSON.parse` returned from Redis under a `ServerFrame` annotation
+
+All three are gone. `ClientFrame` was already parsed on the way in; `ServerFrame` is now parsed on
+the way back, and the gateway parses each payload it relays.
+
+**Parsing repairs rather than rejects, and that is why the gateway does it too.** The schema's own
+defaults fill in what an older producer omitted, so a rolling restart stays safe - and an app build
+already on somebody's phone cannot be fixed retroactively, while the server in front of it can.
+
+The client's policy for a frame it still cannot read: drop it and pay one `syncAll`, since sync is
+the authoritative path and a dropped `msg.new` then costs a round trip rather than a message.
+**The handshake is the exception** - an unreadable `auth.ok` fails the connection instead, because
+nothing further arrives to prompt a retry and dropping it silently is the forever-spinner PRD/03
+forbids. That failure has shipped here once already, from `crypto.randomUUID` throwing in
+`chat-provider`.
+
+Two things fell out of it. The client's frame switch is now exhaustive by construction - a new
+frame type that nobody handles is a type error, because `frame` narrows to `never` in the default
+branch. And **every fixture in `chat-client.test.ts` turned out to be invalid against the
+contract**: no `displayName`, `'club'` as a club id, `'someone-else'` as a sender, `'u-1'` as a
+reactor. Twelve tests had been passing over payloads no server could produce. They were fixed
+rather than the schema loosened.
+
+Mutation-tested at both ends: removing the client's parse fails the three new wire tests, and
+removing the gateway's fails the relay test with the production symptom verbatim - `expected
+undefined to deeply equal []`. That relay test reads the raw bytes off a bare socket rather than
+going through `ChatClient`, because the client parses too and would otherwise repair the frame
+and pass either way, which a first attempt did.
+
 Also renamed migrations 0012 to 0015, which drizzle-kit had christened `0015_hard_zarda` and
 similar. Renaming the file and its `tag` together is safe because `__drizzle_migrations` records a
 content hash and the journal's `when`, never the filename - confirmed by re-running the migrator
 and counting 17 rows before and after. `AGENTS.md` now says to pass `--name`.
 
-Tests: 677 to 696. `replies.test.ts` (10) and `store.test.ts` (5) were mutation-tested - nulling
+Tests: 677 to 700. `replies.test.ts` (10) and `store.test.ts` (5) were mutation-tested - nulling
 the read join fails 7, nulling the append envelope's quote fails exactly the one case that guards
 `msg.new`, hardcoding `deleted: false` fails exactly the deletion case, and skipping the
 strike-quotes branch fails 3.

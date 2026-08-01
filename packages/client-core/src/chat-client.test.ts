@@ -16,6 +16,12 @@ import { findGaps } from './store.ts';
 
 const CHANNEL = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const USER = '11111111-1111-4111-8111-111111111111';
+const CLUB = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+/** Somebody other than the connected user. A real id, because the frames are now parsed. */
+const OTHER = '33333333-3333-4333-8333-333333333333';
+/** Two more reactors. Real ids: `MessageReaction.userIds` is an array of UUIDs. */
+const REACTOR_A = '44444444-4444-4444-8444-444444444444';
+const REACTOR_B = '55555555-5555-4555-8555-555555555555';
 
 /** A socket whose inbound frames the test controls exactly. */
 class FakeSocket implements SocketLike {
@@ -53,7 +59,7 @@ function envelope(seq: number, overrides: Partial<MessageEnvelope> = {}): Messag
     senderName: null,
     senderImage: null,
     mentions: [],
-    senderId: 'someone-else',
+    senderId: OTHER,
     type: 'text',
     body: `message ${seq}`,
     clientMsgId: crypto.randomUUID(),
@@ -114,11 +120,21 @@ async function setup(): Promise<Fixture> {
   socket.open();
   socket.deliver({
     t: 'auth.ok',
+    /*
+     * A REAL auth.ok, field for field.
+     *
+     * It used to omit `displayName` and use the string 'club' as a club id, and both passed
+     * because the client cast the frame instead of parsing it. Now that it parses, a fixture
+     * that no server would ever send fails here rather than passing while the product breaks -
+     * which is the entire point of the change that caught it.
+     */
     d: {
       sessionId: 'sess',
       userId: USER,
+      displayName: 'Test Sender',
+      displayImage: null,
       serverTime: new Date(2026, 0, 1).toISOString(),
-      channels: [{ id: CHANNEL, scope: 'club', clubId: 'club', lastSeq: 0, lastReadSeq: 0 }],
+      channels: [{ id: CHANNEL, scope: 'club', clubId: CLUB, lastSeq: 0, lastReadSeq: 0 }],
     },
   });
   await connected;
@@ -297,12 +313,12 @@ describe('msg.update, the frame that had no producer until reactions', () => {
 
     socket.deliver({
       t: 'msg.update',
-      d: { channelId: CHANNEL, seq: 1, reactions: [{ emoji: '\u{1F525}', userIds: ['u-1', 'u-2'] }] },
+      d: { channelId: CHANNEL, seq: 1, reactions: [{ emoji: '\u{1F525}', userIds: [REACTOR_A, REACTOR_B] }] },
     });
 
     await vi.waitFor(async () => {
       const held = await client.store.list(CHANNEL);
-      expect(held[0]?.reactions).toEqual([{ emoji: '\u{1F525}', userIds: ['u-1', 'u-2'] }]);
+      expect(held[0]?.reactions).toEqual([{ emoji: '\u{1F525}', userIds: [REACTOR_A, REACTOR_B] }]);
     });
   });
 
@@ -315,7 +331,7 @@ describe('msg.update, the frame that had no producer until reactions', () => {
     // blank its body, which is why the handler builds the patch from keys actually present.
     socket.deliver({
       t: 'msg.update',
-      d: { channelId: CHANNEL, seq: 1, reactions: [{ emoji: '\u{1F44D}', userIds: ['u-1'] }] },
+      d: { channelId: CHANNEL, seq: 1, reactions: [{ emoji: '\u{1F44D}', userIds: [REACTOR_A] }] },
     });
 
     await vi.waitFor(async () => {
@@ -352,7 +368,7 @@ describe('msg.update, the frame that had no producer until reactions', () => {
     // bubble in the conversation; running it through the gap rule would spuriously sync.
     socket.deliver({
       t: 'msg.update',
-      d: { channelId: CHANNEL, seq: 99, reactions: [{ emoji: '\u{1F525}', userIds: ['u-1'] }] },
+      d: { channelId: CHANNEL, seq: 99, reactions: [{ emoji: '\u{1F525}', userIds: [REACTOR_A] }] },
     });
 
     await vi.waitFor(() => expect(true).toBe(true));
@@ -397,5 +413,91 @@ describe('findGaps', () => {
   it('handles empty and single-element sets', () => {
     expect(findGaps([])).toEqual([]);
     expect(findGaps([7])).toEqual([]);
+  });
+});
+
+/**
+ * Frames are PARSED against the shared contract, not cast to it.
+ *
+ * Every field in `onFrame` used to be read as `frame.d['x'] as T` - an assertion that the server
+ * sent what the switch believed, which nothing checked. It cost a real bug: a worker process
+ * older than the `mentions` field published an envelope without it, the client cast it anyway,
+ * and SQLite rejected the insert and lost the message.
+ *
+ * Note what fixing this exposed. Every fixture in the file above was invalid against the
+ * contract - no `displayName`, `'club'` as a club id, `'someone-else'` as a sender, `'u-1'` as a
+ * reactor - and every test passed regardless, because nothing validated them. The tests were
+ * green over payloads no server could produce.
+ */
+describe('a frame that does not match the contract', () => {
+  it('repairs one from a producer that predates a field, rather than losing the message', async () => {
+    const { client, socket } = await setup();
+
+    // Exactly what the old worker sent: an envelope with no `mentions` and no `replyTo`. Both
+    // are declared with defaults, so parsing fills them in and the message lands intact.
+    const { mentions, replyTo, ...older } = envelope(1);
+    void mentions;
+    void replyTo;
+    socket.deliver({ t: 'msg.new', d: older });
+
+    await vi.waitFor(async () => expect(await client.store.seqs(CHANNEL)).toEqual([1]));
+    const held = await client.store.list(CHANNEL);
+    expect(held[0]?.mentions).toEqual([]);
+    expect(held[0]?.replyTo).toBeNull();
+  });
+
+  it('drops a frame it cannot read, and pays for it with one sync', async () => {
+    const { client, socket, syncCalls, backlog } = await setup();
+    expect(syncCalls).toHaveLength(0);
+
+    // `seq` is the ordering, and a message without one cannot be placed. The server has it,
+    // so a sync is the way to get it.
+    backlog.push(envelope(1));
+    const { seq, ...unplaceable } = envelope(1);
+    void seq;
+    socket.deliver({ t: 'msg.new', d: unplaceable });
+
+    // Not stored as it arrived...
+    await vi.waitFor(() => expect(syncCalls.length).toBeGreaterThan(0));
+    // ...and recovered from the authoritative read path instead, so nothing is lost.
+    await vi.waitFor(async () => expect(await client.store.seqs(CHANNEL)).toEqual([1]));
+  });
+
+  it('FAILS an unreadable auth reply rather than hanging on it', async () => {
+    /*
+     * The one frame that must not be dropped quietly.
+     *
+     * Everything else can be recovered by asking again; the handshake cannot, because nothing
+     * further arrives to prompt a retry. Dropping it leaves `connect()` awaiting a promise with
+     * no resolver left - the app sits on its spinner forever, which PRD/03 names as the one
+     * outcome never acceptable, and which has already shipped here once.
+     */
+    const socket = new FakeSocket();
+    const client = new ChatClient({
+      wsUrl: 'ws://test',
+      apiUrl: 'http://test',
+      token: 'token',
+      deviceId: '22222222-2222-4222-8222-222222222222',
+      platform: 'ios',
+      createSocket: () => socket,
+      randomUuid: () => crypto.randomUUID(),
+      fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+    });
+
+    const connected = client.connect();
+    socket.open();
+    // `userId` is not a uuid, so this cannot be understood - and must not be ignored.
+    socket.deliver({
+      t: 'auth.ok',
+      d: {
+        sessionId: 'sess',
+        userId: 'not-a-uuid',
+        displayName: null,
+        serverTime: new Date(2026, 0, 1).toISOString(),
+        channels: [],
+      },
+    });
+
+    await expect(connected).rejects.toThrow(/could not be understood/);
   });
 });

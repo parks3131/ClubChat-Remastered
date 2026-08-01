@@ -28,6 +28,36 @@ Envelope: `{ "t": <type>, "id": <correlation id>, "d": <payload> }`
 | `notif.new` | `{ notification }` | Drives the badge live. |
 | `pong` | `{}` | |
 
+### Frames are parsed at both ends, never cast
+
+Every frame crossing this socket is validated against the schemas above - `ClientFrame` on the
+way in, `ServerFrame` on the way back - and neither side reads a field it has not parsed.
+
+> **This was the single largest source of drift in the codebase.** The gateway declared its send
+> handler's payload by hand rather than importing `MsgSendFrame`; the client read every field as
+> `frame.d['x'] as T`; and the gateway relayed whatever `JSON.parse` returned from Redis under a
+> `ServerFrame` annotation nothing checked. All three typechecked perfectly and all three were
+> assertions about a payload rather than knowledge of one. On 2026-08-01 one of them cost a bug:
+> a worker older than the `mentions` field published an envelope without it, and every client's
+> cache bound SQL NULL into a NOT NULL column and lost the message.
+
+Three properties follow, and each is load-bearing:
+
+1. **Defaults are applied, so an older producer is repaired rather than rejected.** A field added
+   to the envelope after a running process started is filled in by the schema, at the gateway,
+   before fan-out. This is what makes a rolling restart safe, and it is why the gateway parses
+   even though the client does too - an app build already on somebody's phone cannot be fixed
+   retroactively, but the server in front of it can.
+2. **A frame the client cannot read is dropped and paid for with one sync**, rather than guessed
+   at. `syncAll` pulls every channel above its local max, so a lost `msg.new` costs a round trip;
+   `msg.update` and `msg.ack` are idempotent or repeated. **The exception is the handshake**: an
+   unreadable `auth.ok` or `auth.err` fails the connection instead, because nothing further will
+   arrive to prompt a retry and a dropped one leaves the app on a spinner forever - the outcome
+   [Accounts and profile](../PRD/03-accounts-and-profile.md) rules out absolutely.
+3. **The client's frame switch is exhaustive by construction.** `ServerFrame` is a discriminated
+   union, so a new frame type added to the protocol and not handled is a type error in
+   `chat-client.ts` rather than a log line nobody reads.
+
 ### REST
 
 > **Built, not sketched, as of Phase 3.75a.** Every line below exists and is exercised by a

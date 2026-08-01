@@ -15,6 +15,7 @@
 
 import {
   decideGap,
+  ServerFrame,
   type ChannelState,
   type MessageEnvelope,
   type MessageReaction,
@@ -214,21 +215,78 @@ export class ChatClient {
   // Frames
   // -------------------------------------------------------------------------
 
-  private async onFrame(raw: string): Promise<void> {
-    let frame: { t: string; d: Record<string, unknown> };
+  /**
+   * Decode one frame from the socket, or say why not.
+   *
+   * > **Parsed against the shared contract, never cast to it.** Every field in here used to be
+   * > read with `frame.d['x'] as T` - an assertion that the server sent what this switch believes
+   * > it sent, which nothing checked. That is failure mode 16 on the hot path, and it has already
+   * > cost one bug: an envelope published by a process older than the `mentions` field reached
+   * > SQLite with the field absent, bound NULL into a NOT NULL column, and silently lost the
+   * > message. Parsing applies the schema's own defaults, so the same envelope now arrives
+   * > repaired instead of malformed.
+   *
+   * A rejection carries the frame's claimed `t` where one can be read, because what a bad frame
+   * costs depends entirely on which frame it was - see `onFrame`.
+   */
+  private decodeFrame(raw: string): { ok: true; frame: ServerFrame } | { ok: false; type: string | null } {
+    let json: unknown;
     try {
-      frame = JSON.parse(raw) as { t: string; d: Record<string, unknown> };
+      json = JSON.parse(raw);
     } catch {
       this.log('undecodable frame');
+      return { ok: false, type: null };
+    }
+
+    const parsed = ServerFrame.safeParse(json);
+    if (parsed.success) return { ok: true, frame: parsed.data };
+
+    // The whole frame, not just the type: a frame that fails validation is one nobody has seen
+    // before, and the type alone rarely says which field was wrong.
+    this.log('frame failed validation', { raw, issues: parsed.error.issues });
+    const type = (json as { t?: unknown } | null)?.t;
+    return { ok: false, type: typeof type === 'string' ? type : null };
+  }
+
+  private async onFrame(raw: string): Promise<void> {
+    const decoded = this.decodeFrame(raw);
+    if (!decoded.ok) {
+      /*
+       * > **An unreadable auth reply must FAIL, not be dropped.** Everything else on this socket
+       * > can be recovered by asking again; the handshake cannot, because nothing else will ever
+       * > arrive to prompt a retry. Dropping it silently leaves `connect()` awaiting a promise
+       * > that no longer has a resolver - the app sits on its loading spinner forever, which
+       * > PRD/03 names as the one outcome never acceptable. That failure has shipped here once
+       * > already, from `crypto.randomUUID` throwing during sign-in.
+       */
+      if (decoded.type === 'auth.ok' || decoded.type === 'auth.err') {
+        this.authRejected?.(new Error('auth reply could not be understood'));
+        return;
+      }
+
+      /*
+       * Everything else is dropped and paid for with one sync.
+       *
+       * A frame we cannot read might have been a message, and a missed message is the one
+       * failure this client is built to make impossible. Rather than guess at the payload, ask
+       * the authoritative read path: `syncAll` pulls every channel above its local max, so a
+       * dropped `msg.new` costs a round trip and nothing else. `msg.update` and `msg.ack` are
+       * idempotent or repeated, so re-syncing is harmless for those too.
+       *
+       * Deliberately fire-and-forget: this runs inside the socket's message handler, and an
+       * awaited sync there would stall every frame queued behind it.
+       */
+      void this.syncAll().catch((error) => this.log('sync after bad frame failed', { error }));
       return;
     }
+    const frame = decoded.frame;
 
     switch (frame.t) {
       case 'auth.ok': {
-        this.userId = frame.d['userId'] as string;
-        this.displayName = (frame.d['displayName'] as string | null | undefined) ?? null;
-        this.displayImage = (frame.d['displayImage'] as string | null | undefined) ?? null;
-        this.channels = frame.d['channels'] as ChannelState[];
+        this.userId = frame.d.userId;
+        this.displayName = frame.d.displayName;
+        this.displayImage = frame.d.displayImage;
+        this.channels = frame.d.channels;
         this.authResolved?.();
         // The socket is only usable once the server has accepted the token, so this is the
         // earliest honest moment to flush anything held while it was down.
@@ -237,13 +295,11 @@ export class ChatClient {
         break;
       }
       case 'auth.err': {
-        this.authRejected?.(new Error(`auth failed: ${String(frame.d['code'])}`));
+        this.authRejected?.(new Error(`auth failed: ${frame.d.code}`));
         break;
       }
       case 'msg.ack': {
-        const seq = frame.d['seq'] as number;
-        const clientMsgId = frame.d['clientMsgId'] as string;
-        const channelId = frame.d['channelId'] as string;
+        const { seq, clientMsgId, channelId } = frame.d;
 
         // THE ASYMMETRY THAT MATTERS. The ack is gap-checked exactly like msg.new.
         //
@@ -254,7 +310,7 @@ export class ChatClient {
         // caught up and be wrong, forever, with no error anywhere.
         await this.applyIncoming(
           {
-            id: frame.d['messageId'] as string,
+            id: frame.d.messageId,
             channelId,
             seq,
             senderId: this.userId ?? '',
@@ -293,7 +349,7 @@ export class ChatClient {
             // at when they replied - so their bubble draws it now rather than when it re-syncs.
             replyTo: this.outbox.get(clientMsgId)?.replyTo ?? null,
             deletedAt: null,
-            createdAt: frame.d['createdAt'] as string,
+            createdAt: frame.d.createdAt,
           },
           channelId,
         );
@@ -305,14 +361,16 @@ export class ChatClient {
         break;
       }
       case 'msg.err': {
-        const clientMsgId = frame.d['clientMsgId'] as string;
-        const code = String(frame.d['code']);
+        const { clientMsgId, code } = frame.d;
         this.waiters.get(clientMsgId)?.reject(new Error(code));
         this.waiters.delete(clientMsgId);
         break;
       }
       case 'msg.new': {
-        const envelope = frame.d as unknown as MessageEnvelope;
+        // Already validated, and already carrying the schema's defaults for anything a producer
+        // older than a field left out. This used to be a bare cast, which is how an envelope
+        // with no `mentions` reached SQLite and lost the message it belonged to.
+        const envelope = frame.d;
         await this.applyIncoming(envelope, envelope.channelId);
         this.opts.onChange?.();
         break;
@@ -337,14 +395,17 @@ export class ChatClient {
        * > which is a change to the sync contract rather than something to patch here.
        */
       case 'msg.update': {
-        const channelId = frame.d['channelId'] as string;
-        const seq = frame.d['seq'] as number;
+        const { channelId, seq } = frame.d;
         const patch: MessagePatch = {};
-        // Only fields actually present. `deletedAt: null` means "not deleted" and must stay
-        // distinguishable from "this frame says nothing about deletion".
-        if ('pinned' in frame.d) patch.pinned = frame.d['pinned'] as boolean;
-        if ('reactions' in frame.d) patch.reactions = frame.d['reactions'] as MessageReaction[];
-        if ('deletedAt' in frame.d) patch.deletedAt = frame.d['deletedAt'] as string | null;
+        /*
+         * Only fields actually present. `deletedAt: null` means "not deleted" and must stay
+         * distinguishable from "this frame says nothing about deletion" - which is why each is
+         * an `undefined` check rather than a truthiness one, and why the schema declares them
+         * `.optional()` rather than `.nullable()` with a default.
+         */
+        if (frame.d.pinned !== undefined) patch.pinned = frame.d.pinned;
+        if (frame.d.reactions !== undefined) patch.reactions = frame.d.reactions;
+        if (frame.d.deletedAt !== undefined) patch.deletedAt = frame.d.deletedAt;
 
         // Serialized per channel like message application, so an update and an arriving
         // message cannot interleave a read-then-write on the same row.
@@ -355,8 +416,22 @@ export class ChatClient {
       case 'subscribed':
       case 'pong':
         break;
-      default:
-        this.log('unhandled frame type', frame.t);
+      default: {
+        /*
+         * Unreachable, and the compiler proves it.
+         *
+         * `ServerFrame` is a discriminated union and every member is now handled above, so
+         * `frame` narrows to `never` here - which means **adding a frame type to the protocol
+         * without handling it is a type error in this file** rather than a log line nobody
+         * reads. That is the whole return on parsing instead of casting: the old switch took a
+         * bare `string` and could silently ignore anything.
+         *
+         * The log stays for the runtime case that cannot happen through this path anyway: an
+         * unknown `t` fails the union and is dropped by `decodeFrame` before reaching here.
+         */
+        const unhandled: never = frame;
+        this.log('unhandled frame type', unhandled);
+      }
     }
   }
 
