@@ -1110,27 +1110,41 @@ export default function ChatScreen() {
   /** True while bytes are in flight, so the "+" cannot start a second upload. */
   const [uploading, setUploading] = useState(false);
   const listRef = useRef<FlatList<Row>>(null);
-  /**
-   * Whether the reader is sitting at the live tail.
+  /*
+   * There is no "am I at the tail" flag any more, and its absence is the fix rather than a
+   * simplification.
    *
-   * > **This is what makes the scroll-to-end conditional, and it has to be.** The list scrolls to
-   * > the end on every content size change, which is right for a new message and catastrophic for
-   * > everything else that changes a row's height after it is laid out. A card fetches its subject
-   * > by id and renders nothing until that lands, so it grows by ~180px a moment after the row
-   * > appears; a photo does the same when its bytes arrive. Scrolling up to read history and
-   * > having any of those resolve used to yank the log back to the bottom, repeatedly, because
-   * > every card resolves on its own schedule.
+   * The list used to chase the bottom with `scrollToEnd` on every content size change, which is
+   * right for a new message and catastrophic for everything else that changes a row's height
+   * after layout - a card resolving its fetch, a photo's bytes landing. `atTailRef` existed to
+   * suppress that, and it was itself set from a `fromBottom` computed against a content height
+   * that was still growing, so opening a channel switched it off and left the reader partway up
+   * the history having watched the list scroll.
    *
-   * So the rule is the standard one: **pin to the tail only if we were already at the tail.**
-   * Starts true so the first layout still opens at the newest message, which is chat's whole
-   * arrival behaviour.
-   *
-   * A ref rather than state on purpose - it is read inside scroll handlers that fire at frame
-   * rate, and re-rendering the entire log on each one would be its own defect.
+   * An inverted list has nothing to chase: offset 0 IS the newest message, arrival needs no
+   * scroll, and a message arriving while the reader is up in history extends the list away from
+   * them rather than moving them. See the `FlatList` below.
    */
-  const atTailRef = useRef(true);
   /** Whether the pinned strip is showing. Fades out once the reader leaves the live tail. */
   const [pinnedStripVisible, setPinnedStripVisible] = useState(true);
+  /**
+   * Whether the reader is sitting at the newest message.
+   *
+   * State rather than a ref, unlike the flag this replaces: the "new messages" control has to
+   * render off it. Set only when it actually flips, so scrolling does not re-render the log on
+   * every frame.
+   */
+  const [atNewest, setAtNewest] = useState(true);
+  /**
+   * The newest seq the reader has actually been shown.
+   *
+   * Everything above this is what the control below counts. It advances while they are at the
+   * newest message and freezes the moment they scroll back into history, which is what makes
+   * "3 new messages" mean *since you started reading* rather than *since you last opened the
+   * app*. Set on arrival too, so the messages that were already unread when the screen opened
+   * are not counted as new - the reader is being placed at them, not told about them.
+   */
+  const [seenThrough, setSeenThrough] = useState(0);
   /**
    * The message a jump landed on, if any.
    *
@@ -1177,6 +1191,71 @@ export default function ChatScreen() {
   useEffect(() => {
     void refresh();
   }, [refresh, revision]);
+
+  /**
+   * The rows as the inverted list wants them: newest first.
+   *
+   * Derived rather than stored, so `rows` keeps the order history actually happened in - which is
+   * what the pinned strip, the jump lookup and every future paging read reason about. Memoized
+   * because reversing on each render would allocate a new array per keystroke and defeat the
+   * memoized rows underneath it.
+   */
+  const invertedRows = useMemo(() => [...rows].reverse(), [rows]);
+
+  /** The newest message this screen currently holds, or 0 for an empty conversation. */
+  const newestSeq = useMemo(
+    () =>
+      rows.reduce(
+        (highest, row) => (row.kind === "message" && row.message.seq > highest ? row.message.seq : highest),
+        0,
+      ),
+    [rows],
+  );
+
+  /**
+   * The messages that have arrived since the reader last saw the newest one.
+   *
+   * Counted from `rows` rather than tracked with a counter, so it cannot drift: a message that
+   * arrives twice, or one that was already held, changes nothing.
+   */
+  const newSinceSeen = useMemo(
+    () =>
+      rows.filter((row) => row.kind === "message" && row.message.seq > seenThrough).length,
+    [rows, seenThrough],
+  );
+
+  /**
+   * Take the reader to the newest message.
+   *
+   * In an inverted list that is offset 0, which is also where the list opens - so this is only
+   * ever a correction after the reader has scrolled away, and it does nothing when they have not.
+   * Animated on purpose: this is the "your thing landed, here it is" motion, and it is the one
+   * place in this screen where movement is the point rather than the defect.
+   */
+  const scrollToNewest = useCallback(() => {
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
+
+  /**
+   * Put a message at the top of the screen, with everything newer below it to read forward into.
+   *
+   * `viewPosition: 1` rather than 0, because this list is inverted: offset 0 is the visual
+   * BOTTOM, so the far end of the viewport - position 1 - is the top. Getting that backwards
+   * lands the target on the last line of the screen with the thing you were sent to read
+   * already scrolled past.
+   *
+   * Never animated. Both callers are placements rather than journeys - "start here" - and an
+   * animated one is the travelling-down motion this whole change exists to remove.
+   */
+  const placeAtTop = useCallback(
+    (row: Row | undefined) => {
+      if (!row) return;
+      const index = invertedRows.indexOf(row);
+      if (index < 0) return;
+      listRef.current?.scrollToIndex({ index, viewPosition: 1, animated: false });
+    },
+    [invertedRows],
+  );
 
   /*
    * Most recently PINNED first, which is not the same as newest message first.
@@ -1320,14 +1399,13 @@ export default function ChatScreen() {
    */
   useEffect(() => {
     if (jumpedTo === null) return;
-    const index = rows.findIndex(
+    // Against the INVERTED array, because that is what the list is indexing. Looking the target
+    // up in `rows` would scroll to its mirror image - the right distance from the wrong end.
+    const index = invertedRows.findIndex(
       (row) => row.kind === "message" && row.message.seq === jumpedTo,
     );
-    /*
-     * A target that is not in the list still has to clear, which is why this no longer returns
-     * early. `jumpedTo` suppresses the follow-the-tail scroll, so leaving it set on a jump that
-     * could not land would quietly stop chat following new messages for the rest of the session.
-     */
+    // A target that is not in the list still has to clear the highlight, which is why this no
+    // longer returns early.
     if (index >= 0) {
       listRef.current?.scrollToIndex({
         index,
@@ -1349,7 +1427,102 @@ export default function ChatScreen() {
      */
     const settle = setTimeout(() => setJumpedTo(null), JUMP_HIGHLIGHT_MS);
     return () => clearTimeout(settle);
-  }, [jumpedTo, rows]);
+  }, [jumpedTo, invertedRows]);
+
+  /**
+   * The read cursor as it stood the moment this screen opened.
+   *
+   * > **Captured BEFORE the effect below marks the channel read**, which is the whole difficulty:
+   * > opening a chat is what clears its unread count, so by the time anything else could ask,
+   * > the answer is always "nothing unread". Effects run in declaration order, so this one being
+   * > written above that one is load-bearing rather than stylistic.
+   *
+   * Null until the channel is known, which a cold open reaches before the channel list has
+   * synced. The landing below treats null as "caught up" and stays at the newest message, which
+   * is the right answer when we cannot prove otherwise - it is where chat opens anyway.
+   */
+  const entryLastReadRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (entryLastReadRef.current !== null || !client || !channelId) return;
+    const channel = client.channels.find((entry) => entry.id === channelId);
+    if (channel) entryLastReadRef.current = channel.lastReadSeq;
+  }, [client, channelId, revision]);
+
+  /**
+   * Where the conversation opens: the first unread message, or the newest if there are none.
+   *
+   * > **Once, on arrival, and never again.** `landedRef` is not tidiness - this depends on
+   * > `rows`, and without it every later change to the list would re-place the reader, which is
+   * > the yanking bug that has already been fixed twice on this screen in different disguises.
+   *
+   * Nothing happens in the common case, and that is the point: an inverted list already opens at
+   * the newest message, so a caught-up reader needs no scroll at all and sees no motion. Only an
+   * unread channel moves, and it moves instantly rather than travelling.
+   *
+   * A `?around=` jump owns the position outright - it was asked for explicitly, and landing on
+   * an unread message first would fight it.
+   */
+  const landedRef = useRef(false);
+  /**
+   * The row the arrival is still trying to hold at the top of the screen, while the rows around
+   * it finish measuring. Null once it has settled or the reader has taken over.
+   */
+  const pendingLandingRef = useRef<Row | null>(null);
+  /**
+   * How many times a placement may be re-applied as the content settles.
+   *
+   * Bounded rather than time-based: a card that re-measures forever would otherwise pin the
+   * reader in place indefinitely, and "a few layout passes" is what this is actually waiting for
+   * rather than a duration.
+   */
+  const landingAttemptsRef = useRef(0);
+  useEffect(() => {
+    if (landedRef.current || loading || rows.length === 0) return;
+    landedRef.current = true;
+
+    /*
+     * Nothing counts as "new" from here on until it actually arrives. Set even when the reader
+     * is being placed among unread messages: those are what they came to read, and announcing
+     * them in a control that offers to scroll to where they already are would be noise.
+     */
+    setSeenThrough(newestSeq);
+    if (around !== undefined) return;
+
+    const lastRead = entryLastReadRef.current;
+    if (lastRead === null) return;
+    const firstUnread = rows.find(
+      (row) => row.kind === "message" && row.message.seq > lastRead,
+    );
+    if (!firstUnread) return;
+
+    /*
+     * > **Held, not just applied once, because the list is still measuring itself.**
+     * >
+     * > A card renders as an empty shell and grows ~180px when its fetch lands; a photo does the
+     * > same when its bytes arrive. Placing the first unread message at the top of the screen the
+     * > instant the rows exist therefore computes an offset against content that has not finished
+     * > existing - and if the messages below it are still shells, the offset needed is larger than
+     * > the content available, so it clamps to the bottom and stays there. Measured: the target
+     * > resolved correctly to seq 11 and the list still sat at offset 0.
+     *
+     * So the target is remembered and re-applied as the content settles. `pendingLanding` is
+     * cleared the moment the reader touches the list, which is what stops this from becoming the
+     * yanking bug it is descended from: they always win.
+     */
+    pendingLandingRef.current = firstUnread;
+    placeAtTop(firstUnread);
+  }, [loading, rows, around, newestSeq, placeAtTop]);
+
+  /**
+   * Keep "what the reader has seen" level with the conversation while they are at the bottom.
+   *
+   * The moment they scroll back into history this stops advancing, which is what freezes the
+   * count for the control below. Nothing else has to know they left.
+   */
+  useEffect(() => {
+    if (!atNewest) return;
+    setSeenThrough((seen) => (newestSeq > seen ? newestSeq : seen));
+  }, [atNewest, newestSeq]);
 
   /*
    * Opening a chat marks it read. That is the ONLY thing that clears its unread count - nothing
@@ -1368,8 +1541,17 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!client || !channelId) return;
     const channel = client.channels.find((entry) => entry.id === channelId);
-    client.markRead(channelId, channel?.lastSeq ?? 0);
-  }, [client, channelId, revision]);
+    /*
+     * The higher of what the channel list last reported and what this screen actually holds.
+     *
+     * The server resolves its own `last_seq` regardless, so this number does not decide what
+     * gets marked - but it is also what the client records locally as "read through", and that
+     * copy decides where a RE-ENTRY places the reader. Sending the stale channel-list value
+     * alone would leave the local cursor behind the conversation and drop somebody back into
+     * history they had already read.
+     */
+    client.markRead(channelId, Math.max(channel?.lastSeq ?? 0, newestSeq));
+  }, [client, channelId, revision, newestSeq]);
 
   /*
    * The message the overlay is about, resolved from the seq the long-press recorded.
@@ -1540,11 +1722,11 @@ export default function ChatScreen() {
     if (body.length === 0 || !client || !channelId || !canPost) return;
     setDraft("");
     /*
-      Sending is a deliberate return to the tail, wherever the reader had scrolled to.
+      Sending is a deliberate return to the newest message, wherever the reader had scrolled to.
       Posting from halfway up the history and being left there, unable to see what you just
-      said, is the one case where NOT following the tail would be the wrong answer.
+      said, is the one case where movement is what somebody wants.
     */
-    atTailRef.current = true;
+    scrollToNewest();
     // Disarmed as the message goes, so the NEXT one is an ordinary message. An announcement
     // toggle that stays armed is how somebody posts three of them by accident, and each one
     // notifies the whole space.
@@ -1679,8 +1861,8 @@ export default function ChatScreen() {
       if (!picked) return;
 
       const uploaded = await uploadAttachment(channelId, picked, kind);
-      // Same deliberate return to the tail as a typed message. See `send`.
-      atTailRef.current = true;
+      // Same deliberate return to the newest message as a typed send. See `send`.
+      scrollToNewest();
       await client.sendWithRetry(channelId, "", {
         type: kind,
         mediaId: uploaded.mediaId,
@@ -2100,34 +2282,70 @@ export default function ChatScreen() {
       ) : (
         <FlatList
           ref={listRef}
-          data={rows}
+          /*
+            > **Inverted, which is what makes chat open AT the newest message rather than
+            > scrolling to it.**
+            >
+            > It used to render oldest-first and chase the bottom with `scrollToEnd` on every
+            > content size change, and that failed in two visible ways at once. Measured on
+            > opening this channel: the list mounted at offset 0, jumped to 302 when the content
+            > was 1144 tall, and then **stayed at 302 while the content grew to 3177** - so the
+            > reader watched it scroll and still did not land at the bottom. The scroll it
+            > performed itself fired `onScroll`, which measured `fromBottom` against the
+            > half-rendered list, concluded the reader had left the tail, and switched off
+            > follow-the-tail for the rest of the session.
+            >
+            > Inverting removes the chase rather than tuning it. Offset 0 IS the newest message,
+            > so arrival needs no scroll at all, and a message arriving while the reader is up in
+            > history extends the list away from them instead of moving them.
+
+            The data is reversed rather than the store's order changed: `rows` stays oldest-first
+            for the pinned strip, which sorts by pin time, and for everything else that reasons
+            about history in the order it happened.
+          */
+          inverted
+          data={invertedRows}
           keyExtractor={keyExtractor}
           contentContainerStyle={styles.list}
           /*
-            Chat opens at the tail, and follows it while the reader is AT the tail.
-
-            Two things suppress the scroll, and they suppress different mistakes. `jumpedTo` is the
-            deliberate one: a jump sent us somewhere specific and scrolling to the end would
-            immediately undo it. `atTailRef` is the one that was missing - without it this fires on
-            every content size change, including a card resolving its fetch 200ms after its row was
-            laid out, which drags a reader who is halfway up the history back down to the bottom.
+            The ONLY thing that reacts to the content growing, and it is bounded three ways: it
+            runs only while an arrival placement is outstanding, only a handful of times, and
+            never once the reader has touched the list. The unbounded version of this - scroll to
+            the end on every content size change - is the bug this screen was rebuilt to remove.
           */
           onContentSizeChange={() => {
-            if (jumpedTo === null && atTailRef.current)
-              listRef.current?.scrollToEnd({ animated: false });
+            const target = pendingLandingRef.current;
+            if (!target) return;
+            if (landingAttemptsRef.current >= 8) {
+              pendingLandingRef.current = null;
+              return;
+            }
+            landingAttemptsRef.current += 1;
+            placeAtTop(target);
           }}
           /*
-            Recomputed as the reader moves, so the rule above knows whether following the tail is
-            what they want. The threshold is deliberately not zero: a list can sit a pixel or two
-            short of the bottom after a layout pass, and "near enough the tail" is what the reader
-            experiences as being at it.
+            The reader takes over. From the first drag the screen stops trying to place them
+            anywhere, permanently - an arrival that is still settling must never fight a finger.
           */
+          onScrollBeginDrag={() => {
+            pendingLandingRef.current = null;
+          }}
           scrollEventThrottle={16}
           onScroll={(event) => {
-            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-            const fromBottom =
-              contentSize.height - layoutMeasurement.height - contentOffset.y;
-            atTailRef.current = fromBottom <= TAIL_SLACK;
+            /*
+              In an inverted list the offset is measured FROM THE BOTTOM, so this is the distance
+              back into history directly - no arithmetic against a content height that is still
+              growing, which is precisely what the old calculation got wrong.
+            */
+            const fromBottom = event.nativeEvent.contentOffset.y;
+            /*
+              Whether the reader is at the newest message, which decides both whether an arriving
+              message counts as new and whether the control announcing them is shown. The
+              threshold is deliberately not zero: a list settles a pixel or two off its own end
+              after a layout pass, and "near enough" is what a reader experiences as being there.
+            */
+            const near = fromBottom <= TAIL_SLACK;
+            setAtNewest((current) => (current === near ? current : near));
             /*
              * The strip fades once the reader has left the live tail.
              *
@@ -2166,7 +2384,12 @@ export default function ChatScreen() {
             }, 50);
           }}
           ListEmptyComponent={
-            <View style={styles.empty}>
+            /*
+              Flipped back upright. `inverted` is a `scaleY(-1)` on the list which each CELL
+              undoes for itself - and the empty component is not a cell, so without this counter
+              transform the empty state renders upside down.
+            */
+            <View style={[styles.empty, styles.unflip]}>
               <Text style={styles.emptyTitle}>No messages yet</Text>
               <Text style={styles.emptyBody}>
                 Say something to get started.
@@ -2416,6 +2639,43 @@ export default function ChatScreen() {
       )}
 
       {/*
+        "3 new messages", while the reader is back in history.
+
+        > **This is the whole reason arriving messages no longer move anybody.** Being yanked to
+        > the bottom mid-sentence is the failure; being told, and choosing, is the fix. So the
+        > conversation stays exactly where it is and this appears instead.
+
+        Tapping lands on the FIRST of them rather than the newest, so the reader reads forward
+        through what they missed instead of arriving after it and scrolling back up. The count
+        then clears: they have been taken to where the new messages start, and leaving it up
+        would have it follow them down the screen saying the same thing.
+      */}
+      {!atNewest && newSinceSeen > 0 && (
+        <Pressable
+          style={styles.newMessages}
+          onPress={() => {
+            placeAtTop(
+              rows.find(
+                (row) => row.kind === "message" && row.message.seq > seenThrough,
+              ),
+            );
+            setSeenThrough(newestSeq);
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={
+            newSinceSeen === 1
+              ? "1 new message. Go to it"
+              : `${newSinceSeen} new messages. Go to the first one`
+          }
+        >
+          <MaterialIcons name="arrow-downward" size={16} color={color.onAccent} />
+          <Text style={styles.newMessagesLabel}>
+            {newSinceSeen === 1 ? "1 new message" : `${newSinceSeen} new messages`}
+          </Text>
+        </Pressable>
+      )}
+
+      {/*
         The quote sitting over the composer while a reply is being written.
 
         Directly above the input rather than inside it, so it reads as context for what is being
@@ -2563,12 +2823,46 @@ const styles = StyleSheet.create({
   list: {
     padding: space.md,
     gap: space.sm,
-    flexGrow: 1,
-    // Anchor to the bottom so a short conversation sits just above the composer rather
-    // than stranded at the top under a screen of empty space. With flexGrow alone the
-    // content container fills the viewport and leaves the gap below the messages.
-    justifyContent: "flex-end",
+    /*
+     * No `flexGrow` and no `justifyContent` here, and their absence is deliberate.
+     *
+     * They existed to anchor a short conversation to the bottom rather than leaving it stranded
+     * under a screen of empty space. An inverted list does that by construction - its content
+     * starts at the visual bottom and grows upward - and `justifyContent: 'flex-end'` inside a
+     * flipped container means the visual TOP, which put a two-message chat back under the header
+     * with the gap beneath it.
+     */
   },
+  /** Undo the list's `scaleY(-1)` for a child that is not a cell. See `ListEmptyComponent`. */
+  unflip: { transform: [{ scaleY: -1 }] },
+
+  /*
+   * The "N new messages" control.
+   *
+   * Sits just above the composer and centred, so it reads as belonging to the conversation
+   * rather than to the chrome, and lands under the thumb on a phone. Deliberately small and
+   * filled: it has to be noticeable enough to answer "did I miss something" at a glance without
+   * competing with the messages themselves, which are what the reader is actually here for.
+   */
+  newMessages: {
+    position: "absolute",
+    bottom: 84,
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.xs,
+    paddingVertical: space.xs + 2,
+    paddingHorizontal: space.md,
+    borderRadius: radius.pill,
+    backgroundColor: color.accent,
+    zIndex: 20,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  newMessagesLabel: { ...type.label, color: color.onAccent, textTransform: "none" },
   empty: {
     flex: 1,
     alignItems: "center",

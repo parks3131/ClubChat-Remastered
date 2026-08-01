@@ -136,10 +136,41 @@ const toEnvelope = (row: Row): MessageEnvelope => ({
 class SqliteMessageStore implements MessageStore {
   private readonly db: SQLite.SQLiteDatabase;
 
+  /**
+   * One writer at a time, for the whole store.
+   *
+   * > **A transaction belongs to the CONNECTION, not to the channel.** The client serializes
+   * > message application per channel - right, because gap detection is a read-then-write of that
+   * > channel's local max - but two DIFFERENT channels writing at the same moment still means two
+   * > `withTransactionAsync` calls on one connection, and expo-sqlite answers that with `Error
+   * > code 1: cannot start a transaction within a transaction`, then `cannot rollback - no
+   * > transaction is active`. The insert dies and takes its message with it.
+   * >
+   * > Seen live on 2026-08-01: a sync running while an arriving card was applied. The per-channel
+   * > queue could never have prevented it, because the two were not the same channel.
+   *
+   * So the lock lives here, where the single connection does. Callers do not have to know, which
+   * is the point: `applyIncoming`, `syncChannel` and `loadOlder` all reach this store by
+   * different routes and none of them can see the others.
+   */
+  private writes: Promise<unknown> = Promise.resolve();
+
   // Explicit assignment, not a parameter property, for consistency with the rest of the
   // repo. Metro would accept either; the server's runtime would not. See AGENTS.md 5.3.
   constructor(db: SQLite.SQLiteDatabase) {
     this.db = db;
+  }
+
+  /** Run `op` after every write already queued, whether that one succeeded or failed. */
+  private exclusive<T>(op: () => Promise<T>): Promise<T> {
+    const next = this.writes.then(op, op);
+    // Swallowed on the stored tail only, so one failed write does not reject every write queued
+    // behind it. The caller still sees its own rejection.
+    this.writes = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   async localMaxSeq(channelId: string): Promise<number> {
@@ -154,7 +185,9 @@ class SqliteMessageStore implements MessageStore {
     if (messages.length === 0) return;
     // One transaction for the batch: a sync response can be hundreds of rows, and
     // committing each one separately is the difference between instant and visibly slow.
-    await this.db.withTransactionAsync(async () => {
+    // Behind the store's write lock, because that transaction is connection-wide.
+    await this.exclusive(() =>
+      this.db.withTransactionAsync(async () => {
       for (const message of messages) {
         await this.db.runAsync(
           `INSERT INTO messages
@@ -214,8 +247,9 @@ class SqliteMessageStore implements MessageStore {
           message.deletedAt,
           message.createdAt,
         );
-      }
-    });
+        }
+      }),
+    );
   }
 
   /**
@@ -246,39 +280,46 @@ class SqliteMessageStore implements MessageStore {
       values.push(patch.deletedAt);
     }
 
-    if (assignments.length > 0) {
-      await this.db.runAsync(
-        `UPDATE messages SET ${assignments.join(', ')} WHERE channel_id = ? AND seq = ?`,
-        ...values,
+    /*
+     * Behind the same write lock as `upsert`, and for a second reason on top of the connection's:
+     * the strike below is a read-modify-write, so a writer landing between its read and its write
+     * would have its change overwritten.
+     */
+    await this.exclusive(async () => {
+      if (assignments.length > 0) {
+        await this.db.runAsync(
+          `UPDATE messages SET ${assignments.join(', ')} WHERE channel_id = ? AND seq = ?`,
+          ...values,
+          channelId,
+          seq,
+        );
+      }
+
+      /*
+       * A delete also strikes this message out of every quote of it. See `strikeQuotedMessage`.
+       *
+       * Read-modify-write rather than a `json_set` in SQL: the shape of the stored ref is declared
+       * in one place - the shared `MessageReplyRef` - and spelling its keys out in a SQL string
+       * would be a second declaration that no compiler is checking. Replies to any one message are
+       * few, and `reply_to_seq` is a real column precisely so this finds them by index.
+       */
+      if (patch.deletedAt === undefined || patch.deletedAt === null) return;
+      const quoting = await this.db.getAllAsync<{ seq: number; reply_to: string | null }>(
+        'SELECT seq, reply_to FROM messages WHERE channel_id = ? AND reply_to_seq = ?',
         channelId,
         seq,
       );
-    }
-
-    /*
-     * A delete also strikes this message out of every quote of it. See `strikeQuotedMessage`.
-     *
-     * Read-modify-write rather than a `json_set` in SQL: the shape of the stored ref is declared
-     * in one place - the shared `MessageReplyRef` - and spelling its keys out in a SQL string
-     * would be a second declaration that no compiler is checking. Replies to any one message are
-     * few, and `reply_to_seq` is a real column precisely so this finds them by index.
-     */
-    if (patch.deletedAt === undefined || patch.deletedAt === null) return;
-    const quoting = await this.db.getAllAsync<{ seq: number; reply_to: string | null }>(
-      'SELECT seq, reply_to FROM messages WHERE channel_id = ? AND reply_to_seq = ?',
-      channelId,
-      seq,
-    );
-    for (const row of quoting) {
-      const ref = parseJsonObject<MessageReplyRef>(row.reply_to);
-      if (ref === null) continue;
-      await this.db.runAsync(
-        'UPDATE messages SET reply_to = ? WHERE channel_id = ? AND seq = ?',
-        JSON.stringify(strikeQuotedMessage(ref)),
-        channelId,
-        row.seq,
-      );
-    }
+      for (const row of quoting) {
+        const ref = parseJsonObject<MessageReplyRef>(row.reply_to);
+        if (ref === null) continue;
+        await this.db.runAsync(
+          'UPDATE messages SET reply_to = ? WHERE channel_id = ? AND seq = ?',
+          JSON.stringify(strikeQuotedMessage(ref)),
+          channelId,
+          row.seq,
+        );
+      }
+    });
   }
 
   async list(channelId: string): Promise<MessageEnvelope[]> {

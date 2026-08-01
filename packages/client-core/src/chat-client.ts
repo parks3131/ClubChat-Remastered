@@ -442,19 +442,33 @@ export class ChatClient {
    * from the UI - and a sync backfills the hole behind it.
    */
   private async applyIncoming(envelope: MessageEnvelope, channelId: string): Promise<void> {
-    return this.serialize(channelId, async () => {
+    /*
+     * The gap decision and the write happen under the channel's lock. The BACKFILL does not.
+     *
+     * > **Syncing inside the lock is what produced `cannot start a transaction within a
+     * > transaction`.** `syncChannel` writes to the same store, and holding the lock across it
+     * > meant the only safe way to serialize those writes - taking the same lock - would have
+     * > deadlocked against the operation waiting for them. Moving the network round trip out
+     * > from under the lock lets both paths queue behind it properly.
+     *
+     * It is also the right shape regardless: a gap sync is a network round trip, and holding a
+     * per-channel lock across one stalls every other frame for that channel until it returns.
+     */
+    const gap = await this.serialize(channelId, async () => {
       const localMax = await this.store.localMaxSeq(channelId);
       const decision = decideGap(envelope.seq, localMax);
 
-      if (decision.action === 'ignore') return;
+      if (decision.action === 'ignore') return null;
 
       await this.store.upsert([envelope]);
-
-      if (decision.syncAfter) {
-        this.log('gap detected, syncing', { channelId, arriving: envelope.seq, localMax });
-        await this.syncChannel(channelId, localMax);
-      }
+      // On a gap the message is still appended - a send that succeeded must not vanish from the
+      // UI - and the backfill below fills the hole behind it.
+      return decision.syncAfter ? localMax : null;
     });
+
+    if (gap === null) return;
+    this.log('gap detected, syncing', { channelId, arriving: envelope.seq, localMax: gap });
+    await this.syncChannel(channelId, gap);
   }
 
   /** Run `op` after every previously queued op for this channel, pass or fail. */
@@ -498,6 +512,19 @@ export class ChatClient {
   markRead(channelId: string, upToSeq: number) {
     const held = this.pendingReads.get(channelId) ?? -1;
     if (upToSeq > held) this.pendingReads.set(channelId, upToSeq);
+
+    /*
+     * Advance this client's own view of the cursor, not just the server's.
+     *
+     * `channels` is only ever replaced wholesale at `auth.ok`, so without this it keeps
+     * reporting the cursor as it stood when the socket connected - for the whole session. A
+     * screen that asks "what had I read when I opened this?" to decide where to place the
+     * reader would then get the same stale answer on every re-entry and drop them back into
+     * history they had already read. Monotonic, like the server's own `GREATEST`.
+     */
+    const channel = this.channels.find((entry) => entry.id === channelId);
+    if (channel && upToSeq > channel.lastReadSeq) channel.lastReadSeq = upToSeq;
+
     this.flushReads();
   }
 
@@ -714,7 +741,16 @@ export class ChatClient {
       const result = body.channels.find((entry) => entry.channelId === channelId);
       if (!result || result.messages.length === 0) return;
 
-      await this.store.upsert(result.messages);
+      /*
+       * Through the SAME per-channel queue a live frame uses.
+       *
+       * This write used to bypass it entirely, so a sync and an arriving message could open two
+       * SQLite transactions at once - "cannot start a transaction within a transaction", which
+       * kills the insert and loses whichever message was in flight. Failure mode 3 said "apply
+       * frames one at a time per channel"; the sync path was never counted as a frame, and it
+       * writes to the same table.
+       */
+      await this.serialize(channelId, () => this.store.upsert(result.messages));
       since = result.messages[result.messages.length - 1]!.seq;
       if (!result.hasMore) return;
     }
@@ -728,7 +764,8 @@ export class ChatClient {
     );
     if (!response.ok) throw new Error(`history failed: ${response.status}`);
     const body = (await response.json()) as { messages: MessageEnvelope[] };
-    await this.store.upsert(body.messages);
+    // Serialized for the same reason as the sync write above: one writer per channel at a time.
+    await this.serialize(channelId, () => this.store.upsert(body.messages));
     return body.messages;
   }
 }

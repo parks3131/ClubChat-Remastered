@@ -13,6 +13,75 @@ Newest first.
 
 ---
 
+## 2026-08-01 (later still) - The list that chased its own bottom
+
+A founder report: "whenever I come to any chat it should take me directly to the bottom, and I
+don't want to see the scrolling thing."
+
+Measured before touching anything, by sampling the scroll offset every frame while a channel
+opened. It was worse than described:
+
+| t | offset | content height |
+|---|---|---|
+| 71ms | 0 | 890 |
+| 90ms | **302** | 1144 |
+| 125ms | **302** | 3177 |
+
+The list mounted at the top, jumped to what was "the end" while it was still rendering, and then
+**stayed there while the content grew to 3177** - so the reader watched it scroll and did not
+arrive at the bottom either. The scroll it performed itself fired `onScroll`, which computed
+`fromBottom` against the half-built list, decided the reader had left the tail, and switched off
+follow-the-tail for the rest of the session.
+
+**The list is now inverted.** Offset 0 IS the newest message, so arriving needs no scroll at all,
+and a message arriving while somebody is up in history extends the list away from them rather
+than moving them. That deletes the whole `atTailRef` heuristic and the `scrollToEnd` chase with
+it - the same machinery that caused the yanking bug fixed in `a2fb32f`. Re-measured after: offset
+stays 0 for the entire mount while the content grows 1249 to 3177.
+
+Then a second requirement, which sharpened the first: **who caused the movement decides whether
+there is any.** Somebody else's message must never move you - it is announced by a "3 new
+messages" control instead, and tapping that lands on the FIRST of them so you read forward. Your
+own action always does move you: send, attach, or create a poll/event/meeting and you are taken
+to the newest message to watch it land. And entering a chat lands on the first unread if there is
+one, which is what `SPEC/PRD/05` rule 3 already said and nothing had ever implemented.
+
+Three bugs came out of building it:
+
+**A store-wide write lock.** `cannot start a transaction within a transaction`, live, from
+expo-sqlite. The client serializes message application per channel - correct, because gap
+detection is a read-then-write of that channel's local max - but **a transaction belongs to the
+connection, not the channel**, so two different channels writing at once collide anyway. The
+first attempt put the lock in the client and was wrong twice over: wrong layer, and
+`syncChannel` is awaited from inside `applyIncoming`, so taking the same per-channel lock would
+have deadlocked. The gap backfill moved out from under the lock (it is a network round trip and
+had no business holding one), and the real lock now lives in the SQLite store, where the single
+connection does.
+
+**A read cursor that was always "nothing unread".** Opening a chat is what marks it read, so
+anything asking "what had I read when I opened this?" has to ask before that runs - effects run
+in declaration order, and that ordering is now load-bearing. `markRead` also advances the
+client's own copy of the cursor, which it never did: `channels` is only replaced wholesale at
+`auth.ok`, so a second entry in the same session read a cursor the server had moved past hours
+ago.
+
+**A placement that clamped to the bottom.** The first-unread landing resolved the right target -
+instrumented and confirmed, `lastRead: 10` to `firstUnread: 11` - and still left the list at
+offset 0, because the four cards below the target were empty shells at that instant. Putting the
+target at the top needed more content than existed, so it clamped. The placement is now
+re-applied as the content settles, bounded to eight attempts and abandoned the moment the reader
+touches the list. That bound is the difference between this and the unbounded content-size chase
+it replaces.
+
+**What is verified and what is not.** Opening with no motion, arrival not moving the reader, the
+count appearing with the right number, and tapping it - all confirmed in the browser with
+measurements. The first-unread placement is confirmed to *choose* correctly and is **not**
+confirmed to hold on screen: every attempt needed a message to arrive while the tab sat idle, and
+the automated browser is throttled between steps, so the gateway reaped the socket at 90 seconds
+each time and the message never arrived. That one needs a device.
+
+---
+
 ## 2026-08-01 (later) - Replies, and a four-second frame
 
 Four things, and the two that mattered most were not the feature.

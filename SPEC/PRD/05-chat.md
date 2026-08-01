@@ -19,7 +19,7 @@ unless it names an exception, and the exceptions a DM carries are listed in
 | Highlights | Pinned / Announcements / Reports tabs over the same conversation |
 | Jump-to-message | Tapping a pinned notice lands on that exact message, highlighted |
 | Unread-aware entry | Chat opens on the first unread message |
-| Jump-to-latest | A floating control once scrolled away from the live tail |
+| Jump-to-latest | A floating "N new messages" control once messages arrive while the reader is back in history. Tapping lands on the FIRST of them, to read forward |
 | System messages | Joins, leaves, adds, removes, promotions, demotions |
 | Auto-posted cards | A created poll, event, or meeting posts itself into the relevant chat |
 | Inline poll voting | A poll card in chat is fully votable without opening the poll screen |
@@ -47,6 +47,22 @@ second is a feature the whole product would have to bend around. Threads remain 
    up.
 3. **Chat opens positioned on the first unread message, with no visible scroll motion.** If
    fully caught up, it opens at the bottom.
+
+   **Who caused the movement decides whether there is any.** Somebody else's message never moves
+   the reader - it is announced by the control in rule 3b instead. The reader's own action always
+   does: sending, attaching, or creating a poll, event or meeting returns them to the newest
+   message so they watch it land. Being taken somewhere you did not ask to go is the failure;
+   watching your own thing arrive is the point.
+
+3a. **The list is inverted**, which is what makes "no visible scroll motion" true rather than
+   aspirational. Chat used to render oldest-first and chase the bottom, so opening a channel
+   scrolled visibly and - measured on 2026-08-01 - frequently stopped partway up the history
+   because the content was still growing when it decided it had arrived.
+
+3b. **Messages arriving while the reader is back in history do not move them.** A floating
+   control appears saying how many arrived; tapping it lands on the FIRST of them, so they read
+   forward through what they missed rather than arriving after it. The count covers arrivals
+   since they last saw the newest message, not since they opened the app.
 4. **Opening a chat marks it read**, which clears its unread count everywhere. Nothing else
    clears it.
 5. **Only an admin of that space can post an announcement or pin a message.** In race chat
@@ -185,7 +201,10 @@ it, and the reports it would contain belong to the platform moderation queue.
 - [ ] The pinned strip appears when a message is pinned and can be dismissed without unpinning.
 - [ ] Highlights lists pinned and announcement messages.
 - [ ] Reopening a chat with unread messages lands on the first unread one with no visible scrolling.
-- [ ] The jump-to-latest control appears after scrolling up and disappears at the bottom.
+- [ ] Opening a chat with unread messages lands on the first one, with nothing seen to scroll.
+- [ ] A message arriving while the reader is back in history does not move them, and is announced
+      by a control naming how many arrived.
+- [ ] Sending, attaching, or creating a poll/event/meeting returns the reader to the newest message.
 - [ ] Scrolling to the top loads older messages without losing scroll position, and **does not fire spuriously on open**.
 - [ ] Deleting a message leaves a tombstone for every other member.
 - [ ] A reply shows a quote of the message it answers, and tapping the quote jumps to it.
