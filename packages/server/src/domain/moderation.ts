@@ -434,7 +434,12 @@ export async function readReportedContext(
       body: row.body,
       clientMsgId: row.client_msg_id,
       pinned: row.pinned,
+      // Not part of the moderation window: a pin is not evidence.
+      pinnedAt: null,
       reactions: byMessage.get(row.id) ?? [],
+      // Not loaded for the moderation window: a moderator is judging what was said, and a
+      // highlighted name would be a profile link out of an audited read.
+      mentions: [],
       mediaId: row.media_id,
       documentName: row.document_name,
       documentSize: row.document_size === null ? null : Number(row.document_size),

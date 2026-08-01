@@ -11,7 +11,7 @@
  */
 
 import * as SQLite from 'expo-sqlite';
-import type { MessageEnvelope, MessageReaction } from '@clubchat/shared';
+import type { MessageEnvelope, MessageMention, MessageReaction } from '@clubchat/shared';
 import {
   InMemoryMessageStore,
   type MessagePatch,
@@ -43,10 +43,12 @@ type Row = {
   sender_id: string;
   sender_name: string | null;
   sender_image: string | null;
+  mentions: string | null;
   type: string;
   body: string | null;
   client_msg_id: string;
   pinned: number;
+  pinned_at: string | null;
   reactions: string | null;
   media_id: string | null;
   document_name: string | null;
@@ -59,7 +61,7 @@ type Row = {
 };
 
 /**
- * Reactions are stored as a JSON string.
+ * Reactions and mentions are stored as JSON strings.
  *
  * A child table keyed by `(channel_id, seq, emoji, user_id)` would be the normalised shape and
  * is the wrong trade here: this is a disposable cache whose only reader renders the whole
@@ -67,10 +69,10 @@ type Row = {
  * malformed value by returning an empty list, because a cache that throws on a bad row is
  * worse than one that shows a message without its pills.
  */
-function parseReactions(raw: string | null): MessageReaction[] {
+function parseJsonList<T>(raw: string | null): T[] {
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw) as MessageReaction[];
+    const parsed = JSON.parse(raw) as T[];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -92,7 +94,13 @@ const toEnvelope = (row: Row): MessageEnvelope => ({
   body: row.body,
   clientMsgId: row.client_msg_id,
   pinned: row.pinned === 1,
-  reactions: parseReactions(row.reactions),
+  // Null on a row cached before this column existed. The strip orders by it, so such a row
+  // simply sorts last until the next sync fills it in.
+  pinnedAt: row.pinned_at,
+  reactions: parseJsonList<MessageReaction>(row.reactions),
+  // Empty on a row cached before this column existed, which renders the body as plain text -
+  // what shipped before mentions, and right for the majority of messages, which name nobody.
+  mentions: parseJsonList<MessageMention>(row.mentions),
   mediaId: row.media_id,
   documentName: row.document_name,
   documentSize: row.document_size,
@@ -128,9 +136,9 @@ class SqliteMessageStore implements MessageStore {
       for (const message of messages) {
         await this.db.runAsync(
           `INSERT INTO messages
-             (channel_id, seq, id, sender_id, sender_name, sender_image, type, body, client_msg_id, pinned, reactions,
+             (channel_id, seq, id, sender_id, sender_name, sender_image, type, body, client_msg_id, pinned, pinned_at, reactions, mentions,
               media_id, document_name, document_size, linked_poll_id, linked_event_id, linked_meeting_id, deleted_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (channel_id, seq) DO UPDATE SET
              id = excluded.id,
              sender_id = excluded.sender_id,
@@ -141,6 +149,8 @@ class SqliteMessageStore implements MessageStore {
              client_msg_id = excluded.client_msg_id,
              pinned = excluded.pinned,
              reactions = excluded.reactions,
+             pinned_at = excluded.pinned_at,
+             mentions = excluded.mentions,
              media_id = excluded.media_id,
              document_name = excluded.document_name,
              document_size = excluded.document_size,
@@ -159,7 +169,9 @@ class SqliteMessageStore implements MessageStore {
           message.body,
           message.clientMsgId,
           message.pinned ? 1 : 0,
+          message.pinnedAt,
           JSON.stringify(message.reactions),
+          JSON.stringify(message.mentions),
           message.mediaId,
           message.documentName,
           message.documentSize,

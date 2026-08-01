@@ -7,7 +7,7 @@
  * here rather than calling appendMessage directly.
  */
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { MessageEnvelope, MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import {
@@ -111,11 +111,12 @@ export async function sendMessage(
     document = { name: media.documentName, size: media.bytes };
   }
 
-  // Mentions are filtered to people who can actually reach this chat BEFORE they are
-  // stored, so a client naming an outsider cannot manufacture a notification into a
-  // conversation that person has no access to. The audience function re-checks anyway;
+  // Mentions are filtered to people who can actually reach this chat, and to names that really
+  // appear in the body, BEFORE they are stored - so a client naming an outsider cannot
+  // manufacture a notification into a conversation that person has no access to, and a name
+  // deleted before sending takes its mention with it. The audience function re-checks anyway;
   // this keeps the stored rows honest as well.
-  const mentions = await filterReachableMentions(db, channel, input.mentions ?? []);
+  const mentions = await resolveMentions(db, channel, input.mentions ?? [], input.body ?? null);
 
   const result = await appendMessage(db, {
     channelId: input.channelId,
@@ -141,7 +142,13 @@ export async function sendMessage(
   if (!result.deduplicated && mentions.length > 0) {
     await db
       .insert(messageMentions)
-      .values(mentions.map((userId) => ({ messageId: result.message.id, userId })))
+      .values(
+        mentions.map((mention) => ({
+          messageId: result.message.id,
+          userId: mention.userId,
+          name: mention.name,
+        })),
+      )
       .onConflictDoNothing();
   }
 
@@ -149,20 +156,46 @@ export async function sendMessage(
 }
 
 /**
- * Narrow a client-supplied mention list to people who can access this channel.
+ * Narrow a client-supplied mention list to people who can access this channel **and are
+ * actually named in the text**, resolving the name to store alongside each.
  *
- * Autocomplete already offers only eligible people, but that is UX. A member could name
- * anyone by editing the payload.
+ * Two independent gates, and both matter:
+ *
+ *  1. **Reachability.** Autocomplete already offers only eligible people, but that is UX. A
+ *     member could name anyone by editing the payload, and a mention is a notification into a
+ *     conversation the named person may have no access to.
+ *  2. **The name is present in the body.** A client may claim a mention it did not write. More
+ *     usefully in practice, somebody picks a name from the list and then deletes it again before
+ *     sending - and being notified about a message that does not contain your name is confusing
+ *     in a way that is hard to explain. Checking the body here makes "edit the name out and the
+ *     mention goes with it" a property of the system rather than of the client remembering to.
+ *
+ * The name comes from the user record, never from the client, so a caller cannot make an
+ * arbitrary run of text highlight as somebody. It is stored rather than re-joined on read - see
+ * the note on the `name` column.
  */
-async function filterReachableMentions(
+async function resolveMentions(
   db: Db,
   channel: ChannelRef,
   candidates: readonly string[],
-): Promise<string[]> {
+  body: string | null,
+): Promise<Array<{ userId: string; name: string }>> {
   if (candidates.length === 0) return [];
-  const reachable = await channelAudience(db, channel);
-  const allowed = new Set(reachable);
-  return [...new Set(candidates)].filter((id) => allowed.has(id));
+  // Nothing to be named in. A photo with no caption cannot mention anybody.
+  if (body === null || body.length === 0) return [];
+
+  const reachable = new Set(await channelAudience(db, channel));
+  const unique = [...new Set(candidates)].filter((id) => reachable.has(id));
+  if (unique.length === 0) return [];
+
+  const named = await db
+    .select({ id: users.id, name: users.name })
+    .from(users)
+    .where(inArray(users.id, unique));
+
+  return named
+    .filter((row) => row.name !== null && body.includes(`@${row.name}`))
+    .map((row) => ({ userId: row.id, name: row.name as string }));
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +245,12 @@ function toEnvelope(
     body: row.body,
     clientMsgId: row.clientMsgId,
     pinned: row.pinned,
+    pinnedAt: row.pinnedAt?.toISOString() ?? null,
+    // Both empty for the same reason: this envelope answers a pin or a delete, and the change
+    // that matters reaches other clients as a `msg.update` PATCH rather than as a whole message.
+    // Nothing merges this over a cached copy, so neither list can erase one.
     reactions: [],
+    mentions: [],
     mediaId: row.mediaId,
     documentName: row.documentName,
     documentSize: row.documentSize,
@@ -258,7 +296,12 @@ export async function setPinned(
 
   const updated = await db
     .update(messages)
-    .set({ pinned })
+    /*
+     * Stamped on every pin, including re-pinning something that was pinned before, so a re-pin
+     * genuinely becomes the most recent - which is what the strip orders by. Cleared on unpin so
+     * the column never claims a pin that is not there.
+     */
+    .set({ pinned, pinnedAt: pinned ? new Date() : null })
     // The type is deliberately NOT in this SET. A pin must never be able to carry a
     // type change along with it.
     .where(and(eq(messages.channelId, channel.id), eq(messages.seq, seq)))

@@ -1,0 +1,1 @@
+ALTER TABLE "message_mentions" ADD COLUMN "name" text;

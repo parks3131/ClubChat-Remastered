@@ -111,6 +111,27 @@ export const MessageReaction = z.object({
 export type MessageReaction = z.infer<typeof MessageReaction>;
 
 /**
+ * One person named in a message.
+ *
+ * > **The name is carried, not just the id**, which is the whole reason this is on the wire at
+ * > all rather than being derived. A body reads `@Sean O Donnell` as plain text; to colour that
+ * > span and make it open a profile, the client has to know which run of characters is a person
+ * > and which person it is. Matching the text against a roster it may not have loaded - or may
+ * > not be allowed to load, in a DM - is not a thing the client can do offline.
+ *
+ * The name is the one stored at send time and is deliberately NOT re-joined on read, unlike
+ * `senderName`. It has to match the characters actually sitting in the body: a member who renames
+ * themselves does not retroactively edit what everybody typed, so re-joining would produce a name
+ * that highlights nothing.
+ */
+export const MessageMention = z.object({
+  userId: Uuid,
+  /** Exactly as it appears in the body, without the leading `@`. */
+  name: z.string(),
+});
+export type MessageMention = z.infer<typeof MessageMention>;
+
+/**
  * A message as it appears on the wire and in the client's local store.
  *
  * `seq` is the ordering. `createdAt` is for display only - a timestamp is not an
@@ -168,7 +189,26 @@ export const MessageEnvelope = z.object({
   body: z.string().nullable(),
   clientMsgId: Uuid,
   pinned: z.boolean(),
+  /**
+   * When it was pinned, or null.
+   *
+   * The pinned strip orders by this, not by `seq`: a strip ordered by message age put a re-pinned
+   * old message back in its old place, where a four-item cap dropped it straight back out. It is
+   * also the only date a notice could honestly show for itself.
+   */
+  pinnedAt: z.string().datetime().nullable().default(null),
   reactions: z.array(MessageReaction).default([]),
+  /**
+   * Who is named in the body, so the client can colour those spans and open a profile from one.
+   *
+   * On the envelope for the same reason as `reactions` and `senderName`: chat is readable from
+   * the local cache in airplane mode, and a mention that needed a roster lookup would be the one
+   * thing missing exactly when there is no network. It is also the only way a DM can render one -
+   * there is no roster there to look a name up in.
+   *
+   * Defaulted, so a producer predating this field still parses.
+   */
+  mentions: z.array(MessageMention).default([]),
   /**
    * The attached object, for a `photo` or `document` message.
    *

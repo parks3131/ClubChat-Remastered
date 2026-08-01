@@ -37,6 +37,17 @@ export type PendingSend = {
   localUri?: string;
   documentName?: string;
   documentSize?: number;
+  /**
+   * Who the composer named, as user ids.
+   *
+   * Held on the outbox entry rather than recomputed at flush time, because a retry across a
+   * reconnect has to send the same mentions as the first attempt - and by then the composer that
+   * knew who was picked has been cleared.
+   *
+   * A claim, not an instruction: the server stores a mention only for somebody whose name is
+   * actually in the body, so a stale id here can add nobody.
+   */
+  mentions?: readonly string[];
   /** Attempts so far. Surfaced so the UI can show "failed" after enough of them. */
   attempts: number;
   status: 'pending' | 'failed';

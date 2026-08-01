@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { ReactionEmoji } from '@clubchat/shared';
 import { readChannelMeta, muteChannel, unmuteChannel } from '../../domain/dm.ts';
 import { openChat } from '../../domain/inbox.ts';
+import { mentionableMembers } from '../../domain/mentions.ts';
 import { readReactions, toggleReaction } from '../../domain/reactions.ts';
 import {
   advanceReadCursor,
@@ -102,6 +103,22 @@ export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
 
     return readHighlights(deps.db, request.params.id, 'pinned', query.data);
+  });
+
+  /**
+   * Who the composer may offer for an `@`.
+   *
+   * Behind the same channel guard as the history read, so the pool can never be wider than the
+   * conversation itself - and it is computed by the very function the send path filters against,
+   * so the list cannot offer somebody the send would drop.
+   */
+  app.get<{ Params: { id: string } }>('/channels/:id/mentionable', async (request, reply) => {
+    const guard = await authorizeChannel(deps, request, request.params.id);
+    if (!guard.ok) return reply.code(guard.code).send({ error: 'not_found' });
+
+    return {
+      members: await mentionableMembers(deps.db, request.params.id, request.userId!),
+    };
   });
 
   app.get<{ Params: { id: string } }>('/channels/:id/announcements', async (request, reply) => {

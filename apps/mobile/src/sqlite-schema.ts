@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS messages (
   body           TEXT,
   client_msg_id  TEXT NOT NULL,
   pinned         INTEGER NOT NULL DEFAULT 0,
+  pinned_at      TEXT,
   reactions      TEXT NOT NULL DEFAULT '[]',
+  mentions       TEXT NOT NULL DEFAULT '[]',
   media_id       TEXT,
   document_name  TEXT,
   document_size  INTEGER,
@@ -100,6 +102,19 @@ export const MIGRATIONS: ReadonlyArray<{ column: string; statements: readonly st
    * backfill to replace a placeholder that already looks right.
    */
   { column: 'sender_image', statements: [`ALTER TABLE messages ADD COLUMN sender_image TEXT`] },
+  /*
+   * No wipe, following `sender_image` rather than `sender_name`.
+   *
+   * An empty mention list on a cached row renders the body as plain text, which is exactly what
+   * shipped before mentions existed and is correct for the great majority of messages, which name
+   * nobody. The row gains its mentions the next time a sync overwrites it.
+   */
+  {
+    column: 'mentions',
+    statements: [`ALTER TABLE messages ADD COLUMN mentions TEXT NOT NULL DEFAULT '[]'`],
+  },
+  /* No wipe: a null pin time simply sorts last in the strip until the next sync fills it in. */
+  { column: 'pinned_at', statements: [`ALTER TABLE messages ADD COLUMN pinned_at TEXT`] },
 ];
 
 /**

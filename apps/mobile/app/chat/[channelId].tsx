@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -33,15 +33,52 @@ import {
   type UploadKind,
 } from "../../src/upload.ts";
 import { LinearGradient } from "expo-linear-gradient";
+import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
 import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  activeMentionQuery,
+  applyMention,
+  matchMentionables,
+  mentionIdsInBody,
+  splitMentions,
+  type Mentionable,
+  type MentionPick,
+} from "../../src/mentions.ts";
 import { MaterialIcons } from "@expo/vector-icons";
 import { Avatar } from "../../src/ui.tsx";
 import { ChatEventCard } from "../../src/screens/events.tsx";
 import { ChatMeetingCard } from "../../src/screens/meetings.tsx";
 import { ChatPollCard } from "../../src/screens/polls.tsx";
 import { QuickNav, spaceProfileHref, useGoBack } from "../../src/nav.tsx";
-import { color, radius, space, type } from "../../src/theme.ts";
+import { color, fontFamily, radius, space, type } from "../../src/theme.ts";
+
+/**
+ * How many pinned notices hang above the conversation.
+ *
+ * A window on the most recent, not the whole pin list - everything pinned stays in Highlights.
+ * Four fits the strip without it becoming a second scrolling list on top of the first.
+ */
+const PINNED_STRIP_LIMIT = 4;
+
+/**
+ * How far from the live tail the pinned strip stays visible, in points.
+ *
+ * Generous enough that a small nudge up does not flicker it away, short enough that reading back
+ * through history clears it. Measured from the bottom, so it is a distance rather than a
+ * direction and does not need to track which way the finger moved.
+ */
+const PINNED_STRIP_FADE_AFTER = 400;
+
+/**
+ * How long a jumped-to message stays highlighted.
+ *
+ * Long enough to find it after the list settles, short enough that it does not linger as though
+ * the message were permanently marked. Clearing the highlight is also what stops the jump from
+ * re-firing on every later change to the list.
+ */
+const JUMP_HIGHLIGHT_MS = 2200;
 
 type Row =
   | { kind: "message"; message: MessageEnvelope }
@@ -204,6 +241,202 @@ function createActions(meta: ChannelMeta): Array<{
 }
 
 /**
+ * A message body with its mentions coloured and tappable.
+ *
+ * > **Nested `<Text>`, never a row of Views.** A mention sits mid-sentence and has to wrap with
+ * > the words around it; laying the runs out as siblings in a flex row would break the line
+ * > wherever a name appears and leave ragged gaps. Nested Text is the only thing that flows as
+ * > one paragraph.
+ *
+ * The tap is `onPress` on the inner Text rather than a Pressable, for the same reason and for
+ * failure mode 17: a Pressable inside a bubble that is itself long-pressable nests two gesture
+ * targets, which is invalid on web and swallows the outer long-press on native.
+ *
+ * Only names the server vouched for are highlighted, because the runs come from the stored
+ * mention list rather than from scanning the text for `@`. Typing an `@` in front of arbitrary
+ * words colours nothing.
+ */
+function MentionedBody({
+  body,
+  mentions,
+  mine,
+  onOpenProfile,
+}: {
+  body: string;
+  mentions: MessageEnvelope["mentions"];
+  mine: boolean;
+  onOpenProfile: (userId: string) => void;
+}) {
+  const runs = splitMentions(body, mentions);
+  // The overwhelming majority of messages name nobody, and pay one check for it.
+  if (runs.length === 1 && runs[0]!.userId === null) return <>{body}</>;
+
+  return (
+    <>
+      {runs.map((run, index) =>
+        run.userId === null ? (
+          <Text key={index}>{run.text}</Text>
+        ) : (
+          <Text
+            key={index}
+            style={mine ? styles.mentionInMine : styles.mentionInTheirs}
+            onPress={() => onOpenProfile(run.userId as string)}
+            accessibilityRole="link"
+            accessibilityLabel={`Open ${run.text.slice(1)}'s profile`}
+          >
+            {run.text}
+          </Text>
+        ),
+      )}
+    </>
+  );
+}
+
+/**
+ * The long-press overlay: reactions above, the message itself, actions below.
+ *
+ * v1's own menu is GroupMe's, and the shape is doing real work rather than decoration. The
+ * backdrop blurs the conversation so the pressed message is unambiguous - in a dense chat, a
+ * bottom sheet leaves you guessing which bubble you actually caught. The message is redrawn here
+ * rather than the real row being lifted, because the real row is inside a FlatList cell that
+ * clips and scrolls.
+ *
+ * The whole backdrop dismisses. A destructive item is last and red, and the two destructive ones
+ * hand off to a confirmation rather than acting.
+ */
+function MessageActions({
+  message,
+  mine,
+  canPin,
+  canDelete,
+  onDismiss,
+  onReact,
+  onReply,
+  onCopy,
+  onPin,
+  onReport,
+  onDelete,
+}: {
+  message: MessageEnvelope;
+  mine: boolean;
+  canPin: boolean;
+  canDelete: boolean;
+  onDismiss: () => void;
+  onReact: (emoji: ReactionEmoji) => void;
+  onReply: () => void;
+  onCopy: () => void;
+  onPin: () => void;
+  onReport: () => void;
+  onDelete: () => void;
+}) {
+  const hasText = message.body !== null && message.body.length > 0;
+
+  const items: Array<{
+    label: string;
+    icon: React.ComponentProps<typeof MaterialIcons>["name"];
+    onPress: () => void;
+    destructive?: boolean;
+  }> = [
+    { label: "Reply", icon: "reply", onPress: onReply },
+    // Copy is offered only when there is text to copy - a photo has nothing to put on the
+    // clipboard, and an item that silently does nothing is worse than an absent one.
+    ...(hasText ? [{ label: "Copy", icon: "content-copy" as const, onPress: onCopy }] : []),
+    ...(canPin
+      ? [
+          {
+            label: message.pinned ? "Unpin" : "Pin",
+            icon: "push-pin" as const,
+            onPress: onPin,
+          },
+        ]
+      : []),
+    // Nobody reports their own message.
+    ...(mine
+      ? []
+      : [
+          {
+            label: "Report a concern",
+            icon: "shield" as const,
+            onPress: onReport,
+            destructive: true,
+          },
+        ]),
+    ...(canDelete
+      ? [{ label: "Delete", icon: "delete" as const, onPress: onDelete, destructive: true }]
+      : []),
+  ];
+
+  return (
+    <View style={styles.overlay}>
+      {/*
+        The scrim is its own pressable filling the screen, BEHIND the content rather than
+        wrapping it - a Pressable wrapping the menu would put every item inside another press
+        target, which is failure mode 17.
+      */}
+      <Pressable
+        style={StyleSheet.absoluteFill}
+        onPress={onDismiss}
+        accessibilityRole="button"
+        accessibilityLabel="Close message actions"
+      />
+      <BlurView intensity={24} tint="light" style={StyleSheet.absoluteFill} pointerEvents="none" />
+
+      <View style={styles.overlayContent} pointerEvents="box-none">
+        <View style={styles.overlayEmojiBar}>
+          {reactionEmoji.map((emoji) => (
+            <Pressable
+              key={emoji}
+              style={styles.overlayEmojiButton}
+              onPress={() => onReact(emoji)}
+              accessibilityRole="button"
+              accessibilityLabel={`React with ${emoji}`}
+            >
+              <Text style={styles.emojiGlyph}>{emoji}</Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {/* The pressed message, redrawn plainly so it is unmistakable which one this is about. */}
+        <View style={[styles.overlayBubble, mine && styles.overlayBubbleMine]}>
+          <Text style={styles.overlayBubbleSender}>
+            {message.senderName ?? "Deleted member"}
+          </Text>
+          <Text style={styles.overlayBubbleBody} numberOfLines={6}>
+            {hasText ? message.body : pinnedPreview(message)}
+          </Text>
+        </View>
+
+        <View style={styles.overlayMenu}>
+          {items.map((item, index) => (
+            <Pressable
+              key={item.label}
+              style={[styles.overlayMenuItem, index > 0 && styles.overlayMenuItemDivided]}
+              onPress={item.onPress}
+              accessibilityRole="button"
+              accessibilityLabel={item.label}
+            >
+              <Text
+                style={[
+                  styles.overlayMenuLabel,
+                  item.destructive === true && styles.destructive,
+                ]}
+              >
+                {item.label}
+              </Text>
+              <MaterialIcons
+                name={item.icon}
+                size={20}
+                color={item.destructive === true ? color.error : color.textPrimary}
+              />
+            </Pressable>
+          ))}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/**
  * One line describing a pinned message, for the notice strip.
  *
  * A pinned photo or document has no body to show, and an empty notice is worse than none: the
@@ -262,6 +495,17 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const [rows, setRows] = useState<Row[]>([]);
   const [draft, setDraft] = useState("");
+  /*
+   * The `@` mention state.
+   *
+   * `caret` is where the cursor is, which decides whether a mention is being typed at all.
+   * `mentionPicks` remembers who was chosen - the body alone cannot say, since two members can
+   * share a name - and is filtered against the final text on send, so a name deleted before
+   * sending takes its mention with it.
+   */
+  const [caret, setCaret] = useState(0);
+  const [mentionable, setMentionable] = useState<Mentionable[]>([]);
+  const [mentionPicks, setMentionPicks] = useState<MentionPick[]>([]);
   const [loading, setLoading] = useState(true);
   const [meta, setMeta] = useState<ChannelMeta | null>(null);
   /** Whether the meta read has finished, successfully or not. See `loadMeta`. */
@@ -333,6 +577,8 @@ export default function ChatScreen() {
    * rate, and re-rendering the entire log on each one would be its own defect.
    */
   const atTailRef = useRef(true);
+  /** Whether the pinned strip is showing. Fades out once the reader leaves the live tail. */
+  const [pinnedStripVisible, setPinnedStripVisible] = useState(true);
   /**
    * The message a jump landed on, if any.
    *
@@ -379,10 +625,20 @@ export default function ChatScreen() {
     void refresh();
   }, [refresh, revision]);
 
-  // Newest first, so the most recent notice is the one already in view rather than the one you
-  // have to scroll the strip sideways to reach. A tombstone is dropped outright: a deleted
-  // message is not worth keeping pinned above the conversation.
-  const pinnedRows = rows
+  /*
+   * Most recently PINNED first, which is not the same as newest message first.
+   *
+   * > **Ordering by `seq` was wrong and looked like several separate bugs.** Pin six messages,
+   * > unpin the first, pin it again: it is the most recent pin but the oldest message, so it went
+   * > back to the end of the strip and a four-item cap dropped it immediately. It appeared in
+   * > Highlights and nowhere else, and the notice showed the message's time rather than the pin's,
+   * > because a pin time did not exist at all until `pinnedAt`.
+   *
+   * A tombstone is dropped outright: a deleted message is not worth keeping above the
+   * conversation.
+   */
+  const pinnedRows = useMemo(() =>
+    rows
     .flatMap((row) => (row.kind === "message" ? [row.message] : []))
     .filter(
       (message) =>
@@ -390,7 +646,27 @@ export default function ChatScreen() {
         message.deletedAt === null &&
         !dismissedPins.has(message.seq),
     )
-    .reverse();
+    .sort((a, b) => {
+      // Null sorts last: a row cached before `pinnedAt` existed still has a place, just not
+      // the front. It gains its real time on the next sync.
+      const at = a.pinnedAt === null ? 0 : Date.parse(a.pinnedAt);
+      const bt = b.pinnedAt === null ? 0 : Date.parse(b.pinnedAt);
+      return bt - at;
+    })
+    /*
+     * The strip is a RECENCY WINDOW, not the pin list.
+     *
+     * > **Nothing is unpinned by falling off the end.** A fifth pin pushes the oldest out of the
+     * > strip and it stays pinned, stays in Highlights, and stays findable. An app that silently
+     * > undid an admin's pin to make room would be destroying a decision to save four points of
+     * > vertical space.
+     *
+     * Capped because the strip hangs over the conversation: past a handful the notices stop being
+     * notices and become a second scrolling list on top of the first.
+     */
+      .slice(0, PINNED_STRIP_LIMIT),
+    [rows, dismissedPins],
+  );
 
   /**
    * Load the channel's title and whether the composer is live.
@@ -401,6 +677,18 @@ export default function ChatScreen() {
    */
   const loadMeta = useCallback(async () => {
     if (!channelId) return;
+    /*
+     * The `@` pool, fetched once with the meta rather than per keystroke. It is a roster: it
+     * changes when somebody joins a club, not while you are typing, and holding it locally is
+     * what lets the list appear the instant `@` is pressed instead of after a round trip.
+     *
+     * Its own catch, because failing to load it must not cost the screen its meta - a chat with
+     * no mention list still works.
+     */
+    void channelApi
+      .mentionable(channelId)
+      .then((data) => setMentionable(data.members))
+      .catch(() => setMentionable([]));
     try {
       setMeta(await dmApi.meta(channelId));
     } catch {
@@ -479,6 +767,20 @@ export default function ChatScreen() {
       viewPosition: 0.5,
       animated: false,
     });
+
+    /*
+     * > **Cleared once it has landed, and that is a bug fix rather than tidiness.**
+     * >
+     * > This effect depends on `rows`, and `jumpedTo` used to be set forever. So EVERY later
+     * > change to the list re-ran it and yanked the reader back to a message they had jumped to
+     * > minutes ago - most visibly on unpinning, which calls `refresh()` and therefore changes
+     * > `rows`, making an unpin look like it was navigating somewhere on purpose.
+     *
+     * The delay is the highlight: `isJumpTarget` reads the same value, so clearing it instantly
+     * would land the jump with no indication of which message was the target.
+     */
+    const settle = setTimeout(() => setJumpedTo(null), JUMP_HIGHLIGHT_MS);
+    return () => clearTimeout(settle);
   }, [jumpedTo, rows]);
 
   /*
@@ -512,6 +814,49 @@ export default function ChatScreen() {
 
   const canPost = meta === null ? true : meta.canPost;
 
+  /*
+   * The message the overlay is about, resolved from the seq the long-press recorded.
+   *
+   * Looked up rather than stored, so it stays current: a reaction or a pin landing while the menu
+   * is open updates the copy on screen instead of freezing a stale one.
+   */
+  const selectedMessage = useMemo(
+    () =>
+      selected === null
+        ? null
+        : (rows.find(
+            (row): row is { kind: "message"; message: MessageEnvelope } =>
+              row.kind === "message" && row.message.seq === selected,
+          )?.message ?? null),
+    [rows, selected],
+  );
+
+  /*
+   * The `@` list's contents, derived from the draft and the caret rather than held in state.
+   *
+   * Two pieces of state to keep in step would be one too many: every keystroke, every caret move
+   * and every insertion would have to remember to update it, and the failure when one forgets is
+   * a list showing the wrong people.
+   */
+  const mentionQuery = activeMentionQuery(draft, caret);
+  const mentionMatches = useMemo(
+    () => (mentionQuery === null ? [] : matchMentionables(mentionable, mentionQuery.query)),
+    [mentionable, mentionQuery?.query],
+  );
+
+  /** Insert the chosen name and remember who it was, so the send can claim them. */
+  const pickMention = (member: Mentionable) => {
+    if (mentionQuery === null) return;
+    const next = applyMention(draft, mentionQuery.start, caret, member);
+    setDraft(next.text);
+    setCaret(next.caret);
+    setMentionPicks((picks) =>
+      picks.some((pick) => pick.userId === member.userId)
+        ? picks
+        : [...picks, { userId: member.userId, name: member.name }],
+    );
+  };
+
   const send = async () => {
     const body = draft.trim();
     if (body.length === 0 || !client || !channelId || !canPost) return;
@@ -527,12 +872,18 @@ export default function ChatScreen() {
     // notifies the whole space.
     const announcing = asAnnouncement;
     setAsAnnouncement(false);
+    /*
+     * Only the people the FINAL text still names. Picking a name and then deleting it before
+     * sending must not notify them - see `mentionIdsInBody`. The server applies the same rule on
+     * arrival and is the real enforcement; this keeps the honest case from ever claiming a lie.
+     */
+    const mentions = mentionIdsInBody(mentionPicks, body);
+    setMentionPicks([]);
     try {
-      await client.sendWithRetry(
-        channelId,
-        body,
-        announcing ? { type: "announcement" } : {},
-      );
+      await client.sendWithRetry(channelId, body, {
+        ...(announcing ? { type: "announcement" as const } : {}),
+        ...(mentions.length > 0 ? { mentions } : {}),
+      });
     } catch {
       // The send failed VISIBLY: the entry stays in the outbox marked failed, and the
       // row below renders it with a retry affordance. It is never silently dropped.
@@ -547,12 +898,28 @@ export default function ChatScreen() {
    * pinned strip, Highlights and every other connected client read independently, and a local
    * guess would be a second opinion about it.
    */
+  /**
+   * Open a pinned notice: always Highlights, never a jump into the conversation.
+   *
+   * > **A pin is something to READ, not somewhere to go.** Jumping dropped the reader into the
+   * > middle of history with no clear way back to where they were, and whether it even worked
+   * > depended on how far back the message happened to be. Highlights shows the pin in full,
+   * > opens instantly whatever its age, and is the same answer every time.
+   */
+  const openPinned = () => {
+    router.push(`/channels/${channelId}/highlights`);
+  };
+
   const setPinned = async (seq: number, pinned: boolean) => {
     if (!channelId) return;
     setSelected(null);
     try {
       await channelApi.setPinned(channelId, seq, pinned);
-      setNotice(pinned ? "Pinned." : "Unpinned.");
+      /*
+       * No confirmation banner. The pinned strip appearing or losing a card IS the feedback, and
+       * a second line announcing it covered the top of the conversation to say what was already
+       * visible. Failures below still speak, because nothing else would say so.
+       */
     } catch {
       setNotice("Could not change the pin. Try again.");
     }
@@ -566,8 +933,8 @@ export default function ChatScreen() {
     try {
       await channelApi.deleteMessage(channelId, seq);
       // A tombstone, not a disappearance: the row stays and reads as deleted, which is what
-      // keeps the gapless sequence gapless.
-      setNotice("Message deleted.");
+      // keeps the gapless sequence gapless - and is also why no banner is needed. The message
+      // visibly becoming "This message was deleted" is the confirmation.
     } catch {
       setNotice("Could not delete that. Try again.");
     }
@@ -872,8 +1239,13 @@ export default function ChatScreen() {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          style={styles.pinnedStrip}
+          style={[styles.pinnedStrip, !pinnedStripVisible && styles.pinnedStripFaded]}
           contentContainerStyle={styles.pinnedStripContent}
+          /*
+            Faded out, it must not intercept taps meant for the messages behind it - a strip you
+            cannot see but can still press is worse than one that is simply there.
+          */
+          pointerEvents={pinnedStripVisible ? "auto" : "none"}
         >
           {pinnedRows.map((message) => (
             <BlurView
@@ -884,9 +1256,9 @@ export default function ChatScreen() {
             >
               <Pressable
                 style={styles.pinnedCardBody}
-                onPress={() => setJumpedTo(message.seq)}
+                onPress={openPinned}
                 accessibilityRole="button"
-                accessibilityLabel="Jump to this pinned message"
+                accessibilityLabel="Open this pinned message in Highlights"
               >
                 <View style={styles.pinnedIcon}>
                   <MaterialIcons
@@ -1075,6 +1447,21 @@ export default function ChatScreen() {
             const fromBottom =
               contentSize.height - layoutMeasurement.height - contentOffset.y;
             atTailRef.current = fromBottom <= TAIL_SLACK;
+            /*
+             * The strip fades once the reader has left the live tail.
+             *
+             * A pin is a shortcut back to something recent, so it earns its place over the
+             * conversation while you are AT the conversation. Reading back through history it is
+             * covering the thing you went looking for, so it gets out of the way and returns when
+             * you come forward again.
+             *
+             * State rather than a ref, because this one has to re-render - and set only when it
+             * actually flips, so a scroll does not re-render the screen on every frame.
+             */
+            const shouldShow = fromBottom <= PINNED_STRIP_FADE_AFTER;
+            setPinnedStripVisible((visible) =>
+              visible === shouldShow ? visible : shouldShow,
+            );
           }}
           /*
             A row whose height has not been measured yet cannot be scrolled to, which is exactly the
@@ -1285,6 +1672,20 @@ export default function ChatScreen() {
                     cardId !== null
                       ? undefined
                       : () => {
+                          /*
+                           * A tap you can feel, before anything appears on screen.
+                           *
+                           * A long press has no visual progress, so without haptics the only way
+                           * to learn it worked is the menu arriving - and the only way to learn
+                           * you have not held long enough is nothing happening. The buzz is the
+                           * acknowledgement.
+                           *
+                           * Fire-and-forget: on a device with the setting off, or on web where
+                           * there is no Taptic Engine, this rejects and the menu still opens.
+                           */
+                          void Haptics.impactAsync(
+                            Haptics.ImpactFeedbackStyle.Medium,
+                          ).catch(() => undefined);
                           setSelected(message.seq);
                           setConfirmingReport(null);
                         }
@@ -1412,7 +1813,12 @@ export default function ChatScreen() {
                       message.body !== null &&
                       message.body.length > 0 && (
                         <Text style={mine ? styles.sentText : styles.receivedText}>
-                          {message.body}
+                          <MentionedBody
+                            body={message.body}
+                            mentions={message.mentions}
+                            mine={mine}
+                            onOpenProfile={(userId) => router.push(`/users/${userId}`)}
+                          />
                         </Text>
                       )
                     )}
@@ -1426,9 +1832,15 @@ export default function ChatScreen() {
                 </Pressable>
 
                 {/*
-                  The reaction row, rendered under the bubble it belongs to and aligned with
-                  it. Only emoji anyone actually used, in the fixed order from the shared
-                  constant so the row does not reshuffle as counts change.
+                  The reaction row.
+
+                  > **Inside the bubble's own column, not a sibling of it.** The message row is a
+                  > horizontal flex - avatar, then bubble - so a pill row added there became a
+                  > THIRD column and sat beside the bubble rather than beneath it. Reactions belong
+                  > to a message and have to read that way.
+
+                  Only emoji anyone actually used, in the fixed order from the shared constant so
+                  the row does not reshuffle as counts change.
                 */}
                 {(() => {
                   const summary = reactionSummary(message.reactions, userId);
@@ -1466,140 +1878,6 @@ export default function ChatScreen() {
                     </View>
                   );
                 })()}
-
-                {selected === message.seq &&
-                  confirmingReport !== message.seq && (
-                    <View style={styles.actionSheet}>
-                      {/*
-                      Six large tap targets, which is the whole reason the set is fixed rather
-                      than a searchable grid: reacting should cost one tap.
-                    */}
-                      <View style={styles.emojiRow}>
-                        {reactionEmoji.map((emoji) => (
-                          <Pressable
-                            key={emoji}
-                            style={styles.emojiButton}
-                            onPress={() => {
-                              setSelected(null);
-                              void react(message.seq, emoji);
-                            }}
-                            accessibilityRole="button"
-                            accessibilityLabel={`React with ${emoji}`}
-                          >
-                            <Text style={styles.emojiGlyph}>{emoji}</Text>
-                          </Pressable>
-                        ))}
-                      </View>
-                      <View style={styles.reportActions}>
-                        <Pressable
-                          style={styles.secondaryButton}
-                          onPress={() => setSelected(null)}
-                          accessibilityRole="button"
-                          accessibilityLabel="Close message actions"
-                        >
-                          <Text style={styles.secondaryLabel}>Close</Text>
-                        </Pressable>
-                        {/*
-                          Pin, for an admin of this space. `canPin` and not `canAnnounce`: in
-                          race chat pinning additionally needs a roster row, and the server
-                          enforces exactly that - this only decides whether to offer it.
-                        */}
-                        {meta?.canPin === true && (
-                          <Pressable
-                            style={styles.secondaryButton}
-                            onPress={() =>
-                              void setPinned(message.seq, !message.pinned)
-                            }
-                            accessibilityRole="button"
-                            accessibilityLabel={
-                              message.pinned
-                                ? "Unpin this message"
-                                : "Pin this message"
-                            }
-                          >
-                            <Text style={styles.secondaryLabel}>
-                              {message.pinned ? "Unpin" : "Pin"}
-                            </Text>
-                          </Pressable>
-                        )}
-                        {/*
-                          Delete: your own message always, anybody's if you moderate here. The
-                          two halves are separate on purpose - a DM has no admin, so neither
-                          participant gets the second one.
-                        */}
-                        {(mine || meta?.canDeleteAnyMessage === true) && (
-                          <Pressable
-                            style={styles.secondaryButton}
-                            onPress={() => setConfirmingDelete(message.seq)}
-                            accessibilityRole="button"
-                            accessibilityLabel={
-                              mine
-                                ? "Delete your message"
-                                : "Delete this message"
-                            }
-                          >
-                            <Text
-                              style={[
-                                styles.secondaryLabel,
-                                styles.destructive,
-                              ]}
-                            >
-                              Delete
-                            </Text>
-                          </Pressable>
-                        )}
-                        {/* Nobody can report their own message, so it is not offered. */}
-                        {!mine && (
-                          <Pressable
-                            style={styles.secondaryButton}
-                            onPress={() => setConfirmingReport(message.seq)}
-                            accessibilityRole="button"
-                            accessibilityLabel="Report this message"
-                          >
-                            <Text
-                              style={[
-                                styles.secondaryLabel,
-                                styles.destructive,
-                              ]}
-                            >
-                              Report
-                            </Text>
-                          </Pressable>
-                        )}
-                      </View>
-                    </View>
-                  )}
-
-                {confirmingDelete === message.seq && (
-                  <View style={styles.actionSheet}>
-                    {/* Names what is lost, and does not pretend it can be undone. */}
-                    <Text style={styles.reportPrompt}>
-                      Delete this message? It is replaced by "This message was deleted" for
-                      everyone, and cannot be brought back.
-                    </Text>
-                    <View style={styles.reportActions}>
-                      <Pressable
-                        style={styles.secondaryButton}
-                        onPress={() => {
-                          setConfirmingDelete(null);
-                          setSelected(null);
-                        }}
-                        accessibilityRole="button"
-                        accessibilityLabel="Keep this message"
-                      >
-                        <Text style={styles.secondaryLabel}>Keep</Text>
-                      </Pressable>
-                      <Pressable
-                        style={styles.button}
-                        onPress={() => void removeMessage(message.seq)}
-                        accessibilityRole="button"
-                        accessibilityLabel="Confirm delete"
-                      >
-                        <Text style={styles.buttonLabel}>Delete</Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                )}
 
                 {confirmingReport === message.seq && (
                   <View style={styles.actionSheet}>
@@ -1717,6 +1995,125 @@ export default function ChatScreen() {
         </View>
       )}
 
+      {/*
+        The long-press overlay.
+
+        > **Rendered at screen level, not inside the message row.** The row lives in a FlatList
+        > cell that clips its children and scrolls with the list, so a menu drawn there is cut off
+        > at the cell boundary and slides away under a finger. Lifting it out is what lets the
+        > backdrop cover the conversation and the message float above it.
+        >
+        > It also means exactly one of these exists rather than one per row.
+      */}
+      {selectedMessage !== null &&
+        confirmingDelete === null &&
+        confirmingReport === null && (
+          <MessageActions
+            message={selectedMessage}
+            mine={selectedMessage.senderId === userId}
+            canPin={meta?.canPin === true}
+            canDelete={
+              selectedMessage.senderId === userId || meta?.canDeleteAnyMessage === true
+            }
+            onDismiss={() => setSelected(null)}
+            onReact={(emoji) => {
+              setSelected(null);
+              void react(selectedMessage.seq, emoji);
+            }}
+            onReply={() => setSelected(null)}
+            onCopy={() => {
+              void Clipboard.setStringAsync(selectedMessage.body ?? "");
+              setSelected(null);
+            }}
+            onPin={() => {
+              void setPinned(selectedMessage.seq, !selectedMessage.pinned);
+              setSelected(null);
+            }}
+            onReport={() => setConfirmingReport(selectedMessage.seq)}
+            onDelete={() => setConfirmingDelete(selectedMessage.seq)}
+          />
+        )}
+
+      {/*
+        Delete, as a centred dialog rather than a row in the conversation.
+
+        It used to render inline where the message sat, which pushed the surrounding messages
+        around at the exact moment somebody is deciding something irreversible - and on a long
+        chat it could land off screen entirely. A dialog stops the world, which is the right
+        weight for the one action here that cannot be undone.
+      */}
+      {confirmingDelete !== null && (
+        <View style={styles.dialogBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => {
+              setConfirmingDelete(null);
+              setSelected(null);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Keep this message"
+          />
+          <View style={styles.dialog}>
+            <Text style={styles.dialogTitle}>Delete Message</Text>
+            {/* Names what happens and does not pretend it can be undone. */}
+            <Text style={styles.dialogBody}>
+              This message will be removed for everyone in this chat. It is replaced by "This
+              message was deleted" and cannot be brought back.
+            </Text>
+            <View style={styles.dialogActions}>
+              <Pressable
+                style={styles.dialogButton}
+                onPress={() => {
+                  setConfirmingDelete(null);
+                  setSelected(null);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="No, keep this message"
+              >
+                <Text style={styles.dialogButtonLabel}>No</Text>
+              </Pressable>
+              <Pressable
+                style={styles.dialogButton}
+                onPress={() => void removeMessage(confirmingDelete)}
+                accessibilityRole="button"
+                accessibilityLabel="Yes, delete this message"
+              >
+                <Text style={[styles.dialogButtonLabel, styles.destructive]}>Yes</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/*
+        The `@` list, sitting directly above the composer.
+
+        Rendered only while a mention is being typed, and only when something matches - an empty
+        panel hovering over the conversation is worse than no panel. It is a plain View rather
+        than a modal so the keyboard stays up and typing keeps narrowing it.
+      */}
+      {canPost && mentionMatches.length > 0 && (
+        <View style={styles.mentionBar}>
+          <ScrollView
+            keyboardShouldPersistTaps="always"
+            showsVerticalScrollIndicator={false}
+          >
+            {mentionMatches.map((member) => (
+              <Pressable
+                key={member.userId}
+                style={styles.mentionRow}
+                onPress={() => pickMention(member)}
+                accessibilityRole="button"
+                accessibilityLabel={`Mention ${member.name}`}
+              >
+                <Avatar name={member.name} image={member.image} size={28} />
+                <Text style={styles.mentionName}>{member.name}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
       {canPost ? (
         <View style={styles.composer}>
           {/*
@@ -1744,6 +2141,14 @@ export default function ChatScreen() {
             placeholderTextColor={color.textSecondary}
             value={draft}
             onChangeText={setDraft}
+            /*
+              The caret drives the `@` list, so it has to be tracked rather than assumed to be at
+              the end - somebody editing a name in the middle of a finished sentence is exactly
+              when the list is most useful.
+            */
+            onSelectionChange={(event) =>
+              setCaret(event.nativeEvent.selection.end)
+            }
             multiline
             accessibilityLabel={asAnnouncement ? "Announcement" : "Message"}
             onSubmitEditing={() => void send()}
@@ -1895,6 +2300,140 @@ const styles = StyleSheet.create({
   announcementSender: { ...type.bodySmall, fontSize: 13, color: color.textSecondary },
   announcementTime: { ...type.bodySmall, fontSize: 11, color: color.textSecondary },
 
+  /*
+   * A mention, in somebody else's bubble and in your own.
+   *
+   * Two styles because your own bubble is filled with the accent, so accent-on-accent would be
+   * invisible. There it goes semibold and opaque white against the tint instead - the same "this
+   * is a person, not prose" signal carried by weight rather than by colour.
+   */
+  mentionInTheirs: { color: color.accent, fontFamily: fontFamily.bodyBold },
+  mentionInMine: { color: color.onAccent, fontFamily: fontFamily.bodyBold },
+
+  /*
+   * The `@` list. Capped in height so a big club cannot cover the conversation, and anchored to
+   * the composer rather than floating, so it reads as part of what is being typed.
+   */
+  mentionBar: {
+    maxHeight: 200,
+    backgroundColor: color.chrome,
+    borderTopWidth: 1,
+    borderTopColor: color.divider,
+    paddingHorizontal: space.sm,
+  },
+  mentionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm + 2,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.sm,
+  },
+  mentionName: { ...type.body, color: color.textPrimary },
+
+  /*
+   * The long-press overlay.
+   *
+   * Covers the whole screen including the composer and the header, which is deliberate: while the
+   * menu is open the conversation is not interactive, and a header still tappable behind a blur
+   * invites a tap that dismisses nothing.
+   */
+  overlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 50,
+    justifyContent: "center",
+  },
+  overlayContent: { padding: space.md, gap: space.sm, alignItems: "center" },
+  overlayEmojiBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.xs,
+    backgroundColor: color.card,
+    borderRadius: radius.pill,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  overlayEmojiButton: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+  },
+  overlayBubble: {
+    alignSelf: "flex-start",
+    maxWidth: "88%",
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    padding: space.md,
+    gap: space.xs,
+  },
+  overlayBubbleMine: { alignSelf: "flex-end", backgroundColor: color.accent },
+  overlayBubbleSender: { ...type.label, color: color.textSecondary, textTransform: "none" },
+  overlayBubbleBody: { ...type.body, color: color.textPrimary },
+  overlayMenu: {
+    width: "100%",
+    maxWidth: 340,
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  overlayMenuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: space.md,
+    paddingVertical: space.md,
+  },
+  overlayMenuItemDivided: { borderTopWidth: 1, borderTopColor: color.cardSunken },
+  overlayMenuLabel: { ...type.body, color: color.textPrimary },
+
+  /* A centred confirmation, for the one action in chat that cannot be undone. */
+  dialogBackdrop: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 60,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: space.lg,
+    backgroundColor: "rgba(0,0,0,0.35)",
+  },
+  dialog: {
+    width: "100%",
+    maxWidth: 320,
+    backgroundColor: color.card,
+    borderRadius: radius.xl,
+    padding: space.lg,
+    gap: space.sm,
+  },
+  dialogTitle: { ...type.headline, fontSize: 20, color: color.textPrimary },
+  dialogBody: { ...type.body, color: color.textSecondary },
+  dialogActions: { flexDirection: "row", gap: space.sm, marginTop: space.sm },
+  dialogButton: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: space.sm + 4,
+    borderRadius: radius.pill,
+    backgroundColor: color.cardSunken,
+  },
+  dialogButtonLabel: { ...type.headline, color: color.textPrimary },
+
   /**
    * v1's message row: avatar and bubble side by side, bottom-aligned so the avatar sits level
    * with the last line of a multi-line bubble rather than floating beside its first.
@@ -1908,6 +2447,15 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     gap: space.sm,
     marginBottom: space.xs,
+    /*
+     * Wraps, so the reaction row drops BELOW the bubble instead of beside it.
+     *
+     * This row is a horizontal flex of avatar-then-bubble, and the pill row is its third child -
+     * so without wrapping it became a third column and the pills sat out to the side of the
+     * message, which reads as unrelated to it. Giving the pill row a full-width basis pushes it
+     * onto its own line under both.
+     */
+    flexWrap: "wrap",
   },
   messageRowMine: { justifyContent: "flex-end" },
   avatarSpacer: { width: 32, height: 32 },
@@ -2161,6 +2709,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.md,
     paddingTop: space.sm,
   },
+  /* Faded rather than unmounted, so it returns without the strip jumping back into layout. */
+  pinnedStripFaded: { opacity: 0 },
   pinnedStripContent: { gap: space.sm, alignItems: "center" },
   pinnedCard: {
     flexDirection: "row",
@@ -2260,10 +2810,18 @@ const styles = StyleSheet.create({
     gap: space.xs,
     flexWrap: "wrap",
     marginTop: -space.xs,
+    // Full width is what makes the wrapping row above break BEFORE this, putting the pills on
+    // their own line rather than alongside the bubble.
+    width: "100%",
   },
-  // Aligned under the bubble they belong to, on whichever side it sits.
-  pillRowMine: { alignSelf: "flex-end" },
-  pillRowTheirs: { alignSelf: "flex-start" },
+  /*
+   * Aligned under the bubble they belong to, on whichever side it sits. `justifyContent` rather
+   * than `alignSelf`, because at full width there is no free space for `alignSelf` to move into.
+   * Theirs is inset past the avatar so the pills line up with the bubble's left edge, not the
+   * avatar's.
+   */
+  pillRowMine: { justifyContent: "flex-end" },
+  pillRowTheirs: { justifyContent: "flex-start", paddingLeft: 32 + space.sm },
   pill: {
     flexDirection: "row",
     alignItems: "center",

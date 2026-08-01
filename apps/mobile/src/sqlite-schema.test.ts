@@ -161,7 +161,13 @@ describe('upgrading a device that already has a cache', () => {
     db.exec('ALTER TABLE messages ADD COLUMN linked_event_id TEXT');
 
     const outstanding = pendingMigrations(columnsOf(db)).map((m) => m.column);
-    expect(outstanding).toEqual(['linked_meeting_id', 'sender_name', 'sender_image']);
+    expect(outstanding).toEqual([
+      'linked_meeting_id',
+      'sender_name',
+      'sender_image',
+      'mentions',
+      'pinned_at',
+    ]);
 
     migrate(db);
     expect(pendingMigrations(columnsOf(db))).toHaveLength(0);

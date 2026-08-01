@@ -378,6 +378,18 @@ export const messages = pgTable(
     documentName: text('document_name'),
     documentSize: integer('document_size'),
     pinned: boolean('pinned').notNull().default(false),
+    /**
+     * When it was pinned, or null.
+     *
+     * > **A boolean cannot order a pinned strip and cannot date one.** Without this the strip
+     * > could only sort by `seq` - the age of the MESSAGE - so re-pinning something old put it
+     * > back in its old place rather than at the front, and a strip capped at four dropped it
+     * > again immediately. The notice also had no date of its own to show, only the message's.
+     *
+     * Set on every pin, including a re-pin, so pinning something again genuinely makes it the
+     * most recent. Cleared on unpin, so the column never claims a pin that is not there.
+     */
+    pinnedAt: timestamp('pinned_at', { withTimezone: true }),
     // Soft delete with a tombstone, never a removal: a message vanishing
     // mid-conversation makes the replies unreadable (domain invariant 7).
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
@@ -703,6 +715,20 @@ export const messageMentions = pgTable(
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    /**
+     * The name exactly as it was typed into the body, without the leading `@`.
+     *
+     * > **Stored rather than joined, which is the opposite of `senderName` and deliberately so.**
+     * > A sender's name is re-joined on every read, so a rename updates everywhere at once. A
+     * > mention cannot work that way: the characters `@Sean O Donnell` are sitting immutably in
+     * > somebody else's message, and a client highlights the mention by finding that exact run of
+     * > text. Join the current name instead and the day Sean renames, every mention of him in all
+     * > of history silently stops being highlighted - the data is intact and the feature just
+     * > quietly stops working, which is the worst way for it to fail.
+     *
+     * Nullable only for rows written before this column existed.
+     */
+    name: text('name'),
   },
   (t) => [primaryKey({ columns: [t.messageId, t.userId] })],
 );

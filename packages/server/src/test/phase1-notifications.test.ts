@@ -28,6 +28,7 @@ import {
   channelMutes,
   clubMemberships,
   devices,
+  messageMentions,
   notifications,
   users,
 } from '../db/schema.ts';
@@ -644,7 +645,9 @@ describe('mentions', () => {
     await sendMessage(h.db, ctx, channel!, {
       channelId: f.channelId,
       clientMsgId: crypto.randomUUID(),
-      body: 'can you drive on Saturday?',
+      // The name has to be IN the body: a mention is only stored for somebody the text
+      // actually names, so that deleting the name before sending takes the mention with it.
+      body: '@Member can you drive on Saturday?',
       mentions: [f.memberId],
     });
     await drainAndDeliver();
@@ -691,7 +694,11 @@ describe('mentions', () => {
       channelId: f.channelId,
       clientMsgId: crypto.randomUUID(),
       type: 'announcement',
-      body: 'kit order closes Friday, @member please confirm',
+      // Capitalised to match the member's actual name. The match is exact rather than
+      // case-insensitive, because the stored name is what the client looks for in the body to
+      // highlight - a case-folded match would store "Member" against text reading "@member" and
+      // highlight nothing. Picking from the autocomplete always inserts the exact name.
+      body: 'kit order closes Friday, @Member please confirm',
       mentions: [f.memberId],
     });
     await drainAndDeliver();
@@ -701,5 +708,76 @@ describe('mentions', () => {
       .from(notifications)
       .where(eq(notifications.recipientId, f.memberId));
     expect(forMember.map((r) => r.type).sort()).toEqual(['announcement', 'mentioned']);
+  });
+
+  /**
+   * > **A mention the text does not contain is not a mention.**
+   *
+   * The realistic path to this is not an attacker: it is somebody picking a name from the
+   * autocomplete and then deleting it again before sending. Being notified about a message that
+   * does not contain your name is confusing in a way no wording fixes, so the body is the
+   * authority and the client's claim is only a hint.
+   */
+  it('stores no mention when the body does not name the person', async () => {
+    const f = await setupClub();
+    const ctx = await loadAccessContext(h.db, f.adminId);
+    const channel = await getChannelRef(h.db, f.channelId);
+
+    const sent = await sendMessage(h.db, ctx, channel!, {
+      channelId: f.channelId,
+      clientMsgId: crypto.randomUUID(),
+      // The claim names the member; the text does not.
+      body: 'can you drive on Saturday?',
+      mentions: [f.memberId],
+    });
+    expect(sent.ok).toBe(true);
+    const messageId = sent.ok ? sent.message.id : '';
+    await drainAndDeliver();
+
+    // Scoped to this message: the table is shared with every other test in this file.
+    const stored = await h.db
+      .select()
+      .from(messageMentions)
+      .where(eq(messageMentions.messageId, messageId));
+    expect(stored).toHaveLength(0);
+    const rows = await h.db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.recipientId, f.memberId));
+    expect(rows).toHaveLength(0);
+  });
+
+  /**
+   * The name is taken from the user record, never from the caller, so no request can make an
+   * arbitrary run of characters highlight as somebody else.
+   */
+  it('stores the name as written, so a later rename cannot unhighlight old messages', async () => {
+    const f = await setupClub();
+    const ctx = await loadAccessContext(h.db, f.adminId);
+    const channel = await getChannelRef(h.db, f.channelId);
+
+    const sent = await sendMessage(h.db, ctx, channel!, {
+      channelId: f.channelId,
+      clientMsgId: crypto.randomUUID(),
+      body: '@Member are you in?',
+      mentions: [f.memberId],
+    });
+    const messageId = sent.ok ? sent.message.id : '';
+
+    const stored = await h.db
+      .select()
+      .from(messageMentions)
+      .where(eq(messageMentions.messageId, messageId));
+    expect(stored).toHaveLength(1);
+    expect(stored[0]?.name).toBe('Member');
+
+    // Rename them. The stored mention still describes the characters sitting in the body, which
+    // is the whole point of storing it rather than re-joining on read.
+    await h.db.update(users).set({ name: 'Renamed Person' }).where(eq(users.id, f.memberId));
+    const after = await h.db
+      .select()
+      .from(messageMentions)
+      .where(eq(messageMentions.messageId, messageId));
+    expect(after[0]?.name).toBe('Member');
   });
 });

@@ -92,9 +92,14 @@ function toEnvelope(
     body: row.body,
     clientMsgId: row.clientMsgId,
     pinned: row.pinned,
+    // Never pinned at the moment it is appended.
+    pinnedAt: null,
     // A message that has just been appended cannot have been reacted to yet. Not a
     // shortcut: there is no window in which it could have been.
     reactions: [],
+    // Same: the mentions were just written, and the sender's own client already knows who it
+    // named. A read of this message will carry them.
+    mentions: [],
     mediaId: row.mediaId,
     documentName: row.documentName,
     documentSize: row.documentSize,

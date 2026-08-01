@@ -269,9 +269,14 @@ export class ChatClient {
             body: this.outbox.get(clientMsgId)?.body ?? null,
             clientMsgId,
             pinned: false,
+            pinnedAt: null,
             // A message we have only just sent cannot have been reacted to. Any reaction
             // that lands afterwards arrives as its own msg.update.
             reactions: [],
+            // The sender's own optimistic bubble. It knows who it named, but the highlight can
+            // wait for the read that follows: an unhighlighted name for a moment is invisible
+            // next to the bubble appearing at all.
+            mentions: [],
             // From the outbox entry rather than the ack, which carries only ids and the seq.
             // Without this a photo would render as an empty bubble until the next sync.
             mediaId: this.outbox.get(clientMsgId)?.mediaId ?? null,
@@ -441,6 +446,8 @@ export class ChatClient {
       localUri?: string;
       documentName?: string;
       documentSize?: number;
+      /** User ids the composer named. See `PendingSend.mentions`. */
+      mentions?: readonly string[];
     } = {},
   ): string {
     const clientMsgId = opts.clientMsgId ?? this.opts.randomUuid();
@@ -455,6 +462,7 @@ export class ChatClient {
       ...(opts.localUri ? { localUri: opts.localUri } : {}),
       ...(opts.documentName ? { documentName: opts.documentName } : {}),
       ...(opts.documentSize !== undefined ? { documentSize: opts.documentSize } : {}),
+      ...(opts.mentions && opts.mentions.length > 0 ? { mentions: opts.mentions } : {}),
     });
     this.opts.onChange?.();
     return clientMsgId;
@@ -480,6 +488,11 @@ export class ChatClient {
         // null rather than '' when there is no caption.
         body: pending.body.length > 0 ? pending.body : null,
         ...(pending.mediaId ? { mediaId: pending.mediaId } : {}),
+        // From the outbox entry, so a retry after a reconnect names the same people the
+        // first attempt did.
+        ...(pending.mentions && pending.mentions.length > 0
+          ? { mentions: [...pending.mentions] }
+          : {}),
       },
     });
 
@@ -502,6 +515,7 @@ export class ChatClient {
       localUri?: string;
       documentName?: string;
       documentSize?: number;
+      mentions?: readonly string[];
     } = {},
   ): Promise<number> {
     const clientMsgId = this.enqueue(channelId, body, attachment);

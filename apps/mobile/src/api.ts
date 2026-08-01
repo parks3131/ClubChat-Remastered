@@ -630,6 +630,18 @@ export const channelApi = {
   announcements: (channelId: string, before?: number) =>
     apiFetch<HighlightPage>(`/channels/${channelId}/announcements${query({ before })}`),
 
+  /**
+   * Who the `@` list may offer, for this channel.
+   *
+   * Read once when chat opens rather than per keystroke: the pool is a roster, it changes on the
+   * scale of somebody joining a club, and filtering it locally is what makes the list appear
+   * instantly as you type instead of a request behind every character.
+   */
+  mentionable: (channelId: string) =>
+    apiFetch<{ members: Array<{ userId: string; name: string; image: string | null }> }>(
+      `/channels/${channelId}/mentionable`,
+    ),
+
   reports: (channelId: string) =>
     apiFetch<{ reports: ReportRow[] }>(`/channels/${channelId}/reports`),
 

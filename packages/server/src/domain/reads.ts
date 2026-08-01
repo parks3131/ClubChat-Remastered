@@ -13,6 +13,7 @@ import type { Db } from '../db/client.ts';
 import { channels, messages, users } from '../db/schema.ts';
 import type { ChannelRef } from '../policy/predicates.ts';
 import { accessibleChannelPredicate } from './channel-access.ts';
+import { mentionsForMessages } from './mentions.ts';
 import { reactionsForMessages } from './reactions.ts';
 
 /** The page size chat opens with, then pages backward from. */
@@ -57,9 +58,11 @@ function toEnvelope(row: MessageRow): MessageEnvelope {
     body: row.body,
     clientMsgId: row.clientMsgId,
     pinned: row.pinned,
-    // Filled in by `withReactions` for reads that return more than one row, so the whole
-    // page costs one extra query rather than one per message.
+    pinnedAt: row.pinnedAt?.toISOString() ?? null,
+    // Both filled in by `withReactions` for reads that return more than one row, so the whole
+    // page costs two extra queries rather than two per message.
     reactions: [],
+    mentions: [],
     mediaId: row.mediaId,
     documentName: row.documentName,
     documentSize: row.documentSize,
@@ -269,15 +272,26 @@ export async function readHighlights(
  */
 async function withReactions(db: Db, envelopes: MessageEnvelope[]): Promise<MessageEnvelope[]> {
   if (envelopes.length === 0) return envelopes;
-  const byMessage = await reactionsForMessages(
-    db,
-    envelopes.map((envelope) => envelope.id),
-  );
-  // Only rewrite the envelopes that actually have reactions, so the common case allocates
-  // nothing beyond the lookup.
+  const ids = envelopes.map((envelope) => envelope.id);
+  /*
+   * Both side loads for the page, together. Two queries for forty messages rather than eighty,
+   * and issued concurrently because neither depends on the other.
+   */
+  const [reactionsByMessage, mentionsByMessage] = await Promise.all([
+    reactionsForMessages(db, ids),
+    mentionsForMessages(db, ids),
+  ]);
+  // Only rewrite the envelopes that actually have something, so the common case allocates
+  // nothing beyond the lookups.
   return envelopes.map((envelope) => {
-    const reactions = byMessage.get(envelope.id);
-    return reactions === undefined ? envelope : { ...envelope, reactions };
+    const reactions = reactionsByMessage.get(envelope.id);
+    const mentions = mentionsByMessage.get(envelope.id);
+    if (reactions === undefined && mentions === undefined) return envelope;
+    return {
+      ...envelope,
+      ...(reactions === undefined ? {} : { reactions }),
+      ...(mentions === undefined ? {} : { mentions }),
+    };
   });
 }
 
