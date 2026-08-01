@@ -39,8 +39,20 @@ type Tab = 'pinned' | 'announcements' | 'reports';
 const HEADER_HEIGHT = 76;
 
 export default function HighlightsScreen() {
-  const { channelId } = useLocalSearchParams<{ channelId: string }>();
-  const [tab, setTab] = useState<Tab>('pinned');
+  const { channelId, tab: requestedTab } = useLocalSearchParams<{
+    channelId: string;
+    /** Which tab to open on. Sent by a `message_reported` notification, which means Reports. */
+    tab?: string;
+  }>();
+  /*
+   * The requested tab is the INITIAL value only, never a controlled one.
+   *
+   * A reviewer arriving from a report notification should land on Reports; from then on the tab
+   * is theirs. Reading the parameter on every render would fight them the moment they tapped
+   * Pinned, and a parameter that keeps reasserting itself is the kind of thing that reads as the
+   * screen ignoring you.
+   */
+  const [tab, setTab] = useState<Tab>(requestedTab === 'reports' ? 'reports' : 'pinned');
   const router = useRouter();
   const insets = useSafeAreaInsets();
   // Highlights is a view over a conversation, so back always returns to that chat.

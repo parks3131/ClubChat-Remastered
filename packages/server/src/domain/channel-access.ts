@@ -22,6 +22,7 @@
  */
 
 import { sql, type SQL } from 'drizzle-orm';
+import { ADMIN_TIER } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import type { ChannelRef } from '../policy/predicates.ts';
 
@@ -140,3 +141,64 @@ export async function channelAudienceById(db: Db, channelId: string): Promise<st
 /** The same thing, when the caller already holds the channel. */
 export const channelAudience = (db: Db, channel: ChannelRef): Promise<string[]> =>
   channelAudienceById(db, channel.id);
+
+/**
+ * Who reviews a report in this channel.
+ *
+ * The list form of `isChannelAdmin`, plus the one case that predicate answers `false` to. A DM
+ * has no admin - PRD/14 rule 7 routes its reports to **platform moderators**, who are not members
+ * of any club and could never be found by any membership query. That single fact is why this
+ * notification did not exist until 2026-08-01: the comment on `reportMessage` named "an audience
+ * rule for platform moderators" as the missing piece, and this is it.
+ *
+ * > **Deliberately built to mirror `isChannelAdmin` scope for scope**, because the two must agree:
+ * > this decides who is *told* about a report and that decides who may *read* it, and somebody
+ * > notified about a queue they cannot open is worse than not being notified. Race is the case
+ * > that catches a careless version - a roster member is not enough, they must ALSO be a club
+ * > admin, which is why the club id is joined rather than the race alone.
+ */
+export async function channelModerationAudienceById(
+  db: Db,
+  channelId: string,
+): Promise<string[]> {
+  /*
+   * The admin tier comes from the shared constant, never from role literals typed here. That is
+   * the defence against the bug that shipped four times in v1: a bare `role = 'admin'` filter
+   * silently excludes a club whose only admin-tier member is its Owner, which is every brand-new
+   * club. `clubAdminTier` in the worker's audience module binds it the same way.
+   */
+  const adminTier = sql.param([...ADMIN_TIER]);
+  const rows = await db.execute<{ user_id: string }>(sql`
+    WITH ch AS (SELECT scope, scope_id, club_id FROM channels WHERE id = ${channelId})
+    -- Club: the admin tier of that club.
+    SELECT cm.user_id FROM club_memberships cm, ch
+     WHERE ch.scope = 'club' AND cm.club_id = ch.scope_id
+       AND cm.role = ANY(${adminTier}::text[])
+    UNION
+    -- Eboard: every member. Membership there is admin-tier by construction, so there is no
+    -- second tier to filter on - the same reasoning isChannelAdmin uses.
+    SELECT em.user_id FROM eboard_memberships em, ch
+     WHERE ch.scope = 'eboard' AND em.eboard_id = ch.scope_id
+    UNION
+    /*
+      Race: on the roster AND a club admin. Either alone is the wrong answer.
+
+      Written as explicit JOINs starting FROM ch, rather than mixing a comma with a JOIN. A comma
+      is a cross join and binds looser than JOIN, so an ON clause cannot see the table on the far
+      side of one - referring to ch.club_id there is "invalid reference to FROM-clause entry",
+      which is how the first version of this failed. Note that no comment inside this template
+      may contain a backtick: it would end the string.
+    */
+    SELECT rm.user_id
+      FROM ch
+      JOIN race_memberships rm ON ch.scope = 'race' AND rm.race_id = ch.scope_id
+      JOIN club_memberships cm ON cm.user_id = rm.user_id
+                              AND cm.club_id = ch.club_id
+                              AND cm.role = ANY(${adminTier}::text[])
+    UNION
+    -- DM: nobody in the conversation reviews it. Platform moderators do.
+    SELECT u.id FROM users u, ch
+     WHERE ch.scope = 'dm' AND u.is_platform_moderator
+  `);
+  return rows.rows.map((r) => r.user_id);
+}

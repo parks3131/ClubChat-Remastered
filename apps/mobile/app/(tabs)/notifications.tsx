@@ -85,6 +85,21 @@ function hrefFor(target: NotificationTarget): string | undefined {
       return `/meetings/${target.meetingId}`;
     case 'news':
       return `/clubs/${target.clubId}/news`;
+    // The Reports tab of that channel's Highlights, opened ON that tab rather than on Pinned -
+    // the reviewer was sent here by a report, so landing them anywhere else is a second tap.
+    case 'chat_reports':
+      return `/channels/${target.channelId}/highlights?tab=reports`;
+    /*
+     * The platform moderation queue, which the app does not have a screen for yet - only the
+     * dismiss call exists in `api.ts`.
+     *
+     * Deliberately `undefined` rather than a route: expo-router answers an unknown path with its
+     * "Unmatched Route" screen, and sending a moderator there would be worse than not moving at
+     * all. The row still appears and still says a report is waiting, which is the part that
+     * matters; the queue itself is the outstanding work.
+     */
+    case 'platform_moderation':
+      return undefined;
     case 'inbox':
       // Already here.
       return undefined;
@@ -115,6 +130,9 @@ const ICON_BY_TYPE: Readonly<Record<string, IconName>> = {
   announcement: 'campaign',
   chat_caught_up: 'done-all',
   mentioned: 'alternate-email',
+  // The same shield the Report action carries in the message menu, so the notification and the
+  // control that produced it read as the same thing.
+  message_reported: 'shield',
   news_post_created: 'photo-camera',
   car_group_incharge_left: 'directions-car',
 };

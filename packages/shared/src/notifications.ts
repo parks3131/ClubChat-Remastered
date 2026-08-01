@@ -47,6 +47,20 @@ export const notificationTypes = [
   'announcement',
   'mentioned',
   /**
+   * Somebody reported a message, and this is the work landing on whoever reviews it.
+   *
+   * > **Deliberately absent until 2026-08-01**, when the founder asked why reporting was silent.
+   * > The note in `domain/moderation.ts` said adding it "would need an audience rule for platform
+   * > moderators, who are not members of any club" - and that is exactly what it needed, because
+   * > the reviewer of a DM report is not an admin of anything. See
+   * > `channelModerationAudienceById`.
+   *
+   * Goes to the REVIEWERS, never to the reported member: PRD/05 rule 10 and PRD/14 rule 7 both
+   * require reporting to be invisible to the person reported, and a notification is the loudest
+   * possible way to break that.
+   */
+  'message_reported',
+  /**
    * A direct message arrived. **Push only - never written to the inbox.**
    *
    * An ordinary message in club, race or Eboard chat produces no discrete notification at
@@ -150,6 +164,26 @@ export const notificationParams = {
     .merge(actor),
 
   /**
+   * A report waiting to be reviewed.
+   *
+   * `clubId` is nullable because a DM report belongs to no club - it goes to the platform queue,
+   * and the recipients are moderators rather than members of anything.
+   *
+   * **Carries no preview of the reported message**, unlike `announcement` and `mentioned`. A
+   * notification is a pointer to work, and the content of a report belongs behind the audited
+   * read that the Reports tab and the DM queue perform - putting it in a push payload would put
+   * it on a lock screen instead.
+   */
+  message_reported: z
+    .object({
+      clubId: Uuid.nullable(),
+      channelId: Uuid,
+      channelName: z.string(),
+      seq: z.number().int().positive(),
+    })
+    .merge(actor),
+
+  /**
    * `clubId` is fixed at null rather than nullable, and that is the type-level statement of
    * the rule: a DM belongs to no club, ever, because two people who share two clubs must get
    * one thread. `channelName` is the sender's name - a conversation has no name of its own,
@@ -236,6 +270,15 @@ export type NotificationTarget =
   | { kind: 'event'; eventId: string }
   | { kind: 'meeting'; meetingId: string }
   | { kind: 'news'; clubId: string }
+  /**
+   * The Reports tab of a channel's Highlights, which is where a group-scope report is worked.
+   *
+   * Its own kind rather than `chat` with a seq: the reviewer's job is the queue, not the
+   * message, and landing them in the conversation would leave them to find the tab themselves.
+   */
+  | { kind: 'chat_reports'; channelId: string }
+  /** The platform moderation queue, where a DM report goes. No club admin can reach it. */
+  | { kind: 'platform_moderation' }
   | { kind: 'inbox' };
 
 /**
@@ -295,6 +338,18 @@ export function notificationTarget(n: {
     // seq would land past anything that arrived after the push was built.
     case 'dm_message':
       return { kind: 'chat', channelId: p['channelId']! };
+
+    /*
+     * Two destinations for one type, decided by whether the channel belongs to a club.
+     *
+     * A group-scope report is reviewed by that space's admins in its Reports tab. A DM report
+     * has no club and no admin - it is reviewed by platform moderators in their own queue, and
+     * routing it to a club screen would send somebody to a page they cannot open.
+     */
+    case 'message_reported':
+      return p['clubId'] === null
+        ? { kind: 'platform_moderation' }
+        : { kind: 'chat_reports', channelId: p['channelId']! };
 
     case 'car_group_incharge_left':
       return { kind: 'race_car_groups', raceId: p['raceId']! };
@@ -386,6 +441,19 @@ export function renderNotification(n: {
       return {
         title: p['channelName']!,
         body: `${p['actorName']} mentioned you: ${p['preview']}`,
+      };
+    /*
+     * Says who reported and where, and NOT what was said or who said it.
+     *
+     * The reported member is never named, because this text can land on a lock screen and an
+     * accusation is not a thing to broadcast before anybody has looked at it. The reviewer opens
+     * the queue to see the message, which is the read that is access-checked and, for a DM,
+     * audited.
+     */
+    case 'message_reported':
+      return {
+        title: p['channelName']!,
+        body: `${p['actorName']} reported a message for review`,
       };
     // The title is the sender's name and the body is what they said, with no "X said:" prefix -
     // in a one-to-one conversation the sender is already the title, so repeating them reads as

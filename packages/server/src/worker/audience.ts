@@ -21,7 +21,10 @@
 import { sql } from 'drizzle-orm';
 import { ADMIN_TIER, type NotificationType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
-import { channelAudienceById } from '../domain/channel-access.ts';
+import {
+  channelAudienceById,
+  channelModerationAudienceById,
+} from '../domain/channel-access.ts';
 
 export type AudienceRequest = {
   type: NotificationType;
@@ -75,6 +78,19 @@ async function gather(db: Db, request: AudienceRequest): Promise<string[]> {
     case 'dm_message':
       if (!request.channelId) return [];
       return channelAudienceById(db, request.channelId);
+
+    /*
+     * Whoever reviews reports in that channel.
+     *
+     * NOT `clubAdminTier`, even though it is the same people for a club channel: a race channel
+     * is reviewed by roster members who are also club admins, and a DM has no admin at all - its
+     * reviewers are platform moderators, who belong to no club and could never be reached by a
+     * club query. One function answers all four, and it is the list form of the same predicate
+     * that decides who may open the queue. See `channelModerationAudienceById`.
+     */
+    case 'message_reported':
+      if (!request.channelId) return [];
+      return channelModerationAudienceById(db, request.channelId);
 
     // The club's admin tier. BOTH admin and owner.
     case 'club_join_request':

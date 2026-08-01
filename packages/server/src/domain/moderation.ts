@@ -22,7 +22,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { replyPreview, type MessageEnvelope, type MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
-import { messageReports, moderationReads } from '../db/schema.ts';
+import { messageReports, moderationReads, outbox } from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
   canDismissReport,
@@ -56,12 +56,21 @@ export const MODERATION_CONTEXT_RADIUS = 5;
  * a no-op" - a property of the data rather than a check a handler could forget. Nothing about
  * the DM path relaxes it.
  *
- * Emits no outbox event and writes no notification, in either kind of scope:
+ * **Emits `message.reported`, in the same transaction as the row.** Either both land or neither
+ * does, so a report can never sit in the queue with nobody told and a notification can never
+ * point at a report that was rolled back. Only a report that was actually created emits one - a
+ * repeat by the same person is absorbed by the primary key and must not buzz anybody a second
+ * time.
  *
- *  - In a DM, PRD/14 is explicit that the other participant is not told.
- *  - In a group scope, the report surfaces in the Reports tab, which is a work list the admin
- *    pulls. There is no `message_reported` notification type in the catalogue, and adding one
- *    would need an audience rule for platform moderators, who are not members of any club.
+ * > **This used to emit nothing**, and said so here: "the report surfaces in the Reports tab,
+ * > which is a work list the admin pulls". It was a work list nobody was told had work in it, and
+ * > the founder found out by reporting something and hearing nothing. The note also named what
+ * > the fix needed - "an audience rule for platform moderators, who are not members of any club"
+ * > - which is `channelModerationAudienceById`.
+ *
+ * Who is told still differs by scope, and neither answer includes the reported member: PRD/14
+ * keeps a DM report away from every club admin, and PRD/05 rule 10 keeps reporting invisible to
+ * its subject.
  */
 export async function reportMessage(
   db: Db,
@@ -84,11 +93,39 @@ export async function reportMessage(
     return { ok: false, code: 'forbidden' };
   }
 
-  const inserted = await db
-    .insert(messageReports)
-    .values({ messageId: message.id, reporterId: ctx.userId })
-    .onConflictDoNothing()
-    .returning({ messageId: messageReports.messageId });
+  const inserted = await db.transaction(async (tx) => {
+    const rows = await tx
+      .insert(messageReports)
+      .values({ messageId: message.id, reporterId: ctx.userId })
+      .onConflictDoNothing()
+      .returning({ messageId: messageReports.messageId });
+
+    /*
+     * The report row and the event that tells somebody about it, in ONE transaction.
+     *
+     * The whole reason the outbox exists rather than notifying from here: either both land or
+     * neither does, so a report can never sit in the table with nobody told, and a notification
+     * can never point at a report that was rolled back.
+     *
+     * Only on a row that was actually created. A second report of the same message by the same
+     * person is a no-op by `onConflictDoNothing`, and re-notifying for it would let one person
+     * buzz every admin repeatedly by tapping Report again.
+     */
+    if (rows.length > 0) {
+      await tx.insert(outbox).values({
+        partitionKey: channel.id,
+        eventType: 'message.reported',
+        payload: {
+          channelId: channel.id,
+          messageId: message.id,
+          seq,
+          reporterId: ctx.userId,
+        },
+      });
+    }
+
+    return rows;
+  });
 
   return {
     ok: true,

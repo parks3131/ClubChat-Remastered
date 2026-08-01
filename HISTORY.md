@@ -13,6 +13,65 @@ Newest first.
 
 ---
 
+## 2026-08-01 (last) - Reporting told nobody
+
+"I didn't get any notification when a member reported."
+
+Correct, and it had never told anybody. `reportMessage` wrote a row into `message_reports` and
+stopped. The Reports tab showed it faithfully to whoever thought to open a tab they had no reason
+to suspect had anything in it.
+
+The comment on that function had already named both the omission and the reason it was left:
+
+> There is no `message_reported` notification type in the catalogue, and adding one would need an
+> audience rule for platform moderators, who are not members of any club.
+
+That is exactly what it needed. **The audience is not "the club's admins"**, and each scope
+disagrees in a way that matters:
+
+| Scope | Who reviews a report |
+|---|---|
+| club | the club's admin tier - owner **and** admin |
+| eboard | every member, because membership there is admin-tier by construction |
+| race | on the roster **and** a club admin. Either alone is the wrong answer |
+| **dm** | **platform moderators**, who belong to no club and no membership query can find |
+
+`channelModerationAudienceById` is the list form of `isChannelAdmin`, plus the case that predicate
+answers `false` to - and the two must agree, because this decides who is *told* and that decides
+who may *read*. Somebody notified about a queue they cannot open would be worse than silence.
+
+The event is written in the same transaction as the report row, so a report can never sit in the
+queue with nobody told, and only a report that was actually created emits one - otherwise tapping
+Report twice would let one member buzz every admin as often as they liked.
+
+The notification names the reporter and the channel, and **nothing else**. Not the reported
+member, not the text. It can land on a lock screen before anybody has looked at it, and an
+accusation is not a thing to broadcast at that point; the content stays behind the audited read
+the queue performs.
+
+Three bugs while building it, all found by the tests rather than by reading:
+
+- **Backticks inside a `sql` template literal end the string.** Twice, in SQL comments. The second
+  time it took a bundler parse error at a line 15 above the actual mistake to place it.
+- **`FROM a, b JOIN c ON ...` cannot see `a` from the ON clause.** A comma is a cross join and
+  binds looser than JOIN, so the race branch's reference to the channel's club id was an "invalid
+  reference to FROM-clause entry". Rewritten as explicit joins starting from the channel.
+- **Role literals in SQL.** The first version typed `IN ('owner', 'admin')`, which is precisely
+  the bug that shipped four times in v1 - a bare `admin` filter excludes a club whose only
+  admin-tier member is its Owner, which is every new club. It binds `ADMIN_TIER` now, like the
+  worker's audience module does.
+
+Mutation-tested: removing the platform-moderator branch fails the DM case, and notifying on a
+duplicate report fails the idempotency case. Verified live end to end - a second member reported a
+message and the club owner's inbox returned "Reporter Rita reported a message for review",
+targeted at that channel's Reports tab.
+
+**The platform queue has no screen yet.** A moderator gets the notification and it deliberately
+navigates nowhere, because expo-router answers an unknown path with "Unmatched Route" and that is
+worse than not moving. Building that screen is the outstanding half.
+
+---
+
 ## 2026-08-01 (later still) - The list that chased its own bottom
 
 A founder report: "whenever I come to any chat it should take me directly to the bottom, and I

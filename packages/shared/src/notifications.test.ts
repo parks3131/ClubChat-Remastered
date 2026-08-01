@@ -130,6 +130,13 @@ const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
     preview: 'can you drive?',
     actorName: 'Riley',
   },
+  message_reported: {
+    clubId: CLUB,
+    channelId: CHANNEL,
+    channelName: 'Hillside',
+    seq: 43,
+    actorName: 'Riley',
+  },
   car_group_incharge_left: {
     clubId: CLUB,
     clubName: 'Hillside',
@@ -156,11 +163,13 @@ const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
 };
 
 describe('the catalogue is complete', () => {
-  it('declares 19 types: the PRD table plus the push-only dm_message', () => {
+  it('declares 20 types: the PRD table, the push-only dm_message, and the report', () => {
     // PRD/12's catalogue lists 18. dm_message is the nineteenth and never appears in that
     // table because it never becomes an inbox row - it exists so a direct message can buzz a
     // phone, which is what makes muting a conversation mean anything. See ADR-0015.
-    expect(notificationTypes).toHaveLength(19);
+    // message_reported is the twentieth, added on 2026-08-01: reporting used to write a row
+    // into a work queue and tell nobody there was work in it.
+    expect(notificationTypes).toHaveLength(20);
   });
 
   it('has a params schema for every type', () => {

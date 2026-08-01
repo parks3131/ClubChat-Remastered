@@ -1081,3 +1081,104 @@ describe('a chat header wears its own face, never the club\'s', () => {
     expect(meta.image, 'a race with no picture borrowed the club\'s').toBeNull();
   });
 });
+
+/**
+ * **Reporting tells the people who review reports, and nobody else.**
+ *
+ * Reporting wrote a row into a work queue and told nobody there was work in it, for every phase
+ * it existed. Raised by the founder on 2026-08-01: "I didn't get any notification when a member
+ * reported."
+ *
+ * The audience is the interesting part, and the reason this lives beside the DM gate above: it is
+ * NOT "the club's admins". A DM has no admin at all - its reviewers are platform moderators, who
+ * belong to no club - and that single fact is what the deferral note on `reportMessage` named as
+ * the missing piece. The two cases are asserted together because getting either one wrong is a
+ * privacy failure rather than a missing convenience.
+ */
+describe('a report notifies whoever reviews it', () => {
+  /** Who was told about a report in THIS channel. Scoped, because the table outlives each test. */
+  async function toldAbout(channelId: string): Promise<string[]> {
+    const rows = await h.db.execute<{ recipient_id: string }>(sql`
+      SELECT recipient_id::text AS recipient_id
+        FROM notifications
+       WHERE type = 'message_reported' AND params->>'channelId' = ${channelId}
+    `);
+    return rows.rows.map((r) => r.recipient_id);
+  }
+
+  it('tells the club admin tier, and neither the reporter nor the reported member', async () => {
+    const f = await setup();
+    const clubChannel = await getChannelRef(h.db, f.clubChannelId);
+    // Alice and Bob are ordinary members; the club's admin tier is the Owner alone.
+    const said = await say(f.aliceId, clubChannel!, 'something rude in club chat');
+    expect(said.ok).toBe(true);
+
+    await reportMessage(h.db, await ctxFor(f.bobId), clubChannel!, said.ok ? said.message.seq : 0);
+    await drainAndPush();
+
+    const told = await toldAbout(f.clubChannelId);
+    expect(told).toEqual([f.ownerId]);
+    // The reporter knows - they did it - and being told about your own report is noise.
+    expect(told).not.toContain(f.bobId);
+    /*
+     * And the reported member is not told, which is the one that matters.
+     *
+     * PRD/05 rule 10 and PRD/14 rule 7 both keep reporting invisible to its subject, and a
+     * notification is the loudest possible way to break that. Alice is an ordinary member here,
+     * so she is outside the audience for the ordinary reason - but this asserts the outcome
+     * rather than the mechanism, because the mechanism is what a future change would alter.
+     */
+    expect(told).not.toContain(f.aliceId);
+  });
+
+  it('tells platform moderators for a DM, and no club admin', async () => {
+    const f = await setup();
+    const moderatorId = await makeModerator('QueueModerator');
+
+    const said = await say(f.aliceId, f.dmChannel, 'something awful');
+    expect(said.ok).toBe(true);
+    await reportMessage(h.db, await ctxFor(f.bobId), f.dmChannel, said.ok ? said.message.seq : 0);
+    await drainAndPush();
+
+    const told = await toldAbout(f.dmChannelId);
+    expect(told).toContain(moderatorId);
+    /*
+     * EVERY recipient is a platform moderator, asserted rather than an exact list.
+     *
+     * Earlier tests in this file leave their own moderators behind, and they are all legitimate
+     * recipients - a DM report goes to the platform's moderators, however many exist. Pinning
+     * the assertion to one id would make this test a hostage to the order the file runs in;
+     * asserting the property is both leak-proof and the thing actually worth guaranteeing.
+     */
+    const nonModerators = await h.db.execute<{ n: number }>(sql`
+      SELECT COUNT(*)::int AS n FROM users
+       WHERE id = ANY(${sql.param(told)}::uuid[]) AND NOT is_platform_moderator
+    `);
+    expect(Number(nonModerators.rows[0]?.n), 'a non-moderator was told about a DM report').toBe(0);
+    /*
+     * The club Owner is NOT told, and this is the assertion that matters most.
+     *
+     * They are the most privileged person in a club both participants belong to - and a DM
+     * belongs to no club, so they have no standing over it at all. PRD/14 rule 7 keeps a DM
+     * report away from every club admin, and announcing that one exists would breach that
+     * before anybody opened anything.
+     */
+    expect(told).not.toContain(f.ownerId);
+    expect(told).not.toContain(f.bobId);
+  });
+
+  it('does not notify again when the same person reports the same message twice', async () => {
+    const f = await setup();
+    const clubChannel = await getChannelRef(h.db, f.clubChannelId);
+    const said = await say(f.aliceId, clubChannel!, 'rude, again');
+    const seq = said.ok ? said.message.seq : 0;
+
+    await reportMessage(h.db, await ctxFor(f.bobId), clubChannel!, seq);
+    await reportMessage(h.db, await ctxFor(f.bobId), clubChannel!, seq);
+    await drainAndPush();
+
+    // One report row means one event means one notification. Without the guard on the insert,
+    // tapping Report repeatedly would let one member buzz every admin as often as they liked.
+    expect(await toldAbout(f.clubChannelId)).toHaveLength(1);
+  });
+});

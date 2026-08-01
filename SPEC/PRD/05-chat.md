@@ -81,7 +81,12 @@ second is a feature the whole product would have to bend around. Threads remain 
 9. **A message can be deleted by its sender or by an admin of that space.** Deletion leaves a
    "This message was deleted" tombstone rather than removing it from history. Reactions and
    pin state are cleared with it.
-10. **Anyone can report a message they did not send.** Reporting twice is a no-op. Reports
+10. **Anyone can report a message they did not send.** Reporting twice is a no-op, and the second
+    one notifies nobody either. **Filing a report notifies whoever reviews it** - the space's
+    admins, or platform moderators for a DM - because a work queue nobody is told about is a work
+    queue nobody opens. The notification names the reporter and the channel and nothing else: not
+    the reported member, not the text, because it can land on a lock screen before anybody has
+    looked at it. Reports
     surface only to admins, in a Reports tab in Highlights, where they can delete the message
     or dismiss the report. **In a DM there is no such admin**, so a DM report routes to a
     platform moderation queue instead and no club admin ever sees it - see

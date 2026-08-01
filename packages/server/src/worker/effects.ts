@@ -1039,6 +1039,82 @@ export const handlers: Record<string, EffectHandler> = {
     deps.log('info', 'message.deleted published', { eventId: event.id, channelId, seq });
   },
 
+  /**
+   * A message was reported, and whoever reviews reports here is told.
+   *
+   * > **Reporting was silent until 2026-08-01.** The row landed in `message_reports` and waited
+   * > for an admin to happen to open the Reports tab, which is a work queue nobody was told had
+   * > work in it. Raised by the founder: "I didn't get any notification when a member reported."
+   *
+   * The audience is deliberately not "the club's admins": a race channel is reviewed by roster
+   * members who are ALSO club admins, and a DM has no admin at all - its reviewers are platform
+   * moderators, who belong to no club. `resolveAudience` routes all four through the list form of
+   * the same predicate that decides who may open the queue, so nobody is ever told about work
+   * they cannot reach.
+   *
+   * The reporter is dropped from the audience by `resolveAudience` - they know - which also
+   * covers the common case of an admin reporting something themselves.
+   */
+  'message.reported': async (event, deps) => {
+    const channelId = String(event.payload['channelId'] ?? event.partitionKey);
+    const seq = Number(event.payload['seq']);
+    const reporterId = String(event.payload['reporterId'] ?? '');
+
+    const context = await channelContext(deps.db, channelId);
+    if (!context) {
+      deps.log('warn', 'message.reported for a channel that no longer exists', { channelId });
+      return;
+    }
+
+    const recipients = await resolveAudience(deps.db, {
+      type: 'message_reported',
+      actorId: reporterId || null,
+      clubId: context.clubId,
+      channelId,
+    });
+
+    const params = {
+      clubId: context.clubId,
+      channelId,
+      channelName: context.name,
+      seq,
+      actorName: reporterId ? await displayName(deps.db, reporterId) : 'Someone',
+    };
+
+    const { created } = await writeNotifications(deps.db, {
+      outboxEventId: notificationKey(event.id, 0),
+      type: 'message_reported',
+      params,
+      recipients,
+      actorId: reporterId || null,
+      clubId: context.clubId,
+    });
+
+    /*
+     * Pushed immediately, and WITHOUT `channelId`/`seq`.
+     *
+     * Those two are what let `dispatchPush` suppress a push for somebody whose read cursor has
+     * already passed the message - the right rule for an announcement, and the wrong one here.
+     * Having read the conversation is not having reviewed the report; suppressing on it would
+     * silence exactly the admin who is most active in that channel.
+     */
+    const outcome = await dispatchPush(deps.db, deps.push, {
+      outboxEventId: notificationKey(event.id, 0),
+      type: 'message_reported',
+      params,
+      recipients,
+    });
+
+    deps.log('info', 'message.reported notified', {
+      eventId: event.id,
+      channelId,
+      scope: context.scope,
+      recipients: recipients.length,
+      created,
+      pushed: outcome.pushed,
+    });
+  },
+
   /** A pin or unpin. Notifies nobody: pins are reference, not interruption. */
   'message.pinned': async (event, deps) => {
     const channelId = String(event.payload['channelId'] ?? event.partitionKey);
