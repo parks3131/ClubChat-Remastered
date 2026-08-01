@@ -13,6 +13,47 @@ Newest first.
 
 ---
 
+## 2026-08-01 (last, corrected) - Reporting, scope by scope
+
+The notification below shipped with the audience wrong in one scope, and the founder walked
+through what was actually wanted the moment it landed. The corrected rules:
+
+| Scope | Reporting | Notified |
+|---|---|---|
+| club | yes | the admin tier: Owner and admins |
+| race | yes | admins **on that race's roster**. A club Owner not in the race hears nothing |
+| **eboard** | **no - removed entirely** | nobody |
+| dm | untouched for now | platform moderators |
+
+Two of the three already matched. **Race was already right**, which is worth stating because it
+is the one with a trap in it: "club admin" and "on the roster" are different questions, and taking
+either alone is wrong in a different direction. **Eboard was wrong** - every member was being
+notified, when reporting should not exist there at all: everyone in that space is admin-tier, so a
+report would be filed by the same people who would review it, and they can delete directly.
+
+Removed at the policy, not in the screen. `canReportInChannel` is a new predicate - the
+channel-level half of `canReportMessage` - so the server refuses a report in Eboard by any route,
+`canReadReports` returns false there so the tab is **absent rather than empty**, and the channel
+meta carries `canReport` so the message menu asks rather than restating the scope rule.
+
+### Two tests that passed for the wrong reason
+
+Both were caught by mutation-testing, and neither would have been caught by reading:
+
+- **The Eboard test had the Owner reporting their own message.** Nobody may report their own
+  message in any scope, so it was refused by that rule and proved nothing about Eboard. Removing
+  the Eboard guard entirely still passed. It needs a second Eboard member, and now has one.
+- **The race test asserted a club admin was not notified without checking they were an admin.**
+  If the promotion had silently failed they would have been an ordinary member, excluded for a
+  boring reason, and the assertion would have passed while proving nothing. The promotion is now
+  asserted before the thing it enables.
+
+The lesson is the same in both: **a negative assertion is only as strong as the setup that makes
+the positive case possible.** Mutation-testing is what distinguishes them, and it is why "the
+tests pass" was not enough here.
+
+---
+
 ## 2026-08-01 (last) - Reporting told nobody
 
 "I didn't get any notification when a member reported."

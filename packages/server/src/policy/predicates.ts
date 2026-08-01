@@ -330,28 +330,52 @@ export const canReportMessage = (
   ctx: AccessContext,
   ch: ChannelRef,
   message: { senderId: string },
-): boolean => isChannelMember(ctx, ch) && message.senderId !== ctx.userId;
+): boolean =>
+  canReportInChannel(ctx, ch) && message.senderId !== ctx.userId;
+
+/**
+ * The channel-level half: may this person report anything here at all?
+ *
+ * Split out from `canReportMessage` so the channel meta can answer "offer the Report control?"
+ * without a message in hand, and so both answers come from ONE definition rather than the screen
+ * restating the scope rule.
+ *
+ * > **Eboard chat has no reporting, by decision on 2026-08-01.** Every member of that space is
+ * > already admin-tier, so a report would be filed by the same set of people who would review it -
+ * > a queue you raise work into for yourself. They can delete the message directly, which is the
+ * > action reporting would have led to anyway.
+ *
+ * Gated on reading the channel rather than on posting in it: a member who has just blocked
+ * somebody, or whose thread went read-only, must still be able to report what was said to them.
+ */
+export const canReportInChannel = (ctx: AccessContext, ch: ChannelRef): boolean =>
+  ch.scope !== 'eboard' && isChannelMember(ctx, ch);
 
 /**
  * Who may READ the reports raised in a channel.
  *
- * > **One table, two readers, selected by the reported message's channel scope.**
+ * > **One table, three answers, selected by the reported message's channel scope.**
  * >
  * > | Channel scope | Report visible to |
  * > |---|---|
- * > | club / race / eboard | admins of that space, in the Highlights Reports tab |
+ * > | club / race | admins of that space, in the Highlights Reports tab |
+ * > | **eboard** | **nobody - reporting does not exist there.** See `canReportInChannel` |
  * > | **dm** | **platform moderators, in a separate queue** |
  *
- * The two branches are mutually exclusive on purpose, in both directions. A club admin never
- * sees a DM report - PRD/14 rule 7 is explicit that no club admin ever sees the contents of a
- * DM - and a platform moderator gets nothing extra in club, race or Eboard chat, where the
- * space's own admins are the right readers and the moderator has no standing at all.
+ * The branches are mutually exclusive on purpose, in both directions. A club admin never sees a
+ * DM report - PRD/14 rule 7 is explicit that no club admin ever sees the contents of a DM - and a
+ * platform moderator gets nothing extra in club or race chat, where the space's own admins are
+ * the right readers and the moderator has no standing at all.
  *
- * Every other scope answers "who sees a report?" with "that space's admins". A DM has none,
- * which is why this needs its own answer rather than a fallback.
+ * **Eboard returns false rather than being left as admins-see-everything**, and that is the point
+ * of writing it out: the tab must be absent there, not empty. A space where reporting cannot
+ * happen and a tab that lists no reports look identical on screen and are not the same claim.
  */
-export const canReadReports = (ctx: AccessContext, ch: ChannelRef): boolean =>
-  ch.scope === 'dm' ? ctx.isPlatformModerator : isChannelAdmin(ctx, ch);
+export const canReadReports = (ctx: AccessContext, ch: ChannelRef): boolean => {
+  if (ch.scope === 'dm') return ctx.isPlatformModerator;
+  if (ch.scope === 'eboard') return false;
+  return isChannelAdmin(ctx, ch);
+};
 
 /**
  * Dismissing a report, and deleting the reported message, are the two actions the Reports tab

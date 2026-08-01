@@ -32,6 +32,7 @@ import {
   canOpenDm,
   canPinInChannel,
   canReadReports,
+  canReportInChannel,
   canPostInChannel,
   canUnblock,
   dmThreadWith,
@@ -378,6 +379,19 @@ export type ChannelMeta = {
    */
   canReadReports: boolean;
   /**
+   * May this viewer report a message here at all?
+   *
+   * `canReportInChannel`, the channel-level half of `canReportMessage`. Carried for the same
+   * reason `canReadReports` is: so the message menu decides whether to OFFER the control rather
+   * than offering it and letting the write fail.
+   *
+   * **False for the whole Eboard scope**, where reporting does not exist - everyone there is
+   * already admin-tier, so a report would be raised by the same people who would review it.
+   * The client must not compute this from `canDeleteAnyMessage` or from the scope: it is one
+   * rule, asked once, in the policy module.
+   */
+  canReport: boolean;
+  /**
    * May this user post an announcement here?
    *
    * `canAnnounceInChannel`, which is `isChannelAdmin` - **not** `canPin`. The two come apart in
@@ -480,6 +494,7 @@ export async function readChannelMeta(
     postDeniedReason: canPost ? null : row.blocked_by_me ? 'you_blocked_them' : 'unavailable',
     canPin: canPinInChannel(ctx, channel),
     canReadReports: canReadReports(ctx, channel),
+    canReport: canReportInChannel(ctx, channel),
     canAnnounce: canAnnounceInChannel(ctx, channel),
     canDeleteAnyMessage: canDeleteOthersMessages(ctx, channel),
     muted: row.muted,

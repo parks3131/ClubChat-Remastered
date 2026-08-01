@@ -331,6 +331,7 @@ function MessageActions({
   message,
   mine,
   canPin,
+  canReport,
   canDelete,
   onDismiss,
   onReact,
@@ -343,6 +344,8 @@ function MessageActions({
   message: MessageEnvelope;
   mine: boolean;
   canPin: boolean;
+  /** Whether this conversation has reporting at all. False for the whole Eboard scope. */
+  canReport: boolean;
   canDelete: boolean;
   onDismiss: () => void;
   onReact: (emoji: ReactionEmoji) => void;
@@ -373,8 +376,13 @@ function MessageActions({
           },
         ]
       : []),
-    // Nobody reports their own message.
-    ...(mine
+    /*
+      Nobody reports their own message, and Eboard chat has no reporting at all - everyone in
+      that space is admin-tier, so a report would be raised by the same people who would review
+      it. They delete directly instead. `canReport` is the server's answer rather than a scope
+      check written out here.
+    */
+    ...(mine || !canReport
       ? []
       : [
           {
@@ -2481,6 +2489,7 @@ export default function ChatScreen() {
             message={selectedMessage}
             mine={selectedMessage.senderId === userId}
             canPin={meta?.canPin === true}
+            canReport={meta?.canReport === true}
             canDelete={
               selectedMessage.senderId === userId || meta?.canDeleteAnyMessage === true
             }

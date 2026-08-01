@@ -81,12 +81,29 @@ second is a feature the whole product would have to bend around. Threads remain 
 9. **A message can be deleted by its sender or by an admin of that space.** Deletion leaves a
    "This message was deleted" tombstone rather than removing it from history. Reactions and
    pin state are cleared with it.
-10. **Anyone can report a message they did not send.** Reporting twice is a no-op, and the second
-    one notifies nobody either. **Filing a report notifies whoever reviews it** - the space's
-    admins, or platform moderators for a DM - because a work queue nobody is told about is a work
-    queue nobody opens. The notification names the reporter and the channel and nothing else: not
-    the reported member, not the text, because it can land on a lock screen before anybody has
-    looked at it. Reports
+10. **Anyone can report a message they did not send, except in Eboard chat.** Reporting twice is
+    a no-op, and the second one notifies nobody either.
+
+    **Eboard has no reporting at all** - not a hidden button, not an empty tab. Every member of
+    that space is already admin-tier, so a report would be raised by the same people who would
+    review it; they delete the message directly, which is where reporting would have led anyway.
+
+    **Filing a report notifies whoever reviews it**, because a work queue nobody is told about is
+    a work queue nobody opens. Who that is depends on the scope, and the differences are
+    deliberate:
+
+    | Scope | Notified |
+    |---|---|
+    | club | the admin tier: Owner and admins |
+    | race | admins **who are on that race's roster**. A club Owner not in the race hears nothing |
+    | eboard | nobody - see above |
+    | dm | platform moderators, never a club admin |
+
+    Every admin is told, **including one whose own message was reported**: the alternative leaves
+    a space with a single admin having nobody notified at all.
+
+    The notification names the reporter and the channel and nothing else - not the reported
+    member, not the text - because it can land on a lock screen before anybody has looked at it. Reports
     surface only to admins, in a Reports tab in Highlights, where they can delete the message
     or dismiss the report. **In a DM there is no such admin**, so a DM report routes to a
     platform moderation queue instead and no club admin ever sees it - see

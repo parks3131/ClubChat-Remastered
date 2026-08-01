@@ -175,11 +175,14 @@ export async function channelModerationAudienceById(
      WHERE ch.scope = 'club' AND cm.club_id = ch.scope_id
        AND cm.role = ANY(${adminTier}::text[])
     UNION
-    -- Eboard: every member. Membership there is admin-tier by construction, so there is no
-    -- second tier to filter on - the same reasoning isChannelAdmin uses.
-    SELECT em.user_id FROM eboard_memberships em, ch
-     WHERE ch.scope = 'eboard' AND em.eboard_id = ch.scope_id
-    UNION
+    /*
+      No eboard branch, deliberately.
+
+      Reporting does not exist in that scope - see canReportInChannel - so there is nothing to
+      review and nobody to tell. An eboard channel reaching here at all would mean a report was
+      filed somewhere the policy refuses one, and answering with a list of recipients would paper
+      over that rather than leaving it visible as a report nobody was notified about.
+    */
     /*
       Race: on the roster AND a club admin. Either alone is the wrong answer.
 

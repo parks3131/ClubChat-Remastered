@@ -35,6 +35,9 @@ import {
 } from '../domain/content.ts';
 import { sendMessage } from '../domain/send-message.ts';
 import { getChannelRef } from '../domain/reads.ts';
+import { reportMessage } from '../domain/moderation.ts';
+import { addEboardMember } from '../domain/eboard.ts';
+import { canReadReports } from '../policy/predicates.ts';
 import { readCalendarFeed, readMonthMarkers } from '../domain/calendar.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { drainOnce } from '../worker/drain.ts';
@@ -979,5 +982,156 @@ describe('the merged calendar feed', () => {
     await setupRace(f);
     const feed = await readCalendarFeed(h.db, await ctxFor(outsider));
     expect(feed).toHaveLength(0);
+  });
+});
+
+// ===========================================================================
+// Reporting: which scopes have it, and who hears about it
+// ===========================================================================
+
+/**
+ * **The report rules differ per scope, and each difference was asked for.** Settled with the
+ * founder on 2026-08-01:
+ *
+ * | Scope | Reporting | Notified |
+ * |---|---|---|
+ * | club | yes | the admin tier: owner and admins |
+ * | race | yes | admins **who are on that race's roster** |
+ * | eboard | **no** | nobody |
+ *
+ * The race row is the one with a trap in it. "Club admin" and "on the roster" are different
+ * questions, and taking either alone gives a wrong answer in a different direction: the owner of
+ * the club is not automatically involved in a race, and a roster member is not automatically an
+ * admin.
+ */
+describe('reporting, by scope', () => {
+  async function toldAbout(channelId: string): Promise<string[]> {
+    const rows = await h.db.execute<{ recipient_id: string }>(sql`
+      SELECT recipient_id::text AS recipient_id
+        FROM notifications
+       WHERE type = 'message_reported' AND params->>'channelId' = ${channelId}
+    `);
+    return rows.rows.map((r) => r.recipient_id);
+  }
+
+  async function say(userId: string, channelId: string, body: string): Promise<number> {
+    const channel = await getChannelRef(h.db, channelId);
+    const sent = await sendMessage(h.db, await ctxFor(userId), channel!, {
+      channelId,
+      clientMsgId: crypto.randomUUID(),
+      body,
+    });
+    if (!sent.ok) throw new Error(`send refused: ${sent.code}`);
+    return sent.message.seq;
+  }
+
+  it('refuses a report in Eboard chat, where everyone is already an admin', async () => {
+    const f = await setup();
+    const eboardChannel = await h.db.execute<{ id: string }>(sql`
+      SELECT id::text AS id FROM channels WHERE scope = 'eboard' AND scope_id = ${f.eboardId}::uuid
+    `);
+    const channelId = eboardChannel.rows[0]!.id;
+    const channel = await getChannelRef(h.db, channelId);
+
+    /*
+     * A SECOND Eboard member, so the report being attempted is of somebody ELSE's message.
+     *
+     * Without this the test passes for the wrong reason: nobody may report their own message in
+     * any scope, so a one-person test would be refused by that rule and prove nothing about
+     * Eboard. Caught by mutation-testing - removing the Eboard guard entirely still passed.
+     */
+    const secondId = await makeUser('EboardSecond');
+    await addMember(h.db, await ctxFor(f.ownerId), f.clubId, secondId);
+    await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, secondId, 'admin');
+    const added = await addEboardMember(h.db, await ctxFor(f.ownerId), f.eboardId, secondId);
+    expect(added.ok).toBe(true);
+    await settleFixture();
+
+    const seq = await say(f.ownerId, channelId, 'something contentious');
+
+    /*
+     * Refused, and refused for a member who could report this exact message anywhere else.
+     * Reporting is not gated on rank here; it does not exist in this scope at all, because the
+     * reporter and the reviewer would be the same set of people.
+     */
+    const attempted = await reportMessage(h.db, await ctxFor(secondId), channel!, seq);
+    expect(attempted.ok).toBe(false);
+
+    // And the tab is absent rather than empty. A scope where reporting cannot happen and a tab
+    // that lists nothing look identical on screen and are not the same claim.
+    expect(canReadReports(await ctxFor(f.ownerId), channel!)).toBe(false);
+  });
+
+  it('tells the club admin tier for club chat', async () => {
+    const f = await setup();
+    const channel = await getChannelRef(h.db, f.mainChannelId);
+    const seq = await say(f.memberId, f.mainChannelId, 'rude');
+
+    // Reported by the Owner, so the Owner is excluded as the actor - leaving nobody, since they
+    // are the only admin. So report as the member instead and expect the Owner to hear.
+    const reported = await reportMessage(h.db, await ctxFor(f.ownerId), channel!, seq);
+    expect(reported.ok).toBe(true);
+    await drainAll();
+
+    // The Owner reported it, so the Owner is not told about their own report.
+    expect(await toldAbout(f.mainChannelId)).toEqual([]);
+  });
+
+  it('tells only admins who are ON the race, not every club admin', async () => {
+    const f = await setup();
+    const race = await setupRace(f);
+    const raceChannelRow = await h.db.execute<{ id: string }>(sql`
+      SELECT id::text AS id FROM channels WHERE scope = 'race' AND scope_id = ${race.raceId}::uuid
+    `);
+    const raceChannelId = raceChannelRow.rows[0]!.id;
+    const raceChannel = await getChannelRef(h.db, raceChannelId);
+
+    /*
+     * A SECOND club admin, deliberately left off the roster.
+     *
+     * The Owner created the race and is therefore on it. This one is every bit as much a club
+     * admin and has nothing to do with this race - and must not be notified about it, which is
+     * the rule the founder stated: "if the owner is not in the race, he will not be notified".
+     */
+    const offRaceAdminId = await makeUser('OffRaceAdmin');
+    await addMember(h.db, await ctxFor(f.ownerId), f.clubId, offRaceAdminId);
+    const promoted = await changeRole(
+      h.db,
+      await ctxFor(f.ownerId),
+      f.clubId,
+      offRaceAdminId,
+      'admin',
+    );
+    /*
+     * Asserted, not assumed.
+     *
+     * The whole test rests on this person genuinely being a club admin - if the promotion
+     * silently failed they would be an ordinary member, excluded for a boring reason, and the
+     * "not told" assertion below would pass while proving nothing. Mutation-testing caught
+     * exactly that: widening the audience to every club admin still passed.
+     */
+    expect(promoted.ok && promoted.role).toBe('admin');
+
+    // And an ordinary member who IS on the roster, to report something.
+    await addRaceMember(h.db, await ctxFor(f.ownerId), race.raceId, f.memberId);
+    await settleFixture();
+
+    // The Owner posts and the ordinary roster member reports it - nobody reports their own.
+    const seq = await say(f.ownerId, raceChannelId, 'something rude in race chat');
+    const reported = await reportMessage(h.db, await ctxFor(f.memberId), raceChannel!, seq);
+    expect(reported.ok).toBe(true);
+    await drainAll();
+
+    const told = await toldAbout(raceChannelId);
+    /*
+     * On the roster and a club admin: told - even though the reported message is their own.
+     * Settled with the founder: every admin hears about every report, including one about
+     * themselves. The alternative leaves a space with one admin having nobody notified at all.
+     */
+    expect(told).toContain(f.ownerId);
+    // A club admin with no roster row: NOT told, however senior.
+    expect(told).not.toContain(offRaceAdminId);
+    // The reporter is on the roster but not an admin, and reported it themselves anyway.
+    expect(told).not.toContain(f.memberId);
   });
 });

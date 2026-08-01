@@ -33,6 +33,13 @@ in.
    admins.
 6. **Any Eboard member can create a meeting or a poll** - there is no further role
    distinction inside.
+6a. **Eboard chat has no reporting**, and that follows from rule 6 rather than being an
+   exception to it. Reporting exists so a member can raise something to an admin; here every
+   member already is one, so a report would be filed by the same people who would review it.
+   They delete the message directly instead. The Report action is absent from the message menu
+   and the Reports tab is absent from Highlights - absent rather than empty, because a scope
+   where reporting cannot happen and a queue that lists nothing look identical and are not the
+   same claim. Decided 2026-08-01; see [Chat](05-chat.md) rule 10.
 7. **Only the meeting's creator can EDIT it.** Everyone else is view-only where editing is
    concerned, and the detail view shows "Added by <name>".
 8. **Any member can CANCEL any meeting**, not only its creator - the deliberate asymmetry with

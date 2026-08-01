@@ -145,6 +145,14 @@ export type ChannelMeta = {
   /** Whether to OFFER the Reports tab. Never computed from canPin - see the server's note. */
   canReadReports: boolean;
   /**
+   * Whether to offer Report at all in this conversation.
+   *
+   * False for the whole Eboard scope, where reporting does not exist: everyone there is
+   * admin-tier and deletes directly. Asked of the server rather than derived from `scope` here,
+   * so the rule lives in the policy module and this screen cannot drift from it.
+   */
+  canReport: boolean;
+  /**
    * Whether to offer the announcement toggle.
    *
    * **Never computed from `canPin`.** The two come apart in race chat, where pinning
