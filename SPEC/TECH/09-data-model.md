@@ -73,7 +73,7 @@ channels              id, club_id NULL, scope ∈ {club,race,eboard,dm}, scope_i
                       -- scopes from ever exploiting the relaxed column. See [Channel log](02-channel-log.md).
 messages              id, channel_id, seq, sender_id NOT NULL, type, body, media_id,
                       document_name, document_size, pinned, deleted_at,
-                      client_msg_id NOT NULL,
+                      client_msg_id NOT NULL, reply_to_seq,
                       linked_poll_id, linked_event_id, linked_meeting_id, created_at
                       UNIQUE (channel_id, seq)
                       UNIQUE (channel_id, sender_id, client_msg_id)
@@ -81,10 +81,24 @@ messages              id, channel_id, seq, sender_id NOT NULL, type, body, media
                       -- distinct in a unique index, so a nullable sender_id or
                       -- client_msg_id silently defeats this constraint. System messages
                       -- use the reserved system-actor UUID, never NULL. See [Message flows](03-message-flows.md).
+                      FK (channel_id, reply_to_seq) → messages (channel_id, seq) ON DELETE CASCADE
+                      CHECK (reply_to_seq IS NULL OR reply_to_seq < seq)
+                      -- A reply stores ONE integer and nothing else about what it answers.
+                      -- The FK is composite and self-referencing on purpose: channel_id
+                      -- appears on both sides, so "the quoted message is in this channel"
+                      -- is enforced by the reference rather than re-checked by every read.
+                      -- The CHECK rules out quoting the future and, with it, a message
+                      -- quoting itself - which the FK alone would accept, because a
+                      -- self-referencing key is satisfied by the row being inserted.
+                      -- The quote's CONTENTS are joined on read, never stored: see
+                      -- [Message flows](03-message-flows.md).
                       INDEX (channel_id, seq DESC)
                       INDEX (channel_id, seq) WHERE pinned           ← Highlights, unbounded
                       INDEX (channel_id, seq) WHERE type='announcement'
                       INDEX (channel_id, seq) WHERE media_id IS NOT NULL   ← Gallery
+                      INDEX (channel_id, reply_to_seq) WHERE reply_to_seq IS NOT NULL
+                      -- for the cascade: without it, deleting a channel scans this table
+                      -- once per message it holds
 message_reactions     message_id, user_id, emoji, created_at
                       PK (message_id, user_id, emoji)
                       CHECK (emoji IN ('👍','❤️','😂','🔥','🎉','😮'))

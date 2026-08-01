@@ -8,7 +8,7 @@
  * over both, so it is written once against this interface and exercised by both.
  */
 
-import type { MessageEnvelope, MessageReaction } from '@clubchat/shared';
+import type { MessageEnvelope, MessageReaction, MessageReplyRef } from '@clubchat/shared';
 
 export type PendingSend = {
   clientMsgId: string;
@@ -48,10 +48,43 @@ export type PendingSend = {
    * actually in the body, so a stale id here can add nobody.
    */
   mentions?: readonly string[];
+  /**
+   * The message being answered, as its seq in this channel. Sent on the wire.
+   *
+   * On the outbox entry for the same reason `mentions` is: a retry after a reconnect has to
+   * answer the same message the first attempt did, and by then the composer that knew which one
+   * has been cleared.
+   */
+  replyToSeq?: number;
+  /**
+   * The quote to draw on the optimistic bubble, before any round trip.
+   *
+   * **Local only - this is never sent.** The server joins the real quote from `replyToSeq` on
+   * every read, because a client-supplied quote would let a sender put words in somebody's
+   * mouth. This copy exists so the sender's own bubble draws its quote immediately instead of
+   * having it appear a moment later when the ack lands, exactly like `localUri` for a photo.
+   */
+  replyTo?: MessageReplyRef;
   /** Attempts so far. Surfaced so the UI can show "failed" after enough of them. */
   attempts: number;
   status: 'pending' | 'failed';
 };
+
+/**
+ * What a quote of a since-deleted message becomes.
+ *
+ * > **Deleting a message has to strike it out of every quote of it**, and on the client that is
+ * > this function's job. The server joins quotes on read, so a fresh read of a reply already
+ * > shows the tombstone - but a client holding that reply in its cache will never fetch the row
+ * > again, because sync pulls strictly ABOVE the local max. Without this, the words an admin
+ * > deleted would live on inside every cached reply that quoted them, permanently.
+ *
+ * The preview and the attachment identity go with it, not just the flag: leaving `preview` in
+ * place would mean a quote box that says "This message was deleted" while still holding the text.
+ */
+export function strikeQuotedMessage(ref: MessageReplyRef): MessageReplyRef {
+  return { ...ref, deleted: true, preview: null, mediaId: null, documentName: null };
+}
 
 /**
  * The fields a `msg.update` frame can change on a message already held locally.
@@ -77,6 +110,11 @@ export interface MessageStore {
    * has never seen is not enough information to render it, and inventing a row with an empty
    * body would put a blank bubble in the conversation. The next sync or history page brings
    * the message and its current reactions together.
+   *
+   * **A delete also strikes this message out of every quote of it**, which is the one case
+   * where a patch touches rows other than the one it names. See `strikeQuotedMessage`. That
+   * belongs here rather than at a call site because both implementations owe it, and a cache
+   * that kept deleted text alive in a quote box would be a defect nothing else could see.
    */
   patch(channelId: string, seq: number, patch: MessagePatch): Promise<void>;
   /** Oldest-first, for rendering. */
@@ -112,11 +150,27 @@ export class InMemoryMessageStore implements MessageStore {
 
   async patch(channelId: string, seq: number, patch: MessagePatch): Promise<void> {
     const existing = this.byChannel.get(channelId)?.get(seq);
-    if (!existing) return;
-    // Spread the patch rather than assigning each field, so a key absent from the frame
-    // leaves the current value alone. `deletedAt: null` is a legitimate value meaning "not
-    // deleted", which is why absence and null have to stay distinguishable.
-    this.channel(channelId).set(seq, { ...existing, ...patch });
+    if (existing) {
+      // Spread the patch rather than assigning each field, so a key absent from the frame
+      // leaves the current value alone. `deletedAt: null` is a legitimate value meaning "not
+      // deleted", which is why absence and null have to stay distinguishable.
+      this.channel(channelId).set(seq, { ...existing, ...patch });
+    }
+
+    /*
+     * A delete reaches further than the row it names: every quote OF that message goes with it.
+     *
+     * Run even when the message itself is not held. A client can hold a reply without holding
+     * what it answers - the quote travels on the reply, which is the whole point of it - and
+     * that is precisely the case where nothing else would ever correct the quote.
+     */
+    if (patch.deletedAt === undefined || patch.deletedAt === null) return;
+    const channel = this.byChannel.get(channelId);
+    if (!channel) return;
+    for (const [heldSeq, message] of channel) {
+      if (message.replyTo === null || message.replyTo.seq !== seq) continue;
+      channel.set(heldSeq, { ...message, replyTo: strikeQuotedMessage(message.replyTo) });
+    }
   }
 
   async list(channelId: string): Promise<MessageEnvelope[]> {

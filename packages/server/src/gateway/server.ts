@@ -22,6 +22,7 @@ import type { Redis } from 'ioredis';
 import {
   ClientFrame,
   type MessageEnvelope,
+  type MsgSendFrame,
   type ServerFrame,
 } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
@@ -296,14 +297,8 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
 
   const handleSend = async (
     state: SocketState,
-    payload: {
-      clientMsgId: string;
-      channelId: string;
-      type: MessageEnvelope['type'];
-      body?: string | null | undefined;
-      mentions?: readonly string[] | undefined;
-      mediaId?: string | null | undefined;
-    },
+    // The frame's own type, not a copy of its fields. See `MsgSendFrame`.
+    payload: MsgSendFrame,
     correlationId?: string,
   ) => {
     // Rate limited BEFORE the insert, per SPEC/TECH/05-authorization.md.
@@ -342,6 +337,7 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
         body: payload.body ?? null,
         mentions: payload.mentions,
         mediaId: payload.mediaId,
+        replyToSeq: payload.replyToSeq,
       });
 
       if (!outcome.ok) {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -14,15 +14,17 @@ import {
 import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
 import { useDeclareSpace } from "../../src/current-space.tsx";
 import {
+  quoteOf,
   reactionEmoji,
   reactionSummary,
   SYSTEM_ACTOR_ID,
   type MessageEnvelope,
+  type MessageReplyRef,
   type ReactionEmoji,
 } from "@clubchat/shared";
 import { useSession } from "../../src/chat-provider.tsx";
 import { channelApi, dmApi, type ChannelMeta } from "../../src/api.ts";
-import { DocumentBubble, PhotoBubble } from "../../src/media-bubble.tsx";
+import { DocumentBubble, PhotoBubble, RemoteImage } from "../../src/media-bubble.tsx";
 import {
   pickDocument,
   pickPhoto,
@@ -94,6 +96,8 @@ type Row =
       localUri?: string | undefined;
       documentName?: string | undefined;
       documentSize?: number | undefined;
+      /** The quote to draw before the ack lands. Local only - see `PendingSend.replyTo`. */
+      replyTo?: MessageReplyRef | undefined;
     };
 
 /**
@@ -450,6 +454,98 @@ function pinnedPreview(message: MessageEnvelope): string {
 }
 
 /**
+ * What a quote box says when the quoted message has no words of its own.
+ *
+ * A photo sent without a caption has nothing to print, and an empty quote box is worse than a
+ * labelled one: the whole job of the box is to say what is being answered.
+ */
+function quoteLabel(quote: MessageReplyRef): string {
+  if (quote.deleted) return "This message was deleted";
+  if (quote.preview !== null) return quote.preview;
+  if (quote.type === "photo") return "Photo";
+  if (quote.type === "document") return quote.documentName ?? "Document";
+  return "Message";
+}
+
+/**
+ * The quote box: what this message is answering, drawn inside its bubble.
+ *
+ * > **Tapped through `Text.onPress`, never a nested `Pressable`.** This sits inside the bubble's
+ * > own long-press target, and a Pressable within one is failure mode 17 - invalid on web, and on
+ * > native the inner gesture eats the outer. `MentionedBody` solves the identical problem the
+ * > identical way, which is the precedent this follows rather than inventing a second answer.
+ *
+ * A deleted original keeps its box and says so. Letting the quote vanish would leave a reply
+ * answering nothing, which is the unreadability the tombstone exists to prevent, one level up.
+ */
+function QuotedMessage({
+  quote,
+  mine,
+  onJump,
+}: {
+  quote: MessageReplyRef;
+  mine: boolean;
+  onJump: (seq: number) => void;
+}) {
+  const label = quoteLabel(quote);
+  const jump = () => onJump(quote.seq);
+
+  return (
+    <View style={[styles.quote, mine ? styles.quoteMine : styles.quoteTheirs]}>
+      {/* The accent rule down the left edge, which is what makes this read as quoted rather
+          than as a first line of the message. */}
+      <View style={[styles.quoteBar, mine && styles.quoteBarMine]} />
+      {/*
+        A thumbnail rather than the word "Photo", when there is one to show. `thumb` is the small
+        derivative, so a quote costs a thumbnail rather than a full-size image - and a photo whose
+        access has since been withdrawn degrades to the label inside `RemoteImage` itself.
+      */}
+      {quote.mediaId !== null && !quote.deleted && quote.type === "photo" && (
+        <RemoteImage
+          mediaId={quote.mediaId}
+          variant="thumb"
+          style={styles.quoteThumb}
+          accessibilityLabel="Photo being replied to"
+        />
+      )}
+      {quote.type === "document" && !quote.deleted && (
+        <View style={styles.quoteDocIcon}>
+          <MaterialIcons
+            name="insert-drive-file"
+            size={16}
+            color={mine ? color.onAccent : color.secondary}
+          />
+        </View>
+      )}
+      <View style={styles.quoteColumn}>
+        <Text
+          style={[styles.quoteSender, mine && styles.quoteSenderMine]}
+          numberOfLines={1}
+          onPress={jump}
+          accessibilityRole="link"
+          accessibilityLabel={`Replying to ${quote.senderName ?? "a deleted member"}. Go to that message`}
+        >
+          {quote.senderName ?? "Deleted member"}
+        </Text>
+        <Text
+          style={[
+            styles.quotePreview,
+            mine && styles.quotePreviewMine,
+            quote.deleted && styles.quoteDeleted,
+          ]}
+          numberOfLines={2}
+          onPress={jump}
+          accessibilityRole="link"
+          accessibilityLabel={`${label}. Go to that message`}
+        >
+          {label}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+/**
  * The bubble shell.
  *
  * > **Ported verbatim from v1's `ChatScreen`**, including the reason it is its own component: the
@@ -483,6 +579,439 @@ function BubbleContainer({
   }
   return <View style={[styles.bubble, styles.received]}>{children}</View>;
 }
+
+/**
+ * An optimistic row from the send outbox, before its ack.
+ *
+ * Memoized beside `MessageRow` and for the same reason. There are rarely more than one or two
+ * of these, but they sit at the tail - the part of the list that is always mounted - so an
+ * unmemoized copy re-renders on every scroll frame the list decides to re-render on.
+ */
+const PendingRow = memo(function PendingRow({
+  row,
+  onRetry,
+  onJumpToQuote,
+}: {
+  row: Extract<Row, { kind: "pending" }>;
+  onRetry: (clientMsgId: string) => void;
+  onJumpToQuote: (seq: number) => void;
+}) {
+  return (
+    <View style={[styles.messageRow, styles.messageRowMine]}>
+      {/*
+        A spacer the exact width of an avatar, not an avatar. The client knows its own
+        user id but not its own name, so there is no initial to draw; leaving the slot
+        empty instead would let the bubble jump 40px left the moment the ack arrives
+        and the real avatar takes the space.
+      */}
+      <View style={styles.avatarSpacer} />
+      <View style={styles.bubbleWrapMine}>
+        <BubbleContainer mine pending>
+          {/* The quote is drawn before the ack, from the outbox entry's own copy of it, so a
+              reply does not visibly gain its quote a moment after being sent. */}
+          {row.replyTo !== undefined && (
+            <QuotedMessage quote={row.replyTo} mine onJump={onJumpToQuote} />
+          )}
+          {row.type === "photo" && (
+            <PhotoBubble mediaId={null} localUri={row.localUri} mine />
+          )}
+          {row.type === "document" && (
+            <DocumentBubble
+              name={row.documentName ?? null}
+              size={row.documentSize ?? null}
+              mine
+            />
+          )}
+          {row.body.length > 0 && <Text style={styles.sentText}>{row.body}</Text>}
+          {row.failed ? (
+            <Pressable
+              onPress={() => onRetry(row.clientMsgId)}
+              accessibilityRole="button"
+              accessibilityLabel="Retry sending this message"
+            >
+              <Text style={styles.failed}>Failed. Tap to retry</Text>
+            </Pressable>
+          ) : (
+            <Text style={styles.pendingLabel}>Sending</Text>
+          )}
+        </BubbleContainer>
+      </View>
+    </View>
+  );
+});
+
+/**
+ * One message in the conversation.
+ *
+ * > **Memoized, and that is a bug fix rather than a tuning knob.**
+ * >
+ * > This was an inline closure inside `renderItem`, so every row's entire subtree - the
+ * > gradient, the mention splitting, two `toLocaleTimeString` calls, the reaction summary - was
+ * > rebuilt whenever the SCREEN re-rendered, for reasons no row cared about: a notice appearing,
+ * > the pinned strip fading, a long press selecting some other message. On a device the log
+ * > reported `VirtualizedList: Encountered an error while measuring a window update` with the JS
+ * > thread blocked for nearly four seconds between scroll events, which also cost the app its
+ * > Metro connection.
+ *
+ * The memo only pays off if every prop is stable, which is why the callbacks below are `seq`-in,
+ * nothing-out and are `useCallback`ed at the call site. Passing `message` itself is safe: `rows`
+ * is rebuilt only when the store changes, so during a scroll every row's props are identical to
+ * the previous render and React skips the whole subtree.
+ */
+const MessageRow = memo(function MessageRow({
+  message,
+  userId,
+  mine,
+  isJumpTarget,
+  onSelect,
+  onReact,
+  onOpenProfile,
+  onJumpToQuote,
+}: {
+  message: MessageEnvelope;
+  /** The viewer, for marking their own reactions. Null only before auth resolves. */
+  userId: string | null;
+  mine: boolean;
+  isJumpTarget: boolean;
+  /** Open the long-press menu for this message. The card's own dots call it too. */
+  onSelect: (seq: number) => void;
+  onReact: (seq: number, emoji: ReactionEmoji) => void;
+  onOpenProfile: (userId: string) => void;
+  onJumpToQuote: (seq: number) => void;
+}) {
+  // A system message is centred and unattributed, not a bubble.
+  if (message.senderId === SYSTEM_ACTOR_ID) {
+    return (
+      <View style={styles.systemRow}>
+        <Text style={styles.systemText}>{message.body}</Text>
+      </View>
+    );
+  }
+
+  /*
+   * A card bubble, of any of the three kinds.
+   *
+   * Poll, event and meeting cards differ in everything except this: each holds its own
+   * press targets, so the bubble around them must hold none. Asking `linkedPollId !==
+   * null` in the places that decide it is how the event card shipped without the
+   * long-press suppression the poll card has - failure mode 17 all over again.
+   */
+  const cardId =
+    message.linkedPollId ?? message.linkedEventId ?? message.linkedMeetingId;
+
+  if (message.deletedAt !== null) {
+    /*
+     * A deleted CARD leaves nothing at all; a deleted MESSAGE leaves a tombstone.
+     *
+     * The tombstone exists for one reason - a message vanishing mid-conversation makes
+     * the replies around it unreadable (domain invariant 7). A card has no replies: it
+     * is a thing the server posted about an object, and when the object goes there is
+     * no conversation left with a hole in it.
+     *
+     * It would also read as a contradiction. Cancelling a meeting posts "X cancelled
+     * <title>" in the card's place, and a tombstone directly above that line says the
+     * same event twice while claiming somebody deleted a message.
+     */
+    if (cardId !== null) return null;
+    return (
+      <View style={styles.systemRow}>
+        <Text style={styles.tombstone}>This message was deleted</Text>
+      </View>
+    );
+  }
+
+  /*
+   * An announcement, which is v1's card rather than a bubble.
+   *
+   * > **This branch did not exist, and its absence made the whole feature look broken.**
+   * > Arming the megaphone worked, the send carried `type: 'announcement'`, the row
+   * > stored as one and the Highlights tab listed it - and in the conversation it drew
+   * > as an ordinary message, identical to the one before it. An announcement notifies
+   * > everybody in the channel, so a reader who cannot tell one from ordinary chatter is
+   * > the entire point of the feature going missing.
+   *
+   * Full width rather than a sided bubble, because it is addressed to the room rather
+   * than said to it - so it is not `mine`-aware and carries no avatar.
+   */
+  if (message.type === "announcement") {
+    return (
+      <View style={[styles.announcementWrap, isJumpTarget && styles.jumpTarget]}>
+        <View style={styles.announcementCard}>
+          {/* Oversized, clipped and nearly transparent: texture, not a label. */}
+          <Text style={styles.announcementWatermark}>INFO</Text>
+          <View style={styles.announcementHeadlineRow}>
+            <View style={styles.announcementAccentBar} />
+            <Text style={styles.announcementHeadline}>{message.body}</Text>
+          </View>
+          {/* A hyphen, not v1's em dash: standing instruction 1 covers UI text too. */}
+          <Text style={styles.announcementSender}>
+            {"- "}
+            {message.senderName ?? "Deleted member"}
+          </Text>
+          <Text style={styles.announcementTime}>
+            {new Date(message.createdAt).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  const summary = reactionSummary(message.reactions, userId);
+
+  return (
+    <View
+      style={[
+        styles.messageRow,
+        mine && styles.messageRowMine,
+        isJumpTarget && styles.jumpTarget,
+      ]}
+    >
+      {/*
+        v1's arrangement: the avatar sits beside the bubble on BOTH sides, and the row
+        right-aligns for your own messages rather than mirroring - so the avatar stays
+        on the left of the bubble either way. Tappable, because a name in a busy channel
+        is only useful if you can get from it to the person.
+      */}
+      <Pressable
+        onPress={() => onOpenProfile(message.senderId)}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${message.senderName ?? "this member"}'s profile`}
+        hitSlop={space.xs}
+      >
+        <Avatar
+          name={message.senderName ?? "?"}
+          image={message.senderImage}
+          size={32}
+        />
+      </Pressable>
+      <Pressable
+        // Long press, not a visible button: reporting is rare and a tap target on
+        // every bubble would be noise. Own messages are excluded because nobody can
+        // report themselves.
+        //
+        // > **A card bubble is long-pressable on native and deliberately not on web**, and
+        // > the split is the honest reading of failure mode 17 rather than a workaround.
+        // > A card holds its own controls - vote, see voters, View Event - so the bubble
+        // > around them wraps a pressable in a pressable, and the two platforms resolve
+        // > that differently:
+        // >
+        // > - **Native negotiates.** The responder system gives the touch to the DEEPEST
+        // >   view that wants it, so a finger on a poll option votes and never reaches
+        // >   this handler, while a finger on the card's own body does. That is exactly
+        // >   the behaviour wanted, for free.
+        // > - **Web bubbles.** The events reach this element on their way up regardless,
+        // >   so holding a vote button for 400ms would vote AND open the menu.
+        //
+        // So web keeps the dots below as its only way in, and a phone gets the same
+        // gesture every other bubble has. Verified on both, not reasoned about: the whole
+        // reason this comment exists is that the first version assumed native behaved like
+        // the web and gave cards no gesture at all.
+        onLongPress={
+          cardId !== null && Platform.OS === "web"
+            ? undefined
+            : () => {
+                /*
+                 * A tap you can feel, before anything appears on screen.
+                 *
+                 * A long press has no visual progress, so without haptics the only way
+                 * to learn it worked is the menu arriving - and the only way to learn
+                 * you have not held long enough is nothing happening. The buzz is the
+                 * acknowledgement.
+                 *
+                 * Fire-and-forget: on a device with the setting off, or on web where
+                 * there is no Taptic Engine, this rejects and the menu still opens.
+                 */
+                void Haptics.impactAsync(
+                  Haptics.ImpactFeedbackStyle.Medium,
+                ).catch(() => undefined);
+                onSelect(message.seq);
+              }
+        }
+        delayLongPress={400}
+        // `none` for a card, and that is what keeps the nesting legal: react-native-web
+        // renders a Pressable as a real <button> ONLY when its role says so, and a plain
+        // <div> wrapper can hold the card's controls legally. `disabled` was the first
+        // attempt and was worse than the bug - a disabled button disables its descendants,
+        // so every option inside went dead and the card could not be voted on at all.
+        accessibilityRole={cardId !== null ? "none" : "button"}
+        accessibilityLabel={
+          mine
+            ? "Press and hold to react to your message"
+            : "Press and hold to react to or report this message"
+        }
+        // The gesture stays on the OUTERMOST element and the gradient sits inside it,
+        // so the bubble's fill can be a LinearGradient without the pressable becoming
+        // one - and without nesting a second pressable (failure mode 16).
+        style={mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs}
+      >
+        <BubbleContainer mine={mine}>
+          {/*
+            v1's bubble header: the name on BOTH sides, dimmed on your own, with the
+            pin marker beside it. Attribution on your own messages is not redundant
+            here - the avatar sits on the left of every bubble, so a nameless own
+            bubble would be the only unlabelled thing on screen.
+
+            Null when the message was cached before this column existed. It renders
+            unattributed rather than blank-labelled, and the next sync fills it in.
+          */}
+          {(message.senderName !== null || message.pinned) && (
+            <View style={styles.bubbleHeader}>
+              {message.senderName !== null && (
+                <Text style={mine ? styles.senderNameMine : styles.senderName}>
+                  {message.senderName}
+                </Text>
+              )}
+              {message.pinned && (
+                <MaterialIcons
+                  name="push-pin"
+                  size={12}
+                  color={mine ? color.onAccent : color.accent}
+                />
+              )}
+            </View>
+          )}
+          {/*
+            The quote sits above everything the message itself carries - its photo, its text, its
+            card - because that is the reading order: what is being answered, then the answer.
+          */}
+          {message.replyTo !== null && (
+            <QuotedMessage
+              quote={message.replyTo}
+              mine={mine}
+              onJump={onJumpToQuote}
+            />
+          )}
+          {message.type === "photo" && message.mediaId !== null && (
+            <PhotoBubble mediaId={message.mediaId} mine={mine} />
+          )}
+          {message.type === "document" && (
+            <DocumentBubble
+              name={message.documentName}
+              size={message.documentSize}
+              mine={mine}
+            />
+          )}
+          {/*
+            A poll card, drawn inside the bubble of the person who made it - which is
+            what it is. v1 does the same, on an explicit founder request that the
+            bubble look and behave like the full poll rather than a link out of the
+            conversation, so it votes, closes and deletes in place.
+
+            The body sentence is suppressed alongside it: the card already says who
+            asked what, and repeating it above is the same line twice.
+          */}
+          {cardId !== null ? (
+            <>
+              {message.linkedPollId !== null ? (
+                <ChatPollCard
+                  pollId={message.linkedPollId}
+                  authorName={message.senderName}
+                />
+              ) : message.linkedEventId !== null ? (
+                /*
+                  An event card, drawn in its creator's bubble exactly as a poll is -
+                  v1's card, with the calendar glyph, the date, the location and View
+                  Event out to the event's own screen.
+
+                  It carries no controls of its own, so unlike the poll card it is a
+                  single press target: the whole card navigates. That is legal inside
+                  this bubble only because the bubble declares `accessibilityRole="none"`
+                  above, which is what stops react-native-web rendering it as a <button>.
+                */
+                <ChatEventCard eventId={message.linkedEventId} />
+              ) : (
+                /* A meeting card. The event card's twin, and navigates the same way. */
+                <ChatMeetingCard meetingId={cardId} />
+              )}
+              {/*
+                The dots stay, even now that a card can be held on native. They are the
+                only way in on web, where the long press is deliberately not attached
+                (see the bubble above), and they are the discoverable one everywhere:
+                v1 draws the same dots in the same corner, and nothing about a card
+                suggests it can be held.
+              */}
+              <Pressable
+                style={styles.cardMenu}
+                onPress={() => onSelect(message.seq)}
+                hitSlop={space.sm}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  mine ? "React to your card" : "React to or report this card"
+                }
+              >
+                <MaterialIcons
+                  name="more-vert"
+                  size={18}
+                  color={mine ? color.onAccent : color.textSecondary}
+                />
+              </Pressable>
+            </>
+          ) : (
+            /* A photo may carry a caption, and usually does not. */
+            message.body !== null &&
+            message.body.length > 0 && (
+              <Text style={mine ? styles.sentText : styles.receivedText}>
+                <MentionedBody
+                  body={message.body}
+                  mentions={message.mentions}
+                  mine={mine}
+                  onOpenProfile={onOpenProfile}
+                />
+              </Text>
+            )
+          )}
+          <Text style={mine ? styles.sentMeta : styles.receivedMeta}>
+            {new Date(message.createdAt).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </Text>
+        </BubbleContainer>
+      </Pressable>
+
+      {/*
+        The reaction row.
+
+        > **Inside the bubble's own column, not a sibling of it.** The message row is a
+        > horizontal flex - avatar, then bubble - so a pill row added there became a
+        > THIRD column and sat beside the bubble rather than beneath it. Reactions belong
+        > to a message and have to read that way.
+
+        Only emoji anyone actually used, in the fixed order from the shared constant so
+        the row does not reshuffle as counts change.
+      */}
+      {summary.length > 0 && (
+        <View
+          style={[styles.pillRow, mine ? styles.pillRowMine : styles.pillRowTheirs]}
+        >
+          {summary.map((entry) => (
+            <Pressable
+              key={entry.emoji}
+              style={[styles.pill, entry.mine && styles.pillMine]}
+              onPress={() => onReact(message.seq, entry.emoji)}
+              accessibilityRole="button"
+              accessibilityLabel={
+                entry.mine
+                  ? `Remove your ${entry.emoji} reaction, ${entry.count} total`
+                  : `React with ${entry.emoji}, ${entry.count} total`
+              }
+            >
+              <Text style={styles.pillEmoji}>{entry.emoji}</Text>
+              <Text
+                style={[styles.pillCount, entry.mine && styles.pillCountMine]}
+              >
+                {entry.count}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+});
 
 export default function ChatScreen() {
   const { channelId, around } = useLocalSearchParams<{
@@ -537,6 +1066,14 @@ export default function ChatScreen() {
    * did the rare thing immediately would be a trap.
    */
   const [selected, setSelected] = useState<number | null>(null);
+  /**
+   * The message the composer is answering, by seq. Null when writing an ordinary message.
+   *
+   * A seq rather than the message itself, and resolved below exactly as `selected` is: the quote
+   * shown over the composer then tracks the real message, so replying to something that is
+   * deleted while you are still typing shows the tombstone rather than words that are gone.
+   */
+  const [replyingToSeq, setReplyingToSeq] = useState<number | null>(null);
   /** Set once Report is tapped, so the confirmation is a second deliberate step. */
   const [confirmingReport, setConfirmingReport] = useState<number | null>(null);
   /**
@@ -613,6 +1150,7 @@ export default function ChatScreen() {
         localUri: entry.localUri,
         documentName: entry.documentName,
         documentSize: entry.documentSize,
+        replyTo: entry.replyTo,
       }));
     setRows([
       ...stored.map((message) => ({ kind: "message" as const, message })),
@@ -711,42 +1249,51 @@ export default function ChatScreen() {
   }, [loadMeta, revision]);
 
   /**
-   * Jump to a message named in the URL.
+   * Go to a message by seq, fetching the history around it if it is not loaded.
    *
    * > **This is what `GET /channels/:id/messages/around` exists for.** Highlights, a pinned-strip
-   * > notice and a mention notification all name a specific `seq`, and paging backward from the tail
-   * > until it appears cannot satisfy "jumps on the FIRST tap" - the message is not loaded yet, so a
-   * > first tap could only start fetching.
+   * > notice, a mention notification and now a tapped reply quote all name a specific `seq`, and
+   * > paging backward from the tail until it appears cannot satisfy "jumps on the FIRST tap" - the
+   * > message is not loaded yet, so a first tap could only start fetching.
    *
    * The window is written into the local store rather than held in this component, so it is cached
    * like every other page of history and a second jump to the same place needs no network at all.
    * Failing is survivable: the chat still renders its tail, which is the "realtime and paging are
    * enhancements" rule applied to navigation.
+   *
+   * **One jump, used by both callers.** The URL parameter below and the quote box are the same
+   * gesture with a different trigger, and a second implementation of "get me to seq N" is how the
+   * two would end up behaving differently.
    */
-  useEffect(() => {
-    const target = Number(around);
-    if (!client || !channelId || !Number.isInteger(target) || target <= 0)
-      return;
-
-    let alive = true;
-    void (async () => {
+  const jumpTo = useCallback(
+    async (target: number) => {
+      if (!client || !channelId) return;
       try {
         const window = await channelApi.around(channelId, target);
-        if (!alive) return;
         await client.store.upsert(window.messages);
         await refresh();
       } catch {
         // Leave the tail on screen. A jump that cannot load is a worse outcome than a jump that
-        // does not happen, and the notice below says which.
-        if (alive) setNotice("Could not open that message.");
+        // does not happen, and the notice says which.
+        setNotice("Could not open that message.");
       } finally {
-        if (alive) setJumpedTo(target);
+        // Set even when the fetch failed: the message may well be loaded already, in which case
+        // the scroll below finds it and nothing was needed. The effect clears it either way.
+        setJumpedTo(target);
       }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [client, channelId, around, refresh]);
+    },
+    [client, channelId, refresh],
+  );
+
+  /** The same jump, for a caller that cannot await - the quote box's tap. */
+  const jumpToQuote = useCallback((seq: number) => void jumpTo(seq), [jumpTo]);
+
+  /** A jump named in the URL, which is how Highlights and a notification arrive here. */
+  useEffect(() => {
+    const target = Number(around);
+    if (!Number.isInteger(target) || target <= 0) return;
+    void jumpTo(target);
+  }, [around, jumpTo]);
 
   /**
    * Scroll the jumped-to message into view.
@@ -761,12 +1308,18 @@ export default function ChatScreen() {
     const index = rows.findIndex(
       (row) => row.kind === "message" && row.message.seq === jumpedTo,
     );
-    if (index < 0) return;
-    listRef.current?.scrollToIndex({
-      index,
-      viewPosition: 0.5,
-      animated: false,
-    });
+    /*
+     * A target that is not in the list still has to clear, which is why this no longer returns
+     * early. `jumpedTo` suppresses the follow-the-tail scroll, so leaving it set on a jump that
+     * could not land would quietly stop chat following new messages for the rest of the session.
+     */
+    if (index >= 0) {
+      listRef.current?.scrollToIndex({
+        index,
+        viewPosition: 0.5,
+        animated: false,
+      });
+    }
 
     /*
      * > **Cleared once it has landed, and that is a bug fix rather than tidiness.**
@@ -803,17 +1356,6 @@ export default function ChatScreen() {
     client.markRead(channelId, channel?.lastSeq ?? 0);
   }, [client, channelId, revision]);
 
-  if (authState === "checking") {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator color={color.accent} />
-      </View>
-    );
-  }
-  if (authState === "signed-out") return <Redirect href="/sign-in" />;
-
-  const canPost = meta === null ? true : meta.canPost;
-
   /*
    * The message the overlay is about, resolved from the seq the long-press recorded.
    *
@@ -831,6 +1373,18 @@ export default function ChatScreen() {
     [rows, selected],
   );
 
+  /** The message the composer is answering, resolved the same way and for the same reasons. */
+  const replyingTo = useMemo(
+    () =>
+      replyingToSeq === null
+        ? null
+        : (rows.find(
+            (row): row is { kind: "message"; message: MessageEnvelope } =>
+              row.kind === "message" && row.message.seq === replyingToSeq,
+          )?.message ?? null),
+    [rows, replyingToSeq],
+  );
+
   /*
    * The `@` list's contents, derived from the draft and the caret rather than held in state.
    *
@@ -843,6 +1397,115 @@ export default function ChatScreen() {
     () => (mentionQuery === null ? [] : matchMentionables(mentionable, mentionQuery.query)),
     [mentionable, mentionQuery?.query],
   );
+
+  /**
+   * Toggle a reaction.
+   *
+   * Optimistic, and reconciled from the response rather than from a locally-guessed set: the
+   * server returns the full resulting set, which is also what arrives over the socket for
+   * everybody else. Two devices held by the same member therefore converge on the same answer
+   * without either one having to have guessed right.
+   */
+  const react = useCallback(
+    async (seq: number, emoji: ReactionEmoji) => {
+      if (!client || !channelId) return;
+      try {
+        const result = await dmApi.reactionToggle(channelId, seq, emoji);
+        await client.store.patch(channelId, seq, { reactions: result.reactions });
+      } catch {
+        // A refusal here is a blocked DM participant or a deleted message. Say so rather than
+        // leaving a pill that silently did not stick.
+        setNotice("Could not react to that message.");
+      }
+      await refresh();
+    },
+    [client, channelId, refresh],
+  );
+
+  const retry = useCallback(
+    async (clientMsgId: string) => {
+      if (!client) return;
+      try {
+        await client.flushOne(clientMsgId);
+      } catch {
+        /* stays failed, still visible */
+      }
+      await refresh();
+    },
+    [client, refresh],
+  );
+
+  const openProfile = useCallback(
+    (memberId: string) => router.push(`/users/${memberId}`),
+    [router],
+  );
+
+  /** Open the long-press menu on a message, from the bubble or from a card's dots. */
+  const selectMessage = useCallback((seq: number) => {
+    setSelected(seq);
+    setConfirmingReport(null);
+  }, []);
+
+  /*
+   * Both list callbacks are hoisted out of the JSX and given stable identities.
+   *
+   * `renderItem` used to be a ~400-line inline closure, so it was a new function on every render
+   * AND it rebuilt every row's subtree inline. `MessageRow` is memoized, which only works if what
+   * it is handed stops changing - hence the `useCallback`s above, each taking a `seq` and closing
+   * over nothing that moves per row.
+   */
+  const keyExtractor = useCallback(
+    (row: Row) =>
+      row.kind === "message" ? `m-${row.message.seq}` : `p-${row.clientMsgId}`,
+    [],
+  );
+
+  const renderRow = useCallback(
+    ({ item }: { item: Row }) => {
+      if (item.kind === "pending") {
+        return (
+          <PendingRow row={item} onRetry={retry} onJumpToQuote={jumpToQuote} />
+        );
+      }
+      return (
+        <MessageRow
+          message={item.message}
+          userId={userId}
+          mine={item.message.senderId === userId}
+          // Marked so a reader can see WHICH message a jump sent them to. Without it the screen
+          // has silently scrolled somewhere and the target is indistinguishable from its
+          // neighbours, which is most of the value of jumping.
+          isJumpTarget={jumpedTo === item.message.seq}
+          onSelect={selectMessage}
+          onReact={react}
+          onOpenProfile={openProfile}
+          onJumpToQuote={jumpToQuote}
+        />
+      );
+    },
+    [retry, userId, jumpedTo, selectMessage, react, openProfile, jumpToQuote],
+  );
+
+  /*
+   * Every hook is above this line, and the two early exits are below it.
+   *
+   * > **They used to sit above `selectedMessage` and `mentionMatches`, which is a hook-order
+   * > violation.** Rendering once while auth was still checking and again once it resolved would
+   * > run a different NUMBER of hooks in the two renders, which React refuses with "rendered more
+   * > hooks than during the previous render". It survived only because this screen happens not to
+   * > be mounted during the checking state today - a fact no part of the file states or enforces,
+   * > and one that stops being true the moment a route stops guarding it.
+   */
+  if (authState === "checking") {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator color={color.accent} />
+      </View>
+    );
+  }
+  if (authState === "signed-out") return <Redirect href="/sign-in" />;
+
+  const canPost = meta === null ? true : meta.canPost;
 
   /** Insert the chosen name and remember who it was, so the send can claim them. */
   const pickMention = (member: Mentionable) => {
@@ -879,10 +1542,25 @@ export default function ChatScreen() {
      */
     const mentions = mentionIdsInBody(mentionPicks, body);
     setMentionPicks([]);
+    /*
+     * The reply is cleared as the message goes, like the announcement toggle above and for the
+     * same reason: a composer that stayed pointed at one message would turn the next three
+     * unrelated messages into replies to it.
+     *
+     * `replyingTo` rather than `replyingToSeq` alone, because the optimistic bubble needs the
+     * quote to draw and the resolved message is what has it. Sending the seq and drawing from
+     * the local copy is the split `MessageReplyRef` describes: the server joins the real quote
+     * on read, and this copy only ever appears in the sender's own pending bubble.
+     */
+    const answering = replyingTo;
+    setReplyingToSeq(null);
     try {
       await client.sendWithRetry(channelId, body, {
         ...(announcing ? { type: "announcement" as const } : {}),
         ...(mentions.length > 0 ? { mentions } : {}),
+        ...(answering === null
+          ? {}
+          : { replyToSeq: answering.seq, replyTo: quoteOf(answering) }),
       });
     } catch {
       // The send failed VISIBLY: the entry stays in the outbox marked failed, and the
@@ -942,24 +1620,26 @@ export default function ChatScreen() {
   };
 
   /**
-   * Toggle a reaction.
+   * Report a message to whoever moderates this conversation.
    *
-   * Optimistic, and reconciled from the response rather than from a locally-guessed set: the
-   * server returns the full resulting set, which is also what arrives over the socket for
-   * everybody else. Two devices held by the same member therefore converge on the same answer
-   * without either one having to have guessed right.
+   * Reported by `seq` rather than by id, like every other message command here - the seq is the
+   * channel-scoped address, and the server resolves it inside the channel it has already
+   * authorized. Reporting the same message twice is not an error and says so.
    */
-  const react = async (seq: number, emoji: ReactionEmoji) => {
-    if (!client || !channelId) return;
+  const reportMessage = async (seq: number) => {
+    if (!channelId) return;
+    setConfirmingReport(null);
+    setSelected(null);
     try {
-      const result = await dmApi.reactionToggle(channelId, seq, emoji);
-      await client.store.patch(channelId, seq, { reactions: result.reactions });
+      const result = await dmApi.report(channelId, seq);
+      setNotice(
+        result.alreadyReported
+          ? "You already reported this message."
+          : "Reported. The other person is not told.",
+      );
     } catch {
-      // A refusal here is a blocked DM participant or a deleted message. Say so rather than
-      // leaving a pill that silently did not stick.
-      setNotice("Could not react to that message.");
+      setNotice("Could not report that. Try again.");
     }
-    await refresh();
   };
 
   /**
@@ -1005,16 +1685,6 @@ export default function ChatScreen() {
       setUploading(false);
       await refresh();
     }
-  };
-
-  const retry = async (clientMsgId: string) => {
-    if (!client) return;
-    try {
-      await client.flushOne(clientMsgId);
-    } catch {
-      /* stays failed, still visible */
-    }
-    await refresh();
   };
 
   /**
@@ -1416,11 +2086,7 @@ export default function ChatScreen() {
         <FlatList
           ref={listRef}
           data={rows}
-          keyExtractor={(row) =>
-            row.kind === "message"
-              ? `m-${row.message.seq}`
-              : `p-${row.clientMsgId}`
-          }
+          keyExtractor={keyExtractor}
           contentContainerStyle={styles.list}
           /*
             Chat opens at the tail, and follows it while the reader is AT the tail.
@@ -1492,442 +2158,7 @@ export default function ChatScreen() {
               </Text>
             </View>
           }
-          renderItem={({ item }) => {
-            if (item.kind === "pending") {
-              return (
-                <View style={[styles.messageRow, styles.messageRowMine]}>
-                  {/*
-                    A spacer the exact width of an avatar, not an avatar. The client knows its own
-                    user id but not its own name, so there is no initial to draw; leaving the slot
-                    empty instead would let the bubble jump 40px left the moment the ack arrives
-                    and the real avatar takes the space.
-                  */}
-                  <View style={styles.avatarSpacer} />
-                  <View style={styles.bubbleWrapMine}>
-                    <BubbleContainer mine pending>
-                      {item.type === "photo" && (
-                        <PhotoBubble
-                          mediaId={null}
-                          localUri={item.localUri}
-                          mine
-                        />
-                      )}
-                      {item.type === "document" && (
-                        <DocumentBubble
-                          name={item.documentName ?? null}
-                          size={item.documentSize ?? null}
-                          mine
-                        />
-                      )}
-                      {item.body.length > 0 && (
-                        <Text style={styles.sentText}>{item.body}</Text>
-                      )}
-                      {item.failed ? (
-                        <Pressable
-                          onPress={() => void retry(item.clientMsgId)}
-                          accessibilityRole="button"
-                          accessibilityLabel="Retry sending this message"
-                        >
-                          <Text style={styles.failed}>
-                            Failed. Tap to retry
-                          </Text>
-                        </Pressable>
-                      ) : (
-                        <Text style={styles.pendingLabel}>Sending</Text>
-                      )}
-                    </BubbleContainer>
-                  </View>
-                </View>
-              );
-            }
-
-            const { message } = item;
-
-            // A system message is centred and unattributed, not a bubble.
-            if (message.senderId === SYSTEM_ACTOR_ID) {
-              return (
-                <View style={styles.systemRow}>
-                  <Text style={styles.systemText}>{message.body}</Text>
-                </View>
-              );
-            }
-
-            /*
-             * A card bubble, of any of the three kinds.
-             *
-             * Poll, event and meeting cards differ in everything except this: each holds its own
-             * press targets, so the bubble around them must hold none. Asking `linkedPollId !==
-             * null` in the places that decide it is how the event card shipped without the
-             * long-press suppression the poll card has - failure mode 17 all over again.
-             */
-            const cardId =
-              message.linkedPollId ?? message.linkedEventId ?? message.linkedMeetingId;
-
-            if (message.deletedAt !== null) {
-              /*
-               * A deleted CARD leaves nothing at all; a deleted MESSAGE leaves a tombstone.
-               *
-               * The tombstone exists for one reason - a message vanishing mid-conversation makes
-               * the replies around it unreadable (domain invariant 7). A card has no replies: it
-               * is a thing the server posted about an object, and when the object goes there is
-               * no conversation left with a hole in it.
-               *
-               * It would also read as a contradiction. Cancelling a meeting posts "X cancelled
-               * <title>" in the card's place, and a tombstone directly above that line says the
-               * same event twice while claiming somebody deleted a message.
-               */
-              if (cardId !== null) return null;
-              return (
-                <View style={styles.systemRow}>
-                  <Text style={styles.tombstone}>This message was deleted</Text>
-                </View>
-              );
-            }
-
-            const mine = message.senderId === userId;
-            // Marked so a reader can see WHICH message a jump sent them to. Without it the screen
-            // has silently scrolled somewhere and the target is indistinguishable from its
-            // neighbours, which is most of the value of jumping.
-            const isJumpTarget = jumpedTo === message.seq;
-
-            /*
-             * An announcement, which is v1's card rather than a bubble.
-             *
-             * > **This branch did not exist, and its absence made the whole feature look broken.**
-             * > Arming the megaphone worked, the send carried `type: 'announcement'`, the row
-             * > stored as one and the Highlights tab listed it - and in the conversation it drew
-             * > as an ordinary message, identical to the one before it. An announcement notifies
-             * > everybody in the channel, so a reader who cannot tell one from ordinary chatter is
-             * > the entire point of the feature going missing.
-             *
-             * Full width rather than a sided bubble, because it is addressed to the room rather
-             * than said to it - so it is not `mine`-aware and carries no avatar.
-             */
-            if (message.type === "announcement") {
-              return (
-                <View
-                  style={[styles.announcementWrap, isJumpTarget && styles.jumpTarget]}
-                >
-                  <View style={styles.announcementCard}>
-                    {/* Oversized, clipped and nearly transparent: texture, not a label. */}
-                    <Text style={styles.announcementWatermark}>INFO</Text>
-                    <View style={styles.announcementHeadlineRow}>
-                      <View style={styles.announcementAccentBar} />
-                      <Text style={styles.announcementHeadline}>{message.body}</Text>
-                    </View>
-                    {/* A hyphen, not v1's em dash: standing instruction 1 covers UI text too. */}
-                    <Text style={styles.announcementSender}>
-                      {"- "}
-                      {message.senderName ?? "Deleted member"}
-                    </Text>
-                    <Text style={styles.announcementTime}>
-                      {new Date(message.createdAt).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </Text>
-                  </View>
-                </View>
-              );
-            }
-            return (
-              <View
-                style={[
-                  styles.messageRow,
-                  mine && styles.messageRowMine,
-                  isJumpTarget && styles.jumpTarget,
-                ]}
-              >
-                {/*
-                  v1's arrangement: the avatar sits beside the bubble on BOTH sides, and the row
-                  right-aligns for your own messages rather than mirroring - so the avatar stays
-                  on the left of the bubble either way. Tappable, because a name in a busy channel
-                  is only useful if you can get from it to the person.
-                */}
-                <Pressable
-                  onPress={() => router.push(`/users/${message.senderId}`)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Open ${message.senderName ?? "this member"}'s profile`}
-                  hitSlop={space.xs}
-                >
-                  <Avatar
-                    name={message.senderName ?? "?"}
-                    image={message.senderImage}
-                    size={32}
-                  />
-                </Pressable>
-                <Pressable
-                  // Long press, not a visible button: reporting is rare and a tap target on
-                  // every bubble would be noise. Own messages are excluded because nobody can
-                  // report themselves.
-                  //
-                  // > **A card bubble is not long-pressable, and must not be.** Its contents are
-                  // > controls - vote, see voters, close, delete - and a pressable wrapping them
-                  // > is failure mode 17: invalid on web, where the browser says "<button> cannot
-                  // > contain a nested <button>", and on native the outer gesture swallows the
-                  // > vote. So the card owns its own taps and the bubble owns none. The cost is
-                  // > that a poll card cannot be reacted to by holding it, which is the right way
-                  // > round: voting on it is what it is for.
-                  onLongPress={
-                    cardId !== null
-                      ? undefined
-                      : () => {
-                          /*
-                           * A tap you can feel, before anything appears on screen.
-                           *
-                           * A long press has no visual progress, so without haptics the only way
-                           * to learn it worked is the menu arriving - and the only way to learn
-                           * you have not held long enough is nothing happening. The buzz is the
-                           * acknowledgement.
-                           *
-                           * Fire-and-forget: on a device with the setting off, or on web where
-                           * there is no Taptic Engine, this rejects and the menu still opens.
-                           */
-                          void Haptics.impactAsync(
-                            Haptics.ImpactFeedbackStyle.Medium,
-                          ).catch(() => undefined);
-                          setSelected(message.seq);
-                          setConfirmingReport(null);
-                        }
-                  }
-                  delayLongPress={400}
-                  // `none`, not `button`, and that is what actually fixes the nesting: react-native-web
-                  // renders a Pressable as a real <button> ONLY when its role says so, and a plain
-                  // <div> wrapper can hold the card's controls legally. `disabled` was the first
-                  // attempt and was worse than the bug - a disabled button disables its descendants,
-                  // so every option inside went dead and the card could not be voted on at all.
-                  accessibilityRole={cardId !== null ? "none" : "button"}
-                  accessibilityLabel={
-                    cardId !== null
-                      ? undefined
-                      : mine
-                        ? "Press and hold to react to your message"
-                        : "Press and hold to react to or report this message"
-                  }
-                  // The gesture stays on the OUTERMOST element and the gradient sits inside it,
-                  // so the bubble's fill can be a LinearGradient without the pressable becoming
-                  // one - and without nesting a second pressable (failure mode 16).
-                  style={mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs}
-                >
-                  <BubbleContainer mine={mine}>
-                    {/*
-                      v1's bubble header: the name on BOTH sides, dimmed on your own, with the
-                      pin marker beside it. Attribution on your own messages is not redundant
-                      here - the avatar sits on the left of every bubble, so a nameless own
-                      bubble would be the only unlabelled thing on screen.
-
-                      Null when the message was cached before this column existed. It renders
-                      unattributed rather than blank-labelled, and the next sync fills it in.
-                    */}
-                    {(message.senderName !== null || message.pinned) && (
-                      <View style={styles.bubbleHeader}>
-                        {message.senderName !== null && (
-                          <Text
-                            style={
-                              mine ? styles.senderNameMine : styles.senderName
-                            }
-                          >
-                            {message.senderName}
-                          </Text>
-                        )}
-                        {message.pinned && (
-                          <MaterialIcons
-                            name="push-pin"
-                            size={12}
-                            color={mine ? color.onAccent : color.accent}
-                          />
-                        )}
-                      </View>
-                    )}
-                    {message.type === "photo" && message.mediaId !== null && (
-                      <PhotoBubble mediaId={message.mediaId} mine={mine} />
-                    )}
-                    {message.type === "document" && (
-                      <DocumentBubble
-                        name={message.documentName}
-                        size={message.documentSize}
-                        mine={mine}
-                      />
-                    )}
-                    {/*
-                      A poll card, drawn inside the bubble of the person who made it - which is
-                      what it is. v1 does the same, on an explicit founder request that the
-                      bubble look and behave like the full poll rather than a link out of the
-                      conversation, so it votes, closes and deletes in place.
-
-                      The body sentence is suppressed alongside it: the card already says who
-                      asked what, and repeating it above is the same line twice.
-                    */}
-                    {cardId !== null ? (
-                      <>
-                        {message.linkedPollId !== null ? (
-                          <ChatPollCard
-                            pollId={message.linkedPollId}
-                            authorName={message.senderName}
-                          />
-                        ) : message.linkedEventId !== null ? (
-                          /*
-                            An event card, drawn in its creator's bubble exactly as a poll is -
-                            v1's card, with the calendar glyph, the date, the location and View
-                            Event out to the event's own screen.
-
-                            It carries no controls of its own, so unlike the poll card it is a
-                            single press target: the whole card navigates. That is legal inside
-                            this bubble only because the bubble declares `accessibilityRole="none"`
-                            above, which is what stops react-native-web rendering it as a <button>.
-                          */
-                          <ChatEventCard eventId={message.linkedEventId} />
-                        ) : (
-                          /* A meeting card. The event card's twin, and navigates the same way. */
-                          <ChatMeetingCard meetingId={cardId} />
-                        )}
-                        {/*
-                          The card bubble cannot be long-pressed - its contents are buttons, and
-                          wrapping them in one is failure mode 17 - so the menu gets a visible
-                          control instead. v1 draws the same dots in the same corner. Without it,
-                          a card is the one message in the log nobody can react to or report.
-                        */}
-                        <Pressable
-                          style={styles.cardMenu}
-                          onPress={() => {
-                            setSelected(message.seq);
-                            setConfirmingReport(null);
-                          }}
-                          hitSlop={space.sm}
-                          accessibilityRole="button"
-                          accessibilityLabel={
-                            mine
-                              ? "React to your card"
-                              : "React to or report this card"
-                          }
-                        >
-                          <MaterialIcons
-                            name="more-vert"
-                            size={18}
-                            color={mine ? color.onAccent : color.textSecondary}
-                          />
-                        </Pressable>
-                      </>
-                    ) : (
-                      /* A photo may carry a caption, and usually does not. */
-                      message.body !== null &&
-                      message.body.length > 0 && (
-                        <Text style={mine ? styles.sentText : styles.receivedText}>
-                          <MentionedBody
-                            body={message.body}
-                            mentions={message.mentions}
-                            mine={mine}
-                            onOpenProfile={(userId) => router.push(`/users/${userId}`)}
-                          />
-                        </Text>
-                      )
-                    )}
-                    <Text style={mine ? styles.sentMeta : styles.receivedMeta}>
-                      {new Date(message.createdAt).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </Text>
-                  </BubbleContainer>
-                </Pressable>
-
-                {/*
-                  The reaction row.
-
-                  > **Inside the bubble's own column, not a sibling of it.** The message row is a
-                  > horizontal flex - avatar, then bubble - so a pill row added there became a
-                  > THIRD column and sat beside the bubble rather than beneath it. Reactions belong
-                  > to a message and have to read that way.
-
-                  Only emoji anyone actually used, in the fixed order from the shared constant so
-                  the row does not reshuffle as counts change.
-                */}
-                {(() => {
-                  const summary = reactionSummary(message.reactions, userId);
-                  if (summary.length === 0) return null;
-                  return (
-                    <View
-                      style={[
-                        styles.pillRow,
-                        mine ? styles.pillRowMine : styles.pillRowTheirs,
-                      ]}
-                    >
-                      {summary.map((entry) => (
-                        <Pressable
-                          key={entry.emoji}
-                          style={[styles.pill, entry.mine && styles.pillMine]}
-                          onPress={() => void react(message.seq, entry.emoji)}
-                          accessibilityRole="button"
-                          accessibilityLabel={
-                            entry.mine
-                              ? `Remove your ${entry.emoji} reaction, ${entry.count} total`
-                              : `React with ${entry.emoji}, ${entry.count} total`
-                          }
-                        >
-                          <Text style={styles.pillEmoji}>{entry.emoji}</Text>
-                          <Text
-                            style={[
-                              styles.pillCount,
-                              entry.mine && styles.pillCountMine,
-                            ]}
-                          >
-                            {entry.count}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                  );
-                })()}
-
-                {confirmingReport === message.seq && (
-                  <View style={styles.actionSheet}>
-                    <Text style={styles.reportPrompt}>
-                      {meta?.scope === "dm"
-                        ? // No club admin ever sees the contents of a DM, so say where it goes.
-                          "Report this to ClubChat moderators?"
-                        : "Report this to the admins of this space?"}
-                    </Text>
-                    <View style={styles.reportActions}>
-                      <Pressable
-                        style={styles.secondaryButton}
-                        onPress={() => {
-                          setConfirmingReport(null);
-                          setSelected(null);
-                        }}
-                        accessibilityRole="button"
-                        accessibilityLabel="Cancel reporting"
-                      >
-                        <Text style={styles.secondaryLabel}>Cancel</Text>
-                      </Pressable>
-                      <Pressable
-                        style={styles.button}
-                        onPress={() => {
-                          setConfirmingReport(null);
-                          setSelected(null);
-                          void dmApi
-                            .report(channelId!, message.seq)
-                            .then((result) =>
-                              setNotice(
-                                result.alreadyReported
-                                  ? "You already reported this message."
-                                  : "Reported. The other person is not told.",
-                              ),
-                            )
-                            .catch(() =>
-                              setNotice("Could not report that. Try again."),
-                            );
-                        }}
-                        accessibilityRole="button"
-                        accessibilityLabel="Confirm report"
-                      >
-                        <Text style={styles.buttonLabel}>Report</Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                )}
-              </View>
-            );
-          }}
+          renderItem={renderRow}
         />
       )}
 
@@ -2020,7 +2251,10 @@ export default function ChatScreen() {
               setSelected(null);
               void react(selectedMessage.seq, emoji);
             }}
-            onReply={() => setSelected(null)}
+            onReply={() => {
+              setReplyingToSeq(selectedMessage.seq);
+              setSelected(null);
+            }}
             onCopy={() => {
               void Clipboard.setStringAsync(selectedMessage.body ?? "");
               setSelected(null);
@@ -2086,6 +2320,58 @@ export default function ChatScreen() {
       )}
 
       {/*
+        Report, as the same centred dialog delete uses.
+
+        It used to render inline in the conversation, where the message sat, which is the shape
+        delete was moved out of for the same two reasons: it pushed the surrounding messages
+        around while somebody was deciding, and on a long chat the message being reported could
+        be anywhere - including off screen behind the thing asking about it.
+      */}
+      {confirmingReport !== null && (
+        <View style={styles.dialogBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => {
+              setConfirmingReport(null);
+              setSelected(null);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel reporting"
+          />
+          <View style={styles.dialog}>
+            <Text style={styles.dialogTitle}>Report a concern</Text>
+            <Text style={styles.dialogBody}>
+              {meta?.scope === "dm"
+                ? // No club admin ever sees the contents of a DM, so say where it actually goes.
+                  "This message goes to ClubChat moderators, who can read the messages around it. The other person is not told."
+                : "This message goes to the admins of this space, who can read the messages around it. The sender is not told."}
+            </Text>
+            <View style={styles.dialogActions}>
+              <Pressable
+                style={styles.dialogButton}
+                onPress={() => {
+                  setConfirmingReport(null);
+                  setSelected(null);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel reporting"
+              >
+                <Text style={styles.dialogButtonLabel}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.dialogButton}
+                onPress={() => void reportMessage(confirmingReport)}
+                accessibilityRole="button"
+                accessibilityLabel="Confirm report"
+              >
+                <Text style={[styles.dialogButtonLabel, styles.destructive]}>Report</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/*
         The `@` list, sitting directly above the composer.
 
         Rendered only while a mention is being typed, and only when something matches - an empty
@@ -2111,6 +2397,37 @@ export default function ChatScreen() {
               </Pressable>
             ))}
           </ScrollView>
+        </View>
+      )}
+
+      {/*
+        The quote sitting over the composer while a reply is being written.
+
+        Directly above the input rather than inside it, so it reads as context for what is being
+        typed and has room for the same box the bubble will eventually draw. It carries its own
+        cancel, because arming a reply by long-pressing is easy to do by accident and a reply you
+        cannot get out of is worse than no reply at all.
+      */}
+      {canPost && replyingTo !== null && (
+        <View style={styles.replyBar}>
+          <View style={styles.replyBarQuote}>
+            <QuotedMessage
+              quote={quoteOf(replyingTo)}
+              mine={false}
+              // Tapping the quote here would scroll the conversation out from under the
+              // composer mid-sentence. In the bubble it is a jump; here it is just context.
+              onJump={() => undefined}
+            />
+          </View>
+          <Pressable
+            onPress={() => setReplyingToSeq(null)}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel this reply"
+            hitSlop={space.sm}
+            style={styles.replyBarCancel}
+          >
+            <MaterialIcons name="close" size={18} color={color.textSecondary} />
+          </Pressable>
         </View>
       )}
 
@@ -2309,6 +2626,77 @@ const styles = StyleSheet.create({
    */
   mentionInTheirs: { color: color.accent, fontFamily: fontFamily.bodyBold },
   mentionInMine: { color: color.onAccent, fontFamily: fontFamily.bodyBold },
+
+  /*
+   * The quote box, inside the bubble of the reply that carries it.
+   *
+   * A tinted block with an accent rule down its left edge, which is the shape every messenger
+   * uses for this and the reason it reads as quoted rather than as the message's own first line.
+   * Two variants because a sent bubble is filled with the accent: a light block would vanish into
+   * it, so there the block is translucent white and the rule is white too.
+   */
+  quote: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    borderRadius: radius.sm,
+    padding: space.xs + 2,
+    marginBottom: space.xs,
+    overflow: "hidden",
+    /*
+     * Full bubble width, not the width of the quoted text.
+     *
+     * Sized to its content it stopped wherever the preview happened to end - which, against a
+     * tinted block with a clipped corner, reads as a box that has been cut off rather than one
+     * that is simply short. Stretching costs nothing and is what every messenger does.
+     */
+    alignSelf: "stretch",
+  },
+  quoteTheirs: { backgroundColor: color.appBackground },
+  quoteMine: { backgroundColor: "rgba(255,255,255,0.18)" },
+  quoteBar: {
+    alignSelf: "stretch",
+    width: 3,
+    minHeight: 28,
+    borderRadius: radius.pill,
+    backgroundColor: color.accent,
+  },
+  quoteBarMine: { backgroundColor: color.onAccent },
+  quoteThumb: { width: 32, height: 32, borderRadius: radius.xs },
+  quoteDocIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.xs,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: color.card,
+  },
+  // `flex: 1` with `minWidth: 0`: the column takes whatever is left after the rule and any
+  // thumbnail, and the zero minimum is what lets a long preview wrap and ellipsize inside it
+  // rather than forcing the row wider than the bubble.
+  quoteColumn: { flex: 1, minWidth: 0, gap: 1 },
+  quoteSender: { ...type.label, fontSize: 10, color: color.accent },
+  quoteSenderMine: { color: color.onAccent, opacity: 0.9 },
+  quotePreview: { ...type.bodySmall, fontSize: 12, color: color.textSecondary },
+  quotePreviewMine: { color: color.onAccent, opacity: 0.85 },
+  quoteDeleted: { fontStyle: "italic" },
+
+  /*
+   * The reply bar over the composer. Same chrome as the `@` list below it, so the two stack as
+   * one surface attached to the input rather than as two floating panels.
+   */
+  replyBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    paddingHorizontal: space.sm,
+    paddingTop: space.sm,
+    backgroundColor: color.chrome,
+    borderTopWidth: 1,
+    borderTopColor: color.divider,
+  },
+  replyBarQuote: { flex: 1 },
+  replyBarCancel: { padding: space.xs },
 
   /*
    * The `@` list. Capped in height so a big club cannot cover the conversation, and anchored to
@@ -2779,31 +3167,6 @@ const styles = StyleSheet.create({
     color: color.textPrimary,
     textAlign: "center",
   },
-  actionSheet: {
-    alignSelf: "flex-start",
-    maxWidth: "90%",
-    backgroundColor: color.card,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.divider,
-    padding: space.sm,
-    gap: space.sm,
-    marginTop: space.xs,
-  },
-  emojiRow: {
-    flexDirection: "row",
-    gap: space.xs,
-    justifyContent: "space-between",
-  },
-  emojiButton: {
-    // A generous target: this is the control the whole fixed-set decision exists to keep fast.
-    minWidth: 44,
-    minHeight: 44,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radius.pill,
-    backgroundColor: color.appBackground,
-  },
   emojiGlyph: { fontSize: 24, lineHeight: 30 },
   pillRow: {
     flexDirection: "row",
@@ -2839,32 +3202,4 @@ const styles = StyleSheet.create({
   pillEmoji: { fontSize: 14, lineHeight: 18 },
   pillCount: { ...type.label, color: color.textSecondary },
   pillCountMine: { color: color.accent },
-  reportPrompt: { ...type.bodySmall, color: color.textPrimary },
-  reportActions: { flexDirection: "row", gap: space.sm },
-  button: {
-    flex: 1,
-    backgroundColor: color.accent,
-    borderRadius: radius.sm,
-    paddingVertical: space.sm,
-    alignItems: "center",
-  },
-  buttonLabel: {
-    ...type.label,
-    color: color.onAccent,
-    textTransform: "uppercase",
-  },
-  secondaryButton: {
-    flex: 1,
-    backgroundColor: color.card,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.divider,
-    paddingVertical: space.sm,
-    alignItems: "center",
-  },
-  secondaryLabel: {
-    ...type.label,
-    color: color.textSecondary,
-    textTransform: "uppercase",
-  },
 });

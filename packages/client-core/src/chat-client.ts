@@ -18,6 +18,7 @@ import {
   type ChannelState,
   type MessageEnvelope,
   type MessageReaction,
+  type MessageReplyRef,
 } from '@clubchat/shared';
 import {
   InMemoryMessageStore,
@@ -287,6 +288,10 @@ export class ChatClient {
             linkedPollId: null,
             linkedEventId: null,
             linkedMeetingId: null,
+            // From the outbox entry, like the attachment fields above. The ack carries only ids
+            // and the seq, and the quote is the sender's own copy of a message they were looking
+            // at when they replied - so their bubble draws it now rather than when it re-syncs.
+            replyTo: this.outbox.get(clientMsgId)?.replyTo ?? null,
             deletedAt: null,
             createdAt: frame.d['createdAt'] as string,
           },
@@ -320,9 +325,16 @@ export class ChatClient {
        * the log, so it cannot create or reveal a hole, and running it through `decideGap`
        * would make every reaction on an older message look like one.
        *
-       * A lost update is self-healing because the frame carries the full reaction set rather
-       * than a delta - the next update, sync or history page brings the truth. That is the
-       * property that lets this path skip the ceremony `msg.new` needs.
+       * A lost update is self-healing **while the socket is up**, because the frame carries the
+       * full reaction set rather than a delta - the next update on that message brings the
+       * truth. That is the property that lets this path skip the ceremony `msg.new` needs.
+       *
+       * > **It is NOT self-healing across a disconnect, and this comment used to claim it was.**
+       * > `syncChannel` pulls strictly ABOVE the local max, so a row already cached is never
+       * > fetched again - an update missed while offline is missed permanently. A client that
+       * > was disconnected when a message was deleted keeps showing that message and its text.
+       * > Recorded as item 14 of SPEC/PRD/17; the fix is a changed-since watermark in sync,
+       * > which is a change to the sync contract rather than something to patch here.
        */
       case 'msg.update': {
         const channelId = frame.d['channelId'] as string;
@@ -448,6 +460,9 @@ export class ChatClient {
       documentSize?: number;
       /** User ids the composer named. See `PendingSend.mentions`. */
       mentions?: readonly string[];
+      /** The message being answered, and the quote to draw meanwhile. See `PendingSend`. */
+      replyToSeq?: number;
+      replyTo?: MessageReplyRef;
     } = {},
   ): string {
     const clientMsgId = opts.clientMsgId ?? this.opts.randomUuid();
@@ -463,6 +478,8 @@ export class ChatClient {
       ...(opts.documentName ? { documentName: opts.documentName } : {}),
       ...(opts.documentSize !== undefined ? { documentSize: opts.documentSize } : {}),
       ...(opts.mentions && opts.mentions.length > 0 ? { mentions: opts.mentions } : {}),
+      ...(opts.replyToSeq !== undefined ? { replyToSeq: opts.replyToSeq } : {}),
+      ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
     });
     this.opts.onChange?.();
     return clientMsgId;
@@ -493,6 +510,9 @@ export class ChatClient {
         ...(pending.mentions && pending.mentions.length > 0
           ? { mentions: [...pending.mentions] }
           : {}),
+        // The seq only. The quote itself is joined by the server on every read, so what the
+        // client believes it is quoting never becomes what anybody else sees.
+        ...(pending.replyToSeq !== undefined ? { replyToSeq: pending.replyToSeq } : {}),
       },
     });
 
@@ -516,6 +536,8 @@ export class ChatClient {
       documentName?: string;
       documentSize?: number;
       mentions?: readonly string[];
+      replyToSeq?: number;
+      replyTo?: MessageReplyRef;
     } = {},
   ): Promise<number> {
     const clientMsgId = this.enqueue(channelId, body, attachment);

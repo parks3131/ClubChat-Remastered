@@ -11,9 +11,15 @@
  */
 
 import * as SQLite from 'expo-sqlite';
-import type { MessageEnvelope, MessageMention, MessageReaction } from '@clubchat/shared';
+import type {
+  MessageEnvelope,
+  MessageMention,
+  MessageReaction,
+  MessageReplyRef,
+} from '@clubchat/shared';
 import {
   InMemoryMessageStore,
+  strikeQuotedMessage,
   type MessagePatch,
   type MessageStore,
 } from '@clubchat/client-core';
@@ -22,7 +28,7 @@ import {
  * run them against a real SQLite engine. This file is the driver half: it does the I/O and owns
  * no SQL of its own beyond the statements below.
  */
-import { pendingMigrations, SCHEMA } from './sqlite-schema.ts';
+import { jsonListColumn, pendingMigrations, SCHEMA } from './sqlite-schema.ts';
 
 async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
   const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(messages)');
@@ -56,6 +62,8 @@ type Row = {
   linked_poll_id: string | null;
   linked_event_id: string | null;
   linked_meeting_id: string | null;
+  reply_to_seq: number | null;
+  reply_to: string | null;
   deleted_at: string | null;
   created_at: string;
 };
@@ -76,6 +84,17 @@ function parseJsonList<T>(raw: string | null): T[] {
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  }
+}
+
+/** The same tolerance for the reply quote, which is one object rather than a list. */
+function parseJsonObject<T>(raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as T;
+    return parsed !== null && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
@@ -107,6 +126,9 @@ const toEnvelope = (row: Row): MessageEnvelope => ({
   linkedPollId: row.linked_poll_id,
   linkedEventId: row.linked_event_id,
   linkedMeetingId: row.linked_meeting_id,
+  // Null on a row cached before this column existed, which draws no quote box - what shipped
+  // before replies, and right for the majority of messages, which answer nothing in particular.
+  replyTo: parseJsonObject<MessageReplyRef>(row.reply_to),
   deletedAt: row.deleted_at,
   createdAt: row.created_at,
 });
@@ -137,8 +159,8 @@ class SqliteMessageStore implements MessageStore {
         await this.db.runAsync(
           `INSERT INTO messages
              (channel_id, seq, id, sender_id, sender_name, sender_image, type, body, client_msg_id, pinned, pinned_at, reactions, mentions,
-              media_id, document_name, document_size, linked_poll_id, linked_event_id, linked_meeting_id, deleted_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              media_id, document_name, document_size, linked_poll_id, linked_event_id, linked_meeting_id, reply_to_seq, reply_to, deleted_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (channel_id, seq) DO UPDATE SET
              id = excluded.id,
              sender_id = excluded.sender_id,
@@ -157,6 +179,8 @@ class SqliteMessageStore implements MessageStore {
              linked_poll_id = excluded.linked_poll_id,
              linked_event_id = excluded.linked_event_id,
              linked_meeting_id = excluded.linked_meeting_id,
+             reply_to_seq = excluded.reply_to_seq,
+             reply_to = excluded.reply_to,
              deleted_at = excluded.deleted_at,
              created_at = excluded.created_at`,
           message.channelId,
@@ -170,14 +194,23 @@ class SqliteMessageStore implements MessageStore {
           message.clientMsgId,
           message.pinned ? 1 : 0,
           message.pinnedAt,
-          JSON.stringify(message.reactions),
-          JSON.stringify(message.mentions),
+          // Never a bare `JSON.stringify` for these two: they are NOT NULL, and an envelope from
+          // a producer that predates either field would bind SQL NULL and lose the whole message.
+          // See `jsonListColumn`.
+          jsonListColumn(message.reactions),
+          jsonListColumn(message.mentions),
           message.mediaId,
           message.documentName,
           message.documentSize,
           message.linkedPollId,
           message.linkedEventId,
           message.linkedMeetingId,
+          // The seq as its own column so a delete can find every quote of that message, and the
+          // whole ref as JSON so drawing one needs no second read. See `sqlite-schema.ts`.
+          message.replyTo?.seq ?? null,
+          // Nullable, so a missing field is simply no quote - but `== null` rather than
+          // `=== null` so an absent one takes the same branch as an explicit one.
+          message.replyTo == null ? null : JSON.stringify(message.replyTo),
           message.deletedAt,
           message.createdAt,
         );
@@ -202,7 +235,7 @@ class SqliteMessageStore implements MessageStore {
     }
     if (patch.reactions !== undefined) {
       assignments.push('reactions = ?');
-      values.push(JSON.stringify(patch.reactions));
+      values.push(jsonListColumn(patch.reactions));
     }
     if (patch.deletedAt !== undefined) {
       assignments.push('deleted_at = ?');
@@ -213,14 +246,39 @@ class SqliteMessageStore implements MessageStore {
       values.push(patch.deletedAt);
     }
 
-    if (assignments.length === 0) return;
+    if (assignments.length > 0) {
+      await this.db.runAsync(
+        `UPDATE messages SET ${assignments.join(', ')} WHERE channel_id = ? AND seq = ?`,
+        ...values,
+        channelId,
+        seq,
+      );
+    }
 
-    await this.db.runAsync(
-      `UPDATE messages SET ${assignments.join(', ')} WHERE channel_id = ? AND seq = ?`,
-      ...values,
+    /*
+     * A delete also strikes this message out of every quote of it. See `strikeQuotedMessage`.
+     *
+     * Read-modify-write rather than a `json_set` in SQL: the shape of the stored ref is declared
+     * in one place - the shared `MessageReplyRef` - and spelling its keys out in a SQL string
+     * would be a second declaration that no compiler is checking. Replies to any one message are
+     * few, and `reply_to_seq` is a real column precisely so this finds them by index.
+     */
+    if (patch.deletedAt === undefined || patch.deletedAt === null) return;
+    const quoting = await this.db.getAllAsync<{ seq: number; reply_to: string | null }>(
+      'SELECT seq, reply_to FROM messages WHERE channel_id = ? AND reply_to_seq = ?',
       channelId,
       seq,
     );
+    for (const row of quoting) {
+      const ref = parseJsonObject<MessageReplyRef>(row.reply_to);
+      if (ref === null) continue;
+      await this.db.runAsync(
+        'UPDATE messages SET reply_to = ? WHERE channel_id = ? AND seq = ?',
+        JSON.stringify(strikeQuotedMessage(ref)),
+        channelId,
+        row.seq,
+      );
+    }
   }
 
   async list(channelId: string): Promise<MessageEnvelope[]> {

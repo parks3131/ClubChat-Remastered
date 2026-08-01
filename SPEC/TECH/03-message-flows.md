@@ -156,3 +156,36 @@ a single reserved row in `users` with a fixed UUID, seeded by the first migratio
 
 Ordering guarantee: the outbox is processed in order **per channel**, so "X was added" cannot
 overtake the message that caused it.
+
+### 6.5 Replies, and why the quote is joined rather than stored
+
+A reply stores exactly one integer: `messages.reply_to_seq`, the quoted message's address inside
+the same channel. Everything the quote box draws - the sender's name, a truncated preview, the
+photo's media id, the document's filename, whether the original has since been deleted - is
+**joined on every read** by a self-join on `(channel_id, seq)`, in `domain/reads.ts`.
+
+> **The deciding case is deletion.** A snapshot taken at send time would survive the original
+> being deleted, so words an admin removed would live on inside every reply that quoted them,
+> visible in the conversation and out of reach of the delete that was supposed to remove them.
+> Joining means one delete changes every quote of it at once. A rename propagates for the same
+> reason `sender_name` is joined and never stored.
+
+Three consequences worth stating, because each has a way to look correct while being wrong:
+
+1. **The wire carries the resolved quote, not the seq.** `MessageEnvelope.replyTo` is built in
+   `appendMessage` as well as in the read path, because `msg.new` is published from the append
+   envelope - and a client that received a reply with a bare seq could not draw it without a
+   second fetch, which is exactly what the offline-first cache exists to avoid. A field stored on
+   the message and never put on the wire is the defect `media_id` and `linked_poll_id` each
+   shipped with.
+2. **The client cache holds the resolved quote, so a delete has to reach it.** `syncChannel`
+   pulls strictly ABOVE the local max, so a row once cached is never fetched again. The
+   `MessageStore.patch` contract therefore says that applying a `deletedAt` also strikes that
+   message out of every quote of it (`strikeQuotedMessage`), and the SQLite cache keeps
+   `reply_to_seq` as its own column purely so that write can find those rows by index.
+3. **A reply cannot point outside its channel**, and that is enforced by the composite foreign
+   key rather than by the send handler. This is why the reference is a `seq` and not a message
+   id: an id reference would need "and it is in this channel" re-checked by every read that
+   draws a quote, which is the shape of failure mode 9.
+
+Replies notify nobody. See [Chat](../PRD/05-chat.md) rule 19 for why.

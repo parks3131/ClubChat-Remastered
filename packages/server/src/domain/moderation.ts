@@ -20,7 +20,7 @@
  */
 
 import { and, eq, sql } from 'drizzle-orm';
-import type { MessageEnvelope, MessageType } from '@clubchat/shared';
+import { replyPreview, type MessageEnvelope, type MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { messageReports, moderationReads } from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
@@ -385,6 +385,14 @@ export async function readReportedContext(
       linked_poll_id: string | null;
       linked_event_id: string | null;
       linked_meeting_id: string | null;
+      reply_seq: number | null;
+      reply_sender_id: string | null;
+      reply_sender_name: string | null;
+      reply_type: string | null;
+      reply_body: string | null;
+      reply_media_id: string | null;
+      reply_document_name: string | null;
+      reply_deleted: boolean | null;
       deleted_at: string | null;
       created_at: string;
     }>(sql`
@@ -398,9 +406,23 @@ export async function readReportedContext(
              m.linked_poll_id::text AS linked_poll_id,
              m.linked_event_id::text AS linked_event_id,
              m.linked_meeting_id::text AS linked_meeting_id,
+             -- What a reply was answering. Loaded for the same reason reactions are: which
+             -- message somebody was responding to changes what their words mean, and the
+             -- quoted message can sit outside the window this read is allowed to return.
+             q.seq AS reply_seq,
+             q.sender_id::text AS reply_sender_id,
+             qu.full_name AS reply_sender_name,
+             q.type AS reply_type,
+             q.body AS reply_body,
+             q.media_id::text AS reply_media_id,
+             q.document_name AS reply_document_name,
+             (q.deleted_at IS NOT NULL) AS reply_deleted,
              m.deleted_at::text AS deleted_at, m.created_at::text AS created_at
         FROM messages m
         LEFT JOIN users u ON u.id = m.sender_id
+        -- Matched on the channel as well as the seq, which is the pair the foreign key uses.
+        LEFT JOIN messages q ON q.channel_id = m.channel_id AND q.seq = m.reply_to_seq
+        LEFT JOIN users qu ON qu.id = q.sender_id
        WHERE m.channel_id = ${channel.id} AND m.seq BETWEEN ${fromSeq} AND ${toSeq}
        ORDER BY m.seq
     `);
@@ -446,6 +468,19 @@ export async function readReportedContext(
       linkedPollId: row.linked_poll_id,
       linkedEventId: row.linked_event_id,
       linkedMeetingId: row.linked_meeting_id,
+      replyTo:
+        row.reply_seq === null
+          ? null
+          : {
+              seq: Number(row.reply_seq),
+              senderId: row.reply_sender_id as string,
+              senderName: row.reply_sender_name,
+              type: row.reply_type as MessageType,
+              preview: replyPreview(row.reply_body),
+              mediaId: row.reply_media_id,
+              documentName: row.reply_document_name,
+              deleted: row.reply_deleted === true,
+            },
       // Strings, not Dates: db.execute does not apply Drizzle's column coercion, so a row type
       // claiming Date here would typecheck and fail at the call site.
       deletedAt: row.deleted_at === null ? null : new Date(row.deleted_at).toISOString(),

@@ -10,6 +10,7 @@ unless it names an exception, and the exceptions a DM carries are listed in
 | Capability | Notes |
 |---|---|
 | Text messages | With @mention tagging and autocomplete |
+| Quote replies | A flat quote of one earlier message, tappable to jump to it. **Not threads** - see the out-of-scope note |
 | Photo attachments | Library or camera |
 | Document attachments | Any file type, shown with filename and size |
 | Emoji reactions | Fixed set: 👍 ❤️ 😂 🔥 🎉 😮. **A full picker is requested and not built - see the open question below.** |
@@ -26,12 +27,18 @@ unless it names an exception, and the exceptions a DM carries are listed in
 | Gallery | Every photo ever posted in that chat, as a grid |
 | Quick-nav | A header menu into that space's other features |
 
-**Out of scope:** threaded/quote replies, editing a sent message, typing indicators, read
+**Out of scope:** **threads**, editing a sent message, typing indicators, read
 receipts, presence, voice notes, video calls, message search, and paging *newer* beyond
 a jump window (chat only pages upward from the live tail).
 
 *(DMs were listed here as out of scope until 2026-07-28, when that position was reversed. See
 [ADR-0009](../decisions/0009-direct-messages-as-fourth-channel-scope.md).)*
+
+*(Quote replies were out of scope alongside threads until 2026-08-01, when the two were
+separated. A quote is a **flat** reference to one earlier message and stays in the main
+conversation; a thread is a second conversation hanging off a message, with its own unread
+state, its own notification rules and its own place to hide. The first is a reading aid, the
+second is a feature the whole product would have to bend around. Threads remain out.)*
 
 **Behaviour rules**
 
@@ -121,6 +128,20 @@ a jump window (chat only pages upward from the live tail).
     and an input that silently rejects reads as a broken app. The stated reason never
     identifies whether a block or a lost shared club caused it - see
     [Direct messages](14-direct-messages.md).
+19. **A reply quotes exactly one earlier message, in the same conversation, and stays flat.**
+    The quote shows who said it and a short preview - a thumbnail for a photo, the filename for
+    a document, otherwise the text - and tapping it jumps to the original and highlights it,
+    the same jump a pinned notice uses. A quote of a reply shows that reply's own words, never
+    a chain.
+
+    **A reply notifies nobody on its own.** Replying is a reading aid, not a summons: if you
+    want the person to know, you @mention them, and that rule already exists. Adding a second
+    silent way to generate a notification would make "why did my phone buzz" unanswerable.
+
+    **A deleted original keeps its quote and says "This message was deleted."** The quote does
+    not vanish - a reply answering nothing is exactly the unreadability the tombstone exists to
+    prevent (rule 9), one level up - and it does not keep showing the deleted words either.
+    Cards are replyable like anything else.
 
 **Highlights**
 
@@ -167,6 +188,10 @@ it, and the reports it would contain belong to the platform moderation queue.
 - [ ] The jump-to-latest control appears after scrolling up and disappears at the bottom.
 - [ ] Scrolling to the top loads older messages without losing scroll position, and **does not fire spuriously on open**.
 - [ ] Deleting a message leaves a tombstone for every other member.
+- [ ] A reply shows a quote of the message it answers, and tapping the quote jumps to it.
+- [ ] Deleting a quoted message turns every quote of it into "This message was deleted",
+      including on a client that already had the reply on screen.
+- [ ] A reply notifies nobody unless it also @mentions them.
 - [ ] Reporting surfaces the message in the admin Reports tab; a second report by the same person changes nothing.
 - [ ] Reporting in a DM surfaces it to platform moderators and to no club admin.
 - [ ] Creating a poll from "+" posts a votable card, and voting on the card matches the full poll screen.

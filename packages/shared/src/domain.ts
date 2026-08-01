@@ -132,6 +132,91 @@ export const MessageMention = z.object({
 export type MessageMention = z.infer<typeof MessageMention>;
 
 /**
+ * How much of a quoted message travels with the reply that quotes it.
+ *
+ * The quote box is two lines. A reply to an 8,000-character message would otherwise carry that
+ * message twice - once as itself, once inside every reply to it - for text no quote box will
+ * ever draw.
+ */
+export const REPLY_PREVIEW_CHARS = 140;
+
+/**
+ * The message a reply is answering, resolved for drawing.
+ *
+ * > **Joined at read time from `reply_to_seq`, never stored as a snapshot**, and the deciding
+ * > case is deletion. A stored copy of the quoted text would survive the original being deleted,
+ * > so the words an admin removed would live on inside every reply that quoted them - visible in
+ * > the conversation, and out of reach of the delete that was supposed to remove them. Joining
+ * > means a deleted original reads "This message was deleted" everywhere at once, for the same
+ * > reason `senderName` is joined rather than stored.
+ *
+ * Carries enough to draw the box and nothing more: who said it, a truncated preview, and the
+ * attachment identity for a photo or a document. What it does NOT carry is a second level of
+ * quoting - replies are flat, so a quote of a reply shows the reply's own text, not a chain.
+ */
+export const MessageReplyRef = z.object({
+  /** The quoted message's seq, which is also what tapping the quote jumps to. */
+  seq: z.number().int().positive(),
+  senderId: Uuid,
+  /** Null for a sender whose account is gone, exactly as on the envelope itself. */
+  senderName: z.string().nullable(),
+  type: MessageType,
+  /** Truncated to `REPLY_PREVIEW_CHARS`. Null for a photo with no caption, or a tombstone. */
+  preview: z.string().nullable(),
+  /** So the quote can draw a thumbnail rather than the word "Photo". */
+  mediaId: Uuid.nullable().default(null),
+  documentName: z.string().nullable().default(null),
+  /**
+   * Whether the original has since been deleted.
+   *
+   * The quote stays and says so, rather than vanishing. A reply whose quote disappeared reads as
+   * an answer to nothing, which is the exact unreadability the tombstone exists to prevent
+   * (domain invariant 7) - one level up.
+   */
+  deleted: z.boolean(),
+});
+export type MessageReplyRef = z.infer<typeof MessageReplyRef>;
+
+/** Cut a quoted body down to what a quote box can show. One definition, both sides of the wire. */
+export function replyPreview(body: string | null): string | null {
+  if (body === null || body.length === 0) return null;
+  return body.length <= REPLY_PREVIEW_CHARS ? body : body.slice(0, REPLY_PREVIEW_CHARS);
+}
+
+/**
+ * The quote a message would produce if it were replied to.
+ *
+ * Here rather than in the client that uses it so it sits beside the server's version of the same
+ * mapping, which builds a ref out of a database row. The two have to agree - one draws the
+ * sender's optimistic bubble and the other draws everybody else's - and agreement is easier to
+ * check when they are next to each other than when they are two packages apart.
+ */
+export function quoteOf(message: MessageEnvelopeShape): MessageReplyRef {
+  return {
+    seq: message.seq,
+    senderId: message.senderId,
+    senderName: message.senderName,
+    type: message.type,
+    preview: replyPreview(message.body),
+    mediaId: message.mediaId,
+    documentName: message.documentName,
+    deleted: message.deletedAt !== null,
+  };
+}
+
+/** What `quoteOf` reads. Declared structurally so it cannot depend on the envelope's own type. */
+type MessageEnvelopeShape = {
+  seq: number;
+  senderId: string;
+  senderName: string | null;
+  type: MessageType;
+  body: string | null;
+  mediaId: string | null;
+  documentName: string | null;
+  deletedAt: string | null;
+};
+
+/**
  * A message as it appears on the wire and in the client's local store.
  *
  * `seq` is the ordering. `createdAt` is for display only - a timestamp is not an
@@ -243,6 +328,16 @@ export const MessageEnvelope = z.object({
   /** The same, for an event card and a meeting card. One of the three at most is ever set. */
   linkedEventId: Uuid.nullable().default(null),
   linkedMeetingId: Uuid.nullable().default(null),
+  /**
+   * What this message is a reply to, ready to draw as a quote. Null for the great majority.
+   *
+   * The reply itself is stored as one integer - `reply_to_seq`, the quoted message's address
+   * within the same channel - and this is that integer resolved. See `MessageReplyRef` for why
+   * it is resolved on every read rather than snapshotted at send time.
+   *
+   * Defaulted, so a producer predating this field still parses.
+   */
+  replyTo: MessageReplyRef.nullable().default(null),
   deletedAt: z.string().datetime().nullable(),
   createdAt: z.string().datetime(),
 });

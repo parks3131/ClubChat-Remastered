@@ -64,6 +64,7 @@ function envelope(seq: number, overrides: Partial<MessageEnvelope> = {}): Messag
     linkedPollId: null,
     linkedEventId: null,
     linkedMeetingId: null,
+    replyTo: null,
     documentName: null,
     documentSize: null,
     deletedAt: null,

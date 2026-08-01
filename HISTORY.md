@@ -13,6 +13,142 @@ Newest first.
 
 ---
 
+## 2026-08-01 (later) - Replies, and a four-second frame
+
+Four things, and the two that mattered most were not the feature.
+
+### The chat row was rebuilt on every screen render
+
+`renderItem` was a ~400-line inline closure, so **every row's whole subtree** - the gradient, the
+mention splitting, two `toLocaleTimeString` calls, the reaction summary - was rebuilt whenever the
+screen re-rendered, for reasons no row cared about: a notice appearing, the pinned strip fading,
+a long press selecting some other message. The device log reported the JS thread blocked for
+nearly four seconds between scroll events, which is also the likeliest reason the app kept losing
+its Metro connection all day: a four-second block drops the dev-server socket, and
+"unsanitized script URL = null" is what that looks like from the outside.
+
+Extracted into `MessageRow` and `PendingRow`, both `memo`ized, with every callback hoisted to a
+`useCallback` that takes a `seq` and closes over nothing per-row. The memo is worthless without
+that half - stable props are the whole mechanism.
+
+**Found on the way: hooks running after an early return.** `selectedMessage` and `mentionMatches`
+sat *below* `if (authState === "checking") return ...`, so a render during auth-checking ran two
+fewer hooks than the render after it - "rendered more hooks than during the previous render",
+waiting for the first route that stops guarding this screen. Every hook now sits above both exits.
+
+### Replies: one integer stored, a whole quote read back
+
+`messages.reply_to_seq`, and nothing else about what a message answers. The quote box's contents -
+name, preview, thumbnail, filename, deleted-or-not - are **joined on every read**.
+
+> **Deletion is what decides this.** A snapshot of the quoted text taken at send time survives the
+> original being deleted, so the words an admin removed would live on inside every reply quoting
+> them - visible in the conversation, out of reach of the delete meant to remove them. Joining
+> makes one delete change every quote at once, for the same reason `sender_name` is joined.
+
+The reference is a `seq` rather than a message id so the foreign key can be **composite and
+self-referencing**: `(channel_id, reply_to_seq) → (channel_id, seq)`. `channel_id` appears on both
+sides, so "the quoted message is in this channel" is enforced by the reference instead of being
+re-checked by every read that draws a quote. A `CHECK (reply_to_seq < seq)` rules out quoting the
+future, and with it a message quoting itself - which the FK alone accepts, because a
+self-referencing key is satisfied by the row being inserted. Both proved in
+`constraint-proof.sql` by attempting the violation.
+
+Three joins in the read path became one `selectMessages(db)` used by all four reads, because the
+second time a `JOIN` clause is written out is when it starts diverging silently (failure mode 9).
+
+**The client cache had to grow a rule.** `syncChannel` pulls strictly above the local max, so a
+cached row is never fetched again - which means a delete has to reach the quotes held locally or
+they keep the deleted text forever. `MessageStore.patch` now strikes the message out of every
+quote of it, in both implementations, and the SQLite cache keeps `reply_to_seq` as its own column
+purely so that write can find those rows by index.
+
+### The gap that fell out of that
+
+`msg.update` is only self-healing **while connected**. Sync never re-reads a cached row, so a pin,
+a tombstone or a reaction missed while offline is missed permanently - a client disconnected when
+a message is deleted shows that message, with its text, indefinitely. The protocol doc claimed
+otherwise. Recorded as roadmap item 14 rather than patched: the fix is a changed-since watermark
+in the sync contract, not a line in the client.
+
+### Cards can be held on native and deliberately not on web
+
+Failure mode 17 said a card bubble must never be long-pressable. That reading was too broad, and
+the two platforms differ:
+
+- **Native negotiates.** The responder system hands the touch to the deepest view that wants it,
+  so a finger on a poll option votes and never reaches the bubble, while a finger on the card's
+  body does. Exactly the wanted behaviour, for free.
+- **Web bubbles.** Events reach the wrapper on the way up regardless, so holding a vote button for
+  400ms would vote *and* open the menu.
+
+So the gesture is attached everywhere except web, and the dots menu stays as the discoverable
+affordance and as web's only way in.
+
+### Verification, and the process that nearly reported a lie
+
+The reply sent from the browser drew its quote correctly and stored `reply_to_seq = NULL`. The
+cause: **both API and gateway had been running for 21 hours with no `--watch`**, so zod silently
+stripped the `replyToSeq` it did not know about, and the quote on screen was the sender's own
+optimistic copy. The same stale process explains a `/mentionable` 404 that looked like a bug in a
+route written a session ago.
+
+That is failure mode 15 wearing different clothes - and note the direction it fails in: the
+feature *looked* like it worked. Restarted properly, the whole path was verified against a live
+server: `reply_to_seq = 9` in the database, `replyTo` fully resolved in the API's own response,
+the quote surviving a reload, tapping it scrolling the list and highlighting exactly one row, and
+deleting the original turning its quote into "This message was deleted" **live** - with the
+quoted text gone from the page entirely.
+
+### "I cannot create a poll or an event", and the field that was not there
+
+Reported from the phone while the rest of this was being written, and worth the whole section
+because the symptom pointed nowhere near the cause. Creating a poll or an event appeared to do
+nothing: back in chat, no card, and an `Uncaught (in promise, id: 0)` toast at the bottom of the
+screen. Expanding it gave the answer:
+
+```
+SQLiteErrorException: Error code 19: NOT NULL constraint failed: messages.mentions
+```
+
+The local cache wrote `JSON.stringify(message.mentions)` into a `NOT NULL` column, and
+**`JSON.stringify(undefined)` returns `undefined` rather than a string** - so an envelope with no
+`mentions` bound SQL NULL, the insert died, and the card was never cached.
+
+Why only cards, and why only sometimes:
+
+- **Cards are the one kind of message published by the worker**; everything else is published by
+  the gateway. The worker process had been up for 22 hours - since before `mentions` existed on
+  the envelope at all - so its `msg.new` frames carried no such field and every other message was
+  fine. "Creating a poll is broken" was really "one publisher is old".
+- **A reload made the card appear**, because the same message then arrived through `/sync`, whose
+  envelopes are built in `reads.ts` and do set `mentions`. That is what made it read as a realtime
+  bug rather than a missing field, and it is why the earlier browser check - where the card also
+  failed to arrive live - was written off as the throttled socket reaping the connection.
+
+Two fixes, because there were two faults. The worker was restarted, and `jsonListColumn` now
+coerces an absent list to the `[]` that `MessageEnvelope` already declares as its default -
+scoped deliberately to the two columns where a default is defined by the contract, and not to the
+identity columns, where inventing a value would turn a loud failure into a corrupt row. Proved by
+creating a poll and watching the card arrive **live**, with three tests including one that asserts
+the raw `JSON.stringify` still throws. Recorded as failure mode 18.
+
+The deeper cause is failure mode 16 again: `msg.new` is `frame.d as unknown as MessageEnvelope`, a
+cast rather than a parse, so nothing checks that an arriving payload matches the contract it
+claims to satisfy.
+
+Also renamed migrations 0012 to 0015, which drizzle-kit had christened `0015_hard_zarda` and
+similar. Renaming the file and its `tag` together is safe because `__drizzle_migrations` records a
+content hash and the journal's `when`, never the filename - confirmed by re-running the migrator
+and counting 17 rows before and after. `AGENTS.md` now says to pass `--name`.
+
+Tests: 677 to 696. `replies.test.ts` (10) and `store.test.ts` (5) were mutation-tested - nulling
+the read join fails 7, nulling the append envelope's quote fails exactly the one case that guards
+`msg.new`, hardcoding `deleted: false` fails exactly the deletion case, and skipping the
+strike-quotes branch fails 3.
+
+---
+
 ## 2026-08-01 - The first session run on real hardware, and what only hardware found
 
 Started as one screen: the member profile did not look like v1's. Ended as the session that put

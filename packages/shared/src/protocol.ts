@@ -50,7 +50,25 @@ export const MsgSendFrame = z.object({
   body: z.string().min(1).max(8_000).nullish(),
   mediaId: Uuid.nullish(),
   mentions: z.array(Uuid).max(200).optional(),
+  /**
+   * The message being replied to, as its seq in this channel.
+   *
+   * A seq, not an id: it is the channel-scoped address, so the server resolves it inside the
+   * channel it has already authorized and a reply cannot name a message somewhere else. The
+   * quote the reader eventually sees is joined from this on every read, never sent by the
+   * client - a client-supplied quote would let a sender put words in somebody's mouth.
+   */
+  replyToSeq: z.number().int().positive().optional(),
 });
+/**
+ * Exported as a type, so a handler takes the frame rather than restating its shape.
+ *
+ * The gateway used to declare its own parameter type listing these fields by hand, which is a
+ * hand-written type over a contract that already exists - failure mode 16 - and it fails in the
+ * direction that hurts: a field added here would be silently dropped by a handler that still
+ * typechecks against its own older copy.
+ */
+export type MsgSendFrame = z.infer<typeof MsgSendFrame>;
 
 /** Advances the read cursor. The only thing that clears an unread count. */
 export const MsgReadFrame = z.object({

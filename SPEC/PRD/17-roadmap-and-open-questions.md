@@ -65,6 +65,17 @@ designed in.
     per-new-conversation limit, because one sender opening many threads stays under any
     per-sender bucket. Phase 4.
 13. **Backups and version parity** between development and production data stores. **Still open** - there is no production yet. Migrations already replay cleanly from zero, which is half of it.
+14. **A `msg.update` missed while disconnected is never recovered.** Found on 2026-08-01 while
+    verifying replies: `syncChannel` pulls strictly ABOVE the local max, so a row the client has
+    already cached is never fetched again - and pins, tombstones and reactions all travel as
+    updates against rows below that mark. A client that is offline when somebody deletes a
+    message shows that message, with its text, indefinitely. [Protocol](../TECH/10-protocol.md)
+    currently claims the loss is self-healing because "the next update, sync or history page
+    brings the truth"; sync does not, and the claim is only true for a message the client had
+    not yet seen. The fix is a reconciliation bound - sync returning rows *changed* since a
+    watermark rather than rows *added* - and it is a design change to the sync contract rather
+    than a patch, which is why it is recorded here rather than fixed in passing. Note the shape:
+    every automated check passes, because each half is individually correct.
 
 ### Verification owed
 

@@ -201,7 +201,7 @@ npm install                  # install (npm workspaces; no pnpm/yarn)
 
 npm run db:up                # start Postgres 17 + Redis 8 in Docker, and WAIT for them
 npm run db:migrate           # apply pending migrations
-npm run db:generate          # generate a migration from a schema change
+npm run db:generate -- --name=message_replies   # generate a migration from a schema change
 npm run db:prove             # attempt to violate every constraint; must exit 0
 npm run db:down              # stop the containers
 npm run db:nuke              # stop AND destroy the volume. Development data only.
@@ -226,6 +226,14 @@ npm run dev:mobile           # Expo client
 # checked-in image silently drifts from its source.
 ./scripts/render-diagrams.sh
 ```
+
+**Always pass `--name` to `db:generate`.** Without it drizzle-kit invents a random codename and
+you get `0015_hard_zarda.sql`, which says nothing about what it does to anybody reading the
+directory later. Migrations 0012 to 0015 shipped that way and were renamed on 2026-08-01; the
+rename was safe because `__drizzle_migrations` records a hash of the SQL and the journal's `when`,
+never the filename - so renaming the file **and** its `tag` in `meta/_journal.json` together
+changes nothing about what has been applied. That is a rename, not an edit, and non-negotiable 2
+still stands: the SQL inside an applied migration is never touched.
 
 **Node 24 or newer.** There is no build step and no bundler for the server: Node runs `.ts`
 directly by stripping types. That is why every import carries an explicit `.ts` extension.
@@ -426,3 +434,20 @@ that records how to recognise the class._
     `View`, and any tap behaviour it wants belongs to the enclosing pressable. Caught by reading
     the browser console during a smoke test, which is the only place it surfaces: it typechecks,
     it renders, and it looks right.
+
+18. **`JSON.stringify(undefined)` returns `undefined`, so an absent field binds SQL NULL and takes
+    the whole row with it.** Symptom: creating a poll or an event appeared to do nothing - the card
+    never showed up in chat - with an unrelated-looking `Uncaught (in promise)` toast elsewhere on
+    screen. Root cause: the local cache wrote `JSON.stringify(message.mentions)` into a `NOT NULL`
+    column, and the arriving envelope had no `mentions` at all, so the insert died on `NOT NULL
+    constraint failed`. **Rule: never bind a bare `JSON.stringify` to a NOT NULL column - coerce
+    the absent case to the default the contract declares** (`JSON.stringify(value ?? [])`). How to
+    recognise the class: a field the *type* says is required, arriving from a producer that
+    predates it. TypeScript is no help - the payload was cast, not parsed - and neither is the
+    happy path, because every other producer sets the field.
+
+    Two things made it hard to place, and both are worth remembering. **Only cards broke**, because
+    cards are the one message published by the *worker* and everything else is published by the
+    gateway - so "creating a poll is broken" was really "one publisher is old". And **a reload fixed
+    it**, because the same message then arrived through `/sync`, which builds its envelopes
+    somewhere else entirely - which makes it read as a realtime bug rather than a missing field.

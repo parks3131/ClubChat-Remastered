@@ -56,6 +56,16 @@ export type SendMessageInput = {
   mentions?: readonly string[] | undefined;
   /** For a photo or document message: an object already uploaded and completed. */
   mediaId?: string | null | undefined;
+  /**
+   * The message being answered, as its seq in this channel.
+   *
+   * Passed straight through rather than checked here, and that is deliberate: the composite
+   * foreign key on `(channel_id, reply_to_seq)` already refuses a seq from another channel or
+   * from nowhere at all, so a check in this function would be the same rule written twice - and
+   * the copy in the handler is the one that races. A refused reply surfaces as the insert
+   * failing, which the caller reports like any other failed send.
+   */
+  replyToSeq?: number | null | undefined;
 };
 
 /**
@@ -128,6 +138,7 @@ export async function sendMessage(
     // Shown on a document bubble. A photo carries neither.
     documentName: type === 'document' ? document?.name ?? null : null,
     documentSize: type === 'document' ? document?.size ?? null : null,
+    replyToSeq: input.replyToSeq ?? null,
   });
 
   // Point the object back at the message that owns it, which is what lets the nightly GC
@@ -246,11 +257,12 @@ function toEnvelope(
     clientMsgId: row.clientMsgId,
     pinned: row.pinned,
     pinnedAt: row.pinnedAt?.toISOString() ?? null,
-    // Both empty for the same reason: this envelope answers a pin or a delete, and the change
-    // that matters reaches other clients as a `msg.update` PATCH rather than as a whole message.
-    // Nothing merges this over a cached copy, so neither list can erase one.
+    // All three empty for the same reason: this envelope answers a pin or a delete, and the
+    // change that matters reaches other clients as a `msg.update` PATCH rather than as a whole
+    // message. Nothing merges this over a cached copy, so none of them can erase one.
     reactions: [],
     mentions: [],
+    replyTo: null,
     mediaId: row.mediaId,
     documentName: row.documentName,
     documentSize: row.documentSize,

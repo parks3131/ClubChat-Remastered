@@ -13,6 +13,30 @@
  * the test stops being runnable, silently, in the same commit that makes it matter most.
  */
 
+/**
+ * A value bound to one of the two NOT NULL json columns, `reactions` and `mentions`.
+ *
+ * > **`JSON.stringify(undefined)` returns `undefined`, not a string.** So a field missing from an
+ * > arriving envelope binds SQL NULL, the insert dies on `NOT NULL constraint failed:
+ * > messages.mentions`, and the message is never cached - which shows up as a message that simply
+ * > does not appear, plus an unhandled promise rejection with no obvious connection to it.
+ * >
+ * > Hit on 2026-08-01 by a **card**: those are published by the worker, and the worker process
+ * > had been running since before `mentions` was added to the envelope, so its `msg.new` frames
+ * > carried no such field. Every other message was fine, because everything else is published by
+ * > the gateway. A card that arrived later through `/sync` was fine too, so it looked like a
+ * > realtime bug rather than a missing field.
+ *
+ * An empty list is the right default rather than a guess: `MessageEnvelope` declares exactly that
+ * with `.default([])`, so this makes the cache agree with the contract for a producer that
+ * predates the field. It is deliberately NOT extended to the identity columns - a payload with no
+ * `id` or `sender_id` is broken rather than old, and inventing values for those would turn a loud
+ * failure into a corrupt row.
+ */
+export function jsonListColumn(value: unknown): string {
+  return JSON.stringify(value ?? []) ?? '[]';
+}
+
 export const SCHEMA = `
 PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS messages (
@@ -35,6 +59,8 @@ CREATE TABLE IF NOT EXISTS messages (
   linked_poll_id TEXT,
   linked_event_id TEXT,
   linked_meeting_id TEXT,
+  reply_to_seq   INTEGER,
+  reply_to       TEXT,
   deleted_at     TEXT,
   created_at     TEXT NOT NULL,
   PRIMARY KEY (channel_id, seq)
@@ -115,6 +141,26 @@ export const MIGRATIONS: ReadonlyArray<{ column: string; statements: readonly st
   },
   /* No wipe: a null pin time simply sorts last in the strip until the next sync fills it in. */
   { column: 'pinned_at', statements: [`ALTER TABLE messages ADD COLUMN pinned_at TEXT`] },
+  /*
+   * The quote a reply carries, and the seq it points at, as two columns rather than one.
+   *
+   * `reply_to` is the whole `MessageReplyRef` as JSON, following `mentions` - this is a
+   * disposable cache whose only reader draws the whole message at once, and the server owns the
+   * normalised copy. `reply_to_seq` is that JSON's `seq` lifted out into a real column, because
+   * one write needs to find rows BY it: deleting a message has to strike it out of every quote
+   * of it, and `WHERE json_extract(...)` for that would be both slower and a second place where
+   * the shape of the JSON is spelled out.
+   *
+   * No wipe, following `mentions`. A row cached before these existed draws no quote box, which
+   * is exactly what shipped before replies did, and it gains one when a sync overwrites it.
+   *
+   * Two steps rather than one with two statements, each keyed on the column it adds. A single
+   * step keyed on `reply_to` that added both would be un-re-runnable after a half-applied run:
+   * the step would still be selected, and its first statement would fail on a column that is
+   * already there. Selection by absent column only converges if each step adds exactly one.
+   */
+  { column: 'reply_to_seq', statements: [`ALTER TABLE messages ADD COLUMN reply_to_seq INTEGER`] },
+  { column: 'reply_to', statements: [`ALTER TABLE messages ADD COLUMN reply_to TEXT`] },
 ];
 
 /**

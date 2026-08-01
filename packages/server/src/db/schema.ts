@@ -367,6 +367,20 @@ export const messages = pgTable(
     linkedEventId: uuid('linked_event_id'),
     linkedMeetingId: uuid('linked_meeting_id'),
     /**
+     * What this message is a reply to: the quoted message's `seq`, in this same channel.
+     *
+     * A seq rather than a message id, and that is what makes the reference safe as well as
+     * cheap. `(channel_id, seq)` is this table's other unique key, so the foreign key below
+     * can be composite - which means a reply **cannot** point outside its own channel. An id
+     * reference could, and the read that draws the quote would then have to re-check the
+     * channel itself, which is a predicate restated in a second place (failure mode 9).
+     *
+     * The quote's CONTENTS are not stored here. They are joined from the referenced row on
+     * every read, so a deleted original stops showing its text everywhere at once - see
+     * `MessageReplyRef` in the shared package.
+     */
+    replyToSeq: integer('reply_to_seq'),
+    /**
      * The attached object, for a photo or document message.
      *
      * No foreign key, deliberately: `media_objects.owner_id` points back at the message, and a
@@ -437,6 +451,38 @@ export const messages = pgTable(
          + CASE WHEN linked_event_id IS NOT NULL THEN 1 ELSE 0 END
          + CASE WHEN linked_meeting_id IS NOT NULL THEN 1 ELSE 0 END) <= 1`,
     ),
+    /*
+     * A reply points at a real message in the SAME channel, enforced by the data rather than
+     * by the handler that writes it.
+     *
+     * Composite and self-referencing, against the `(channel_id, seq)` unique key. That shape is
+     * the whole point: `channel_id` appears on both sides, so "the quoted message is in this
+     * channel" is not a check anybody can forget to write. Cascading on delete because a
+     * message row is only ever hard-deleted by its channel going, which takes the replies too.
+     */
+    foreignKey({
+      columns: [t.channelId, t.replyToSeq],
+      foreignColumns: [t.channelId, t.seq],
+      name: 'messages_reply_to_fk',
+    }).onDelete('cascade'),
+    /*
+     * You can only reply to something already said.
+     *
+     * Strictly less-than rather than not-equal, which also rules out a message replying to
+     * itself: a self-referencing foreign key is satisfied by the row being inserted, so
+     * `reply_to_seq = seq` would otherwise be accepted and would render as a bubble quoting
+     * itself forever.
+     */
+    check('messages_reply_precedes', sql`reply_to_seq is null or reply_to_seq < seq`),
+    /*
+     * Partial, for the same reason as the card links above: it stays proportional to the
+     * number of replies rather than to the whole log. It exists for the cascade - without an
+     * index on the referencing side, deleting a channel scans this table once per message it
+     * holds, which is quadratic in the size of the channel being deleted.
+     */
+    index('messages_reply_to')
+      .on(t.channelId, t.replyToSeq)
+      .where(sql`reply_to_seq is not null`),
   ],
 );
 

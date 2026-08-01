@@ -11,7 +11,7 @@ Envelope: `{ "t": <type>, "id": <correlation id>, "d": <payload> }`
 | `auth` | `{ token, device_id, platform }` | First frame. Socket closed if absent within 5s. |
 | `subscribe` | `{ channel_ids: [] }` | **Authorized here, once.** Rejected ids returned in the reply. |
 | `unsubscribe` | `{ channel_ids: [] }` | |
-| `msg.send` | `{ client_msg_id, channel_id, type, body?, media_id?, mentions? }` | |
+| `msg.send` | `{ client_msg_id, channel_id, type, body?, media_id?, mentions?, reply_to_seq? }` | `reply_to_seq` is a seq, not an id, and the quote itself is never sent: the server joins it on read, so a sender cannot put words in somebody's mouth. See [Message flows](03-message-flows.md) 6.5. |
 | `msg.read` | `{ channel_id, up_to_seq }` | Advances the read cursor. |
 | `ping` | `{}` | Every 30s. |
 
@@ -23,8 +23,8 @@ Envelope: `{ "t": <type>, "id": <correlation id>, "d": <payload> }`
 | `auth.err` | `{ code }` | Socket closed. |
 | `msg.ack` | `{ client_msg_id, message_id, seq, created_at }` | **Gap-checked exactly like `msg.new`** - a skipped `seq` here leaves a permanent hole. See [Client architecture](08-client-architecture.md). |
 | `msg.err` | `{ client_msg_id, code }` | `rate_limited`, `forbidden`, `channel_gone`, `malformed`, `media_not_ready` |
-| `msg.new` | full message envelope incl. `seq` and `reactions` | Append if `seq == local_max + 1`, else sync. Reactions ride on the envelope so they survive offline with the message ([ADR-0017](../decisions/0017-reactions-travel-on-the-message-envelope.md)). |
-| `msg.update` | `{ channel_id, seq, pinned?, deleted_at?, reactions? }` | **Reactions are the FULL set, never a delta.** Only the fields that changed are present, and an absent field is distinct from an explicit `null`. Declared from Phase 0 and had no producer at all until reactions arrived in Phase 3.5 - pins and tombstones now travel on it too. Deliberately **not** gap-checked: an update names an existing `seq` rather than extending the log, so it can neither create nor reveal a hole. See [ADR-0017](../decisions/0017-reactions-travel-on-the-message-envelope.md). |
+| `msg.new` | full message envelope incl. `seq`, `reactions` and a resolved `reply_to` | Append if `seq == local_max + 1`, else sync. Reactions ride on the envelope so they survive offline with the message ([ADR-0017](../decisions/0017-reactions-travel-on-the-message-envelope.md)). `reply_to` is resolved here rather than left as a seq, for the same reason: the cache has to be able to draw the quote with no network. |
+| `msg.update` | `{ channel_id, seq, pinned?, deleted_at?, reactions? }` | **Reactions are the FULL set, never a delta.** Only the fields that changed are present, and an absent field is distinct from an explicit `null`. Declared from Phase 0 and had no producer at all until reactions arrived in Phase 3.5 - pins and tombstones now travel on it too. Deliberately **not** gap-checked: an update names an existing `seq` rather than extending the log, so it can neither create nor reveal a hole. See [ADR-0017](../decisions/0017-reactions-travel-on-the-message-envelope.md). **An update missed while disconnected is missed permanently** - sync pulls strictly above the local max and never re-reads a cached row. Item 14 of [the roadmap](../PRD/17-roadmap-and-open-questions.md). |
 | `notif.new` | `{ notification }` | Drives the badge live. |
 | `pong` | `{}` | |
 

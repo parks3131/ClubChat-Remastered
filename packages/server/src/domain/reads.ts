@@ -8,7 +8,13 @@
  */
 
 import { and, asc, desc, eq, getTableColumns, gt, gte, isNull, lt, lte, sql } from 'drizzle-orm';
-import type { ChannelState, MessageEnvelope, MessageType } from '@clubchat/shared';
+import { alias } from 'drizzle-orm/pg-core';
+import {
+  replyPreview,
+  type ChannelState,
+  type MessageEnvelope,
+  type MessageType,
+} from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { channels, messages, users } from '../db/schema.ts';
 import type { ChannelRef } from '../policy/predicates.ts';
@@ -31,7 +37,30 @@ export const SYNC_PAGE_SIZE = 500;
 type MessageRow = typeof messages.$inferSelect & {
   senderName: string | null;
   senderImage: string | null;
+  quoted: {
+    seq: number | null;
+    senderId: string | null;
+    senderName: string | null;
+    type: string | null;
+    body: string | null;
+    mediaId: string | null;
+    documentName: string | null;
+    deletedAt: Date | null;
+  };
 };
+
+/**
+ * The quoted message, joined to whatever is replying to it.
+ *
+ * > **A self-join, matched on `(channel_id, seq)`** - the same pair the foreign key uses, so the
+ * > quote cannot resolve to a message in another channel even if a row somehow held one.
+ *
+ * An alias rather than a second query, because the alternative is a side load: one extra round
+ * trip per page like `withReactions`, for a column most messages do not use. The join costs
+ * nothing on a page with no replies in it.
+ */
+const quotedMessage = alias(messages, 'quoted');
+const quotedSender = alias(users, 'quoted_sender');
 
 /**
  * Every read in this module selects the message columns plus the sender's name.
@@ -44,7 +73,43 @@ const messageColumns = {
   ...getTableColumns(messages),
   senderName: users.name,
   senderImage: users.image,
+  quoted: {
+    seq: quotedMessage.seq,
+    senderId: quotedMessage.senderId,
+    senderName: quotedSender.name,
+    type: quotedMessage.type,
+    body: quotedMessage.body,
+    mediaId: quotedMessage.mediaId,
+    documentName: quotedMessage.documentName,
+    deletedAt: quotedMessage.deletedAt,
+  },
 };
+
+/**
+ * The `SELECT ... FROM messages` every read in this module starts from, joins and all.
+ *
+ * > **One definition, four callers.** History, the jump window, Highlights and sync each need
+ * > identical joins, and the second time a `WHERE`/`JOIN` clause is written out is the moment it
+ * > starts diverging silently - failure mode 9, which cost a whole phase when "which channels can
+ * > this user reach" existed in four hand-written copies. Adding a column to a message means
+ * > editing this once.
+ *
+ * Callers add their own `where`, `orderBy` and `limit`, which is all that differs between them.
+ */
+function selectMessages(db: Db) {
+  return db
+    .select(messageColumns)
+    .from(messages)
+    .leftJoin(users, eq(users.id, messages.senderId))
+    .leftJoin(
+      quotedMessage,
+      and(
+        eq(quotedMessage.channelId, messages.channelId),
+        eq(quotedMessage.seq, messages.replyToSeq),
+      ),
+    )
+    .leftJoin(quotedSender, eq(quotedSender.id, quotedMessage.senderId));
+}
 
 function toEnvelope(row: MessageRow): MessageEnvelope {
   return {
@@ -69,6 +134,29 @@ function toEnvelope(row: MessageRow): MessageEnvelope {
     linkedPollId: row.linkedPollId,
     linkedEventId: row.linkedEventId,
     linkedMeetingId: row.linkedMeetingId,
+    /*
+     * The quote, built from the joined row rather than from anything stored on this one.
+     *
+     * `row.quoted.seq` is the null test rather than `row.replyToSeq`, and that ordering matters:
+     * a left join answers null for both "this is not a reply" and "the quoted row is missing",
+     * and in the second case there is nothing to draw either way. The foreign key means the
+     * second case cannot arise, which is what lets one branch cover both.
+     */
+    replyTo:
+      row.quoted.seq === null
+        ? null
+        : {
+            seq: row.quoted.seq,
+            senderId: row.quoted.senderId as string,
+            senderName: row.quoted.senderName,
+            type: row.quoted.type as MessageType,
+            // A tombstone has no body left to quote - `softDeleteMessage` nulls it - so this is
+            // already null there rather than needing to be suppressed.
+            preview: replyPreview(row.quoted.body),
+            mediaId: row.quoted.mediaId,
+            documentName: row.quoted.documentName,
+            deleted: row.quoted.deletedAt !== null,
+          },
     deletedAt: row.deletedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };
@@ -145,10 +233,7 @@ export async function readHistory(
       ? eq(messages.channelId, channelId)
       : and(eq(messages.channelId, channelId), lt(messages.seq, opts.before));
 
-  const rows = await db
-    .select(messageColumns)
-    .from(messages)
-    .leftJoin(users, eq(users.id, messages.senderId))
+  const rows = await selectMessages(db)
     .where(where)
     // Ordered by seq, never by timestamp. A timestamp is not an ordering: clock skew
     // is real, and timestamps here are for display only.
@@ -185,10 +270,7 @@ export async function readAround(
 }> {
   const span = Math.min(Math.max(radius, 1), 100);
 
-  const rows = await db
-    .select(messageColumns)
-    .from(messages)
-    .leftJoin(users, eq(users.id, messages.senderId))
+  const rows = await selectMessages(db)
     .where(
       and(
         eq(messages.channelId, channelId),
@@ -245,10 +327,7 @@ export async function readHighlights(
   ];
   if (opts.before !== undefined) conditions.push(lt(messages.seq, opts.before));
 
-  const rows = await db
-    .select(messageColumns)
-    .from(messages)
-    .leftJoin(users, eq(users.id, messages.senderId))
+  const rows = await selectMessages(db)
     .where(and(...conditions))
     // Newest first: Highlights is a reference list rather than a conversation, so the most
     // recent pin is the one somebody opening the tab is looking for.
@@ -309,10 +388,7 @@ export async function syncSince(
   sinceSeq: number,
   limit = SYNC_PAGE_SIZE,
 ): Promise<{ messages: MessageEnvelope[]; hasMore: boolean }> {
-  const rows = await db
-    .select(messageColumns)
-    .from(messages)
-    .leftJoin(users, eq(users.id, messages.senderId))
+  const rows = await selectMessages(db)
     .where(and(eq(messages.channelId, channelId), gt(messages.seq, sinceSeq)))
     .orderBy(asc(messages.seq))
     .limit(limit + 1);

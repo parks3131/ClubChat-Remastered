@@ -11,7 +11,12 @@
 
 import { createHash } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
-import type { MessageEnvelope, MessageType } from '@clubchat/shared';
+import {
+  replyPreview,
+  type MessageEnvelope,
+  type MessageReplyRef,
+  type MessageType,
+} from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { messages, outbox, users } from '../db/schema.ts';
 import { isUniqueViolation } from '../db/errors.ts';
@@ -32,6 +37,14 @@ export type AppendMessageInput = {
   mediaId?: string | null | undefined;
   documentName?: string | null | undefined;
   documentSize?: number | null | undefined;
+  /**
+   * The message this one answers, as its seq in the same channel.
+   *
+   * Not validated here: `messages_reply_to_fk` is a composite foreign key on
+   * `(channel_id, reply_to_seq)`, so a seq that does not exist in THIS channel is rejected by
+   * the database rather than by a check this function could forget to make.
+   */
+  replyToSeq?: number | null | undefined;
   /**
    * Extra outbox events to write in the SAME transaction as the message. Used by
    * command handlers that need an effect to be atomic with the message itself.
@@ -80,6 +93,7 @@ export function deriveClientMsgId(scope: string, key: string | number): string {
 function toEnvelope(
   row: typeof messages.$inferSelect,
   sender: SenderIdentity,
+  replyTo: MessageReplyRef | null,
 ): MessageEnvelope {
   return {
     id: row.id,
@@ -106,6 +120,16 @@ function toEnvelope(
     linkedPollId: row.linkedPollId,
     linkedEventId: row.linkedEventId,
     linkedMeetingId: row.linkedMeetingId,
+    /*
+     * Resolved by the caller, not left null for the client to fill in.
+     *
+     * This envelope is what `msg.new` carries to everybody else in the channel, so a null here
+     * would deliver a reply that draws no quote until that client happens to re-sync the row -
+     * which `syncChannel` never does, because it pulls strictly above the local max. That is
+     * the same defect `mediaId` and `linkedPollId` each shipped with: a field stored on the
+     * message and never put on the wire.
+     */
+    replyTo,
     deletedAt: row.deletedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };
@@ -113,6 +137,51 @@ function toEnvelope(
 
 /** Who the envelope says sent it: the name to print and the picture to draw. */
 type SenderIdentity = { name: string | null; image: string | null };
+
+/**
+ * The quote to hang on a reply's envelope, read from the message it answers.
+ *
+ * Read OUTSIDE the sequence-allocating transaction for the same reason `senderIdentityOf` is:
+ * that transaction holds the channel's row lock until commit, and nothing gets added to it.
+ *
+ * Null when there is no reply, and null when the quoted row cannot be found - which the
+ * foreign key makes impossible for a row that is about to be inserted, so this is the
+ * belt-and-braces branch rather than a case with behaviour.
+ */
+async function replyRefOf(
+  db: Db,
+  channelId: string,
+  replyToSeq: number | null | undefined,
+): Promise<MessageReplyRef | null> {
+  if (replyToSeq === null || replyToSeq === undefined) return null;
+  const rows = await db
+    .select({
+      seq: messages.seq,
+      senderId: messages.senderId,
+      senderName: users.name,
+      type: messages.type,
+      body: messages.body,
+      mediaId: messages.mediaId,
+      documentName: messages.documentName,
+      deletedAt: messages.deletedAt,
+    })
+    .from(messages)
+    .leftJoin(users, eq(users.id, messages.senderId))
+    .where(and(eq(messages.channelId, channelId), eq(messages.seq, replyToSeq)))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    seq: row.seq,
+    senderId: row.senderId,
+    senderName: row.senderName,
+    type: row.type as MessageType,
+    preview: replyPreview(row.body),
+    mediaId: row.mediaId,
+    documentName: row.documentName,
+    deleted: row.deletedAt !== null,
+  };
+}
 
 /**
  * The sender's current display name and picture, for the envelope.
@@ -154,7 +223,10 @@ async function findByIdempotencyKey(
     )
     .limit(1);
   const row = found[0];
-  return row ? toEnvelope(row, sender) : null;
+  if (!row) return null;
+  // From the STORED row rather than from `input`: a retry is answered with what was actually
+  // written, and the two can differ if a client resends the same id with a different payload.
+  return toEnvelope(row, sender, await replyRefOf(db, row.channelId, row.replyToSeq));
 }
 
 /**
@@ -178,8 +250,9 @@ export async function appendMessage(
   db: Db,
   input: AppendMessageInput,
 ): Promise<AppendMessageResult> {
-  // Resolved once, before the transaction, and used by both paths below.
+  // Both resolved once, before the transaction, and used by both paths below.
   const sender = await senderIdentityOf(db, input.senderId);
+  const replyTo = await replyRefOf(db, input.channelId, input.replyToSeq);
 
   // Fast path. A retry that we can recognise before touching the counter costs one
   // indexed lookup and burns no sequence number.
@@ -223,6 +296,7 @@ export async function appendMessage(
           mediaId: input.mediaId ?? null,
           documentName: input.documentName ?? null,
           documentSize: input.documentSize ?? null,
+          replyToSeq: input.replyToSeq ?? null,
         })
         .returning();
 
@@ -258,7 +332,7 @@ export async function appendMessage(
         })),
       ]);
 
-      return toEnvelope(row, sender);
+      return toEnvelope(row, sender, replyTo);
     });
 
     return { message, deduplicated: false };

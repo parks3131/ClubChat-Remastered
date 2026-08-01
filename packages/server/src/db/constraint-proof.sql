@@ -181,6 +181,56 @@ SELECT pg_temp.assert_rejected(
             '77777777-7777-4777-8777-777777777777')$$);
 
 -- ---------------------------------------------------------------------------
+-- Replies: a quote points at a real message in the SAME channel, said earlier
+-- ---------------------------------------------------------------------------
+
+SELECT pg_temp.assert_accepted(
+  'reply - quoting an earlier message in the same channel',
+  $$INSERT INTO messages (channel_id, seq, sender_id, type, body, client_msg_id, reply_to_seq)
+    VALUES ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 3,
+            '11111111-1111-4111-8111-111111111111', 'text', 'answering the first',
+            '11111111-2222-4333-8444-555555555551', 1)$$);
+
+SELECT pg_temp.assert_rejected(
+  'reply - quoting a seq that does not exist',
+  $$INSERT INTO messages (channel_id, seq, sender_id, type, body, client_msg_id, reply_to_seq)
+    VALUES ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 4,
+            '11111111-1111-4111-8111-111111111111', 'text', 'answering nothing',
+            '11111111-2222-4333-8444-555555555552', 99)$$);
+
+-- The composite foreign key is what makes this impossible, and it is the reason the
+-- reference is (channel_id, seq) rather than a message id. With an id reference this
+-- insert would succeed and the read that draws the quote would have to re-check the
+-- channel itself - the same predicate written in a second place.
+INSERT INTO channels (id, club_id, scope, scope_id) VALUES
+  ('c2c2c2c2-cccc-4ccc-8ccc-cccccccccccc',
+   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'race',
+   'e2e2e2e2-eeee-4eee-8eee-eeeeeeeeeeee');
+
+SELECT pg_temp.assert_rejected(
+  'reply - quoting a message that lives in another channel',
+  $$INSERT INTO messages (channel_id, seq, sender_id, type, body, client_msg_id, reply_to_seq)
+    VALUES ('c2c2c2c2-cccc-4ccc-8ccc-cccccccccccc', 1,
+            '11111111-1111-4111-8111-111111111111', 'text', 'reaching across',
+            '11111111-2222-4333-8444-555555555553', 1)$$);
+
+-- A self-referencing foreign key is satisfied by the row being inserted, so the FK alone
+-- would accept a message quoting itself. The check constraint is what rules it out.
+SELECT pg_temp.assert_rejected(
+  'reply - a message quoting itself',
+  $$INSERT INTO messages (channel_id, seq, sender_id, type, body, client_msg_id, reply_to_seq)
+    VALUES ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 5,
+            '11111111-1111-4111-8111-111111111111', 'text', 'quoting myself',
+            '11111111-2222-4333-8444-555555555554', 5)$$);
+
+SELECT pg_temp.assert_rejected(
+  'reply - quoting a message that has not been said yet',
+  $$INSERT INTO messages (channel_id, seq, sender_id, type, body, client_msg_id, reply_to_seq)
+    VALUES ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 6,
+            '11111111-1111-4111-8111-111111111111', 'text', 'answering the future',
+            '11111111-2222-4333-8444-555555555555', 7)$$);
+
+-- ---------------------------------------------------------------------------
 -- Domain invariant 10: deleting an account anonymises, it does not remove content
 -- ---------------------------------------------------------------------------
 
