@@ -101,6 +101,25 @@ type Row =
     };
 
 /**
+ * Whether a card bubble can be held to open the message menu.
+ *
+ * > **One fact, asked in two places**, and they must never disagree: the bubble attaches the
+ * > gesture, and the card draws a visible dots control only where the gesture is missing. Written
+ * > as two separate platform checks these would eventually drift into a card that can be held AND
+ * > carries a redundant button, or one with neither.
+ *
+ * A card holds its own controls - vote, see voters, View Event - so long-pressing it wraps a
+ * pressable in a pressable, and the platforms resolve that differently. Native negotiates: the
+ * responder system gives the touch to the deepest view that wants it, so a finger on a poll option
+ * votes and never reaches the bubble, while a finger on the card's body does. Web bubbles events
+ * upward regardless, so holding a vote button there would vote AND open the menu.
+ *
+ * So the phone gets the same gesture every other bubble has, and web keeps the dots as its way in.
+ * Verified on both: long press confirmed working on a physical iPhone on 2026-08-01.
+ */
+const CARDS_ARE_LONG_PRESSABLE = Platform.OS !== 'web';
+
+/**
  * How far from the bottom still counts as being AT the bottom, in pixels.
  *
  * Not zero. A list settles a pixel or two short of its own end after a layout pass - measured at
@@ -792,25 +811,12 @@ const MessageRow = memo(function MessageRow({
         // every bubble would be noise. Own messages are excluded because nobody can
         // report themselves.
         //
-        // > **A card bubble is long-pressable on native and deliberately not on web**, and
-        // > the split is the honest reading of failure mode 17 rather than a workaround.
-        // > A card holds its own controls - vote, see voters, View Event - so the bubble
-        // > around them wraps a pressable in a pressable, and the two platforms resolve
-        // > that differently:
-        // >
-        // > - **Native negotiates.** The responder system gives the touch to the DEEPEST
-        // >   view that wants it, so a finger on a poll option votes and never reaches
-        // >   this handler, while a finger on the card's own body does. That is exactly
-        // >   the behaviour wanted, for free.
-        // > - **Web bubbles.** The events reach this element on their way up regardless,
-        // >   so holding a vote button for 400ms would vote AND open the menu.
-        //
-        // So web keeps the dots below as its only way in, and a phone gets the same
-        // gesture every other bubble has. Verified on both, not reasoned about: the whole
-        // reason this comment exists is that the first version assumed native behaved like
-        // the web and gave cards no gesture at all.
+        // A card bubble is long-pressable on native and deliberately not on web - the
+        // honest reading of failure mode 17 rather than a workaround. See
+        // `CARDS_ARE_LONG_PRESSABLE` for why the two platforms differ, and note that the
+        // dots below key off the same constant so the two can never disagree.
         onLongPress={
-          cardId !== null && Platform.OS === "web"
+          cardId !== null && !CARDS_ARE_LONG_PRESSABLE
             ? undefined
             : () => {
                 /*
@@ -927,27 +933,36 @@ const MessageRow = memo(function MessageRow({
                 <ChatMeetingCard meetingId={cardId} />
               )}
               {/*
-                The dots stay, even now that a card can be held on native. They are the
-                only way in on web, where the long press is deliberately not attached
-                (see the bubble above), and they are the discoverable one everywhere:
-                v1 draws the same dots in the same corner, and nothing about a card
-                suggests it can be held.
+                The dots, ONLY where the long press is not available - which today means
+                web alone.
+
+                > **They were on every card and are now on almost none**, at the founder's
+                > request once holding a card was confirmed working on the phone: a visible
+                > control doing what the gesture already does is clutter on the one surface
+                > that is actually the product, and it sits in the corner of a card whose
+                > own controls are what the card is for.
+
+                Web keeps them because it has nothing else: the gesture is deliberately not
+                attached there, and without these a card would be the one message in the log
+                nobody could react to, report or reply to.
               */}
-              <Pressable
-                style={styles.cardMenu}
-                onPress={() => onSelect(message.seq)}
-                hitSlop={space.sm}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  mine ? "React to your card" : "React to or report this card"
-                }
-              >
-                <MaterialIcons
-                  name="more-vert"
-                  size={18}
-                  color={mine ? color.onAccent : color.textSecondary}
-                />
-              </Pressable>
+              {!CARDS_ARE_LONG_PRESSABLE && (
+                <Pressable
+                  style={styles.cardMenu}
+                  onPress={() => onSelect(message.seq)}
+                  hitSlop={space.sm}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    mine ? "React to your card" : "React to or report this card"
+                  }
+                >
+                  <MaterialIcons
+                    name="more-vert"
+                    size={18}
+                    color={mine ? color.onAccent : color.textSecondary}
+                  />
+                </Pressable>
+              )}
             </>
           ) : (
             /* A photo may carry a caption, and usually does not. */

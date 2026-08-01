@@ -82,8 +82,17 @@ the two platforms differ:
 - **Web bubbles.** Events reach the wrapper on the way up regardless, so holding a vote button for
   400ms would vote *and* open the menu.
 
-So the gesture is attached everywhere except web, and the dots menu stays as the discoverable
-affordance and as web's only way in.
+So the gesture is attached everywhere except web.
+
+The dots that used to sit in every card's corner are **gone on native**, removed at the founder's
+request once holding a card was confirmed working on a physical iPhone: a visible control doing
+what the gesture already does is clutter, and it sits in the corner of a card whose own controls
+are the reason the card exists. Web keeps them, because the gesture is deliberately not attached
+there and without them a card would be the one message nobody could react to, report or reply to.
+
+Both facts now read from one constant, `CARDS_ARE_LONG_PRESSABLE`. Asked as two separate platform
+checks they would eventually drift into a card that can be held AND carries a redundant button, or
+one with neither.
 
 ### Verification, and the process that nearly reported a lie
 
