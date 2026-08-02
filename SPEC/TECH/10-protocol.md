@@ -4,27 +4,34 @@
 
 Envelope: `{ "t": <type>, "id": <correlation id>, "d": <payload> }`
 
+> **Payload fields are camelCase, and this table said snake_case until 2026-08-02.** The frames
+> are parsed against the Zod schemas in `packages/shared`, so a field spelled the way this
+> document used to spell it is not merely untidy - it is rejected, and the socket answers
+> `auth.err {"code":"malformed"}` before anything else happens. Found by writing a client from
+> this table and watching it fail to connect. The schemas are the contract; this table describes
+> them.
+
 **Client → server**
 
 | Type | Payload | Notes |
 |---|---|---|
-| `auth` | `{ token, device_id, platform }` | First frame. Socket closed if absent within 5s. |
-| `subscribe` | `{ channel_ids: [] }` | **Authorized here, once.** Rejected ids returned in the reply. |
-| `unsubscribe` | `{ channel_ids: [] }` | |
-| `msg.send` | `{ client_msg_id, channel_id, type, body?, media_id?, mentions?, reply_to_seq? }` | `reply_to_seq` is a seq, not an id, and the quote itself is never sent: the server joins it on read, so a sender cannot put words in somebody's mouth. See [Message flows](03-message-flows.md) 6.5. |
-| `msg.read` | `{ channel_id, up_to_seq }` | Advances the read cursor. |
+| `auth` | `{ token, deviceId, platform }` | First frame. Socket closed if absent within 5s. |
+| `subscribe` | `{ channelIds: [] }` | **Authorized here, once.** Rejected ids returned in the reply. |
+| `unsubscribe` | `{ channelIds: [] }` | |
+| `msg.send` | `{ clientMsgId, channelId, type, body?, mediaId?, mentions?, replyToSeq? }` | `replyToSeq` is a seq, not an id, and the quote itself is never sent: the server joins it on read, so a sender cannot put words in somebody's mouth. See [Message flows](03-message-flows.md) 6.5. |
+| `msg.read` | `{ channelId, upToSeq }` | Advances the read cursor. |
 | `ping` | `{}` | Every 30s. |
 
 **Server → client**
 
 | Type | Payload | Notes |
 |---|---|---|
-| `auth.ok` | `{ session_id, server_time, channels: [{id, last_seq, last_read_seq}] }` | The client immediately knows every channel with a gap. |
-| `auth.err` | `{ code }` | Socket closed. |
-| `msg.ack` | `{ client_msg_id, message_id, seq, created_at }` | **Gap-checked exactly like `msg.new`** - a skipped `seq` here leaves a permanent hole. See [Client architecture](08-client-architecture.md). |
-| `msg.err` | `{ client_msg_id, code }` | `rate_limited`, `forbidden`, `channel_gone`, `malformed`, `media_not_ready` |
+| `auth.ok` | `{ sessionId, userId, displayName, displayImage, serverTime, channels: [{id, scope, clubId, lastSeq, lastReadSeq}] }` | The client immediately knows every channel with a gap. `displayName` and `displayImage` ride here rather than on every ack, because neither can change for the life of the connection and the client needs both to draw its own optimistic bubble. |
+| `auth.err` | `{ code }` | Socket closed. `invalid_token`, `expired_token`, `signin_blocked`, `timeout`, `malformed`. |
+| `msg.ack` | `{ clientMsgId, messageId, channelId, seq, createdAt }` | **Gap-checked exactly like `msg.new`** - a skipped `seq` here leaves a permanent hole. See [Client architecture](08-client-architecture.md). |
+| `msg.err` | `{ clientMsgId, code }` | `rate_limited`, `forbidden`, `channel_gone`, `malformed`, `media_not_ready` |
 | `msg.new` | full message envelope incl. `seq`, `reactions` and a resolved `reply_to` | Append if `seq == local_max + 1`, else sync. Reactions ride on the envelope so they survive offline with the message ([ADR-0017](../decisions/0017-reactions-travel-on-the-message-envelope.md)). `reply_to` is resolved here rather than left as a seq, for the same reason: the cache has to be able to draw the quote with no network. |
-| `msg.update` | `{ channel_id, seq, pinned?, deleted_at?, reactions? }` | **Reactions are the FULL set, never a delta.** Only the fields that changed are present, and an absent field is distinct from an explicit `null`. Declared from Phase 0 and had no producer at all until reactions arrived in Phase 3.5 - pins and tombstones now travel on it too. Deliberately **not** gap-checked: an update names an existing `seq` rather than extending the log, so it can neither create nor reveal a hole. See [ADR-0017](../decisions/0017-reactions-travel-on-the-message-envelope.md). **An update missed while disconnected is missed permanently** - sync pulls strictly above the local max and never re-reads a cached row. Item 14 of [the roadmap](../PRD/17-roadmap-and-open-questions.md). |
+| `msg.update` | `{ channelId, seq, pinned?, deletedAt?, reactions? }` | **Reactions are the FULL set, never a delta.** Only the fields that changed are present, and an absent field is distinct from an explicit `null`. Declared from Phase 0 and had no producer at all until reactions arrived in Phase 3.5 - pins and tombstones now travel on it too. Deliberately **not** gap-checked: an update names an existing `seq` rather than extending the log, so it can neither create nor reveal a hole. See [ADR-0017](../decisions/0017-reactions-travel-on-the-message-envelope.md). **An update missed while disconnected is missed permanently** - sync pulls strictly above the local max and never re-reads a cached row. Item 14 of [the roadmap](../PRD/17-roadmap-and-open-questions.md). |
 | `notif.new` | `{ notification }` | Drives the badge live. |
 | `pong` | `{}` | |
 
@@ -77,6 +84,7 @@ GET    /users/:id                            ← profile card; dob withheld from
 PATCH  /me/profile                           ← self only; there is deliberately no PATCH /users/:id
 DELETE /me                                   ← anonymize + block future sign-in; 409 while they own a club
 
+GET    /conversations                        ← the chat list: club chats + DMs, newest first
 GET    /sync?channels[]={id}:{since_seq}     ← the reconnect / foreground path
 GET    /channels/:id/messages?before={seq}&limit=40
 GET    /channels/:id/messages/around?around={seq}&radius=20   ← jump-to-message window
@@ -174,6 +182,13 @@ POST   /devices                              ← register push token
 > date, tapping the avatar sends nothing but a picture - so an omitted field means "not mine to
 > touch". Merged, an avatar upload would be indistinguishable from a form that cleared the name.
 > `PATCH /eboards/:id` and `PATCH /clubs/:id` follow the identity rule, not the form rule.
+
+> **`/conversations` and `/channels` are not the same read, and the names are close enough to
+> matter.** `/channels` is sync state - ids, scopes and sequence numbers for the client's gap
+> arithmetic, carrying nothing a person reads. `/conversations` is the chat list: names,
+> pictures, unread counts and the last thing said in each, for club and DM scopes only
+> ([Screen map](../PRD/15-screen-map.md)). Both scope themselves with the same access predicate,
+> so neither can drift from the other about who may see what.
 
 Every mutation returns the created/updated resource - legal and trivial now, and the direct
 counter-example to [Engineering pitfalls](14-engineering-pitfalls.md) 1.

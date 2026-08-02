@@ -17,6 +17,15 @@ should be refused on those grounds.
 
 1. **A DM exists only between members who share at least one club.** Discovery is a search over
    people the viewer already shares a club with. There is no global user search.
+
+   **A search result opens that person's profile, and the conversation starts from a Send
+   message action there** *(2026-08-02)*. Two reasons, and the second is the load-bearing one:
+   looking somebody up should show you who they are rather than committing you to a thread with
+   them, and it puts "message this person" in **one** place - so reaching a profile from a
+   roster, from an avatar in chat or from the search offers the same action rather than three
+   screens each growing their own. The action is absent on your own profile, since a
+   conversation with yourself is refused anyway; every other refusal is only knowable by asking,
+   so it surfaces after the tap.
 2. **There is exactly one thread per pair of people, ever** - not one per shared club. Two
    people in three clubs together have one conversation.
 3. **Losing the last shared club makes the thread read-only**, it does not delete it. History

@@ -725,7 +725,15 @@ export function Tabs<T extends string>({
   variant = 'segmented',
 }: {
   tabs: ReadonlyArray<{ key: T; label: string }>;
-  active: T;
+  /**
+   * The selected tab, or **null for none**.
+   *
+   * Null exists for the chat list's filter chips, where "no filter" is the resting state rather
+   * than a fourth chip called All - which is what the design shows and what stops the landing
+   * screen ever being an empty list. Every other caller passes a real key and is unaffected,
+   * since `T` is assignable to `T | null`.
+   */
+  active: T | null;
   onChange: (key: T) => void;
   variant?: 'segmented' | 'pill';
 }) {

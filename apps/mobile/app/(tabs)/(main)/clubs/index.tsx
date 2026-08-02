@@ -1,276 +1,375 @@
 /**
- * The Clubs destination.
+ * The Chats destination: every conversation in one list.
  *
- * The list, plus the two ways in that `PRD/04` names: create, and join. Joining is by **search or
- * link only** - there is no screen anywhere that asks for a typed invite code (ADR-0010), and that
- * absence is a requirement rather than an omission.
+ * **This replaced the My Clubs list on 2026-08-02.** The landing screen used to be a roster of
+ * clubs, which meant the two things a member actually opens the app for - a club's chat and a
+ * direct message - lived on different screens, one of them two taps down and the other behind a
+ * button at the bottom of a list. Now they are one list ordered by what happened most recently,
+ * which is the shape every chat app has converged on for the same reason.
  *
- * A row opens the club **hub**, not its chat. That is a change from the previous version, which
- * jumped straight into the main channel: the hub is where News, races, the Eboard space and the
- * calendar are reached from, and `PRD/15` puts News and Highlights as its first row.
+ * Three rules this screen exists to hold:
+ *
+ *  1. **No filter is the resting state.** The chips narrow the list; none of them is selected on
+ *     arrival. Landing on Unread would mean opening the app to an empty screen on every day you
+ *     are caught up, which is most days, and an empty list reads as a broken app rather than as
+ *     good news.
+ *  2. **Club main chats and DMs only.** A race and an Eboard space each have a real channel, and
+ *     both are deliberately absent - see `CONVERSATION_SCOPES` on the server. Their unread still
+ *     reaches the member through the Notifications inbox and the badge.
+ *  3. **A club row opens that club's hub; a DM row opens the conversation.** The two differ
+ *     because the destinations differ: a DM *is* a conversation and has nowhere else to go, while
+ *     a club is a place with a chat in it - plus News, races, the Eboard space and the calendar -
+ *     and landing straight in its chat puts the rest of the club a back-press behind you.
+ *
+ *     The cost is that a club row previews a message and then opens something that is not that
+ *     conversation, which is a real inconsistency and was the argument for opening chat. What
+ *     makes it tolerable is that the hub's own chat row carries the same unread count, so the
+ *     count on this row leads somewhere that repeats it rather than swallowing it.
+ *
+ * The search field filters by NAME and deliberately not by message content. Message search is on
+ * `PRD/17`'s "deliberately deferred" list and stayed there in this change; searching a list you
+ * already hold is a different and much smaller thing than indexing every message in the product.
  */
 
+import { useMemo, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { RemoteImage } from '../../../../src/media-bubble.tsx';
 import { Redirect, useRouter } from 'expo-router';
-import { useClearClub } from '../../../../src/current-space.tsx';
-import { unreadCount, type Club } from '@clubchat/shared';
-import { clubApi } from '../../../../src/api.ts';
+import {
+  conversationSummaryText,
+  type ConversationSummary,
+} from '@clubchat/shared';
+import { channelApi } from '../../../../src/api.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
+import { useClearClub } from '../../../../src/current-space.tsx';
+import { formatConversationTimestamp } from '../../../../src/dates.ts';
 import { color, radius, space, type } from '../../../../src/theme.ts';
-import { DataScreen } from '../../../../src/ui.tsx';
+import { Avatar, DataScreen, EmptyState, SearchField, Tabs } from '../../../../src/ui.tsx';
 import { useLoad } from '../../../../src/use-load.ts';
 
-export default function ClubsScreen() {
+/** The three chips, in the order the design shows them. */
+const FILTERS = [
+  { key: 'unread', label: 'Unread' },
+  { key: 'dms', label: 'DMs' },
+  { key: 'clubs', label: 'Clubs' },
+] as const;
+
+type Filter = (typeof FILTERS)[number]['key'];
+
+/**
+ * Whether a row survives the active filter and the search text.
+ *
+ * A pure function over one row so it can be reasoned about without a screen around it, which is
+ * the rule pitfall 34 exists to enforce - both of chat's marker bugs shipped from list arithmetic
+ * buried in a memo inside a 3,400 line component.
+ */
+export function matchesFilter(
+  row: ConversationSummary,
+  filter: Filter | null,
+  query: string,
+): boolean {
+  const trimmed = query.trim().toLowerCase();
+  if (trimmed.length > 0 && !row.name.toLowerCase().includes(trimmed)) return false;
+
+  switch (filter) {
+    case 'unread':
+      return row.unread > 0;
+    case 'dms':
+      return row.scope === 'dm';
+    case 'clubs':
+      // Every non-DM scope, so this stays correct if races are ever added to the list rather
+      // than silently excluding them from the only chip they could belong to.
+      return row.scope !== 'dm';
+    default:
+      return true;
+  }
+}
+
+/**
+ * Where a row goes.
+ *
+ * A club opens its **hub**, not its chat: a club is a place with a chat in it, and the hub is
+ * where News, the races list, the Eboard space and the calendar are reached from. A DM opens the
+ * conversation, because a DM *is* the conversation.
+ *
+ * Falling back to the channel covers a club row that somehow arrived without its `clubId` -
+ * impossible for the `club` scope, whose `club_id` is `NOT NULL` by a check constraint, but a
+ * navigation that silently does nothing is a worse answer than one that opens the chat.
+ */
+function destinationOf(row: ConversationSummary): string {
+  if (row.scope === 'dm' || row.clubId === null) return `/chat/${row.channelId}`;
+  return `/clubs/${row.clubId}`;
+}
+
+/**
+ * The line under the name: who said it, and what.
+ *
+ * The sender is prefixed even in a DM, which is what the design shows and is right for a reason
+ * beyond matching it - a thread where both people speak reads as a conversation rather than as a
+ * feed of the other person. A card, a photo or a tombstone has no useful prefix, so it gets none.
+ */
+function previewLine(row: ConversationSummary, viewerId: string | null): string {
+  const last = row.lastMessage;
+  const text = conversationSummaryText(last);
+  if (last === null || last.deleted) return text;
+  // A system message narrates itself - "X was added by Y" - so a name in front of it would be
+  // the system actor's, which is not a person and never renders anywhere else in the product.
+  if (last.type === 'system') return text;
+
+  const who = last.senderId === viewerId ? 'You' : (last.senderName ?? 'Deleted member');
+  return `${who}: ${text}`;
+}
+
+export default function ChatsScreen() {
   /*
-   * The one screen that is outside every club, and therefore the ONLY one that clears it.
+   * The one screen outside every club, and therefore the only one that clears it.
    *
    * > **Leaving a club is an act, not a side effect of glancing at another tab.** Calendar,
-   * > Notifications and Profile each used to clear it too, and that broke the Clubs tab's whole
-   * > purpose: stepping across to the Calendar and tapping CLUBS dropped you on this list instead
-   * > of surfacing at the club's front door, which is what rule 2 of the navigation contract
-   * > exists to give you. Worse, it did it inconsistently - the clear and the tab press raced, so
-   * > the same two taps went two different places.
-   *
-   * The rule is now one sentence: you are inside a club until you come here. Which also makes
-   * the club-scoped Calendar possible at all - it follows whichever club you are in.
+   * > Notifications and Profile each used to clear it too, which broke the Clubs tab's whole
+   * > purpose: stepping across to the Calendar and tapping it dropped you on this list instead of
+   * > surfacing at the club's front door.
    */
   useClearClub();
-  const { authState, channels, revision } = useSession();
+  const { authState, revision, userId } = useSession();
   const router = useRouter();
 
-  const load = useLoad(() => clubApi.mine(), [revision]);
+  const [filter, setFilter] = useState<Filter | null>(null);
+  const [query, setQuery] = useState('');
+
+  const load = useLoad(() => channelApi.conversations(), [revision]);
 
   // A guarded screen renders a placeholder in its denied branch, because the redirect lands a
   // frame later and an unguarded render would flash real chrome first.
   if (authState === 'checking') return <View style={styles.flex} />;
   if (authState === 'signed-out') return <Redirect href="/sign-in" />;
 
-  const unreadFor = (channelId: string): number => {
-    const channel = channels.find((entry) => entry.id === channelId);
-    // Computed from the log, never stored. A stored count drifts; this one cannot.
-    return channel ? unreadCount(channel) : 0;
-  };
-
   return (
     <View style={styles.flex}>
-      {/* v1's page header: the title, and one line saying what this screen is for. */}
-      <View style={styles.heading}>
-        <Text style={styles.title}>My Clubs</Text>
-        <Text style={styles.subtitle}>Manage your teams and athletic communities</Text>
+      <View style={styles.header}>
+        <Text style={styles.title}>Chats</Text>
+        <View style={styles.headerActions}>
+          {/*
+            Two actions, and which is which matters. The person+ starts a CONVERSATION with
+            somebody; the plain + joins or creates a CLUB. Both are additive, so neither is
+            styled as the primary.
+          */}
+          <Pressable
+            style={styles.headerButton}
+            onPress={() => router.push('/dm/new')}
+            accessibilityRole="button"
+            accessibilityLabel="Message someone"
+            hitSlop={space.xs}
+          >
+            <MaterialIcons name="person-add-alt" size={22} color={color.accent} />
+          </Pressable>
+          <Pressable
+            style={styles.headerButton}
+            onPress={() => router.push('/clubs/add')}
+            accessibilityRole="button"
+            accessibilityLabel="Join or create a club"
+            hitSlop={space.xs}
+          >
+            <MaterialIcons name="add" size={24} color={color.accent} />
+          </Pressable>
+        </View>
       </View>
 
-      {/*
-        The two ways in, side by side and equally weighted. Create is filled and Join is outlined,
-        which is the only hierarchy between them - both are first-class, and a member with no clubs
-        needs whichever one matches how they heard about the club.
-      */}
-      <View style={styles.actions}>
-        <Pressable
-          style={styles.primaryButton}
-          onPress={() => router.push('/clubs/create')}
-          accessibilityRole="button"
-          accessibilityLabel="Create a club"
-        >
-          <MaterialIcons name="add-circle" size={18} color={color.onAccent} />
-          <Text style={styles.primaryButtonText}>Create a Club</Text>
-        </Pressable>
-        <Pressable
-          style={styles.secondaryButton}
-          onPress={() => router.push('/clubs/join')}
-          accessibilityRole="button"
-          accessibilityLabel="Join a club"
-        >
-          <MaterialIcons name="explore" size={18} color={color.accent} />
-          <Text style={styles.secondaryButtonText}>Join a Club</Text>
-        </Pressable>
+      <View style={styles.controls}>
+        <SearchField value={query} onChangeText={setQuery} placeholder="Search chats" />
+        <Tabs
+          tabs={FILTERS}
+          active={filter}
+          variant="pill"
+          // Tapping the active chip clears it, so getting back to "everything" needs no fourth
+          // chip and no second gesture to learn.
+          onChange={(key) => setFilter((current) => (current === key ? null : key))}
+        />
       </View>
 
       <DataScreen load={load}>
-        {(data) => (
-          <FlatList<Club>
-            data={data.clubs}
-            keyExtractor={(club) => club.id}
-            contentContainerStyle={styles.list}
-            refreshControl={
-              <RefreshControl
-                refreshing={load.state === 'loading'}
-                onRefresh={load.reload}
-                tintColor={color.accent}
-              />
-            }
-            ListEmptyComponent={
-              <View style={styles.empty}>
-                <MaterialIcons name="groups" size={48} color={color.border} />
-                <Text style={styles.emptyTitle}>No clubs yet?</Text>
-                <Text style={styles.emptyBody}>
-                  Every champion needs a team. Join an existing club or lead your own squad to
-                  victory.
-                </Text>
-                <Pressable
-                  style={styles.primaryButton}
-                  onPress={() => router.push('/clubs/create')}
-                  accessibilityRole="button"
-                  accessibilityLabel="Create your first club"
-                >
-                  <Text style={styles.primaryButtonText}>Create your first club</Text>
-                </Pressable>
-              </View>
-            }
-            renderItem={({ item }) => {
-              const unread = unreadFor(item.mainChannelId);
-              const isAdminTier = item.role === 'owner' || item.role === 'admin';
-              return (
-                <Pressable
-                  style={styles.clubRow}
-                  onPress={() => router.push(`/clubs/${item.id}`)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Open ${item.name}, ${item.role}`}
-                >
-                  <View style={styles.clubRowLeft}>
-                    {item.image === null ? (
-                      <View style={styles.clubAvatar}>
-                        <Text style={styles.clubAvatarInitial}>
-                          {item.name.charAt(0).toUpperCase()}
-                        </Text>
-                      </View>
-                    ) : (
-                      <RemoteImage
-                        mediaId={item.image}
-                        variant="thumb"
-                        style={styles.clubAvatar}
-                        resizeMode="cover"
-                      />
-                    )}
-                    <View style={styles.clubRowText}>
-                      <Text style={styles.clubName} numberOfLines={1}>
-                        {item.name}
-                      </Text>
-                      <Text style={styles.clubSport}>{item.sport}</Text>
-                    </View>
-                  </View>
-                  <View style={styles.clubRowRight}>
-                    {/* Only when there IS unread. A zero badge is noise. */}
-                    {unread > 0 && (
-                      <Text style={styles.unreadBadge}>{unread > 99 ? '99+' : unread}</Text>
-                    )}
-                    {/* Role badges are visible, so authority is never guessed. */}
-                    <Text
-                      style={[
-                        styles.roleBadge,
-                        isAdminTier ? styles.roleBadgeAdmin : styles.roleBadgeMember,
-                      ]}
-                    >
-                      {item.role === 'owner' ? 'Owner' : item.role === 'admin' ? 'Admin' : 'Member'}
-                    </Text>
-                    <MaterialIcons name="chevron-right" size={22} color={color.textSecondary} />
-                  </View>
-                </Pressable>
-              );
-            }}
-          />
-        )}
+        {(data) => {
+          const rows = data.conversations.filter((row) => matchesFilter(row, filter, query));
+          return (
+            <FlatList<ConversationSummary>
+              data={rows}
+              keyExtractor={(row) => row.channelId}
+              contentContainerStyle={styles.list}
+              refreshControl={
+                <RefreshControl
+                  refreshing={load.state === 'loading'}
+                  onRefresh={load.reload}
+                  tintColor={color.accent}
+                />
+              }
+              ListEmptyComponent={
+                <EmptyState
+                  title={emptyTitle(filter, query, data.conversations.length)}
+                  body={emptyBody(filter, query, data.conversations.length)}
+                />
+              }
+              renderItem={({ item }) => (
+                <ConversationRow
+                  row={item}
+                  viewerId={userId}
+                  onPress={() => router.push(destinationOf(item))}
+                />
+              )}
+            />
+          );
+        }}
       </DataScreen>
     </View>
   );
 }
 
+/**
+ * The empty state, which says which of three different things happened.
+ *
+ * "No chats yet" under an active Unread filter would be a lie - there are chats, you have read
+ * them all. `PRD/16` rule 2 asks an empty list to tell the truth rather than be blank, and the
+ * truth here is not one sentence.
+ */
+function emptyTitle(filter: Filter | null, query: string, total: number): string {
+  if (query.trim().length > 0) return 'No chats match that';
+  if (total === 0) return 'No chats yet';
+  if (filter === 'unread') return "You're all caught up";
+  if (filter === 'dms') return 'No direct messages yet';
+  return 'No club chats yet';
+}
+
+function emptyBody(filter: Filter | null, query: string, total: number): string | undefined {
+  if (query.trim().length > 0) return undefined;
+  if (total === 0) return 'Join or create a club to get started, or message someone you know.';
+  if (filter === 'unread') return 'Everything here has been read.';
+  if (filter === 'dms') return 'Tap the person icon above to message someone from your clubs.';
+  return undefined;
+}
+
+function ConversationRow({
+  row,
+  viewerId,
+  onPress,
+}: {
+  row: ConversationSummary;
+  viewerId: string | null;
+  onPress: () => void;
+}) {
+  const unread = row.unread > 0;
+  const timestamp = useMemo(
+    () =>
+      row.lastMessage === null ? '' : formatConversationTimestamp(row.lastMessage.createdAt),
+    [row.lastMessage],
+  );
+
+  return (
+    <Pressable
+      style={[styles.row, unread && styles.rowUnread]}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={
+        unread
+          ? `${row.name}, ${row.unread} unread ${row.unread === 1 ? 'message' : 'messages'}`
+          : row.name
+      }
+    >
+      <Avatar name={row.name} image={row.image} size={52} />
+
+      <View style={styles.rowText}>
+        <View style={styles.rowTopLine}>
+          <Text style={[styles.name, unread && styles.nameUnread]} numberOfLines={1}>
+            {row.name}
+          </Text>
+          <Text style={[styles.timestamp, unread && styles.timestampUnread]}>{timestamp}</Text>
+        </View>
+
+        <View style={styles.rowBottomLine}>
+          <Text style={[styles.preview, unread && styles.previewUnread]} numberOfLines={1}>
+            {previewLine(row, viewerId)}
+          </Text>
+
+          {/* Mute is about the buzz, not the count, so a muted row can still be unread. */}
+          {row.muted && (
+            <MaterialIcons
+              name="notifications-off"
+              size={14}
+              color={color.textSecondary}
+              accessibilityLabel="Muted"
+            />
+          )}
+          {/*
+            A DM that went read-only stays in the list and says so. Blocking and losing the last
+            shared club both leave history readable, so the row is not removed.
+          */}
+          {!row.canPost && row.scope === 'dm' && <Text style={styles.readOnly}>READ ONLY</Text>}
+          {unread && (
+            <View style={styles.unreadBadge}>
+              <Text style={styles.unreadLabel}>{row.unread > 99 ? '99+' : row.unread}</Text>
+            </View>
+          )}
+        </View>
+      </View>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: color.appBackground, padding: space.md },
+  flex: { flex: 1, backgroundColor: color.appBackground },
 
-  heading: { marginBottom: space.md },
-  title: { ...type.title, color: color.textPrimary },
-  subtitle: {
-    ...type.label,
-    color: color.textSecondary,
-    marginTop: space.xs,
-    textTransform: 'none',
-  },
-
-  actions: { flexDirection: 'row', gap: space.sm, marginBottom: space.md },
-  primaryButton: {
-    flex: 1,
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: space.xs,
-    backgroundColor: color.accent,
-    borderRadius: radius.pill,
-    paddingVertical: space.sm + 4,
-  },
-  primaryButtonText: { ...type.label, color: color.onAccent, textTransform: 'uppercase' },
-  secondaryButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: space.xs,
-    // A 2px edge, not a hairline: this is a peer of the filled button, not a quiet control.
-    borderWidth: 2,
-    borderColor: color.accent,
-    borderRadius: radius.pill,
-    paddingVertical: space.sm + 4,
-  },
-  secondaryButtonText: { ...type.label, color: color.accent, textTransform: 'uppercase' },
-
-  list: { gap: space.sm, paddingBottom: space.lg },
-  clubRow: {
-    flexDirection: 'row',
     justifyContent: 'space-between',
+    paddingHorizontal: space.md,
+    paddingTop: space.sm,
+  },
+  title: { ...type.title, color: color.textPrimary },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
+  headerButton: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.pill,
     alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: color.cardSunken,
+  },
+
+  controls: { paddingHorizontal: space.md, paddingTop: space.sm, gap: space.sm },
+
+  list: { padding: space.md, gap: space.xs, paddingBottom: space.lg },
+
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
     backgroundColor: color.card,
     borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.hairline,
-    padding: space.md,
+    paddingVertical: space.sm + 2,
+    paddingHorizontal: space.md,
   },
-  clubRowLeft: { flexDirection: 'row', alignItems: 'center', gap: space.md, flex: 1 },
-  clubRowText: { flex: 1 },
-  // Larger than the avatar anywhere else in the app: a club is the biggest thing in the product,
-  // and this list is the first screen anybody sees.
-  clubAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: color.cardSunken,
+  // Tinted rather than badged-in-the-corner, so unread is legible at a glance down a long list.
+  rowUnread: { backgroundColor: color.accentSoft },
+
+  rowText: { flex: 1, gap: 2 },
+  rowTopLine: { flexDirection: 'row', alignItems: 'baseline', gap: space.sm },
+  name: { ...type.headline, fontSize: 17, color: color.textPrimary, flex: 1 },
+  nameUnread: { color: color.textPrimary },
+  timestamp: { ...type.label, fontSize: 11, color: color.textSecondary, textTransform: 'none' },
+  timestampUnread: { color: color.onAccentSoft },
+
+  rowBottomLine: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
+  preview: { ...type.bodySmall, color: color.textSecondary, flex: 1 },
+  // Full strength when unread, secondary when read - the same contrast the inbox uses.
+  previewUnread: { color: color.textPrimary },
+
+  readOnly: { ...type.label, fontSize: 10, color: color.secondary },
+  unreadBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: radius.pill,
+    backgroundColor: color.error,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  clubAvatarInitial: { ...type.title, fontSize: 20, lineHeight: 26, color: color.accent },
-  clubName: { ...type.headline, fontSize: 17, color: color.textPrimary },
-  clubSport: { ...type.label, color: color.onSecondaryContainer, marginTop: 2, textTransform: 'none' },
-  clubRowRight: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  roleBadge: {
-    ...type.label,
-    borderRadius: radius.pill,
-    paddingHorizontal: space.sm,
-    paddingVertical: 4,
-    textTransform: 'none',
-    overflow: 'hidden',
-  },
-  roleBadgeAdmin: { backgroundColor: color.accentSoft, color: color.onAccentSoft },
-  roleBadgeMember: { backgroundColor: color.fallback, color: color.textSecondary },
-  unreadBadge: {
-    ...type.label,
-    fontSize: 10,
-    minWidth: 20,
-    textAlign: 'center',
-    borderRadius: radius.pill,
     paddingHorizontal: space.xs,
-    paddingVertical: 2,
-    backgroundColor: color.error,
-    color: color.onAccent,
-    overflow: 'hidden',
   },
-
-  empty: { alignItems: 'center', marginTop: 60, gap: space.sm, paddingHorizontal: space.md },
-  emptyTitle: { ...type.title, fontSize: 20, lineHeight: 26, color: color.textPrimary },
-  emptyBody: {
-    ...type.body,
-    color: color.textSecondary,
-    textAlign: 'center',
-    maxWidth: 280,
-  },
-
+  unreadLabel: { ...type.label, fontSize: 10, color: color.onAccent },
 });

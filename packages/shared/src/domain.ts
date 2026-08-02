@@ -409,6 +409,118 @@ export const Club = z.object({
 });
 export type Club = z.infer<typeof Club>;
 
+/** How much of a message body a conversation row can show. Shorter than a quote box. */
+export const CONVERSATION_PREVIEW_CHARS = 80;
+
+/**
+ * The last thing said in a conversation, as a list row needs it.
+ *
+ * Structured fields rather than a finished sentence, for the reason
+ * [ADR-0013](../../../SPEC/decisions/0013-notifications-store-type-and-params.md) gives about
+ * notifications: the wording is produced where it is read, so it stays localisable and a copy
+ * edit is one function rather than a migration. `conversationPreview` below is that function,
+ * and it lives here so the client cannot render this differently from anywhere else that wants
+ * it later.
+ */
+export const ConversationLastMessage = z.object({
+  seq: z.number().int().positive(),
+  type: MessageType,
+  /**
+   * The body, truncated. **Null for a tombstone**, and null for an attachment with no caption.
+   *
+   * Deletion nulls the column, so there is no stored text for this to resurrect even by
+   * accident - which is the property that matters, since a chat list is exactly where a deleted
+   * message would otherwise keep being quoted long after it vanished from the conversation.
+   */
+  preview: z.string().nullable(),
+  /** Who said it, for the "Name: text" prefix. Null once the account is anonymised. */
+  senderName: z.string().nullable(),
+  senderId: Uuid,
+  documentName: z.string().nullable().default(null),
+  deleted: z.boolean(),
+  createdAt: z.string(),
+});
+export type ConversationLastMessage = z.infer<typeof ConversationLastMessage>;
+
+/**
+ * One row of the unified chat list.
+ *
+ * `scope` is the full `ChannelScope` even though the endpoint currently returns **club and dm
+ * only**. That is deliberate rather than sloppy: the narrowing is a product decision about what
+ * this screen shows, not a fact about the contract, and race and Eboard rows would need no
+ * change here to start appearing. Every non-dm scope navigates identically, so the client's
+ * handling of the wider union costs a line.
+ */
+export const ConversationSummary = z.object({
+  channelId: Uuid,
+  scope: ChannelScope,
+  /** The scope's own name - the club's, or the other participant's in a DM. */
+  name: z.string(),
+  /**
+   * The scope's own picture, and never its parent's as a stand-in.
+   *
+   * Null means "no picture set", and the row draws the initial of `name`. See
+   * `channelDisplayImage` on the server for why this is a CASE on the scope rather than a
+   * COALESCE - a race with no picture of its own once wore its club's face.
+   */
+  image: z.string().nullable().default(null),
+  /** Computed from the log, never stored. */
+  unread: z.number().int().nonnegative(),
+  /** Muted silences the push, not the count, so a muted row can still be unread. */
+  muted: z.boolean(),
+  /** The owning club, for a club row. Null in a DM, which belongs to no club. */
+  clubId: Uuid.nullable().default(null),
+  /** The other participant, for a DM row. Null in every other scope. */
+  otherUserId: Uuid.nullable().default(null),
+  /**
+   * Whether the composer is live there.
+   *
+   * A DM goes read-only when blocked or when the last shared club goes, and **stays in the
+   * list** either way, because both leave history readable.
+   */
+  canPost: z.boolean(),
+  /** Null in a conversation nobody has said anything in yet. */
+  lastMessage: ConversationLastMessage.nullable(),
+});
+export type ConversationSummary = z.infer<typeof ConversationSummary>;
+
+/** Cut a body down to what a conversation row can show. One definition, both sides of the wire. */
+export function conversationPreview(body: string | null): string | null {
+  if (body === null || body.length === 0) return null;
+  return body.length <= CONVERSATION_PREVIEW_CHARS
+    ? body
+    : body.slice(0, CONVERSATION_PREVIEW_CHARS);
+}
+
+/**
+ * What a conversation row says under the name.
+ *
+ * Defined here rather than in the screen so that the one place a message becomes a sentence is
+ * shared, and so it can be tested without rendering anything. Returns the text only - the
+ * sender prefix is the caller's, because a DM and a club row space it differently.
+ */
+export function conversationSummaryText(last: ConversationLastMessage | null): string {
+  if (last === null) return 'No messages yet';
+  if (last.deleted) return 'Message deleted';
+
+  switch (last.type) {
+    case 'photo':
+      // A caption when there is one, because the words are more use than the medium.
+      return last.preview ?? 'Photo';
+    case 'document':
+      return last.documentName ?? 'Document';
+    case 'poll':
+      return last.preview ?? 'Poll';
+    case 'event':
+      return last.preview ?? 'Event';
+    case 'meeting':
+      return last.preview ?? 'Meeting';
+    default:
+      // text, announcement and system all carry their words in the body.
+      return last.preview ?? '';
+  }
+}
+
 /**
  * Unread count for a channel.
  *

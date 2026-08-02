@@ -24,6 +24,7 @@
 import { useState } from 'react';
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -33,7 +34,6 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { File, Paths } from 'expo-file-system';
-import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { resolveMedia } from './api.ts';
@@ -158,7 +158,23 @@ export function PhotoViewer({
 
   const download = () =>
     run('save this photo', async () => {
+      /*
+       * **`expo-media-library` is imported here rather than at the top of the file, and that is
+       * load-bearing rather than tidy.** It has no web implementation, so evaluating the module
+       * throws `Cannot find native module 'ExpoMediaLibraryNext'` - and a static import is
+       * evaluated when the BUNDLE loads, which took the whole web app down with it: a blank
+       * screen on every route, not a broken Download button. That is AGENTS.md failure mode 8
+       * exactly, one package over from the `expo-sqlite` wasm case, and it shipped on
+       * 2026-08-01 because the photo viewer was verified on a device and never in a browser.
+       *
+       * Deferring it means the module is only evaluated when somebody actually taps Download,
+       * by which point the guard below has already sent web callers home.
+       */
+      if (Platform.OS === 'web') {
+        return 'Saving to Photos is not available on the web. Use Share Image instead.';
+      }
       const { file } = await localCopy();
+      const MediaLibrary = await import('expo-media-library');
       // Write-only: this asks for "add to your photos" rather than for the run of the library,
       // which is the whole permission this needs and the smaller thing to ask a member for.
       const permission = await MediaLibrary.requestPermissionsAsync(true);

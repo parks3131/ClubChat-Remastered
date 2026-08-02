@@ -127,14 +127,12 @@ export default function MainStackLayout() {
         as a one-time app masthead rather than a per-screen fixture, which is why no other screen
         in this stack repeats it.
       */}
-      <Stack.Screen
-        name="clubs/index"
-        options={{
-          title: 'ClubChat',
-          headerTitleAlign: 'left',
-          headerShadowVisible: false,
-        }}
-      />
+      {/*
+        The chat list draws its own title and its own two actions in the body, so the stack's
+        header would be a second bar saying the same thing above them. Every other screen in this
+        stack keeps one.
+      */}
+      <Stack.Screen name="clubs/index" options={{ headerShown: false }} />
 
       {/*
         The two ways into a club, as screens rather than as panels inside the list.
@@ -144,18 +142,29 @@ export default function MainStackLayout() {
         that fills the screen IS a screen, and as one it gets the stack's back arrow and a header
         that says which of the two you are looking at.
       */}
+      {/*
+        The chooser between them, which is what the chat list's "+" opens. Its own two options
+        push on top of it, so backing out of Create lands here rather than on the list.
+      */}
+      <Stack.Screen
+        name="clubs/add"
+        options={{
+          title: 'Add a club',
+          headerLeft: () => <BackTo href="/clubs" label="Chats" variant="icon" />,
+        }}
+      />
       <Stack.Screen
         name="clubs/create"
         options={{
           title: 'Create club',
-          headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
+          headerLeft: () => <BackTo href="/clubs/add" label="Add a club" variant="icon" />,
         }}
       />
       <Stack.Screen
         name="clubs/join"
         options={{
           title: 'Join club',
-          headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
+          headerLeft: () => <BackTo href="/clubs/add" label="Add a club" variant="icon" />,
         }}
       />
 
@@ -168,7 +177,18 @@ export default function MainStackLayout() {
         name="dm/index"
         options={{
           title: 'Messages',
-          headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
+          headerLeft: () => <BackTo href="/clubs" label="Chats" variant="icon" />,
+        }}
+      />
+      {/*
+        Finding somebody to message. Its results open a PROFILE rather than a conversation, so
+        the thing that actually starts a DM lives in one place - see the screen's own note.
+      */}
+      <Stack.Screen
+        name="dm/new"
+        options={{
+          title: 'New message',
+          headerLeft: () => <BackTo href="/clubs" label="Chats" variant="icon" />,
         }}
       />
 

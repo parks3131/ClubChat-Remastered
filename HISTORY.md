@@ -13,6 +13,131 @@ Newest first.
 
 ---
 
+## 2026-08-02 - One list instead of two, and a web client that had stopped booting
+
+The founder asked for the landing screen to work the way GroupMe's does: every conversation in
+one list, clubs and DMs together, newest first, with filter chips over the top and the last
+message on each row. Four questions were worth asking before building any of it, and three of
+the four answers narrowed the work rather than widening it.
+
+### What the questions were for
+
+**Search.** The field in the design says "Search chats and messages", and message search is on
+`PRD/17`'s "deliberately deferred - do not fix" list, reaffirmed on 2026-07-30 when a Stitch
+design showing a search screen was deliberately not built. Searching chat *names* is a filter
+over a list already in memory; searching *messages* is a full-text index, an endpoint that scopes
+hits to readable channels, paging, and jump-to-message. Settled at names only, deferral intact.
+
+**Which scopes.** A race and an Eboard space each have a real channel with a real unread count.
+Including them makes the list complete and long; excluding them makes it the conversations
+somebody thinks of as theirs. Settled at club chats and DMs only - and the thing that makes that
+safe is that `readInbox` and `badgeCount` scope themselves with `accessibleChannelPredicate` and
+know nothing about this screen, so race unread still reaches the member through the Notifications
+tab and the badge. Verified rather than assumed before answering.
+
+**Where a club row goes.** GroupMe opens the group chat; a ClubChat club also has a hub carrying
+News, Races, the Eboard space and the calendar. Settled at chat first, on the argument that a row
+previewing a message and then opening something else is a broken tap - then **changed to the hub
+within the hour, on seeing it running**. The argument that won is the one the mockup could not
+show: a club is not a conversation, it is a place with a conversation in it, and opening straight
+into chat puts everything else about the club a back-press behind you. The DM row still opens the
+conversation, because a DM *is* one.
+
+The inconsistency the first decision was avoiding is real and now shipped deliberately: a club row
+shows a message and opens a hub. What keeps it honest is that the hub's chat row carries the same
+unread count, so the number is repeated rather than swallowed - checked before making the change
+rather than assumed.
+
+Worth recording that both answers came from the same person a few minutes apart, and the second
+one is better. **Seeing it beat reasoning about it**, which is this repo's standing lesson about
+bugs and turns out to apply to product decisions too.
+
+**The landing filter.** The founder said both "show them all" and "unread is the entering page",
+which are different screens. Their own screenshot settles it - no chip is highlighted in the
+first image, and the list mixes a club with a DM - and the practical argument is stronger than
+the reference: landing on Unread means opening the app to an empty screen on every day you are
+caught up, which is most days. Settled at no filter, chips optional. The empty state that would
+have been the landing is now only reachable deliberately, and says "You're all caught up".
+
+### The read
+
+`listConversations` is `listDmThreads` generalised from one scope to two, and it is deliberately
+built on `channel-access.ts` rather than on a membership join written out again. That module
+exists because this exact question was restated four times with every copy missing the race
+scope; a fifth copy is the one thing this function must not be. The display-name and
+display-image fragments came with it, so the two traps documented there - the COALESCE order that
+titled every race chat with its club's name, and the CASE-not-COALESCE that dressed a race in its
+club's face - were solved before this screen existed.
+
+Two mutation tests, because a check that cannot fail is worse than no check. Widening
+`CONVERSATION_SCOPES` to all four scopes fails the exclusion test **and** the ordering test.
+Passing the channel id where `canPostInChannel` wants `scope_id` fails exactly one test, with
+`expected false to be true` - a healthy DM reading as read-only, which looks like a permissions
+bug and is a join bug.
+
+### Two defects found on the way, neither of them in this work
+
+**The web client had not booted since 2026-08-01.** `photo-viewer.tsx` statically imports
+`expo-media-library`, which has no web implementation, so evaluating the module throws
+`Cannot find native module 'ExpoMediaLibraryNext'` - and a static import is evaluated when the
+bundle loads. Not a broken Download button: a blank screen on every route, including sign-in.
+That is failure mode 8 exactly, one package over from the `expo-sqlite` wasm case, and it shipped
+because the photo viewer was verified on a device and never in a browser. The import is now
+deferred into the handler behind a `Platform.OS === 'web'` guard that says saving is not a web
+capability. **Note what this cost beyond itself**: for a day, the surface this project does most
+of its verification on was unavailable, and nothing reported it.
+
+**`TECH/10` documented the WebSocket payloads in snake_case and the schemas are camelCase.**
+Found by writing a client straight from the table to seed test data and watching it answer
+`auth.err {"code":"malformed"}` before anything else happened. Harmless while every caller is
+in-repo and imports the schemas; actively misleading to anybody working from the document, which
+is what it is for. Both directions corrected.
+
+### The screens
+
+The chat list replaced the My Clubs list at the same route, so no URL changed. The destination is
+now **Chats**, with `forum` - the icon the vocabulary already assigns to chat, applied to a
+destination that became one, rather than a new meaning invented for it.
+
+Three smaller things, each because the alternative was a forked copy: `Tabs` gained `active:
+T | null` so "no filter" is a real state rather than a fourth chip called All; the row timestamp
+became `formatConversationTimestamp` in `dates.ts` with six tests rather than arithmetic inside a
+list row, per pitfall 34; and `conversationSummaryText` sits in `packages/shared` so a document
+row saying its filename and a tombstone saying "Message deleted" are one function.
+
+`searchDmCandidates` was projecting a name and no picture, so the new-message search would have
+shown letters while the profile one tap later showed a face - the 2026-08-01 avatar class, caught
+by looking rather than by anything failing. Fixed, with a case added to `avatars-on-reads.test.ts`,
+which is shaped around exactly this.
+
+### Verified
+
+752 tests green across the four workspaces (650 server, 52 client, 25 shared, 25 client-core),
+typecheck, `check:runtime` over 61 modules, and the em-dash gate. Then in the running app against
+a real API, gateway, worker and Postgres, with two seeded accounts:
+
+- The list mixes a club chat and a DM, ordered by last activity, with the sender prefixed on each
+  preview - and **no prefix on a system message**, since the sender there is the system actor.
+- Unread rows tint and carry counts (1, 3, 1); the Notifications badge reads 3 alongside.
+- Each chip filters, and tapping the active one clears it. Unread with nothing unread says
+  "You're all caught up" rather than going blank.
+- Search matches case-insensitively on the name.
+- A club row lands on the club hub, with News, the races list, the Eboard space and the calendar
+  where they have always been; the hub's chat row repeats the unread count. A DM row opens the
+  conversation.
+- The person+ search lists only people sharing a club, a result opens their profile, and **Send
+  message** there opens the thread. The new empty conversation then appears at the **top** of the
+  list saying "No messages yet", which is the `COALESCE(last_message, created_at)` sort doing what
+  it was written for.
+- Zero console errors throughout, including on the gallery route that transitively imports the
+  photo viewer.
+
+**Not verified:** the phone rendered the list and called the endpoint, but the screenshots above
+are react-native-web at phone width. The iPhone loaded the new bundle and `/conversations`
+answered 200; nobody has looked at the result on the device itself.
+
+---
+
 ## 2026-08-01 (evening) - A device session: four surfaces, and three bugs that were never going to be found by reading
 
 Everything below came out of one evening on the founder's phone. Worth saying up front, because

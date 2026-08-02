@@ -10,15 +10,24 @@
 import { and, asc, desc, eq, getTableColumns, gt, gte, isNull, lt, lte, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
+  conversationPreview,
   replyPreview,
   type ChannelState,
+  type ConversationSummary,
   type MessageEnvelope,
   type MessageType,
 } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { channels, messages, users } from '../db/schema.ts';
-import type { ChannelRef } from '../policy/predicates.ts';
-import { accessibleChannelPredicate } from './channel-access.ts';
+import { isoUtc } from '../db/sql-helpers.ts';
+import type { AccessContext } from '../policy/context.ts';
+import { canPostInChannel, type ChannelRef } from '../policy/predicates.ts';
+import {
+  accessibleChannelPredicate,
+  channelDisplayImage,
+  channelDisplayName,
+  channelNameJoins,
+} from './channel-access.ts';
 import { mentionsForMessages } from './mentions.ts';
 import { reactionsForMessages } from './reactions.ts';
 
@@ -467,4 +476,145 @@ export async function listClubsForUser(db: Db, userId: string) {
     role: row.role as 'owner' | 'admin' | 'member',
     mainChannelId: row.main_channel_id,
   }));
+}
+
+/**
+ * The scopes the unified chat list shows.
+ *
+ * > **Club main chats and DMs only, and that is a product decision rather than a limit of this
+ * > query.** A race and an Eboard space each have a real channel with a real unread count, and
+ * > both are deliberately left out so the list stays the conversations somebody thinks of as
+ * > theirs rather than one row per space they can reach. Neither disappears: both still produce a
+ * > chat-unread row in the inbox and both still count toward the badge, because `readInbox` and
+ * > `badgeCount` scope themselves with `accessibleChannelPredicate` and know nothing about this
+ * > constant.
+ *
+ * Widening the list to a third scope is this array and nothing else - the select, the joins and
+ * the wire type already cover every scope.
+ */
+const CONVERSATION_SCOPES = ['club', 'dm'] as const;
+
+/**
+ * Every conversation the viewer has, newest activity first.
+ *
+ * This is `listDmThreads` generalised from one scope to several, and it is deliberately built on
+ * the fragments in `channel-access.ts` rather than on a membership join written out here. That
+ * module exists because this exact question - "which channels can this person reach" - had been
+ * restated four times with every copy wrong in the same way, so a fifth copy is the one thing
+ * this function must not be.
+ *
+ * Two joins are worth reading twice:
+ *
+ *  - **The last message is a LATERAL rather than a correlated subquery per column.** One index
+ *    seek per channel on `(channel_id, seq DESC)`, an index that already exists for paging, and
+ *    it yields the whole row so the sender join has something to hang off.
+ *  - **The sender's name is joined, never stored.** Same rule as `MessageRow` above: a rename
+ *    changes every row at once, and an anonymised account reads as null here rather than keeping
+ *    a name the product promised to drop.
+ *
+ * `canPost` comes from the policy module rather than from SQL, because the context already holds
+ * whether a pair shares a club and whether either has blocked the other, and a predicate restated
+ * in SQL is that same failure one layer down.
+ */
+export async function listConversations(
+  db: Db,
+  ctx: AccessContext,
+): Promise<ConversationSummary[]> {
+  const scopes = sql.param([...CONVERSATION_SCOPES]);
+  const result = await db.execute<{
+    channel_id: string;
+    scope: string;
+    scope_id: string;
+    club_id: string | null;
+    name: string;
+    image: string | null;
+    other_user_id: string | null;
+    unread: number;
+    muted: boolean;
+    last_seq: number | null;
+    last_type: string | null;
+    last_body: string | null;
+    last_document_name: string | null;
+    last_deleted: boolean | null;
+    last_sender_id: string | null;
+    last_sender_name: string | null;
+    last_at: string | null;
+  }>(sql`
+    SELECT c.id::text        AS channel_id,
+           c.scope,
+           c.scope_id::text  AS scope_id,
+           c.club_id::text   AS club_id,
+           ${channelDisplayName()}  AS name,
+           ${channelDisplayImage()} AS image,
+           peer.id::text     AS other_user_id,
+           GREATEST(c.last_seq - COALESCE(rc.last_read_seq, 0), 0) AS unread,
+           (mute.user_id IS NOT NULL) AS muted,
+           last.seq             AS last_seq,
+           last.type            AS last_type,
+           last.body            AS last_body,
+           last.document_name   AS last_document_name,
+           (last.deleted_at IS NOT NULL) AS last_deleted,
+           last.sender_id::text AS last_sender_id,
+           sender.full_name     AS last_sender_name,
+           ${isoUtc(sql`last.created_at`)} AS last_at
+      FROM channels c
+      ${channelNameJoins(ctx.userId)}
+      LEFT JOIN read_cursors rc
+             ON rc.channel_id = c.id AND rc.user_id = ${ctx.userId}
+      LEFT JOIN channel_mutes mute
+             ON mute.channel_id = c.id
+            AND mute.user_id = ${ctx.userId}
+            AND (mute.muted_until IS NULL OR mute.muted_until > now())
+      LEFT JOIN LATERAL (
+        SELECT m.seq, m.type, m.body, m.document_name, m.deleted_at, m.sender_id, m.created_at
+          FROM messages m
+         WHERE m.channel_id = c.id
+         ORDER BY m.seq DESC
+         LIMIT 1
+      ) last ON true
+      LEFT JOIN users sender ON sender.id = last.sender_id
+     WHERE c.scope = ANY(${scopes}::text[])
+       AND ${accessibleChannelPredicate(ctx.userId)}
+     -- A conversation nobody has spoken in yet sorts by when it was made, so a DM just opened
+     -- appears at the top rather than below everything ever said.
+     ORDER BY COALESCE(last.created_at, c.created_at) DESC
+  `);
+
+  return result.rows.map((row) => {
+    const scope = row.scope as ConversationSummary['scope'];
+    return {
+      channelId: row.channel_id,
+      scope,
+      name: row.name,
+      image: row.image,
+      clubId: row.club_id,
+      otherUserId: row.other_user_id,
+      unread: Number(row.unread),
+      muted: row.muted,
+      canPost: canPostInChannel(ctx, {
+        id: row.channel_id,
+        scope,
+        clubId: row.club_id,
+        // The channel's own `scope_id`, read from the row rather than reconstructed. For a DM
+        // that is the conversation the predicate looks up in the context's thread map, and
+        // passing the channel id instead would answer "cannot post" for every thread.
+        scopeId: row.scope_id,
+      }),
+      lastMessage:
+        row.last_seq === null
+          ? null
+          : {
+              seq: Number(row.last_seq),
+              type: row.last_type as MessageType,
+              // Null once deleted, because the tombstone nulls the column itself - there is no
+              // stored text here that could leak back into a list.
+              preview: conversationPreview(row.last_body),
+              senderName: row.last_sender_name,
+              senderId: row.last_sender_id ?? '',
+              documentName: row.last_document_name,
+              deleted: row.last_deleted === true,
+              createdAt: row.last_at ?? '',
+            },
+    };
+  });
 }

@@ -164,6 +164,52 @@ describe('a read that names somebody carries their picture', () => {
     expect(candidate.image).toBe(avatar);
   });
 
+  it('puts it on a DM candidate, which is the search that starts a conversation', async () => {
+    const owner = await signUp('DmCandidateOwner');
+    const found = await signUp('DmCandidateFound');
+    const avatar = await setAvatar(found);
+
+    // The pool is people the caller already shares a club with, enforced server-side.
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, found);
+
+    const results = await as(
+      owner,
+      'GET',
+      `/dm/candidates?q=${encodeURIComponent(found.name)}`,
+    );
+    expect(results.status).toBe(200);
+    const candidate = results.body.candidates.find((c: any) => c.userId === found.userId);
+    expect(candidate).toBeDefined();
+    /*
+     * This read feeds the new-message search, whose results open a profile carrying the same
+     * face. A letter placeholder here and a photograph one tap later is the exact discontinuity
+     * this whole suite exists to catch.
+     */
+    expect(candidate.image).toBe(avatar);
+  });
+
+  it('puts it on a conversation row, for both a club and a DM', async () => {
+    const owner = await signUp('ConvAvatarOwner');
+    const peer = await signUp('ConvAvatarPeer');
+    const peerAvatar = await setAvatar(peer);
+
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, peer);
+    await as(owner, 'POST', '/dm/threads', { userId: peer.userId });
+
+    const rows = (await as(owner, 'GET', '/conversations')).body.conversations;
+    const dm = rows.find((r: any) => r.scope === 'dm');
+
+    /*
+     * A DM has no name and no picture of its own - it is two people - so the row wears the OTHER
+     * participant's. Getting this from the club would be the failure `channelDisplayImage`
+     * documents, one scope over.
+     */
+    expect(dm.image).toBe(peerAvatar);
+    expect(dm.name).toBe('ConvAvatarPeer');
+  });
+
   it('puts it on both halves of the car groups read', async () => {
     const owner = await signUp('CarAvatarOwner');
     const seated = await signUp('CarAvatarSeated');

@@ -16,6 +16,7 @@ import { readReactions, toggleReaction } from '../../domain/reactions.ts';
 import {
   advanceReadCursor,
   listAccessibleChannels,
+  listConversations,
   readAround,
   readHighlights,
   readHistory,
@@ -26,6 +27,21 @@ import { authorizeChannel, type AppDeps } from '../plumbing.ts';
 export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
   app.get('/channels', async (request) => ({
     channels: await listAccessibleChannels(deps.db, request.userId!),
+  }));
+
+  /**
+   * The unified chat list: every club chat and every DM, newest activity first.
+   *
+   * Distinct from `/channels` above, which is sync state - ids and sequence numbers for the
+   * client's gap arithmetic, and deliberately nothing a person reads. This one is the landing
+   * screen's read, carrying names, pictures, unread counts and the last thing said.
+   *
+   * Unpaginated, like the roster and the news feed, and bounded by the same thing: how many
+   * clubs somebody belongs to plus how many people they talk to. If that ever stops being small
+   * the cursor goes on `COALESCE(last.created_at, c.created_at)`, which is already the sort key.
+   */
+  app.get('/conversations', async (request) => ({
+    conversations: await listConversations(deps.db, request.access!),
   }));
 
   /**

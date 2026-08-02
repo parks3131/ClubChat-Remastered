@@ -57,4 +57,11 @@ decides what it is being handed from the file extension alone. Object keys carry
 the resolve hop returns the object's `mime` alongside its URL and the client names the file from
 it. The gallery read carries its sender for the same reason the viewer needs a header at all.
 
+**Saving is iOS and Android only.** There is no photo library on the web, so the action there
+says so and points at Share instead. *(Corrected 2026-08-02: the platform module backing it was
+imported at the top of the viewer, and because it has no web build, evaluating it took the
+**entire web bundle** down - a blank screen on every route rather than one unavailable action.
+It is loaded inside the handler now. Same shape as the `expo-sqlite` wasm failure in
+[Engineering pitfalls](../TECH/14-engineering-pitfalls.md).)*
+
 **Not built yet.** Nothing in this section.

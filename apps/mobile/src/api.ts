@@ -13,6 +13,7 @@
 import type {
   Club,
   ClubRole,
+  ConversationSummary,
   JoinPolicy,
   MessageEnvelope,
   MessageReaction,
@@ -110,7 +111,7 @@ export type DmThread = {
   lastMessage: { body: string | null; seq: number; createdAt: string } | null;
 };
 
-export type DmCandidate = { userId: string; name: string };
+export type DmCandidate = { userId: string; name: string; image: string | null };
 
 /**
  * Somebody who could be added to a roster.
@@ -629,6 +630,18 @@ export const accountApi = {
 
 export const channelApi = {
   meta: (channelId: string) => apiFetch<ChannelMeta>(`/channels/${channelId}`),
+
+  /**
+   * The unified chat list: every club chat and every DM, newest activity first.
+   *
+   * Note this is NOT `/channels`, which answers with sync state - ids and sequence numbers for
+   * the client's gap arithmetic, and nothing anybody reads. This one carries names, pictures and
+   * the last thing said, and it is deliberately typed from `@clubchat/shared` rather than
+   * restated here: six defects in two phases came from a hand-written client type disagreeing
+   * with what the server actually returns.
+   */
+  conversations: () =>
+    apiFetch<{ conversations: ConversationSummary[] }>('/conversations'),
 
   /**
    * Report a message, from wherever it is being looked at.

@@ -89,13 +89,16 @@ export async function searchDmCandidates(
   db: Db,
   ctx: AccessContext,
   opts: { query?: string | undefined; limit?: number | undefined } = {},
-): Promise<Array<{ userId: string; name: string }>> {
+): Promise<Array<{ userId: string; name: string; image: string | null }>> {
   const limit = Math.min(opts.limit ?? 25, 100);
   const query = (opts.query ?? '').trim();
   const blocked = [...ctx.blockedEither];
 
-  const rows = await db.execute<{ id: string; full_name: string }>(sql`
-    SELECT DISTINCT u.id::text AS id, u.full_name
+  const rows = await db.execute<{ id: string; full_name: string; image: string | null }>(sql`
+    -- The picture rides along with the name. Every read that returns one has to project the
+    -- other, or the member wears a letter placeholder in this one list while carrying their face
+    -- everywhere else - which is precisely what nine reads did until 2026-08-01.
+    SELECT DISTINCT u.id::text AS id, u.full_name, u.image
       FROM users u
       JOIN club_memberships theirs ON theirs.user_id = u.id
      WHERE theirs.club_id IN (SELECT club_id FROM club_memberships WHERE user_id = ${ctx.userId})
@@ -110,7 +113,11 @@ export async function searchDmCandidates(
      LIMIT ${limit}
   `);
 
-  return rows.rows.map((row) => ({ userId: row.id, name: row.full_name }));
+  return rows.rows.map((row) => ({
+    userId: row.id,
+    name: row.full_name,
+    image: row.image,
+  }));
 }
 
 // ---------------------------------------------------------------------------

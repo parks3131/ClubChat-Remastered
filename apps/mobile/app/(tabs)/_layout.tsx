@@ -33,9 +33,16 @@ function TabLabel({ label, focused }: { label: string; focused: boolean }) {
   return <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>{label}</Text>;
 }
 
-/** The four icons v1 used for these destinations, kept identical. */
+/**
+ * The four destination icons.
+ *
+ * `forum` rather than v1's `groups` for the first one, because that destination stopped being a
+ * roster of clubs on 2026-08-02 and became the conversation list - clubs and DMs together. The
+ * icon vocabulary already assigns `forum` to chat, so this is the existing meaning applied to the
+ * destination rather than a new one invented for it. The other three are v1's, unchanged.
+ */
 const TAB_ICON = {
-  clubs: 'groups',
+  clubs: 'forum',
   calendar: 'calendar-month',
   notifications: 'notifications',
   profile: 'person',
@@ -129,7 +136,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="(main)"
         options={{
-          title: 'Clubs',
+          title: 'Chats',
           /*
             This tab supplies its OWN headers, from the stack inside it. Without this the tab
             navigator draws a second one above them - a "Clubs" bar stacked on top of every
@@ -138,7 +145,7 @@ export default function TabsLayout() {
           */
           headerShown: false,
           tabBarIcon: ({ focused }) => <TabIcon name="clubs" focused={focused} />,
-          tabBarLabel: ({ focused }) => <TabLabel label="Clubs" focused={focused} />,
+          tabBarLabel: ({ focused }) => <TabLabel label="Chats" focused={focused} />,
         }}
         /*
           The two-stage escape hatch. `PRD/15`:

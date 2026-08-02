@@ -126,6 +126,48 @@ export function formatDaySeparator(dateKey: string, now: Date = new Date()): str
   });
 }
 
+/**
+ * The timestamp on a conversation row: a time today, a weekday this week, a date before that.
+ *
+ * The shape every chat list uses, and the reason it is here rather than in the screen is
+ * AGENTS.md pitfall 34 - **list arithmetic belongs outside the component**. Both bugs in chat's
+ * marker placement shipped because the logic lived in a memo inside a 3,400 line screen, where
+ * the only way to exercise it was to open a chat on a phone and look at it.
+ *
+ * Like `formatDaySeparator`, the day comparisons go through local date KEYS rather than
+ * subtracting milliseconds. "Was this today?" is a question about the reader's calendar, and two
+ * timestamps twenty hours apart can be the same day or two days apart depending on where the
+ * boundary falls.
+ *
+ * The week window is six days back, not seven: at exactly seven days the weekday name would be
+ * today's, so "Sat" would mean either yesterday-week or a moment ago. A date is unambiguous.
+ *
+ * `now` is a parameter so every boundary can be tested rather than waited for.
+ */
+export function formatConversationTimestamp(iso: string, now: Date = new Date()): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const key = toDateKey(date);
+  if (key === toDateKey(now)) {
+    return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  if (key === toDateKey(yesterday)) return 'Yesterday';
+
+  const weekAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+  if (date >= weekAgo) return date.toLocaleDateString(undefined, { weekday: 'short' });
+
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    // The year only when it is not this one, the same rule the day separator uses. A chat list
+    // is read in the present, so "Jul 17" means this July until it does not.
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+  });
+}
+
 /** "5:00 PM". The time of day alone, for an item already filed under its date. */
 export function formatTimeOfDay(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });

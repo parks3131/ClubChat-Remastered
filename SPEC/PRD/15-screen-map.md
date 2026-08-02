@@ -5,16 +5,58 @@ every screen below has a job that must land somewhere.
 
 ### Top level
 
-Four primary destinations: **Clubs**, **Calendar**, **Notifications**, **Profile**. The
+Four primary destinations: **Chats**, **Calendar**, **Notifications**, **Profile**. The
 Notifications destination carries an unread badge.
 
-### Clubs
+*(The first was called **Clubs** and was a list of clubs until 2026-08-02. See below.)*
+
+### Chats - the landing screen
+
+**One list of every conversation, clubs and direct messages together, most recent activity
+first.** This replaced the My Clubs list, because the two things a member opens the app for -
+a club's chat and a direct message - were on different screens, one of them two taps down and
+the other behind a button at the bottom of a list.
+
+1. **The list carries club main chats and DMs, and nothing else.** A race and an Eboard space
+   each have a real channel with a real unread count, and both are deliberately absent: the
+   list is the conversations somebody thinks of as theirs, not one row per space they can
+   reach. Their unread still arrives through the Notifications inbox and the badge.
+2. **Each row shows** the scope's own avatar and name, the last message prefixed with who sent
+   it, and when. A row with unread messages is tinted and carries a count.
+3. **Three filter chips - Unread, DMs, Clubs - and none of them is selected on arrival.**
+   Landing on a filter would mean opening the app to an empty screen on every day the reader is
+   caught up, which is most days, and an empty list reads as a broken app rather than as good
+   news. Tapping the active chip clears it.
+4. **The search field filters by conversation name.** Message content is **not** searched -
+   message search remains deferred ([Roadmap](17-roadmap-and-open-questions.md)) and is a
+   different and much larger feature than filtering a list already on screen.
+5. **A club row opens that club's hub; a DM row opens the conversation.** The asymmetry follows
+   from what the two things are: a DM *is* a conversation and has nowhere else to go, while a
+   club is a place with a chat in it, alongside News, races, the Eboard space and the calendar.
+   Opening a club straight into its chat puts all of that a back-press behind the reader.
+
+   The cost, stated because it is real: a club row previews a message and then opens something
+   that is not that conversation. What keeps it honest is that the hub's own chat row carries the
+   same unread count, so the number on the list row is repeated rather than swallowed.
+
+   *(Shipped opening chat on 2026-08-02 and changed the same day, on seeing it: the hub is the
+   club's front door and the chat list should not bypass it.)*
+6. **Two actions in the header.** A person+ opens the people search that starts a direct
+   message; a plain + opens join-or-create-a-club. Both are additive and neither is styled as
+   the primary.
+7. **The empty state says which of three things happened** - no chats at all, nothing matching
+   the search, or nothing unread - because "No chats yet" under an active Unread filter is a
+   lie.
 
 ```
-Clubs list  (empty state offers Create and Join)
-├─ Create club        (name, sport, description, join policy)
-├─ Join by link      (the deep-link target; no typed-code screen exists)
-└─ Club hub
+Chats  (every club chat and DM, newest first; chips: Unread | DMs | Clubs)
+├─ New message        (person+: search people you share a club with → their profile)
+├─ Add a club         (+: chooser)
+│  ├─ Create club     (name, sport, description, join policy)
+│  └─ Join club       (search by name)
+├─ Join by link       (the deep-link target; no typed-code screen exists)
+├─ DM chat            ← a DM row opens HERE
+└─ Club hub           ← a club row opens HERE, not its chat
    ├─ News and Highlights        ← first row; the club's front page
    │  └─ Create / edit post      (admin)
    ├─ Club main chat             ← the centre of gravity
@@ -69,16 +111,27 @@ Eboard chat's header quick-nav: **Members · Meetings · Polls**.
 ### Messages
 
 ```
-Messages list           (thread per person, most recently active first)
-├─ New message          (search over people the viewer shares a club with; no global search)
-└─ DM chat              ← the same chat screen, not a fork
-   ├─ Gallery
-   ├─ Member profile card
-   └─ header options: Mute · Block / Unblock
+New message             (search over people the viewer shares a club with; no global search)
+└─ Member profile       ← a result opens the PROFILE
+   └─ Send message      ← which is where a conversation actually starts
+      └─ DM chat        ← the same chat screen, not a fork
+         ├─ Gallery
+         ├─ Member profile card
+         └─ header options: Mute · Block / Unblock
 ```
 
-**Sibling of Clubs, not nested inside one.** A DM belongs to no club - two people who share three
+**DMs are listed in the Chats destination, alongside club chats**, and are reached by the DMs
+chip rather than by a screen of their own. A DM belongs to no club - two people who share three
 clubs have one conversation - so nesting it under a club would misrepresent the model.
+
+**Starting one goes through the person's profile, and that is deliberate.** A search result
+opens who they are rather than jumping straight into a thread with them, which also means
+"message this person" lives in exactly one place: reaching a profile from a roster, from a chat
+avatar or from the search all offer the same action rather than three different ones.
+
+*(A standalone Messages list still exists. Nothing navigates to it any more except a DM chat's
+back-fallback, which is the only reason it has not been deleted; it is redundant with the DMs
+chip and removing it means giving DM chat a new declared parent.)*
 
 Three things this screen group deliberately does **not** have: a Highlights **Reports** tab
 (there is no admin of the conversation to read it), an announcement or poll action in the "+"
@@ -106,12 +159,15 @@ composer would put two competing bars in the thumb's way. Everywhere else - club
 polls, races, highlights, gallery, calendar - the tab bar stays, so a member is never more than
 one tap from the four destinations. Signed-out screens have no tab bar at all.
 
-> **The remaster currently differs.** Every non-destination screen is a sibling of the tabs group
-> rather than nested inside it, so the tab bar disappears on the club hub, rosters and every list
-> as well as on chat. Matching v1 means those screens move inside the Clubs destination's stack.
+*(The remaster differed here until 2026-07-30, when every non-destination screen moved inside the
+first destination's stack. The tab bar is now present everywhere v1 puts it, and absent only in
+chat.)*
 
-**The masthead.** The word "ClubChat" is a **one-time app masthead on the Clubs landing screen**,
-not a per-screen fixture. Calendar and Notifications carry the same branded header because they
+**The masthead.** ~~The word "ClubChat" is a one-time app masthead on the Clubs landing screen.~~
+**Gone as of 2026-08-02**: that screen became the Chats list, which draws its own "Chats" title
+alongside its two header actions, and a branded bar above it would be a second header saying
+something else. The word survives on sign-in, which is the one screen that has to say what the
+app is. Calendar and Notifications carry the branded header because they
 have no nested stack of their own to host one. Inside a club, the header title is instead the
 club's own avatar and name, **tappable through to the club profile from every screen in the
 club**. Chat and Highlights replace the header entirely with the glass-blur one.
@@ -132,7 +188,7 @@ never "the tab root" and never nothing.
 
 | Screen | Back goes to | | Screen | Back goes to |
 |---|---|---|---|---|
-| Club hub | My Clubs | | Race hub | Races list |
+| Club hub | Chats | | Race hub | Races list |
 | Club chat | Club hub | | **Race chat** | **Races list** |
 | Club Highlights | Club chat | | Race Highlights | Race chat |
 | Club calendar | Club hub | | Race roster | Race hub |
@@ -154,18 +210,18 @@ with no history would bounce hub to chat to hub forever.
 chat it belongs to, and a row inside it jumps into that chat at that message rather than opening a
 sub-page - there is nothing deeper to come back from.
 
-### The Clubs tab is a two-stage escape hatch
+### The Chats tab is a two-stage escape hatch
 
 Not a plain "go to the list" tab. Its meaning depends on whether the viewer is **inside a club**,
 which means anywhere in that club's world - the hub, its chat, Highlights, news, calendar,
 routines, polls, the races list, a race hub, a race chat, the Eboard channel, any of it. Not just
 the hub.
 
-| Where | Tapping CLUBS goes to |
+| Where | Tapping CHATS goes to |
 |---|---|
-| Not inside a club (list, Calendar, Notifications, Profile) | My Clubs |
+| Not inside a club (the list, Calendar, Notifications, Profile) | the Chats list |
 | Inside a club, on any screen except its hub | **that club's hub**, from any depth |
-| Inside a club, already on its hub | My Clubs |
+| Inside a club, already on its hub | the Chats list |
 
 So the whole gesture is: **tap once to surface at the club's front door, tap again to leave it.**
 Never more than two taps to the root from anywhere. The tab carries **no extra visual state** for
@@ -173,17 +229,17 @@ any of this - same icon, same label, same active tint. The behaviour is contextu
 not. The other destinations are plain: each goes to its own root and keeps its own stack.
 
 The "inside a club" signal is set when a club-scoped screen mounts and cleared when it unmounts,
-which is what makes it survive into race and Eboard chat. **A back arrow on the My Clubs list is a
+which is what makes it survive into race and Eboard chat. **A back arrow on the Chats list is a
 bug, not a state** - leaving a club must unwind to the existing root entry rather than stacking a
 second copy of it.
 
 **Two cross-stack jumps override their back arrow entirely**, because popping sends the person
 sideways and then bounces them back:
 
-- A hub reached by the **Clubs tab shortcut** always goes back to My Clubs, whatever history says.
+- A hub reached by the **Chats tab shortcut** always goes back to the Chats list, whatever history says.
   Popping would return them to the deep screen they just escaped, which makes the shortcut useless.
 - A hub reached from a **Profile club chip** goes back to Profile, *and* the jump replaces rather
-  than pushes so the Clubs tab already reads as My Clubs underneath. Otherwise tapping Clubs later
+  than pushes so the Chats tab already reads as the Chats list underneath. Otherwise tapping Chats later
   lands back on that hub whose back bounces to Profile - a live, reproducible loop.
 
 **A screen the viewer may not see redirects to that scope's safe parent** rather than rendering an
@@ -204,7 +260,7 @@ One vocabulary, taken from v1. An icon that means a thing in one place means it 
 
 | Concept | Icon | Concept | Icon |
 |---|---|---|---|
-| Clubs (destination) | `groups` | Calendar (destination) | `calendar-month` |
+| Chats (destination) | `forum` | Calendar (destination) | `calendar-month` |
 | Notifications (destination) | `notifications` | Profile (destination) | `person` |
 | News and Highlights | `auto-awesome` | Club main chat | `forum` |
 | Eboard and Council | `shield` | Race or meet | `flag` |

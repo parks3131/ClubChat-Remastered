@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { formatDaySeparator, toDateKey } from './dates.ts';
+import { formatConversationTimestamp, formatDaySeparator, toDateKey } from './dates.ts';
 
 /** A local date, built from components - never parsed, for the reason at the top of `dates.ts`. */
 const localDate = (year: number, month: number, day: number, hour = 12) =>
@@ -55,5 +55,59 @@ describe('the chat day separator', () => {
     const night = localDate(2026, 8, 1, 22);
     expect(toDateKey(morning)).toBe(toDateKey(night));
     expect(formatDaySeparator(toDateKey(morning), night)).toBe('Today');
+  });
+});
+
+/**
+ * The timestamp on a conversation row.
+ *
+ * Same boundary rules as the separator above, different vocabulary: a chat list says a time for
+ * today and a weekday for this week, because the column is narrow and the reader is scanning it
+ * rather than reading it.
+ */
+describe('the conversation row timestamp', () => {
+  // A Saturday, so the weekday assertions below name real days rather than assumed ones.
+  const now = localDate(2026, 8, 1, 15);
+
+  it('shows a clock time for today', () => {
+    const earlier = localDate(2026, 8, 1, 9);
+    const shown = formatConversationTimestamp(earlier.toISOString(), now);
+    // Locale decides 9:00 AM versus 09:00, so assert the minutes rather than the whole string.
+    expect(shown).toMatch(/9[:.]00/);
+    expect(shown).not.toBe('Yesterday');
+  });
+
+  it('says Yesterday, then names the weekday for the rest of the week', () => {
+    expect(formatConversationTimestamp(localDate(2026, 7, 31, 9).toISOString(), now)).toBe(
+      'Yesterday',
+    );
+    // Four days back is Tuesday 28 July 2026.
+    expect(formatConversationTimestamp(localDate(2026, 7, 28, 9).toISOString(), now)).toBe('Tue');
+  });
+
+  it('falls back to a date once the weekday would be ambiguous', () => {
+    /*
+     * Seven days back is another Saturday, and "Sat" would then mean either a week ago or
+     * today. The window is six days for exactly that reason, so this reads as a date.
+     */
+    const weekAgo = formatConversationTimestamp(localDate(2026, 7, 25, 9).toISOString(), now);
+    expect(weekAgo).not.toBe('Sat');
+    expect(weekAgo).toContain('Jul');
+  });
+
+  it('adds the year only when it is not this one', () => {
+    const thisYear = formatConversationTimestamp(localDate(2026, 3, 2, 9).toISOString(), now);
+    expect(thisYear).toContain('Mar');
+    expect(thisYear).not.toContain('2026');
+
+    const lastYear = formatConversationTimestamp(localDate(2025, 3, 2, 9).toISOString(), now);
+    expect(lastYear).toContain('2025');
+  });
+
+  it('renders nothing rather than "Invalid Date" for a timestamp it cannot read', () => {
+    // A row whose last message somehow arrived without a usable date must not print garbage
+    // across the list. Empty is honest; "Invalid Date" is a bug report shown to a member.
+    expect(formatConversationTimestamp('', now)).toBe('');
+    expect(formatConversationTimestamp('not-a-date', now)).toBe('');
   });
 });

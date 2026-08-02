@@ -339,6 +339,16 @@ that records how to recognise the class._
    Note the shape of the symptom: a screen that spins forever, which is exactly the failure
    `SPEC/PRD/03` warns about and which reads as a crash to whoever is holding the phone.
 
+   **It recurred on 2026-08-02 with `expo-media-library`**, and the second instance earns its
+   place because the trigger differs: not a missing bundler config but a **platform-only native
+   module imported at module scope**. It has no web implementation, so evaluating it throws
+   `Cannot find native module` - at bundle load, which meant one unavailable action blanked every
+   route including sign-in. The web client had been dead for a day and nothing reported it,
+   because the feature it belongs to was verified on a device. **Rule: a native module that only
+   exists on some platforms is imported inside the handler that uses it, behind a platform check,
+   never at the top of the file.** How to recognise the class: the package is in `package.json`,
+   the import resolves, typecheck is clean, and the app renders nothing at all.
+
 9. **A hand-copied SQL predicate does not diverge loudly. It diverges silently, and every copy
    stays individually correct.** Symptom: none, for a whole phase. Race chat existed, had
    messages in it, and was invisible in the channel list, the unread counts, the badge and the
