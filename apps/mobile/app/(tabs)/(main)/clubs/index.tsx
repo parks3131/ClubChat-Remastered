@@ -31,7 +31,7 @@
  * already hold is a different and much smaller thing than indexing every message in the product.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Redirect, useFocusEffect, useRouter } from 'expo-router';
@@ -170,12 +170,29 @@ export default function ChatsScreen() {
    */
   useFocusEffect(
     useCallback(() => {
-      load.reload();
+      // QUIET. Coming back to this screen is not a load, and driving the loader into its loading
+      // state fires the list's refresh spinner every single time - which is what "the chats
+      // reloading again and again, weird and seeable" was.
+      load.refresh();
       // Deliberately not depending on `load` - it is a fresh object every render, and depending
       // on it would refetch in a loop rather than on focus.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   );
+
+  /** A pull, and only a pull, spins the control. A background refresh must look like nothing. */
+  const [pulling, setPulling] = useState(false);
+  const pullToRefresh = () => {
+    setPulling(true);
+    load.reload();
+  };
+  /*
+   * Cleared when the read settles, and it has to be: a flag left true would make the NEXT
+   * background refresh spin, which is the bug this exists to prevent, one refresh later.
+   */
+  useEffect(() => {
+    if (load.state !== 'loading') setPulling(false);
+  }, [load.state]);
 
   const act = async (run: () => Promise<unknown>) => {
     setSheetFor(null);
@@ -246,8 +263,8 @@ export default function ChatsScreen() {
               contentContainerStyle={styles.list}
               refreshControl={
                 <RefreshControl
-                  refreshing={load.state === 'loading'}
-                  onRefresh={load.reload}
+                  refreshing={pulling && load.state === 'loading'}
+                  onRefresh={pullToRefresh}
                   tintColor={color.accent}
                 />
               }

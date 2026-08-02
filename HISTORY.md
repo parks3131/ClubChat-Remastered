@@ -13,6 +13,72 @@ Newest first.
 
 ---
 
+## 2026-08-02 (last, again) - The same bug one row over, a race nobody lost, and a spinner I added
+
+Three more from the phone, and the pattern across all three is that each was a **second instance
+of something already fixed once**. Worth keeping together for that reason rather than for the
+fixes, which are small.
+
+### The split I built for the Eboard and never carried to races
+
+"The message split is not working for the race group." Correct, and it is the identical defect to
+the Eboard one from an hour earlier: a club row totals every channel of the club the viewer can
+reach, races included, and the race rows on the hub showed a pin, a lock and no number. So a
+race's share of the total was real and unfindable.
+
+The galling part is that `unreadForScope` was written **for this**, in the same change, and wired
+to the Eboard row alone. A helper built for two callers and given one is a fix that only looks
+finished, and the tests could not see it because they assert what the server returns rather than
+what a row draws.
+
+Badged per row rather than as a total on the section header, which is a deliberate choice with a
+known hole: the hub previews about five races, so unread in a race outside that preview still
+shows nothing until "See all". Recorded rather than papered over.
+
+### The badge was racing the thing that should have preceded it
+
+"If I click notification and then switch to chat, everything other than unread messages should be
+gone, but it is gone only when I come back to notifications."
+
+Precisely observed, and the mechanism is a race rather than a delay. Leaving the inbox marks it
+read **fire-and-forget**, and the badge re-reads on navigation - which is the same instant. The
+read usually won and fetched the count from before the mark landed, and nothing told it
+afterwards, so it sat wrong until the next navigation. Coming back to the inbox was simply the
+next navigation.
+
+The badge is now told after the write settles, through a `notifyChanged` the session exposes for
+exactly this: an HTTP call that changes notification state server-side raises no socket frame, so
+there is no other door. Doing it beside the write would have been the same race with more steps.
+
+Note the shape it shares with this morning's report of counts not clearing: **the state was
+correct in Postgres both times, and the client never asked again.** Two different bugs, one
+lesson, and the lesson is not about unread arithmetic.
+
+### And a spinner I added this morning
+
+"The chats is getting reloaded again and again when I go inside a club and come out - weird and
+seeable, which kinda creeps." Mine, from the focus refetch added to fix the counts. `useLoad.reload`
+moves the state to `loading`, the list binds its `RefreshControl` to that state, and so returning
+to the screen fired a pull-to-refresh spinner every single time.
+
+`useLoad` gained `refresh()` - read again without announcing a load. A background refresh is not a
+first load and must not claim to be one: the screen keeps its content, and a failed background
+read keeps the last good answer rather than replacing working content with a retry button. The
+spinner is now driven by a flag only an actual pull sets, and cleared when the read settles, since
+a flag left true would make the *next* background refresh spin.
+
+### Verified
+
+770 tests and every gate. Live: a race with two unread badges 2 on the hub while the club row
+reads 6 and splits 3 main + 1 Eboard + 2 race; and leaving the inbox with a real unread
+notification in it dropped the badge from 5 to 4 immediately, the 4 being the chat-unread
+contribution that correctly never clears from that screen.
+
+The spinner fix is verified structurally rather than by watching it - the control is now bound to
+a flag no background path sets - which is the weakest of the three and worth saying.
+
+---
+
 ## 2026-08-02 (last) - Three reports from one screenshot, and a count that told nobody
 
 A photograph of the chat list on a real phone, and three separate faults in it. Worth keeping

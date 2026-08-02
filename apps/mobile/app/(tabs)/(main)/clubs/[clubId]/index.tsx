@@ -69,7 +69,8 @@ export default function ClubHubScreen() {
   const states = useLoad(() => channelApi.states(), [revision]);
   useFocusEffect(
     useCallback(() => {
-      states.reload();
+      // Quiet, for the same reason the chat list is: returning to a screen is not a load.
+      states.refresh();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   );
@@ -207,6 +208,25 @@ export default function ClubHubScreen() {
                         <Text style={styles.raceName} numberOfLines={1}>
                           {race.name}
                         </Text>
+                        {/*
+                          A race's own unread.
+
+                          The club row above totals every channel of the club this member can
+                          reach, races included - so without this a race's share of that number
+                          is real and unfindable, which is exactly the complaint the Eboard badge
+                          fixed one row up. `unreadForScope` was written for that and never
+                          carried across, which is how it happened.
+
+                          Zero for a race with no roster row, because the channel is not in the
+                          reachable set at all: no access, no count, nothing to explain.
+                        */}
+                        {unreadForScope('race', race.id) > 0 && (
+                          <Text style={styles.raceUnread}>
+                            {unreadForScope('race', race.id) > 99
+                              ? '99+'
+                              : unreadForScope('race', race.id)}
+                          </Text>
+                        )}
                         {race.pinned && (
                           <MaterialIcons name="push-pin" size={16} color={color.accent} />
                         )}
@@ -475,6 +495,18 @@ const styles = StyleSheet.create({
   raceInitial: { ...type.headline, fontSize: 17, color: color.accent },
   // Fills the well the initial would sit in, so a race with a picture and one without line up.
   raceAvatarImage: { width: 44, height: 44, borderRadius: radius.pill },
+  raceUnread: {
+    ...type.label,
+    fontSize: 10,
+    minWidth: 20,
+    textAlign: 'center',
+    borderRadius: radius.pill,
+    paddingHorizontal: space.xs,
+    paddingVertical: 2,
+    backgroundColor: color.error,
+    color: color.onAccent,
+    overflow: 'hidden',
+  },
   raceName: { ...type.body, color: color.textPrimary, flex: 1 },
 
   sheetBackdrop: {

@@ -140,7 +140,7 @@ const ICON_BY_TYPE: Readonly<Record<string, IconName>> = {
 type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
 
 export default function NotificationsScreen() {
-  const { authState, revision } = useSession();
+  const { authState, revision, notifyChanged } = useSession();
   const load = useLoad(() => inboxApi.page(), [revision]);
 
   /*
@@ -211,12 +211,24 @@ export default function NotificationsScreen() {
       setExhausted(false);
 
       return () => {
-        void inboxApi.markRead().catch(() => undefined);
+        /*
+         * Mark on the way out, and TELL somebody once it lands.
+         *
+         * The badge re-reads on navigation, which happens at this same instant - so the read
+         * raced this write and usually won, fetching the count from before the mark. The number
+         * then sat wrong until the next navigation, which is why it only appeared to clear on
+         * coming back to this screen. Notifying after the write settles is the whole fix; doing
+         * it beside the write would just be the same race with more steps.
+         */
+        void inboxApi
+          .markRead()
+          .then(() => notifyChanged())
+          .catch(() => undefined);
       };
       // `load.reload` is deliberately not a dependency: it changes identity on every render, and
       // depending on it would re-fire this on every render rather than on focus.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [authState]),
+    }, [authState, notifyChanged]),
   );
 
   if (authState === 'checking') return <View style={styles.flex} />;

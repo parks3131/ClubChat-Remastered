@@ -32,6 +32,11 @@ the other behind a button at the bottom of a list.
    everywhere else - reported from a phone as "it says nine and I cannot find them".)*
 
    A race the viewer has no roster row for contributes nothing, since they could never open it.
+
+   **The hub badges each of those rows with its own count** - the main chat, the Eboard space and
+   every race in the preview - so the total on the list always resolves to somewhere to go. A
+   number that cannot be found is worse than no number, which is what it was for the Eboard and
+   then again for races.
 3. **Three filter chips - Unread, DMs, Clubs - and none of them is selected on arrival.**
    Landing on a filter would mean opening the app to an empty screen on every day the reader is
    caught up, which is most days, and an empty list reads as a broken app rather than as good

@@ -49,6 +49,18 @@ type SessionContextValue = {
   offline: boolean;
   /** Bumped whenever the client's state changes, so screens can re-read the store. */
   revision: number;
+  /**
+   * Say that something a screen watches has changed.
+   *
+   * The socket bumps `revision` for everything it hears about, and this is the door for the
+   * things it does not: an HTTP call that clears notifications server-side raises no frame, so
+   * nothing tells the badge. Marking the inbox read is exactly that case - it fired at the same
+   * instant the badge re-read on navigation, the read won the race and fetched the pre-mark
+   * count, and the number then sat wrong until the next navigation.
+   *
+   * Call it AFTER the write lands, never beside it.
+   */
+  notifyChanged: () => void;
   signedIn: (token: string, userId: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
@@ -216,8 +228,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       revision,
       signedIn,
       signOut,
+      notifyChanged: bump,
     }),
-    [authState, userId, channels, offline, revision, signedIn, signOut],
+    [authState, userId, channels, offline, revision, signedIn, signOut, bump],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
