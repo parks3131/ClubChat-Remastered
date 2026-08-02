@@ -13,6 +13,77 @@ Newest first.
 
 ---
 
+## 2026-08-01 (evening) - A device session: four surfaces, and three bugs that were never going to be found by reading
+
+Everything below came out of one evening on the founder's phone. Worth saying up front, because
+it is the pattern rather than the coincidence: **the two worst bugs were in code that was
+complete at both ends and joined in the middle by nothing**, and no test failed for either.
+
+### The Eboard's events had no consumer, and nobody had noticed
+
+`eboard.join_requested`, `eboard.membership_decided` and `eboard.member_departed` were written to
+the outbox from the day the space was built. Nothing handled them. `dispatch` throws on an unknown
+type - correct, it routes the event through retry and parking where it is visible - and the drain
+absorbs a handler failure into the `attempts` column rather than rethrowing, which is also correct
+for a queue. Together they mean the event retried five times, parked, and produced nothing anybody
+would see. Requesting Eboard access notified nobody. Approving or denying told the requester
+nothing. Being added told you nothing.
+
+Everything else already existed: the notification type declared in shared, its params schema,
+`audience.ts` resolving it to the current members and deliberately not to the club's admin tier,
+and the inbox clearing it when the Eboard roster opens. Only the line that writes the row was
+missing. Failure mode 11 - both ends complete, nothing joining them.
+
+**The worse half is that losing Eboard access never ended it.** The gateway's own contract says
+access is checked at subscribe time and never rechecked per message, so removing somebody from a
+club, a race roster *or the Eboard* has to force-unsubscribe their sockets. Club departure, race
+departure and both deletions all did. Neither Eboard path did: departure had no handler at all,
+and demotion deleted the `eboard_memberships` row inside `changeRole` and revoked nothing. A
+demoted admin kept reading the board's private chat until they happened to reconnect.
+
+The test fake for the bus was `publish: async () => 1`, which discarded every publish - so the
+half that matters was untestable by construction. It records them now.
+`effect-coverage.test.ts` scans the producer source for `eventType` literals and asserts each is
+claimed, because a runtime test only reaches the flows some test already triggers and the gap was
+in the three flows nothing triggered. Mutation-tested by deleting a handler.
+
+### "Last read" marked messages that had not been sent yet
+
+Shipped in the afternoon, reported from the phone the same evening: open a chat you are caught up
+on, type anything, and the rule appeared above your own message.
+
+The read cursor is captured once on arrival, which is right. The list was then compared against it
+on every render, which is a different rule wearing the same clothes - a message sent a minute
+after you arrive has a higher `seq` than a cursor frozen before it existed. **Unread is a fact
+about a moment, not a property a message carries.** The anchor is a decision now, taken once, and
+null means "no rule this visit" rather than "no rule yet".
+
+Both bugs in this arithmetic shipped for the same reason: it lived in a memo inside a 3,400 line
+screen, where the only way to exercise it was to open a chat on a phone and look at it. It is
+`src/chat-rows.ts` with ten tests now, two of which are the reported case exactly.
+
+### Three more surfaces, each finishing something half-built
+
+**Car groups** gained the delete v1 had and the remaster never got, plus a search instead of a
+wall of every eligible name, and avatars the read was already required to carry. **The photo
+viewer** was listed in `PRD/13` as unbuilt; it is one component serving chat and the gallery, and
+the interesting part is that saving has to download the `original` because derived variants are
+WebP, Photos will not take WebP, and iOS decides what it is holding from the file extension - so
+the resolve hop now returns the object's `mime`, since the key has no extension to read one from.
+**Create club** collected a name and a sport and silently defaulted every club to `open`, leaving
+the description unreachable from the product though the column, the route and the client API all
+carried it; `PRD/04` rule 1 names four inputs and the form was the only missing link.
+
+### The chat header's menu had never been anchored
+
+It opened over the status bar and cut the header in half, because it was positioned `absolute`
+with `right` and `zIndex` and no `top` - so it laid out at the top of the *screen* rather than
+under the header. The comment above it already claimed it was anchored under the header; the
+anchor itself was never written. Nothing failed, because a menu in the wrong place still renders
+and still works.
+
+---
+
 ## 2026-08-01 (last, corrected) - Reporting, scope by scope
 
 The notification below shipped with the audience wrong in one scope, and the founder walked

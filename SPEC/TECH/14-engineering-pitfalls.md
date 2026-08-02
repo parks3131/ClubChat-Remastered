@@ -82,6 +82,43 @@ they cost.
     row in the project, and the cost is per-subscriber authorization plus a full refetch each.
     Every subscription must carry a filter, or be replaced by a cheaper signal.
 
+### The outbox and the effects that read it
+
+30. **A producer with no consumer parks in silence.** `dispatch` throws on an unknown event
+    type, which is correct - it routes the event through retry and parking where it is visible -
+    but the drain absorbs a handler failure into the `attempts` column rather than rethrowing,
+    which is also correct for a queue. Together they mean an event type nobody handles produces
+    no notification, no error anybody sees, and no failing test. Three Eboard event types lived
+    that way for the whole life of the space. **Every event type a producer writes needs a test
+    that it is claimed** - `effect-coverage.test.ts` scans the source for `eventType` literals,
+    because a runtime test only reaches the flows some test already triggers, and the gap is
+    always in the flows nothing triggers.
+31. **One event, two messages, two identities.** A system message's idempotency key is derived
+    from `(scope, eventId)`, so a handler that posts into two channels from one event must give
+    the second an explicit `scope` or the two collide and the second is silently dropped as a
+    redelivery.
+
+### Access that has to end
+
+32. **Losing access has two halves, and the second one is invisible.** The row goes, and the
+    live subscription has to be force-unsubscribed - access is checked at subscribe time and
+    never rechecked per message (ADR-0007). Club departure, race departure and both deletions
+    all did this; **neither Eboard path did**, so a demoted admin kept receiving the board's
+    private chat until they happened to reconnect. Anywhere membership can end, ask what happens
+    to the socket. A test fake for the bus that discards publishes makes this half untestable by
+    construction - record them.
+
+### Unread, and other facts about a moment
+
+33. **"Unread" is a fact about a moment, not a property of a message.** The read cursor is
+    captured on arrival and then frozen, so comparing the live list against it forever means
+    every message sent afterwards - including the reader's own - counts as unread. Decide the
+    anchor once and hold the decision; null must mean "none this visit", not "none yet".
+34. **List arithmetic belongs outside the screen.** Both bugs in the chat's marker placement
+    shipped because the logic sat in a memo inside a 3,400 line component, where the only way to
+    exercise it was to open a chat on a phone and look. A pure function over a list has no
+    business being unreachable from a test.
+
 ### Process
 
 27. **Reproduce before fixing.** Read-and-reason fixes in this repo's history were repeatedly

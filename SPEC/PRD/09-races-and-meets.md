@@ -56,6 +56,19 @@ logistics - replacing the throwaway group chat spun up per race.
 20. Every race member can view the groups, including Incharge tags, read-only. Only managers
     can create, delete, assign, or remove.
 
+20a. **Deleting a group empties the car and changes nothing else about the people in it.** They
+    keep their roster row, their race access and their chat - a car is travel logistics, not
+    membership - and can be put in another group. It notifies nobody, which is the contrast with
+    rule 18 worth stating: an Incharge *walking away* leaves a group that needs a new one, and a
+    deleted group needs nothing. **The remaining groups keep their numbers**: deleting Group 2 of
+    three leaves 1 and 3, because a number is what people say out loud in a car park and closing
+    the gap would move somebody between labels without touching their row.
+
+20b. **Adding somebody is a search over the people with no car**, not a list of everyone
+    eligible. The pool is rule 16's exactly, and who is left over sits behind a "Remaining"
+    control that only managers see - a manager filling cars needs the leftovers, and a member
+    wanting to know which car they are in does not.
+
 #### Pins
 
 21. **Pinning a race is personal.** Each member pins for themselves; it affects only their own

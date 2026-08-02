@@ -63,6 +63,20 @@ second is a feature the whole product would have to bend around. Threads remain 
    control appears saying how many arrived; tapping it lands on the FIRST of them, so they read
    forward through what they missed rather than arriving after it. The count covers arrivals
    since they last saw the newest message, not since they opened the app.
+3c. **A "Last read" rule marks where reading stopped**, drawn above the first message that was
+   unread **when the screen opened**, and it is what the arrival lands on rather than the message
+   beneath it. It appears only when something actually was unread.
+
+   **Unread is a fact about the moment of arrival, not a property a message keeps.** The rule is
+   decided once, on entry, and nothing that arrives afterwards can create one or move one - not
+   the reader's own message, not anybody else's. Shipped the other way on 2026-08-01 and reported
+   from a phone the same evening: typing into a chat you were caught up on drew the rule above
+   your own message, announcing that you had not read the thing you had just written.
+
+3d. **A date heading opens each day**, above that day's first message: "Today", "Yesterday", or
+   the date, with the year only when it is not this one. Quieter than the rule above, and the
+   contrast is deliberate - a date says where you are, the rule says where to start reading.
+
 4. **Opening a chat marks it read**, which clears its unread count everywhere. Nothing else
    clears it.
 5. **Only an admin of that space can post an announcement or pin a message.** In race chat

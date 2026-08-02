@@ -25,6 +25,20 @@ in.
 1. Every club has exactly one Eboard space, **created automatically at club creation**, with
    the Owner as its first member.
 2. **Promotion to Admin or Owner auto-joins; demotion to Member auto-removes.**
+2a. **A role change narrates itself in both rooms**, because it is one act with consequences in
+   two. The club sees "X promoted Y as admin" and the board sees "X added Y to the group", each
+   the mirror of itself on demotion. Both name the actor: "Y is now an admin" said what happened
+   and not who did it, which is the half people ask about afterwards. Somebody let in by an
+   approval or added outright reads as the same sentence - an existing member let them in - and a
+   **denial posts nothing**, because announcing a refusal to the room somebody was refused entry
+   to is a different and worse act.
+
+2b. **Losing membership ends access immediately, not eventually.** Demotion and removal both
+   force-unsubscribe that person's live sockets from the Eboard channel and nothing else, since
+   their club membership is untouched. Until 2026-08-01 neither did, and a demoted admin kept
+   receiving the board's private chat until they happened to reconnect - rule 4 held in the
+   database and not on the wire.
+
 3. **An ownership transfer changes nothing** about Eboard membership - both parties stay
    admin-tier.
 4. **Only club admins can see the space exists.** Ordinary members have no visibility of it,

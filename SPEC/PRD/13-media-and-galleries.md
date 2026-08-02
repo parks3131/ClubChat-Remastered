@@ -41,8 +41,20 @@ hold different signed URLs for the same object, so N viewers is still N origin d
 "+" menu, the pickers, the presigned upload, thumbnail derivation, and photo and document bubbles
 that render through the authorized hop. A document bubble shows its filename and size.
 
-**Not built yet.** The **Gallery grid** and the **full-screen viewer**. The server endpoint behind
-the grid has existed since Phase 3 and is paginated; what is missing is the two screens. Until the
-viewer exists, tapping a photo does nothing - deliberately nothing rather than a nested control,
-because a photo bubble sits inside the message bubble's own long-press target and a second
-pressable there is invalid on web and swallows the outer gesture on native.
+**Built 2026-08-01.** The **Gallery grid** and the **full-screen viewer**, which is one component
+serving both surfaces. Tapping a photo in chat opens it; the gesture went on the message bubble's
+own pressable rather than on the bubble inside it, because a second pressable there is invalid on
+web and swallows the outer long press on native.
+
+The viewer carries the sender's face, name and date over the photograph, and a menu: **Reply**
+from chat, **Show in chat** from the gallery, then Share Image, Download and Report. Only the
+first item differs between the two, and it differs because a photograph reached from the gallery
+has been lifted out of the conversation it was said in.
+
+**Saving downloads the `original`, never a derived variant**, and that is a correctness rule
+rather than a quality preference: derived variants are WebP, Photos will not accept WebP, and iOS
+decides what it is being handed from the file extension alone. Object keys carry no extension, so
+the resolve hop returns the object's `mime` alongside its URL and the client names the file from
+it. The gallery read carries its sender for the same reason the viewer needs a header at all.
+
+**Not built yet.** Nothing in this section.

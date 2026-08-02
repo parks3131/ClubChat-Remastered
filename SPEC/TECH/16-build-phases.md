@@ -41,7 +41,7 @@ And from [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) "
 | 1 - Effects, notifications, push | **Done** | |
 | 1.5 - Kafka downstream of the outbox | **Not started** | Skipped over. The worker still drains the outbox directly with `FOR UPDATE SKIP LOCKED`, which works and is correct - see below |
 | 2 - Breadth across the domain | **Done** | Schema, 32 command handlers and the permission matrix. Shipped with no routes and no screens; the routes arrived in 3.75a, the screens are 3.75b - see below |
-| 3 - Media and offline | **Done** | Closed 2026-07-30; the client can attach and render. Gallery grid and full-screen viewer outstanding |
+| 3 - Media and offline | **Done** | Closed 2026-07-30; the client can attach and render. Gallery grid and full-screen viewer both landed 2026-08-01 |
 | 3.5 - Direct messages and safety tooling | **Done** | |
 | 3.75a - The HTTP surface | **Done** | 2026-07-30. 45 routes became **111**; ~20 new query and command functions; one new table; 76 route-level tests; five defects in shipped code fixed on the way. Gate met: 73 checks against a running server, `npm run gate:surface` |
 | 3.75b - The screens | **In progress** | Started 2026-07-30. The tab shell, the shared primitives and ~28 screens exist; the client data layer covers the whole API. Chat integration and the full reachability walk are outstanding - see below |
@@ -222,9 +222,9 @@ readable in airplane mode.*
 >
 > Verified end to end in the running app against MinIO: pick, presigned PUT, complete, real
 > `sharp` derivation to thumb and display webp, and the photo rendering in the bubble - plus a
-> document bubble showing its filename and size. **Still not built:** the Gallery grid and the
-> full-screen viewer, which are [Media and galleries](../PRD/13-media-and-galleries.md)'s
-> remaining client surface; the server's gallery endpoint has been complete since this phase.
+> document bubble showing its filename and size. The Gallery grid and the full-screen viewer -
+> this phase's remaining client surface, against a server endpoint complete since it - **both
+> landed on 2026-08-01**; see [Media and galleries](../PRD/13-media-and-galleries.md).
 
 **Phase 3.5 - Direct messages, with their safety tooling.**
 The fourth channel scope: `dm_conversations`, `isDmParticipant`, nullable `club_id`, the
@@ -376,7 +376,8 @@ The screens [Screen map](../PRD/15-screen-map.md) already specifies: races and t
 Information and car groups; polls in three scopes with inline voting; the calendar and events
 list; routines; news and Highlights; the Eboard space and its meetings. Plus the surfaces every
 phase has quietly deferred - the notification inbox, the member roster, profile, and chat's own
-Highlights tabs. And Phase 3's remaining two: the Gallery grid and the full-screen viewer.
+Highlights tabs. Phase 3's remaining two, the Gallery grid and the full-screen viewer, closed
+on 2026-08-01.
 
 Ordinary client work now, against a surface that is finished and tested. Three things decided up
 front, because each is the difference between forty screens and forty *copies*:
