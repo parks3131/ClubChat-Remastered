@@ -15,6 +15,7 @@ import {
   assignToCarGroup,
   createCarGroup,
   createRace,
+  deleteCarGroup,
   leaveCarGroup,
   removeRaceMember,
   requestRaceAccess,
@@ -320,6 +321,58 @@ describe('car groups', () => {
       .from(carGroupMembers)
       .where(eq(carGroupMembers.carGroupId, group.groupId));
     expect(remaining.map((r) => r.userId)).toEqual([third]);
+  });
+
+  it('deleting a group empties the car and leaves the race roster alone', async () => {
+    const { f, race, group } = await raceWithGroup();
+    await assignToCarGroup(h.db, await ctxFor(f.ownerId), group.groupId, f.memberId);
+
+    const deleted = await deleteCarGroup(h.db, await ctxFor(f.ownerId), group.groupId);
+    expect(deleted.ok).toBe(true);
+
+    // The group is gone, and its seats went with it through the composite foreign key.
+    const groups = await h.db.select().from(carGroups).where(eq(carGroups.id, group.groupId));
+    expect(groups).toHaveLength(0);
+    const seats = await h.db
+      .select()
+      .from(carGroupMembers)
+      .where(eq(carGroupMembers.userId, f.memberId));
+    expect(seats).toHaveLength(0);
+
+    // A car is travel logistics, not membership: the passenger is still in the race.
+    const roster = await h.db
+      .select()
+      .from(raceMemberships)
+      .where(
+        and(eq(raceMemberships.raceId, race.raceId), eq(raceMemberships.userId, f.memberId)),
+      );
+    expect(roster, 'deleting a car group removed somebody from the race').toHaveLength(1);
+  });
+
+  it('deleting a group whose Incharge is still in it notifies nobody', async () => {
+    // The contrast with the asymmetry above: an Incharge WALKING AWAY leaves a group that needs
+    // a new one, and admins are told. A deleted group needs nothing, so telling them "Group 1
+    // needs a new Incharge" would be a notification about something that no longer exists.
+    const { f, group } = await raceWithGroup();
+    await assignToCarGroup(h.db, await ctxFor(f.ownerId), group.groupId, f.memberId);
+    await setCarGroupIncharge(h.db, await ctxFor(f.ownerId), group.groupId, f.memberId);
+    await drainAll();
+
+    await deleteCarGroup(h.db, await ctxFor(f.ownerId), group.groupId);
+    await drainAll();
+
+    const rows = await h.db.select().from(notifications);
+    expect(rows, 'deleting a car group raised a notification').toHaveLength(0);
+  });
+
+  it('refuses to delete a group for somebody who only rides in it', async () => {
+    const { f, group } = await raceWithGroup();
+    await assignToCarGroup(h.db, await ctxFor(f.ownerId), group.groupId, f.memberId);
+
+    const result = await deleteCarGroup(h.db, await ctxFor(f.memberId), group.groupId);
+    expect(result.ok).toBe(false);
+    const groups = await h.db.select().from(carGroups).where(eq(carGroups.id, group.groupId));
+    expect(groups, 'a plain race member deleted a car group').toHaveLength(1);
   });
 
   it('leaving the race also leaves the car group', async () => {

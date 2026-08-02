@@ -301,6 +301,15 @@ export type MediaRedirect = {
    * one client re-render an image repeatedly without re-authorizing every time.
    */
   cacheControl: string;
+  /**
+   * What the bytes at that URL actually are.
+   *
+   * **Object keys carry no extension** (`message/2026-08/<uuid>`), so a client that saves or
+   * shares a photo has nothing to name the file from. A `.jpg` guess is wrong for the HEIC an
+   * iPhone uploads and for the WebP a derived variant is, and iOS decides what it is holding
+   * from the extension. So the type travels with the URL rather than being inferred from it.
+   */
+  mime: string;
 };
 
 /**
@@ -340,6 +349,9 @@ export async function resolveMediaRedirect(
   // Fall back to the original when a derived variant does not exist yet - the worker may not
   // have run, and a missing thumbnail must degrade to a slower image rather than a broken one.
   const objectKey = requested === 'original' ? media.objectKey : (variants[requested] ?? media.objectKey);
+  // Derived variants are WebP (see `derive.ts`); the original is whatever was uploaded. Read off
+  // the SAME branch the key was, so the two can never describe different bytes.
+  const mime = objectKey === media.objectKey ? media.mime : 'image/webp';
 
   const nowMs = opts.nowMs ?? Date.now();
   // Whoever is going to serve the bytes has to be the one whose signature they carry.
@@ -356,7 +368,7 @@ export async function resolveMediaRedirect(
         })()
       : signedMediaUrl(config, objectKey, nowMs);
 
-  return { ok: true, url, cacheControl: 'private, max-age=600' };
+  return { ok: true, url, mime, cacheControl: 'private, max-age=600' };
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +382,16 @@ export type GalleryEntry = {
   url: string;
   thumbUrl: string;
   createdAt: string;
+  /**
+   * Who posted it.
+   *
+   * The grid does not draw this; the full-screen viewer does, and it is the same header the
+   * viewer shows when it is opened from chat - a face, a name and a date over the photograph.
+   * Null where the account has been deleted, exactly as a message's own sender is.
+   */
+  senderId: string;
+  senderName: string | null;
+  senderImage: string | null;
 };
 
 /**
@@ -399,10 +421,21 @@ export async function readGallery(
     media_id: string;
     seq: number;
     created_at: string;
+    sender_id: string;
+    full_name: string | null;
+    image: string | null;
   }>(sql`
-    SELECT m.media_id, m.seq, m.created_at::text AS created_at
+    SELECT m.media_id,
+           m.seq,
+           m.created_at::text AS created_at,
+           m.sender_id::text AS sender_id,
+           -- An anonymized account keeps its row so history stays attributed, and the viewer
+           -- draws "Deleted member" from the null rather than inventing a name here.
+           CASE WHEN u.anonymized_at IS NULL THEN u.full_name END AS full_name,
+           CASE WHEN u.anonymized_at IS NULL THEN u.image END AS image
       FROM messages m
       JOIN media_objects mo ON mo.id = m.media_id
+      JOIN users u ON u.id = m.sender_id
      WHERE m.channel_id = ${channelId}
        AND m.media_id IS NOT NULL
        AND m.deleted_at IS NULL
@@ -427,6 +460,9 @@ export async function readGallery(
       url: `/media/${row.media_id}`,
       thumbUrl: `/media/${row.media_id}?variant=thumb`,
       createdAt: new Date(row.created_at).toISOString(),
+      senderId: row.sender_id,
+      senderName: row.full_name,
+      senderImage: row.image,
     })),
     nextCursor: hasMore ? (page[page.length - 1]?.seq ?? null) : null,
   };

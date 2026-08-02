@@ -137,6 +137,29 @@ export default function MainStackLayout() {
       />
 
       {/*
+        The two ways into a club, as screens rather than as panels inside the list.
+
+        They were `mode` state on the Clubs screen, which left them wearing the "ClubChat"
+        masthead and gave them no way back except a Cancel button of their own invention. A form
+        that fills the screen IS a screen, and as one it gets the stack's back arrow and a header
+        that says which of the two you are looking at.
+      */}
+      <Stack.Screen
+        name="clubs/create"
+        options={{
+          title: 'Create club',
+          headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
+        }}
+      />
+      <Stack.Screen
+        name="clubs/join"
+        options={{
+          title: 'Join club',
+          headerLeft: () => <BackTo href="/clubs" label="Clubs" variant="icon" />,
+        }}
+      />
+
+      {/*
         Messages sits beside Clubs rather than inside one. A DM belongs to no club - two people
         who share three clubs have one conversation - so nesting it under a club would be a lie
         about the model.

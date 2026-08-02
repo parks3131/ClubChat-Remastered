@@ -334,6 +334,55 @@ describe('race routes: the authority-versus-access boundary', () => {
     expect(cleared.status).toBe(200);
     expect(cleared.body.inchargeUserId).toBeNull();
   });
+
+  it('deletes a group for a manager, refuses its passengers, and frees its seats', async () => {
+    const owner = await signUp('DeleteCarOwner');
+    const rider = await signUp('DeleteCarRider');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, rider);
+
+    const created = await as(owner, 'POST', `/clubs/${clubId}/races`, {
+      name: 'Delete car race',
+      raceDate: '2027-03-03',
+    });
+    const raceId = created.body.raceId;
+    await as(owner, 'POST', `/races/${raceId}/members`, { userId: rider.userId });
+
+    const group = await as(owner, 'POST', `/races/${raceId}/car-groups`);
+    const groupId = group.body.groupId;
+    await as(owner, 'POST', `/car-groups/${groupId}/members`, { userId: rider.userId });
+    await as(owner, 'PATCH', `/car-groups/${groupId}/incharge`, { userId: rider.userId });
+
+    // Riding in the car is not managing it, even as its Incharge. 404 rather than 403, like
+    // every other refusal here: a caller who may not act on this group does not learn it exists.
+    expect((await as(rider, 'DELETE', `/car-groups/${groupId}`)).status).toBe(404);
+    // ...and the group is still there, which is the half a status code cannot prove.
+    expect((await as(rider, 'GET', `/races/${raceId}/car-groups`)).body.groups).toHaveLength(1);
+
+    expect((await as(owner, 'DELETE', `/car-groups/${groupId}`)).status).toBe(200);
+
+    // Gone, and its passenger is back to having no car - still on the roster, so still in
+    // `unassigned` and still able to be put in the next group.
+    const after = await as(rider, 'GET', `/races/${raceId}/car-groups`);
+    expect(after.status).toBe(200);
+    expect(after.body.groups).toHaveLength(0);
+    expect(after.body.unassigned.map((u: { userId: string }) => u.userId)).toContain(
+      rider.userId,
+    );
+
+    // The numbers do not close up behind a delete: the next group created is a fresh 1 only
+    // because that one was the last. Deleting the middle of three would leave 1 and 3.
+    const replacement = await as(owner, 'POST', `/races/${raceId}/car-groups`);
+    expect(replacement.status).toBe(201);
+    const seated = await as(owner, 'POST', `/car-groups/${replacement.body.groupId}/members`, {
+      userId: rider.userId,
+    });
+    expect(seated.status, 'a freed passenger could not be seated again').toBe(200);
+
+    // Deleting something already deleted is a 404, not a silent success - the same answer the
+    // rider got, and deliberately indistinguishable from it.
+    expect((await as(owner, 'DELETE', `/car-groups/${groupId}`)).status).toBe(404);
+  });
 });
 
 describe('race routes: requests and pins', () => {
@@ -472,6 +521,7 @@ describe('race routes: the session boundary', () => {
       raceDate: '2027-07-07',
     });
     const raceId = created.body.raceId;
+    const group = await as(owner, 'POST', `/races/${raceId}/car-groups`);
 
     for (const [method, url] of [
       ['GET', `/clubs/${clubId}/races`],
@@ -479,6 +529,7 @@ describe('race routes: the session boundary', () => {
       ['GET', `/races/${raceId}`],
       ['GET', `/races/${raceId}/members`],
       ['GET', `/races/${raceId}/car-groups`],
+      ['DELETE', `/car-groups/${group.body.groupId}`],
       ['POST', `/races/${raceId}/pin`],
       ['DELETE', `/races/${raceId}`],
     ] as const) {

@@ -10,7 +10,6 @@
  * calendar are reached from, and `PRD/15` puts News and Highlights as its first row.
  */
 
-import { useCallback, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { RemoteImage } from '../../../../src/media-bubble.tsx';
@@ -18,13 +17,10 @@ import { Redirect, useRouter } from 'expo-router';
 import { useClearClub } from '../../../../src/current-space.tsx';
 import { unreadCount, type Club } from '@clubchat/shared';
 import { clubApi } from '../../../../src/api.ts';
-import type { ClubSearchResult } from '../../../../src/api-types.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { color, radius, space, type } from '../../../../src/theme.ts';
-import { Action, Badge, DataScreen, EmptyState, Field, Row, SectionHeader } from '../../../../src/ui.tsx';
+import { DataScreen } from '../../../../src/ui.tsx';
 import { useLoad } from '../../../../src/use-load.ts';
-
-type Mode = 'list' | 'create' | 'join';
 
 export default function ClubsScreen() {
   /*
@@ -41,9 +37,8 @@ export default function ClubsScreen() {
    * the club-scoped Calendar possible at all - it follows whichever club you are in.
    */
   useClearClub();
-  const { authState, channels, client, revision } = useSession();
+  const { authState, channels, revision } = useSession();
   const router = useRouter();
-  const [mode, setMode] = useState<Mode>('list');
 
   const load = useLoad(() => clubApi.mine(), [revision]);
 
@@ -57,33 +52,6 @@ export default function ClubsScreen() {
     // Computed from the log, never stored. A stored count drifts; this one cannot.
     return channel ? unreadCount(channel) : 0;
   };
-
-  if (mode === 'create') {
-    return (
-      <CreateClub
-        onCancel={() => setMode('list')}
-        onCreated={async () => {
-          setMode('list');
-          // Resubscribe so the brand-new club's channel is live immediately.
-          await client?.reconnect().catch(() => undefined);
-          load.reload();
-        }}
-      />
-    );
-  }
-
-  if (mode === 'join') {
-    return (
-      <JoinClub
-        onDone={async () => {
-          setMode('list');
-          await client?.reconnect().catch(() => undefined);
-          load.reload();
-        }}
-        onCancel={() => setMode('list')}
-      />
-    );
-  }
 
   return (
     <View style={styles.flex}>
@@ -101,7 +69,7 @@ export default function ClubsScreen() {
       <View style={styles.actions}>
         <Pressable
           style={styles.primaryButton}
-          onPress={() => setMode('create')}
+          onPress={() => router.push('/clubs/create')}
           accessibilityRole="button"
           accessibilityLabel="Create a club"
         >
@@ -110,7 +78,7 @@ export default function ClubsScreen() {
         </Pressable>
         <Pressable
           style={styles.secondaryButton}
-          onPress={() => setMode('join')}
+          onPress={() => router.push('/clubs/join')}
           accessibilityRole="button"
           accessibilityLabel="Join a club"
         >
@@ -142,7 +110,7 @@ export default function ClubsScreen() {
                 </Text>
                 <Pressable
                   style={styles.primaryButton}
-                  onPress={() => setMode('create')}
+                  onPress={() => router.push('/clubs/create')}
                   accessibilityRole="button"
                   accessibilityLabel="Create your first club"
                 >
@@ -204,154 +172,6 @@ export default function ClubsScreen() {
           />
         )}
       </DataScreen>
-    </View>
-  );
-}
-
-function CreateClub({
-  onCancel,
-  onCreated,
-}: {
-  onCancel: () => void;
-  onCreated: () => Promise<void>;
-}) {
-  const [name, setName] = useState('');
-  const [sport, setSport] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState<string | null>(null);
-
-  const submit = async () => {
-    if (name.trim().length === 0 || sport.trim().length === 0) return;
-    setBusy(true);
-    setFailed(null);
-    try {
-      await clubApi.create({ name: name.trim(), sport: sport.trim() });
-      await onCreated();
-    } catch {
-      setFailed('Could not create the club. Check your connection and try again.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <View style={styles.panel}>
-      <SectionHeader title="Create a club" />
-      <Field label="Club name" value={name} onChangeText={setName} placeholder="Riverside Runners" />
-      <Field label="Sport" value={sport} onChangeText={setSport} placeholder="running" />
-      {failed !== null && <Text style={styles.error}>{failed}</Text>}
-      <View style={styles.panelActions}>
-        <Action
-          label="Cancel"
-          variant="secondary"
-          onPress={onCancel}
-          style={styles.panelButton}
-        />
-        <Action
-          label={busy ? 'Creating' : 'Create'}
-          onPress={() => void submit()}
-          disabled={busy || name.trim().length === 0 || sport.trim().length === 0}
-          style={styles.panelButton}
-        />
-      </View>
-      <Text style={styles.hint}>
-        You become the Owner, with a main chat and an Eboard space created for you.
-      </Text>
-    </View>
-  );
-}
-
-/**
- * Join by search.
- *
- * The safe projection is all this screen gets: name, sport, member count and the caller's own
- * request status. A non-member can find and join a club without being able to read anything
- * inside it, which is why there is no preview of its chat or roster here.
- */
-function JoinClub({ onDone, onCancel }: { onDone: () => Promise<void>; onCancel: () => void }) {
-  const [term, setTerm] = useState('');
-  const [results, setResults] = useState<ClubSearchResult[] | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const search = useCallback(async (value: string) => {
-    const trimmed = value.trim();
-    if (trimmed.length === 0) {
-      setResults(null);
-      return;
-    }
-    setBusy(true);
-    try {
-      const found = await clubApi.search(trimmed);
-      setResults(found.clubs);
-    } catch {
-      setResults([]);
-    } finally {
-      setBusy(false);
-    }
-  }, []);
-
-  const join = async (club: ClubSearchResult) => {
-    try {
-      await clubApi.join(club.id);
-      await onDone();
-    } catch {
-      // Re-search rather than guessing: the club may have switched policy or been deleted.
-      void search(term);
-    }
-  };
-
-  return (
-    <View style={styles.panel}>
-      <SectionHeader title="Join a club" />
-      <Field
-        label="Search by name"
-        value={term}
-        onChangeText={(next) => {
-          setTerm(next);
-          void search(next);
-        }}
-        placeholder="Riverside"
-      />
-
-      {results === null ? (
-        <Text style={styles.hint}>
-          Search for a club by name. An open club joins in one tap; a request club files a request
-          for an admin to approve.
-        </Text>
-      ) : results.length === 0 ? (
-        // Tells the truth, and deliberately does not offer to create a club with that name.
-        <Text style={styles.hint}>{busy ? 'Searching...' : 'No clubs found'}</Text>
-      ) : (
-        <View style={styles.results}>
-          {results.map((club) => (
-            <Row
-              key={club.id}
-              title={club.name}
-              subtitle={`${club.sport}  ·  ${club.memberCount} member${club.memberCount === 1 ? '' : 's'}`}
-              onPress={() => {
-                if (!club.requestPending) void join(club);
-              }}
-              accessibilityLabel={
-                club.requestPending ? `${club.name}, already requested` : `Join ${club.name}`
-              }
-              right={
-                club.requestPending ? (
-                  <Badge label="Requested" tone="muted" />
-                ) : (
-                  <Badge label={club.joinPolicy === 'open' ? 'Join' : 'Request'} tone="accent" />
-                )
-              }
-            />
-          ))}
-        </View>
-      )}
-
-      <View style={styles.panelActions}>
-        <Action label="Done" variant="secondary" onPress={onCancel} style={styles.panelButton} />
-      </View>
-      <Text style={styles.hint}>
-        Have an invite link? Opening it joins you directly, even on a request club.
-      </Text>
     </View>
   );
 }
@@ -453,10 +273,4 @@ const styles = StyleSheet.create({
     maxWidth: 280,
   },
 
-  panel: { flex: 1, gap: space.sm, backgroundColor: color.appBackground },
-  panelActions: { flexDirection: 'row', gap: space.sm, paddingTop: space.sm },
-  panelButton: { flex: 1 },
-  results: { gap: space.sm },
-  hint: { ...type.bodySmall, color: color.textSecondary },
-  error: { ...type.bodySmall, color: color.error },
 });

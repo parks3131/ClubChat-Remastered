@@ -132,17 +132,20 @@ export type RaceRoster = {
   pendingRequests: JoinRequestEntry[] | null;
 };
 
+/** Somebody in a car, or waiting for a seat in one. Both halves of the read draw a face. */
+export type CarGroupPerson = { userId: string; name: string; image: string | null };
+
 export type CarGroup = {
   id: string;
   number: number;
   inchargeUserId: string | null;
-  members: Array<{ userId: string; name: string; isIncharge: boolean }>;
+  members: Array<CarGroupPerson & { isIncharge: boolean }>;
 };
 
 export type CarGroupsView = {
   groups: CarGroup[];
   /** On the roster and in no car. Exactly the add-to-group search (PRD/09 rule 16). */
-  unassigned: Array<{ userId: string; name: string }>;
+  unassigned: CarGroupPerson[];
 };
 
 // ---------------------------------------------------------------------------
@@ -429,6 +432,10 @@ export type GalleryEntry = {
   url: string;
   thumbUrl: string;
   createdAt: string;
+  /** Who posted it. The grid does not draw this; the full-screen viewer's header does. */
+  senderId: string;
+  senderName: string | null;
+  senderImage: string | null;
 };
 
 export type GalleryPage = { entries: GalleryEntry[]; nextCursor: number | null };

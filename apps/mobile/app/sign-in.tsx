@@ -10,6 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
 import { Redirect } from 'expo-router';
 import { useSession } from '../src/chat-provider.tsx';
 import { config } from '../src/config.ts';
@@ -59,6 +60,17 @@ export default function SignIn() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        {/*
+          v1's brand mark, which is a badge rather than a picture.
+
+          There is no logo FILE to take: `assets/icon.png` in both repos is still the stock Expo
+          template artwork, and v1's own sign-in screen draws its mark the same way this does -
+          a tilted rounded square holding one glyph, with the wordmark under it. Copying the
+          asset would have copied the wrong thing.
+        */}
+        <View style={styles.brandBadge}>
+          <MaterialIcons name="sports-kabaddi" size={32} color={color.onAccentSoft} />
+        </View>
         <Text style={styles.wordmark}>ClubChat</Text>
         <Text style={styles.tagline}>
           The structure your club is already faking by hand.
@@ -160,6 +172,18 @@ const styles = StyleSheet.create({
     maxWidth: 460,
     width: '100%',
     alignSelf: 'center',
+  },
+  /** 3 degrees off square, which is v1's value. Enough to read as drawn rather than as a box. */
+  brandBadge: {
+    width: 64,
+    height: 64,
+    borderRadius: radius.lg,
+    backgroundColor: color.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    marginBottom: space.sm,
+    transform: [{ rotate: '3deg' }],
   },
   wordmark: { ...type.display, color: color.accent, textAlign: 'center' },
   tagline: {

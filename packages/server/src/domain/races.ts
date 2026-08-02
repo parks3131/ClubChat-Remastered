@@ -498,6 +498,43 @@ export async function createCarGroup(
 }
 
 /**
+ * Delete a car group, whoever is still sitting in it.
+ *
+ * **Its members go back to being unassigned, and nothing else about them changes.** They keep
+ * their roster row, their race access and their chat; a car is travel logistics, not membership.
+ * The rows go with the composite foreign key's `ON DELETE CASCADE` rather than by hand here -
+ * `car_group_members` points at `(id, race_id)`, so the group is the only thing this has to
+ * delete.
+ *
+ * **No notification, and the contrast with `departCarGroup` is the reason to say so.** That one
+ * tells every club admin when an Incharge walks away, because the group survives and needs a new
+ * one. Here the group does not survive. "Group 2 needs a new Incharge" about a group that no
+ * longer exists is worse than silence.
+ *
+ * **The remaining groups keep their numbers.** Deleting Group 2 of three leaves 1 and 3, and the
+ * next group created is a new 2 - because `createCarGroup` takes `MAX(number) + 1`... which after
+ * deleting the LAST group hands the number out again. Both are deliberate: a number is what
+ * people say out loud to each other in a car park, so renumbering everybody else's car to close a
+ * gap would move a person between labels without touching their row.
+ */
+export async function deleteCarGroup(
+  db: Db,
+  ctx: AccessContext,
+  groupId: string,
+): Promise<Result<{ deleted: true }>> {
+  const group = await db.select().from(carGroups).where(eq(carGroups.id, groupId)).limit(1);
+  const found = group[0];
+  if (!found) return { ok: false, code: 'not_found' };
+
+  const race = await raceRef(db, found.raceId);
+  if (!race) return { ok: false, code: 'not_found' };
+  if (!canManageCarGroups(ctx, race)) return { ok: false, code: 'forbidden' };
+
+  await db.delete(carGroups).where(eq(carGroups.id, groupId));
+  return { ok: true, deleted: true };
+}
+
+/**
  * Assign someone to a car group.
  *
  * **Only people with real race access can be added** - so an admin who manages the groups but
@@ -1010,11 +1047,14 @@ export async function readRaceRoster(
   };
 }
 
+/** Somebody in a car, or waiting for a seat in one. Both halves of this read draw a face. */
+export type CarGroupPerson = { userId: string; name: string; image: string | null };
+
 export type CarGroupView = {
   id: string;
   number: number;
   inchargeUserId: string | null;
-  members: Array<{ userId: string; name: string; isIncharge: boolean }>;
+  members: Array<CarGroupPerson & { isIncharge: boolean }>;
 };
 
 /**
@@ -1032,7 +1072,7 @@ export async function readCarGroups(
   db: Db,
   ctx: AccessContext,
   raceId: string,
-): Promise<Result<{ groups: CarGroupView[]; unassigned: Array<{ userId: string; name: string }> }>> {
+): Promise<Result<{ groups: CarGroupView[]; unassigned: CarGroupPerson[] }>> {
   const race = await raceRef(db, raceId);
   if (!race || !canViewCarGroups(ctx, race)) return { ok: false, code: 'not_found' };
 
@@ -1042,12 +1082,14 @@ export async function readCarGroups(
     incharge_user_id: string | null;
     user_id: string | null;
     full_name: string | null;
+    image: string | null;
   }>(sql`
     SELECT cg.id::text AS group_id,
            cg.number,
            cg.incharge_user_id::text AS incharge_user_id,
            u.id::text AS user_id,
-           u.full_name
+           u.full_name,
+           u.image
       FROM car_groups cg
       LEFT JOIN car_group_members cgm ON cgm.car_group_id = cg.id
       LEFT JOIN users u ON u.id = cgm.user_id
@@ -1073,14 +1115,19 @@ export async function readCarGroups(
       group.members.push({
         userId: row.user_id,
         name: row.full_name ?? '',
+        image: row.image,
         isIncharge: row.user_id === row.incharge_user_id,
       });
     }
   }
 
   // Who is on the roster and in no group - which is exactly rule 16's add-member search.
-  const unassignedRows = await db.execute<{ user_id: string; full_name: string }>(sql`
-    SELECT u.id::text AS user_id, u.full_name
+  const unassignedRows = await db.execute<{
+    user_id: string;
+    full_name: string;
+    image: string | null;
+  }>(sql`
+    SELECT u.id::text AS user_id, u.full_name, u.image
       FROM race_memberships rm
       JOIN users u ON u.id = rm.user_id
      WHERE rm.race_id = ${raceId}
@@ -1097,6 +1144,7 @@ export async function readCarGroups(
     unassigned: unassignedRows.rows.map((row) => ({
       userId: row.user_id,
       name: row.full_name,
+      image: row.image,
     })),
   };
 }

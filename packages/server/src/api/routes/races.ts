@@ -20,6 +20,7 @@ import {
   createCarGroup,
   createRace,
   decideRaceRequest,
+  deleteCarGroup,
   deleteRace,
   leaveCarGroup,
   listRaces,
@@ -280,6 +281,19 @@ export function registerRaceRoutes(app: FastifyInstance, deps: AppDeps): void {
     const result = await createCarGroup(deps.db, request.access!, request.params.id);
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return reply.code(201).send(result);
+  });
+
+  /**
+   * Delete a car group, members and all.
+   *
+   * Keyed by the group rather than by the race, unlike the member routes below: a group is the
+   * thing being deleted and it knows its own race, so naming both would let a caller name the
+   * wrong one.
+   */
+  app.delete<{ Params: { id: string } }>('/car-groups/:id', async (request, reply) => {
+    const result = await deleteCarGroup(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
   });
 
   const AssignBody = z.object({ userId: z.string().uuid() });

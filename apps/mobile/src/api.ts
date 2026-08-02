@@ -192,11 +192,6 @@ export const dmApi = {
   unmute: (channelId: string) =>
     apiFetch<unknown>(`/channels/${channelId}/mute`, { method: 'DELETE' }),
 
-  report: (channelId: string, seq: number) =>
-    apiFetch<{ alreadyReported: boolean }>(`/channels/${channelId}/messages/${seq}/report`, {
-      method: 'POST',
-      body: {},
-    }),
 
   /**
    * Toggle a reaction, returning the FULL resulting set rather than the delta.
@@ -404,6 +399,10 @@ export const raceApi = {
       method: 'POST',
       body: {},
     }),
+
+  /** Deletes the group and empties the car. Everybody in it keeps their place in the race. */
+  deleteCarGroup: (groupId: string) =>
+    apiFetch<unknown>(`/car-groups/${groupId}`, { method: 'DELETE' }),
 
   assignToCarGroup: (groupId: string, userId: string) =>
     apiFetch<unknown>(`/car-groups/${groupId}/members`, { method: 'POST', body: { userId } }),
@@ -631,6 +630,20 @@ export const accountApi = {
 export const channelApi = {
   meta: (channelId: string) => apiFetch<ChannelMeta>(`/channels/${channelId}`),
 
+  /**
+   * Report a message, from wherever it is being looked at.
+   *
+   * On `channelApi` rather than `dmApi`, where it used to sit: the route is channel-scoped and
+   * chat has always called it for club and race conversations too, so the old home named the one
+   * caller it was written for rather than what it does. The gallery's photo viewer is the second
+   * caller, and the one that made the misfiling visible.
+   */
+  report: (channelId: string, seq: number) =>
+    apiFetch<{ alreadyReported: boolean }>(`/channels/${channelId}/messages/${seq}/report`, {
+      method: 'POST',
+      body: {},
+    }),
+
   /** Highlights: over the whole channel, so a pin past the loaded page is still found. */
   pinned: (channelId: string, before?: number) =>
     apiFetch<HighlightPage>(`/channels/${channelId}/pinned${query({ before })}`),
@@ -704,9 +717,12 @@ export const channelApi = {
  * Keyed by media id and variant. Dropped once past its expiry, so a client that stays open
  * across the hour boundary re-resolves rather than rendering a broken image.
  */
-const mediaUrlMemo = new Map<string, { url: string; expiresAt: number }>();
+const mediaUrlMemo = new Map<string, { url: string; mime: string; expiresAt: number }>();
 
 export type MediaVariant = 'original' | 'display' | 'thumb';
+
+/** A resolved URL and what is at the end of it. */
+export type ResolvedMedia = { url: string; mime: string };
 
 /**
  * Turn a media id into a fetchable URL, through the authorized hop.
@@ -719,18 +735,33 @@ export async function resolveMediaUrl(
   mediaId: string,
   variant: MediaVariant = 'display',
 ): Promise<string> {
+  return (await resolveMedia(mediaId, variant)).url;
+}
+
+/**
+ * The same resolve, with the content type kept.
+ *
+ * Rendering an `Image` needs only the URL, which is why `resolveMediaUrl` stays the narrow one
+ * that thirty call sites use. Saving a file needs to name it, and the name has to come from the
+ * server because the object key carries no extension.
+ */
+export async function resolveMedia(
+  mediaId: string,
+  variant: MediaVariant = 'display',
+): Promise<ResolvedMedia> {
   const key = `${mediaId}:${variant}`;
   const held = mediaUrlMemo.get(key);
   // A minute of headroom, so a URL is never handed out with less life left than the request
   // that uses it might take.
-  if (held && held.expiresAt - Date.now() > 60_000) return held.url;
+  if (held && held.expiresAt - Date.now() > 60_000) return { url: held.url, mime: held.mime };
 
-  const resolved = await apiFetch<{ url: string; expiresAt: string }>(
+  const resolved = await apiFetch<{ url: string; expiresAt: string; mime: string }>(
     `/media/${mediaId}/url?variant=${variant}`,
   );
   mediaUrlMemo.set(key, {
     url: resolved.url,
+    mime: resolved.mime,
     expiresAt: new Date(resolved.expiresAt).getTime(),
   });
-  return resolved.url;
+  return { url: resolved.url, mime: resolved.mime };
 }

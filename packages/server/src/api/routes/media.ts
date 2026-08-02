@@ -143,6 +143,8 @@ export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
       url: result.url,
       // So a client can drop its memo when the window rolls rather than holding a dead URL.
       expiresAt: new Date(hourAlignedExpiry(Date.now()) * 1000).toISOString(),
+      // So a client saving or sharing the file can name it correctly - the key has no extension.
+      mime: result.mime,
     });
   });
 

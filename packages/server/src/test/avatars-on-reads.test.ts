@@ -164,6 +164,40 @@ describe('a read that names somebody carries their picture', () => {
     expect(candidate.image).toBe(avatar);
   });
 
+  it('puts it on both halves of the car groups read', async () => {
+    const owner = await signUp('CarAvatarOwner');
+    const seated = await signUp('CarAvatarSeated');
+    const waiting = await signUp('CarAvatarWaiting');
+    const seatedAvatar = await setAvatar(seated);
+    const waitingAvatar = await setAvatar(waiting);
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, seated);
+    await join(clubId, waiting);
+
+    const race = await as(owner, 'POST', `/clubs/${clubId}/races`, {
+      name: 'Avatar race',
+      raceDate: '2027-04-04',
+    });
+    const raceId = race.body.raceId;
+    await as(owner, 'POST', `/races/${raceId}/members`, { userId: seated.userId });
+    await as(owner, 'POST', `/races/${raceId}/members`, { userId: waiting.userId });
+
+    const group = await as(owner, 'POST', `/races/${raceId}/car-groups`);
+    await as(owner, 'POST', `/car-groups/${group.body.groupId}/members`, {
+      userId: seated.userId,
+    });
+
+    // Two projections of the same roster - in a car, and waiting for one - and the person moves
+    // between them the moment somebody is added. A face on one side only means somebody's
+    // picture appears the instant they are seated, which is exactly what shipped here.
+    const view = await as(owner, 'GET', `/races/${raceId}/car-groups`);
+    expect(view.status).toBe(200);
+    const member = view.body.groups[0].members.find((m: any) => m.userId === seated.userId);
+    expect(member.image).toBe(seatedAvatar);
+    const unseated = view.body.unassigned.find((u: any) => u.userId === waiting.userId);
+    expect(unseated.image).toBe(waitingAvatar);
+  });
+
   it('puts it on a poll voter', async () => {
     const owner = await signUp('PollOwner');
     const voter = await signUp('PollVoter');

@@ -25,6 +25,7 @@ import {
 import { useSession } from "../../src/chat-provider.tsx";
 import { channelApi, dmApi, type ChannelMeta } from "../../src/api.ts";
 import { DocumentBubble, PhotoBubble, RemoteImage } from "../../src/media-bubble.tsx";
+import { PhotoViewer } from "../../src/photo-viewer.tsx";
 import {
   pickDocument,
   pickPhoto,
@@ -694,6 +695,7 @@ const MessageRow = memo(function MessageRow({
   onReact,
   onOpenProfile,
   onJumpToQuote,
+  onOpenPhoto,
 }: {
   message: MessageEnvelope;
   /** The viewer, for marking their own reactions. Null only before auth resolves. */
@@ -705,6 +707,8 @@ const MessageRow = memo(function MessageRow({
   onReact: (seq: number, emoji: ReactionEmoji) => void;
   onOpenProfile: (userId: string) => void;
   onJumpToQuote: (seq: number) => void;
+  /** Open the full-screen viewer. Only ever reached from a photo message. */
+  onOpenPhoto: (message: MessageEnvelope) => void;
 }) {
   // A system message is centred and unattributed, not a bubble.
   if (message.senderId === SYSTEM_ACTOR_ID) {
@@ -843,6 +847,20 @@ const MessageRow = memo(function MessageRow({
                 ).catch(() => undefined);
                 onSelect(message.seq);
               }
+        }
+        /*
+          A tap opens the photo, and ONLY on a photo message.
+
+          It belongs to this Pressable rather than to the bubble inside it, which is what
+          `media-bubble.tsx` has said since it was written: a second Pressable nested in this one
+          is a <button> inside a <button> on web and swallows this long press on native. So the
+          gesture that already owns the bubble grows a tap, and a message with no photo keeps
+          having none rather than becoming a control that does nothing.
+        */
+        onPress={
+          message.type === "photo" && message.mediaId !== null
+            ? () => onOpenPhoto(message)
+            : undefined
         }
         delayLongPress={400}
         // `none` for a card, and that is what keeps the nesting legal: react-native-web
@@ -1099,6 +1117,8 @@ export default function ChatScreen() {
   const [replyingToSeq, setReplyingToSeq] = useState<number | null>(null);
   /** Set once Report is tapped, so the confirmation is a second deliberate step. */
   const [confirmingReport, setConfirmingReport] = useState<number | null>(null);
+  /** The photo being looked at full screen, or null. The whole message - see `openPhoto`. */
+  const [viewingPhoto, setViewingPhoto] = useState<MessageEnvelope | null>(null);
   /**
    * Set once Delete is tapped. Deleting is irreversible and destroys somebody's words, so it
    * gets the same second deliberate step reporting does rather than firing off a long press.
@@ -1113,8 +1133,16 @@ export default function ChatScreen() {
   const [asAnnouncement, setAsAnnouncement] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
-  /** The grid dropdown of this conversation's other screens. */
+  /** The dropdown of this conversation's other screens. */
   const [gridOpen, setGridOpen] = useState(false);
+  /**
+   * The header's bottom edge, measured, so the dropdown can hang off it.
+   *
+   * Measured rather than computed from `insets.top` plus a constant: the header's height is the
+   * sum of a safe-area inset, its own padding and the tallest thing in its row, and a constant
+   * that duplicated that arithmetic would be wrong on the first device with a different notch.
+   */
+  const [headerBottom, setHeaderBottom] = useState(0);
   /** True while bytes are in flight, so the "+" cannot start a second upload. */
   const [uploading, setUploading] = useState(false);
   const listRef = useRef<FlatList<Row>>(null);
@@ -1651,6 +1679,18 @@ export default function ChatScreen() {
     setConfirmingReport(null);
   }, []);
 
+  /**
+   * Open a photo full screen.
+   *
+   * The whole envelope is kept rather than the media id: the viewer's header draws the sender
+   * and the date, and Reply and Report both need the `seq`. Held here rather than looked up
+   * again on close, so the viewer cannot be left holding a message the list has since replaced.
+   */
+  const openPhoto = useCallback(
+    (message: MessageEnvelope) => setViewingPhoto(message),
+    [],
+  );
+
   /*
    * Both list callbacks are hoisted out of the JSX and given stable identities.
    *
@@ -1685,10 +1725,11 @@ export default function ChatScreen() {
           onReact={react}
           onOpenProfile={openProfile}
           onJumpToQuote={jumpToQuote}
+          onOpenPhoto={openPhoto}
         />
       );
     },
-    [retry, userId, jumpedTo, selectMessage, react, openProfile, jumpToQuote],
+    [retry, userId, jumpedTo, selectMessage, react, openProfile, jumpToQuote, openPhoto],
   );
 
   /*
@@ -1836,7 +1877,7 @@ export default function ChatScreen() {
     setConfirmingReport(null);
     setSelected(null);
     try {
-      const result = await dmApi.report(channelId, seq);
+      const result = await channelApi.report(channelId, seq);
       setNotice(
         result.alreadyReported
           ? "You already reported this message."
@@ -1959,6 +2000,10 @@ export default function ChatScreen() {
         intensity={80}
         tint="light"
         style={[styles.header, { paddingTop: insets.top + space.sm }]}
+        onLayout={(event) => {
+          const { y, height } = event.nativeEvent.layout;
+          setHeaderBottom(y + height);
+        }}
       >
         <Pressable
           onPress={goBack}
@@ -2044,6 +2089,11 @@ export default function ChatScreen() {
               <MaterialIcons name="bolt" size={16} color={color.onAccent} />
               <Text style={styles.highlightsPillLabel}>Highlights</Text>
             </Pressable>
+            {/*
+              Three dots, not a grid. A grid says "a set of things laid out"; three dots is the
+              one glyph a phone user reads as "there is more behind this" without being taught,
+              and it is what every other menu in this app already uses.
+            */}
             <Pressable
               onPress={() => setGridOpen((open) => !open)}
               accessibilityRole="button"
@@ -2051,7 +2101,7 @@ export default function ChatScreen() {
               hitSlop={space.sm}
               style={styles.headerAction}
             >
-              <MaterialIcons name="grid-view" size={18} color={color.textPrimary} />
+              <MaterialIcons name="more-vert" size={20} color={color.textPrimary} />
             </Pressable>
           </>
         )}
@@ -2063,17 +2113,26 @@ export default function ChatScreen() {
             hitSlop={space.sm}
             style={styles.headerAction}
           >
-            <MaterialIcons name="more-horiz" size={20} color={color.textPrimary} />
+            {/* Vertical, like the group header beside it: one corner, one glyph, whatever the
+                conversation is. It held the horizontal pair while the group chats held a grid. */}
+            <MaterialIcons name="more-vert" size={20} color={color.textPrimary} />
           </Pressable>
         )}
       </BlurView>
 
       {/*
-        The grid dropdown: where this conversation's other screens live.
+        The dropdown: where this conversation's other screens live.
 
         Anchored under the header rather than shown as a permanent strip, because these are places
         you go occasionally and a row of six chips above every conversation spends the screen's
         most valuable space on navigation.
+
+        > **`top` is measured, and leaving it unset was the whole bug.** An absolutely positioned
+        > view with no `top` lays out at the top of its container, which here is the screen - so
+        > the panel opened OVER the status bar and the header, clipping the title and the back
+        > button into what looked like a divided header. The comment above already said "anchored
+        > under the header"; the anchor itself was never written, and nothing failed because a
+        > menu in the wrong place still renders and still works.
       */}
       {gridOpen && meta !== null && meta.scope !== "dm" && (
         <>
@@ -2083,7 +2142,7 @@ export default function ChatScreen() {
             accessibilityRole="button"
             accessibilityLabel="Close"
           />
-          <View style={styles.gridMenu}>
+          <View style={[styles.gridMenu, { top: headerBottom + space.xs }]}>
             {scopeLinks(meta.scope, meta).map((item) => (
               <Pressable
                 key={item.href}
@@ -2616,6 +2675,49 @@ export default function ChatScreen() {
             </View>
           </View>
         </View>
+      )}
+
+      {/*
+        A photo, full screen.
+
+        Last in the tree and absolutely positioned, so it covers the conversation, the pinned
+        strip and the composer rather than appearing inside them. The same component the gallery
+        uses - the only difference is that this one's first menu item is Reply, because here you
+        are already in the conversation the photo was posted in.
+      */}
+      {viewingPhoto !== null && viewingPhoto.mediaId !== null && (
+        <PhotoViewer
+          mediaId={viewingPhoto.mediaId}
+          senderName={viewingPhoto.senderName}
+          senderImage={viewingPhoto.senderImage}
+          takenAt={viewingPhoto.createdAt}
+          contextAction={{
+            label: "Reply",
+            icon: "reply",
+            onPress: () => {
+              setReplyingToSeq(viewingPhoto.seq);
+              setViewingPhoto(null);
+            },
+          }}
+          {...(viewingPhoto.senderId !== userId && meta?.canReport === true
+            ? {
+                report: {
+                  body:
+                    meta?.scope === "dm"
+                      ? // No club admin ever sees the contents of a DM, so say where it goes.
+                        "This photo goes to ClubChat moderators, who can read the messages around it. The other person is not told."
+                      : "This photo goes to the admins of this space, who can read the messages around it. The sender is not told.",
+                  run: async () => {
+                    const result = await channelApi.report(channelId!, viewingPhoto.seq);
+                    return result.alreadyReported
+                      ? "You already reported this photo."
+                      : "Reported. The sender is not told.";
+                  },
+                },
+              }
+            : {})}
+          onClose={() => setViewingPhoto(null)}
+        />
       )}
 
       {/*
@@ -3381,6 +3483,7 @@ const styles = StyleSheet.create({
 
   // Full-bleed, so a tap anywhere outside the card closes it.
   gridScrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 60 },
+  /** `top` is supplied at render from the measured header, and is not optional - see the note there. */
   gridMenu: {
     position: 'absolute',
     right: space.md,

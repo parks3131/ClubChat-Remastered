@@ -12,10 +12,12 @@
 
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { channelApi } from '../../../../../src/api.ts';
+import type { GalleryEntry } from '../../../../../src/api-types.ts';
+import { useSession } from '../../../../../src/chat-provider.tsx';
 import { RemoteImage } from '../../../../../src/media-bubble.tsx';
+import { PhotoViewer } from '../../../../../src/photo-viewer.tsx';
 import { color, space, type } from '../../../../../src/theme.ts';
 import { DataScreen, EmptyState } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
@@ -27,15 +29,53 @@ const GUTTER = 2;
 
 export default function GalleryScreen() {
   const { channelId } = useLocalSearchParams<{ channelId: string }>();
-  const [viewing, setViewing] = useState<string | null>(null);
+  const router = useRouter();
+  const { userId } = useSession();
+  const [viewing, setViewing] = useState<GalleryEntry | null>(null);
   const load = useLoad(() => channelApi.gallery(channelId), [channelId]);
+  // Only for `canReport`, which is the server's answer about this conversation and not something
+  // a gallery can derive: reporting does not exist at all in the Eboard scope.
+  const meta = useLoad(() => channelApi.meta(channelId), [channelId]);
   const { width } = useWindowDimensions();
 
   // The gutter appears between each pair and at each edge, so N columns need N+1 of them.
   const tile = Math.floor((width - GUTTER * (COLUMNS + 1)) / COLUMNS);
 
   if (viewing !== null) {
-    return <Viewer mediaId={viewing} onClose={() => setViewing(null)} />;
+    const entry = viewing;
+    const reportable = meta.data?.canReport === true && entry.senderId !== userId;
+    return (
+      <PhotoViewer
+        mediaId={entry.mediaId}
+        senderName={entry.senderName}
+        senderImage={entry.senderImage}
+        takenAt={entry.createdAt}
+        /*
+          "Show in chat" rather than "Reply", which is the one thing the gallery needs that chat
+          does not: a photograph here has been lifted out of the conversation it was said in, and
+          getting back to what was being talked about is the question somebody actually has.
+        */
+        contextAction={{
+          label: 'Show in chat',
+          icon: 'chat-bubble-outline',
+          onPress: () => router.push(`/chat/${channelId}?around=${entry.seq}`),
+        }}
+        {...(reportable
+          ? {
+              report: {
+                body: 'This photo goes to the admins of this space, who can read the messages around it. The sender is not told.',
+                run: async () => {
+                  const result = await channelApi.report(channelId, entry.seq);
+                  return result.alreadyReported
+                    ? 'You already reported this photo.'
+                    : 'Reported. The sender is not told.';
+                },
+              },
+            }
+          : {})}
+        onClose={() => setViewing(null)}
+      />
+    );
   }
 
   return (
@@ -49,7 +89,7 @@ export default function GalleryScreen() {
           {data.entries.map((entry) => (
             <Pressable
               key={entry.mediaId}
-              onPress={() => setViewing(entry.mediaId)}
+              onPress={() => setViewing(entry)}
               style={[styles.tile, { width: tile, height: tile }]}
               accessibilityRole="imagebutton"
               accessibilityLabel="Open photo"
@@ -76,36 +116,6 @@ export default function GalleryScreen() {
   );
 }
 
-/**
- * The full-screen viewer.
- *
- * The `display` variant rather than the original: a full-screen view does not need the raw file,
- * and the derived one is what the pipeline made for exactly this. The surface inverts, which is
- * the one place `inverseSurface` is the right token - a photograph is judged against dark.
- */
-function Viewer({ mediaId, onClose }: { mediaId: string; onClose: () => void }) {
-  return (
-    <View style={styles.viewer}>
-      <RemoteImage
-        mediaId={mediaId}
-        variant="display"
-        style={styles.full}
-        resizeMode="contain"
-        accessibilityLabel="Photo, full screen"
-      />
-      {/* Floating over the photograph rather than sitting in a bar under it, so nothing crops. */}
-      <Pressable
-        style={styles.close}
-        onPress={onClose}
-        accessibilityRole="button"
-        accessibilityLabel="Close the photo"
-      >
-        <MaterialIcons name="close" size={22} color={color.onInverseSurface} />
-      </Pressable>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: color.appBackground },
   grid: {
@@ -118,18 +128,4 @@ const styles = StyleSheet.create({
   tile: { backgroundColor: color.cardSunken, overflow: 'hidden' },
   image: { width: '100%', height: '100%' },
   more: { ...type.bodySmall, color: color.textSecondary, padding: space.md },
-
-  viewer: { flex: 1, backgroundColor: color.inverseSurface, justifyContent: 'center' },
-  full: { flex: 1, width: '100%' },
-  close: {
-    position: 'absolute',
-    top: space.lg,
-    right: space.md,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.45)',
-  },
 });

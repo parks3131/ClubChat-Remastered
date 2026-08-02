@@ -657,6 +657,39 @@ describe('galleries', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('carries who posted each photo, for the viewer that opens over it', async () => {
+    // The grid draws none of this. The full-screen viewer draws a face, a name and a date over
+    // the photograph - the same header whether it was opened from chat or from here - and it has
+    // nothing to draw it from unless the gallery read carries the sender.
+    const f = await withPhotos(1);
+    const avatar = crypto.randomUUID();
+    await h.db.update(users).set({ image: avatar }).where(eq(users.id, f.ownerId));
+
+    const result = await readGallery(h.db, await ctxFor(f.memberId), f.mainChannelId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.entries[0]!.senderId).toBe(f.ownerId);
+    expect(result.entries[0]!.senderName).toBe('Owner');
+    expect(result.entries[0]!.senderImage).toBe(avatar);
+  });
+
+  it('says "nobody" rather than a name for a deleted account', async () => {
+    const f = await withPhotos(1);
+    // Anonymized, not removed: the row survives so history stays attributed, and the viewer
+    // draws "Deleted member" from the null rather than from a name nobody may see any more.
+    await h.db
+      .update(users)
+      .set({ anonymizedAt: new Date(), image: crypto.randomUUID() })
+      .where(eq(users.id, f.ownerId));
+
+    const result = await readGallery(h.db, await ctxFor(f.memberId), f.mainChannelId);
+    if (!result.ok) return;
+    expect(result.entries[0]!.senderName).toBeNull();
+    expect(result.entries[0]!.senderImage).toBeNull();
+    // Still attributed by id, which is what keeps "is this mine?" answerable.
+    expect(result.entries[0]!.senderId).toBe(f.ownerId);
+  });
+
   it('excludes documents, deleted messages, and incomplete uploads', async () => {
     const f = await setup();
     const channel = await getChannelRef(h.db, f.mainChannelId);
@@ -746,6 +779,38 @@ describe('thumbnail derivation', () => {
     if (!result.ok) return;
     const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, media!));
     expect(result.url).toContain(row[0]!.objectKey);
+    // And the type follows the bytes it fell back TO, not the variant that was asked for.
+    expect(result.mime).toBe('image/jpeg');
+  });
+
+  it('says what the bytes are, because the object key has no extension to read', async () => {
+    /*
+     * The viewer's Download saves a file, and iOS decides what it is being handed from the
+     * extension alone - `createAsset` throws on a name that has none. The key is
+     * `message/2026-08/<uuid>`, so there is nothing to derive one from and the type has to
+     * travel with the URL.
+     */
+    const f = await setup();
+    const { media } = await uploadPhoto(f.ownerId, f.mainChannelId, { mime: 'image/png' });
+    const original = await resolveMediaRedirect(h.db, store, config, await ctxFor(f.ownerId), media!, {
+      variant: 'original',
+    });
+    if (!original.ok) return;
+    expect(original.mime).toBe('image/png');
+
+    // A derived variant is WebP whatever was uploaded - which is exactly why the viewer saves
+    // the original, since Photos will not take a WebP. Recorded directly rather than derived:
+    // `simulateUpload` writes zeroes, and Sharp cannot resize bytes that are not an image.
+    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, media!));
+    await h.db
+      .update(mediaObjects)
+      .set({ variants: { display: `${row[0]!.objectKey}.display.webp` } })
+      .where(eq(mediaObjects.id, media!));
+    const display = await resolveMediaRedirect(h.db, store, config, await ctxFor(f.ownerId), media!, {
+      variant: 'display',
+    });
+    if (!display.ok) return;
+    expect(display.mime).toBe('image/webp');
   });
 });
 
