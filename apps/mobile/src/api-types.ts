@@ -41,6 +41,13 @@ export type ClubDetail = {
   channelId: string | null;
   /** Present only for somebody inside the space. Null is "you are not in it". */
   eboardId: string | null;
+  /**
+   * The Eboard's chat channel, for a member of the space.
+   *
+   * Lets the hub open the conversation directly rather than pushing a landing screen that
+   * immediately redirects - two transitions for one tap. Gated exactly as `eboardId` is.
+   */
+  eboardChannelId: string | null;
   viewer: { role: ClubRole; isAdmin: boolean; isOwner: boolean };
   /** Admin tier only. The link is the only invite mechanism, so this is the club's front door. */
   inviteToken: string | null;

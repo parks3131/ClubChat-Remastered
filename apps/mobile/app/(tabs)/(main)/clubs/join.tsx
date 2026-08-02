@@ -35,6 +35,7 @@ import { clubApi } from '../../../../src/api.ts';
 import type { ClubSearchResult } from '../../../../src/api-types.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { color, radius, space, type } from '../../../../src/theme.ts';
+import { ARRIVED_FORWARD } from '../../../../src/nav.tsx';
 
 export default function JoinClubScreen() {
   const router = useRouter();
@@ -77,7 +78,7 @@ export default function JoinClubScreen() {
       const outcome = await clubApi.join(club.id);
       if (outcome.status === 'joined') {
         await client?.reconnect().catch(() => undefined);
-        router.replace(`/clubs/${club.id}`);
+        router.replace(`/clubs/${club.id}?${ARRIVED_FORWARD}`);
         return;
       }
       // Requested: stay here, and mark the row so the button cannot be pressed again.

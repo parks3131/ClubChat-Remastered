@@ -10,7 +10,7 @@
  */
 
 import { Stack } from 'expo-router';
-import { BackTo } from '../../../src/nav.tsx';
+import { BackTo, STACK_MOTION} from '../../../src/nav.tsx';
 import { color, type } from '../../../src/theme.ts';
 
 export default function ProfileStackLayout() {
@@ -21,6 +21,7 @@ export default function ProfileStackLayout() {
         headerTitleStyle: { ...type.headerTitle, color: color.accent },
         headerTintColor: color.accent,
         contentStyle: { backgroundColor: color.appBackground },
+        ...STACK_MOTION,
       }}
     >
       <Stack.Screen

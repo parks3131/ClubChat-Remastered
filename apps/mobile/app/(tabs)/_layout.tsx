@@ -140,6 +140,15 @@ export default function TabsLayout() {
         },
         tabBarActiveTintColor: color.accent,
         tabBarInactiveTintColor: color.textSecondary,
+        /*
+          No motion between destinations, declared rather than left to a default.
+
+          The four tabs are SIBLINGS, not depth - Calendar is not deeper than Chats - so sliding
+          between them would say something untrue about where you are. It also keeps the slide
+          meaning exactly one thing everywhere else: right-to-left is going in, left-to-right is
+          coming out. A gesture that means two things means neither.
+        */
+        animation: 'none',
       }}
     >
       {/*

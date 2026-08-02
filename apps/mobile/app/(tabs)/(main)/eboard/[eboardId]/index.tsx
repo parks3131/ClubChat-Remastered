@@ -18,6 +18,7 @@ import { Redirect, Stack, useLocalSearchParams } from 'expo-router';
 import { useDeclareEboard } from '../../../../../src/current-space.tsx';
 import { eboardApi } from '../../../../../src/api.ts';
 import { color, space, type } from '../../../../../src/theme.ts';
+import { ARRIVED_REDIRECT } from '../../../../../src/nav.tsx';
 import { Action, Badge, Body, Card, DataScreen, Row, SectionHeader } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
@@ -48,7 +49,7 @@ export default function EboardScreen() {
         // A member goes straight to chat. `Redirect` rather than push, so back does not return
         // them to a hub that would bounce them here again.
         if (eboard.viewer.isMember && eboard.channelId !== null) {
-          return <Redirect href={`/chat/${eboard.channelId}`} />;
+          return <Redirect href={`/chat/${eboard.channelId}?${ARRIVED_REDIRECT}`} />;
         }
 
         return (

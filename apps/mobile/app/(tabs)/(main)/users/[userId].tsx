@@ -25,6 +25,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { accountApi, dmApi } from '../../../../src/api.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { color, space, type } from '../../../../src/theme.ts';
+import { ARRIVED_FORWARD } from '../../../../src/nav.tsx';
 import { Action, Avatar, Body, DataScreen, DetailLine } from '../../../../src/ui.tsx';
 import { useLoad } from '../../../../src/use-load.ts';
 
@@ -91,7 +92,7 @@ function SendMessage({ userId, name }: { userId: string; name: string }) {
       const { channelId } = await dmApi.open(userId);
       // Replace rather than push: coming from the search, the profile was a step on the way to
       // the conversation, and backing out of the chat should not land on it again.
-      router.replace(`/chat/${channelId}`);
+      router.replace(`/chat/${channelId}?${ARRIVED_FORWARD}`);
     } catch {
       setError(`You cannot message ${name.split(' ')[0] ?? 'this member'} right now.`);
     } finally {

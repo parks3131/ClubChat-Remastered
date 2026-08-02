@@ -778,6 +778,14 @@ export type ClubDetail = {
   channelId: string | null;
   /** The Eboard space, present for every club - but only named to somebody in it. */
   eboardId: string | null;
+  /**
+   * The Eboard's chat channel, on the same terms as the id above.
+   *
+   * So the hub can open the conversation directly rather than pushing a landing screen that
+   * immediately redirects into it - two transitions for one tap, which is the difference
+   * between how entering the Eboard felt and how entering club main chat felt.
+   */
+  eboardChannelId: string | null;
   viewer: {
     role: ClubRole;
     isAdmin: boolean;
@@ -814,6 +822,7 @@ export async function readClub(
     member_count: string;
     channel_id: string | null;
     eboard_id: string | null;
+    eboard_channel_id: string | null;
   }>(sql`
     SELECT c.id::text AS id,
            c.name,
@@ -825,10 +834,14 @@ export async function readClub(
            ${isoUtc('c.created_at')} AS created_at,
            (SELECT count(*) FROM club_memberships m WHERE m.club_id = c.id) AS member_count,
            ch.id::text AS channel_id,
-           eb.id::text AS eboard_id
+           eb.id::text AS eboard_id,
+           ebch.id::text AS eboard_channel_id
       FROM clubs c
       LEFT JOIN channels ch ON ch.scope = 'club' AND ch.scope_id = c.id
       LEFT JOIN eboard_channels eb ON eb.club_id = c.id
+      -- The Eboard's CONVERSATION, so the hub can open it directly rather than pushing a
+      -- landing screen that immediately redirects. See the note beside eboardChannelId below.
+      LEFT JOIN channels ebch ON ebch.scope = 'eboard' AND ebch.scope_id = eb.id
      WHERE c.id = ${clubId}
   `);
 
@@ -853,6 +866,22 @@ export async function readClub(
       // of the Eboard at all, and returning its id here would be the one place that leaked.
       eboardId:
         row.eboard_id !== null && ctx.eboardMember.has(row.eboard_id) ? row.eboard_id : null,
+      /**
+       * The Eboard's chat channel, for a member of the space.
+       *
+       * > **So the hub can open the conversation directly, the way it already opens club main
+       * > chat.** A member entering the space is taken straight to chat (PRD/10 rule 15), and
+       * > routing that through the landing screen means one tap costs a push plus a replace -
+       * > two transitions for one act, which reads as a stumble on the way in and cannot be
+       * > tuned away, because the second transition is real.
+       *
+       * Gated exactly as `eboardId` is, and for the same reason: an ordinary member has no
+       * visibility of the space at all, so this must not become the one field that leaks it.
+       */
+      eboardChannelId:
+        row.eboard_id !== null && ctx.eboardMember.has(row.eboard_id)
+          ? row.eboard_channel_id
+          : null,
       viewer: {
         role,
         isAdmin,

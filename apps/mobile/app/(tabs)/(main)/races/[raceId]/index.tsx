@@ -22,6 +22,7 @@ import { Redirect, Stack, useLocalSearchParams } from 'expo-router';
 import { useDeclareRace } from '../../../../../src/current-space.tsx';
 import { raceApi } from '../../../../../src/api.ts';
 import { color, space, type } from '../../../../../src/theme.ts';
+import { ARRIVED_REDIRECT } from '../../../../../src/nav.tsx';
 import {
   Action,
   Badge,
@@ -62,7 +63,7 @@ export default function RaceHubScreen() {
         // A real race member is taken straight to chat. `replace` rather than `push`, so the
         // history does not contain a hub that back would return them to.
         if (viewer.hasAccess && viewer.channelId !== null) {
-          return <Redirect href={`/chat/${viewer.channelId}`} />;
+          return <Redirect href={`/chat/${viewer.channelId}?${ARRIVED_REDIRECT}`} />;
         }
 
         return (

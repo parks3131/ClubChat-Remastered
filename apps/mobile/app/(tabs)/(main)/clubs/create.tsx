@@ -31,6 +31,7 @@ import type { JoinPolicy } from '@clubchat/shared';
 import { clubApi } from '../../../../src/api.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { color, radius, space, type } from '../../../../src/theme.ts';
+import { ARRIVED_FORWARD } from '../../../../src/nav.tsx';
 
 const POLICIES: ReadonlyArray<{
   value: JoinPolicy;
@@ -82,7 +83,7 @@ export default function CreateClubScreen() {
       await client?.reconnect().catch(() => undefined);
       // `replace`, not push: going back from the new club must not return to a form that
       // would create a second one.
-      router.replace(`/clubs/${created.clubId}`);
+      router.replace(`/clubs/${created.clubId}?${ARRIVED_FORWARD}`);
     } catch {
       setFailed('Could not create the club. Check your connection and try again.');
       setSaving(false);

@@ -35,6 +35,7 @@ import { useSession } from '../../../../../../src/chat-provider.tsx';
 import { useDeclareClub } from '../../../../../../src/current-space.tsx';
 import { toDateKey } from '../../../../../../src/dates.ts';
 import { color, radius, space, type } from '../../../../../../src/theme.ts';
+import { ARRIVED_FORWARD } from '../../../../../../src/nav.tsx';
 import { Avatar, DataScreen } from '../../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../../src/use-load.ts';
 
@@ -102,7 +103,7 @@ export default function CreateRaceScreen() {
       }
       // `replace`, not push: going back from the new race must not return to a form that would
       // create a second one.
-      router.replace(`/races/${created.raceId}`);
+      router.replace(`/races/${created.raceId}?${ARRIVED_FORWARD}`);
     } catch {
       setFailed('Could not create the race. Check your connection and try again.');
       setSaving(false);

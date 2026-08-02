@@ -18,6 +18,75 @@ import { RemoteImage } from './media-bubble.tsx';
 import { color, radius, space, type } from './theme.ts';
 
 /**
+ * How every screen enters and leaves.
+ *
+ * > **One motion, one meaning: right-to-left is going in, left-to-right is coming out.** That is
+ * > what a stack push and pop already do on iOS, and declaring it here rather than inheriting it
+ * > makes it true on Android too, where the platform default differs.
+ *
+ * `gestureEnabled` is the same motion under a thumb instead of under the header, so it belongs
+ * with the animation rather than being a separate decision.
+ *
+ * `animationTypeForReplace: 'pop'` is the default because most replaces in this app are a way
+ * OUT: a back control with no history to pop, an edit that saved, a club that was deleted, a
+ * sign-out. The handful that are a way IN - you created a thing and landed on it - say so with
+ * a route param and override this per screen. See `ARRIVED_FORWARD`.
+ */
+export const STACK_MOTION = {
+  animation: 'slide_from_right',
+  gestureEnabled: true,
+  animationTypeForReplace: 'pop',
+} as const;
+
+/**
+ * The query param a forward `replace` carries, and the options it implies.
+ *
+ * A replace has no direction of its own - it swaps the top of the stack - so the screen being
+ * replaced INTO is the only place that can say which way the motion should read. Creating a club
+ * and landing on it is going in, even though the form must not be left behind; without this it
+ * would slide out, which reads as retreating from something you just made.
+ */
+export const ARRIVED_FORWARD = 'arrived=forward';
+
+/**
+ * The marker a REDIRECT carries, which is a third thing again.
+ *
+ * A race and an Eboard space both send a real member straight into chat, so entering one is a
+ * push onto a landing screen that immediately replaces itself. Left alone that is two animations
+ * for one act - slide in, then slide back out into the conversation - which is what "weird
+ * animation both ways when going in" was.
+ *
+ * The landing is a routing decision rather than a destination: nobody meant to be there. So the
+ * swap is instant, and what the member sees is the single slide they asked for, landing on chat.
+ * Club chat never had this because its hub links straight to the channel with no landing at all.
+ */
+export const ARRIVED_REDIRECT = 'arrived=redirect';
+
+export function motionFor(params: Record<string, string> | undefined) {
+  switch (params?.['arrived']) {
+    case 'forward':
+      return { animationTypeForReplace: 'push' } as const;
+    case 'redirect':
+      /*
+        **Both, and `animationTypeForReplace` is the one that was missing.**
+
+        A first attempt set only `animation: 'none'`, reasoning that an unseen landing screen
+        needs no transition. It did not work, and the video showed why: for a REPLACE the
+        direction option decides, so the stack's `pop` default still ran and the conversation
+        slid in from the left - going into a race animated as coming back out of one.
+
+        `push` fixes the direction; `none` suppresses the motion where it is honoured. Entering
+        a race or an Eboard space is a push onto a landing screen that immediately replaces
+        itself, and the landing never paints, so what is left is the single slide inward that
+        entering anything else gives.
+      */
+      return { animationTypeForReplace: 'push', animation: 'none' } as const;
+    default:
+      return {} as const;
+  }
+}
+
+/**
  * Going back: **pop if there is history, fall back to the declared parent if there is not.**
  *
  * A hook rather than logic inside `BackTo`, because two screens cannot use `BackTo` at all. Chat

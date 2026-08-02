@@ -13,6 +13,68 @@ Newest first.
 
 ---
 
+## 2026-08-02 (evening) - One motion everywhere, and a landing screen that was the real problem
+
+The ask was simple: going deeper slides right to left, coming back slides the other way, everywhere.
+Most of it already worked, because a stack push and pop do exactly that on iOS. What follows is the
+part that did not, and the two attempts it took to find out why.
+
+### What was actually inconsistent
+
+No animation was configured anywhere, so the app was inheriting the platform default - right on
+iOS, different on Android. Declaring it makes the rule true rather than lucky. Tabs stay instant:
+the four destinations are siblings rather than depth, and a gesture that means two things means
+neither. Swipe-from-the-edge is on, since it is the same motion under a thumb.
+
+The real inconsistency was `replace`, used 29 times and carrying no direction of its own. Most are
+a way **out** - a back control with no history to pop, an edit that saved, a club deleted, a sign
+out - so the stack's default treats a replace as a pop. The few that are a way **in** say so with a
+route param: creating a club and landing on it is going in, even though the form must not be left
+behind. Signing in is the same shape and was caught before it was reported.
+
+### Two wrong attempts at the Eboard and race, and what they were wrong about
+
+Reported from the device: club main chat felt right, entering a race or the Eboard did not, both
+ways. The first fix marked the redirect into chat as motionless, reasoning that an unseen landing
+screen needs no transition. **It did nothing**, and the video showed why - for a replace the
+DIRECTION option decides, and the stack's `pop` default was still running, so entering a race slid
+the conversation in from the left. Going in animated as coming back out.
+
+The second fix set the direction as well. Better, and still not right, which is when the useful
+question got asked: **why does it work for one and not the other two?**
+
+Because club main chat has no landing screen. The hub links straight to the channel - one push,
+nothing else. A race and an Eboard space each push a landing screen that immediately redirects,
+so one tap costs a push plus a cross-navigator replace. **Two transitions for one act cannot be
+tuned into feeling like one**, and both attempts were tuning the second transition rather than
+noticing there was one.
+
+So the hub now opens all three conversations directly, which makes the working case the only case.
+`RaceListItem.channelId` already existed and is null exactly when there is no roster row;
+`ClubDetail` gained `eboardChannelId` on the same terms as `eboardId`, which is what stops it
+becoming the one field that leaks a space an ordinary member has no visibility of.
+
+The landing screens stay, and still redirect. A notification, a direct URL and a non-member all
+still arrive that way and still need the decision they make. Only the hub stopped going through
+them.
+
+### The thing worth remembering
+
+Three attempts, and the first two were competent work on the wrong layer. The report that unlocked
+it was not a better description of the symptom - it was **"why does it work for one and not the
+other two?"**, which is a question about the difference rather than about the defect. The
+difference was structural and had been visible in the routing the whole time.
+
+### Verified
+
+774 tests, 82 constraint assertions, every gate. Confirmed working on the device by the founder,
+which is the only place a native stack animation can be judged - a browser does not animate one.
+`hub-entry.test.ts` pins the two fields the hub now navigates on, because the consequence of a
+regression changed: a leaked channel id used to be a wrong badge and is now a tap into a
+conversation the server will refuse. Ungating the Eboard channel fails two of its three cases.
+
+---
+
 ## 2026-08-02 (last, again) - The same bug one row over, a race nobody lost, and a spinner I added
 
 Three more from the phone, and the pattern across all three is that each was a **second instance

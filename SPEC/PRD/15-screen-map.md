@@ -280,6 +280,28 @@ again. The **tab bar label stays "Calendar"** either way - only the header title
 why the club-scoped and cross-club calendars are one component: they are one screen with a
 parameter, reached two ways.
 
+### Motion
+
+One rule, everywhere: **going deeper slides right to left, coming back slides left to right.**
+That is what a stack push and pop already do; declaring it rather than inheriting it is what makes
+it true on Android as well. The edge-swipe gesture is the same motion under a thumb and is on
+throughout.
+
+**Switching between the four destinations does not slide.** They are siblings rather than depth,
+and a motion that means both "you went in" and "you moved across" means neither.
+
+**A replace carries no direction of its own**, so the screen being replaced into says which way it
+reads. Most replaces here are a way out - a back control with no history to pop, a saved edit, a
+deleted club, a sign-out - and a few are a way in: creating a club or a race and landing on it,
+signing in, opening a conversation from a member's profile.
+
+> **A conversation is opened directly, never through a landing screen.** The club hub links
+> straight to its main chat, to the Eboard's chat for a member of the space, and to a race's chat
+> for somebody on its roster. Routing those through the landing screen meant one tap cost a push
+> plus a redirect - two transitions for one act, which cannot be made to feel like one and was
+> reported as exactly that. The landings remain for the arrivals that genuinely need a decision: a
+> notification, a direct URL, and anybody without access.
+
 ### Icons
 
 One vocabulary, taken from v1. An icon that means a thing in one place means it everywhere.

@@ -26,7 +26,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SessionProvider } from '../src/chat-provider.tsx';
 import { CurrentSpaceProvider } from '../src/current-space.tsx';
 import { FontGate } from '../src/fonts.tsx';
-import { BackTo } from '../src/nav.tsx';
+import { BackTo, STACK_MOTION, motionFor} from '../src/nav.tsx';
 import { color, type } from '../src/theme.ts';
 
 export default function RootLayout() {
@@ -52,13 +52,26 @@ export default function RootLayout() {
               headerTitleStyle: { ...type.headerTitle, color: color.accent },
               headerTintColor: color.accent,
               contentStyle: { backgroundColor: color.appBackground },
+              ...STACK_MOTION,
             }}
           >
             <Stack.Screen name="index" options={{ headerShown: false }} />
             <Stack.Screen name="sign-in" options={{ title: 'ClubChat', headerShown: false }} />
 
             {/* The four destinations, and everything that keeps the tab bar beneath them. */}
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen
+              name="(tabs)"
+              options={{
+                headerShown: false,
+                /*
+                  Signing in replaces sign-in with the app, and entering the app is going IN.
+                  The stack's default treats a replace as a way out, which is right for the many
+                  places that use one to leave something - and wrong for exactly this one, where
+                  it would slide the app in from the left as though you had retreated into it.
+                */
+                animationTypeForReplace: 'push',
+              }}
+            />
 
             {/*
               Chat opts out of the native header and renders its own glass-blur one, per the
@@ -66,7 +79,18 @@ export default function RootLayout() {
               which is exactly why it takes an explicit back-fallback rather than relying on
               history.
             */}
-            <Stack.Screen name="chat/[channelId]" options={{ headerShown: false }} />
+            <Stack.Screen
+              name="chat/[channelId]"
+              options={({ route }) => ({
+                headerShown: false,
+                /*
+                  A conversation opened by Send message slides IN. That path replaces rather than
+                  pushes - the profile was a step on the way and should not be behind you - so
+                  without this it would slide out of a screen you were moving into.
+                */
+                ...motionFor((route.params ?? {}) as Record<string, string>),
+              })}
+            />
 
             {/*
               Readable signed in AND signed out, which is why they are outside every guard - and

@@ -157,7 +157,23 @@ export default function ClubHubScreen() {
                     tint={color.tertiary}
                     label="Eboard & Council"
                     subtitle="Private space for admins"
-                    href={`/eboard/${data.club.eboardId}`}
+                    /*
+                      Straight to the conversation, exactly as CLUB MAIN CHAT above does.
+
+                      > **This is why club chat felt right and the other two did not.** A member
+                      > entering the space is taken to chat anyway (PRD/10 rule 15); routing that
+                      > through the landing screen made one tap cost a push plus a replace, and
+                      > two transitions for one act cannot be tuned into feeling like one. The
+                      > landing still exists for the paths that genuinely need a decision - a
+                      > direct URL, a notification, somebody who is not a member.
+
+                      The row only renders for a member at all, so the channel is there.
+                    */
+                    href={
+                      data.club.eboardChannelId !== null
+                        ? `/chat/${data.club.eboardChannelId}`
+                        : `/eboard/${data.club.eboardId}`
+                    }
                     /*
                       The row that had no badge, which is what made unread in the board's chat
                       invisible everywhere: the club row totalled it and nothing here said where
@@ -199,7 +215,17 @@ export default function ClubHubScreen() {
                 previewed.map((race, index) => (
                   <View key={race.id}>
                     {index > 0 && <View style={styles.divider} />}
-                    <Link href={`/races/${race.id}`} asChild accessibilityRole="link">
+                    {/*
+                      A race the member is ON opens its conversation directly; one they are not
+                      on opens the preview, which is where the request-to-join lives. Same rule
+                      as the Eboard row above, and `channelId` is null precisely when there is no
+                      roster row - so this cannot open a chat somebody may not read.
+                    */}
+                    <Link
+                      href={race.channelId !== null ? `/chat/${race.channelId}` : `/races/${race.id}`}
+                      asChild
+                      accessibilityRole="link"
+                    >
                       <Pressable
                         style={styles.raceRow}
                         accessibilityLabel={`${race.name}${race.hasAccess ? '' : ', no access'}`}
@@ -251,7 +277,13 @@ export default function ClubHubScreen() {
                 onDismiss={() => setRacesOpen(false)}
                 onPick={(raceId) => {
                   setRacesOpen(false);
-                  router.push(`/races/${raceId}`);
+                  // The same rule as the preview rows: a race you are on opens its conversation,
+                  // one you are not opens the preview. Picking from the sheet must not take a
+                  // different route to the same place, or the two would drift.
+                  const picked = races.data?.races.find((race) => race.id === raceId);
+                  router.push(
+                    picked?.channelId != null ? `/chat/${picked.channelId}` : `/races/${raceId}`,
+                  );
                 }}
               />
             )}

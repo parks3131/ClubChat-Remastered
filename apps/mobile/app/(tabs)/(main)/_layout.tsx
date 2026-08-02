@@ -43,7 +43,7 @@
  */
 
 import { Stack } from 'expo-router';
-import { BackTo, BackToClub, SpaceHeaderTitle } from '../../../src/nav.tsx';
+import { BackTo, BackToClub, SpaceHeaderTitle, STACK_MOTION, motionFor} from '../../../src/nav.tsx';
 import { color, type } from '../../../src/theme.ts';
 
 /**
@@ -120,6 +120,7 @@ export default function MainStackLayout() {
         headerTitleStyle: { ...type.headerTitle, color: color.accent },
         headerTintColor: color.accent,
         contentStyle: { backgroundColor: color.appBackground },
+        ...STACK_MOTION,
       }}
     >
       {/*
@@ -220,6 +221,12 @@ export default function MainStackLayout() {
         options={({ route }) => {
           const params = (route.params ?? {}) as Record<string, string>;
           return {
+            /*
+              A club reached by CREATING or JOINING it slides in, not out. The replace is right -
+              the form must not be left behind - but a replace has no direction of its own, so the
+              arriving screen is the only place that can say which way the motion reads.
+            */
+            ...motionFor(params),
             title: 'Club',
             headerTitle: () => (
               <SpaceHeaderTitle expect={{ kind: 'club', id: params['clubId'] }} fallback="Club" />
@@ -303,6 +310,8 @@ export default function MainStackLayout() {
         options={({ route }) => {
           const params = (route.params ?? {}) as Record<string, string>;
           return {
+            // A race reached by creating it slides IN, like the club hub above.
+            ...motionFor(params),
             title: 'Race',
             // The RACE's identity, not its club's. A race is a mini-club with its own name,
             // picture and profile, and wearing its parent's face here would make the header
