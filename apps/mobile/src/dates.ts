@@ -97,6 +97,35 @@ export function formatDateOnly(dateKey: string): string {
   });
 }
 
+/**
+ * The label on a chat's day separator: "Today", "Yesterday", or the date.
+ *
+ * **Compared as local date KEYS, never as instants.** "Was this today?" is a question about the
+ * reader's calendar, and subtracting milliseconds answers a different one - two timestamps 20
+ * hours apart can be either the same day or two days apart depending on where the boundary falls.
+ * Keys make that impossible to get wrong: same string, same day, in the reader's own timezone.
+ *
+ * The year appears only when it is not this one. A chat is read in the present, so "Mar 2" means
+ * this March until it does not, and spelling out a year on every older message is noise.
+ *
+ * `now` is a parameter so the boundary can be tested rather than waited for.
+ */
+export function formatDaySeparator(dateKey: string, now: Date = new Date()): string {
+  const today = toDateKey(now);
+  if (dateKey === today) return 'Today';
+
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  if (dateKey === toDateKey(yesterday)) return 'Yesterday';
+
+  const date = fromDateKey(dateKey);
+  return date.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+  });
+}
+
 /** "5:00 PM". The time of day alone, for an item already filed under its date. */
 export function formatTimeOfDay(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });

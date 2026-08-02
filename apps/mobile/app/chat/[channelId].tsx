@@ -23,6 +23,7 @@ import {
   type ReactionEmoji,
 } from "@clubchat/shared";
 import { useSession } from "../../src/chat-provider.tsx";
+import { formatDaySeparator, toDateKey } from "../../src/dates.ts";
 import { channelApi, dmApi, type ChannelMeta } from "../../src/api.ts";
 import { DocumentBubble, PhotoBubble, RemoteImage } from "../../src/media-bubble.tsx";
 import { PhotoViewer } from "../../src/photo-viewer.tsx";
@@ -99,7 +100,26 @@ type Row =
       documentSize?: number | undefined;
       /** The quote to draw before the ack lands. Local only - see `PendingSend.replyTo`. */
       replyTo?: MessageReplyRef | undefined;
-    };
+    }
+  /**
+   * The "Last read" rule, drawn above the first message that was unread on arrival.
+   *
+   * Carries nothing: where it sits is the entire content, so there is nothing to put on it.
+   */
+  | { kind: "lastRead" }
+  /** A day's heading, above the first message sent on that local date. */
+  | { kind: "day"; dateKey: string };
+
+/**
+ * The one and only "Last read" row.
+ *
+ * **A module constant, so its identity survives every rebuild of the list**, which is what makes
+ * it safe to hold. The arrival remembers its target row and re-applies it as cards and photos
+ * finish measuring, and it finds that row by `indexOf` - so a target rebuilt into a fresh object
+ * on the next render silently stops being found and the placement quietly gives up. A message row
+ * has that hazard by nature; this one does not have to.
+ */
+const LAST_READ_ROW: Row = { kind: "lastRead" };
 
 /**
  * Whether a card bubble can be held to open the message menu.
@@ -1120,6 +1140,17 @@ export default function ChatScreen() {
   /** The photo being looked at full screen, or null. The whole message - see `openPhoto`. */
   const [viewingPhoto, setViewingPhoto] = useState<MessageEnvelope | null>(null);
   /**
+   * The read cursor as it stood on arrival, as STATE, because the "Last read" rule is drawn
+   * from it and the list has to be rebuilt when it lands.
+   *
+   * The ref of the same name below is what the landing effect reads, in the same tick it is set.
+   * Both exist because they are needed at different moments: a ref cannot trigger the re-render
+   * that draws the divider, and state is not readable synchronously by the effect that captured
+   * it. See `entryLastReadRef` for why the capture has to happen before anything marks the
+   * channel read.
+   */
+  const [entryLastRead, setEntryLastRead] = useState<number | null>(null);
+  /**
    * Set once Delete is tapped. Deleting is irreversible and destroys somebody's words, so it
    * gets the same second deliberate step reporting does rather than firing off a long press.
    */
@@ -1236,7 +1267,49 @@ export default function ChatScreen() {
    * because reversing on each render would allocate a new array per keystroke and defeat the
    * memoized rows underneath it.
    */
-  const invertedRows = useMemo(() => [...rows].reverse(), [rows]);
+  const invertedRows = useMemo(() => {
+    /*
+     * Both markers go in here rather than into `rows`, for the same reason the reversal does:
+     * `rows` is what history actually is, and a day heading and a "Last read" rule are facts
+     * about ONE READER looking at it. The pinned strip, the jump lookup and the unread arithmetic
+     * all read `rows`, and none of them should have to know a marker might be sitting in it.
+     *
+     * Built in chronological order and reversed at the end. Doing it the other way means
+     * reasoning about a list that reads bottom-upwards, which is where an off-by-one hides in
+     * plain sight.
+     */
+    const cutoff = entryLastRead;
+    const firstUnread =
+      cutoff === null
+        ? -1
+        : rows.findIndex((row) => row.kind === "message" && row.message.seq > cutoff);
+
+    const withMarkers: Row[] = [];
+    let previousDay: string | null = null;
+
+    rows.forEach((row, index) => {
+      // A pending row has no timestamp yet - it is being sent right now, so it belongs to today.
+      const dayKey =
+        row.kind === "message" ? toDateKey(new Date(row.message.createdAt)) : toDateKey(new Date());
+      if (dayKey !== previousDay) {
+        withMarkers.push({ kind: "day", dateKey: dayKey });
+        previousDay = dayKey;
+      }
+
+      /*
+       * The day heading comes FIRST where both land on the same message, which is the order the
+       * two facts are true in: the reader crossed into a new day, and then into what they had
+       * not read. Reversed, that draws the date above the rule above the message.
+       *
+       * No rule above the very first message either: one at the top of an empty history says
+       * "everything below is new" about a conversation the reader has simply never opened.
+       */
+      if (index === firstUnread && firstUnread > 0) withMarkers.push(LAST_READ_ROW);
+      withMarkers.push(row);
+    });
+
+    return withMarkers.reverse();
+  }, [rows, entryLastRead]);
 
   /** The newest message this screen currently holds, or 0 for an empty conversation. */
   const newestSeq = useMemo(
@@ -1481,7 +1554,10 @@ export default function ChatScreen() {
   useEffect(() => {
     if (entryLastReadRef.current !== null || !client || !channelId) return;
     const channel = client.channels.find((entry) => entry.id === channelId);
-    if (channel) entryLastReadRef.current = channel.lastReadSeq;
+    if (channel) {
+      entryLastReadRef.current = channel.lastReadSeq;
+      setEntryLastRead(channel.lastReadSeq);
+    }
   }, [client, channelId, revision]);
 
   /**
@@ -1545,9 +1621,19 @@ export default function ChatScreen() {
      * cleared the moment the reader touches the list, which is what stops this from becoming the
      * yanking bug it is descended from: they always win.
      */
-    pendingLandingRef.current = firstUnread;
-    placeAtTop(firstUnread);
-  }, [loading, rows, around, newestSeq, placeAtTop]);
+    /*
+     * The DIVIDER is the landing target when there is one, not the message under it.
+     *
+     * Placing the first unread message at the top of the screen puts the rule that explains it
+     * one row above the fold, so the reader arrives among new messages with the thing that says
+     * so just out of sight. Landing on the rule itself is what makes it do its job, and it is
+     * also the sturdier target: `LAST_READ_ROW` is a constant, so the re-application below cannot
+     * lose it to a rebuilt row object the way a message can.
+     */
+    const target = invertedRows.includes(LAST_READ_ROW) ? LAST_READ_ROW : firstUnread;
+    pendingLandingRef.current = target;
+    placeAtTop(target);
+  }, [loading, rows, invertedRows, around, newestSeq, placeAtTop]);
 
   /**
    * Keep "what the reader has seen" level with the conversation while they are at the bottom.
@@ -1699,14 +1785,41 @@ export default function ChatScreen() {
    * it is handed stops changing - hence the `useCallback`s above, each taking a `seq` and closing
    * over nothing that moves per row.
    */
-  const keyExtractor = useCallback(
-    (row: Row) =>
-      row.kind === "message" ? `m-${row.message.seq}` : `p-${row.clientMsgId}`,
-    [],
-  );
+  const keyExtractor = useCallback((row: Row) => {
+    switch (row.kind) {
+      case "message":
+        return `m-${row.message.seq}`;
+      case "pending":
+        return `p-${row.clientMsgId}`;
+      case "day":
+        return `d-${row.dateKey}`;
+      case "lastRead":
+        return "last-read";
+    }
+  }, []);
 
   const renderRow = useCallback(
     ({ item }: { item: Row }) => {
+      if (item.kind === "day") {
+        return (
+          <View style={styles.dayRow}>
+            <Text style={styles.dayLabel}>{formatDaySeparator(item.dateKey)}</Text>
+          </View>
+        );
+      }
+      if (item.kind === "lastRead") {
+        return (
+          <View
+            style={styles.lastReadRow}
+            accessibilityRole="header"
+            accessibilityLabel="Last read. Everything below this is new."
+          >
+            <View style={styles.lastReadRule} />
+            <Text style={styles.lastReadLabel}>Last read</Text>
+            <View style={styles.lastReadRule} />
+          </View>
+        );
+      }
       if (item.kind === "pending") {
         return (
           <PendingRow row={item} onRetry={retry} onJumpToQuote={jumpToQuote} />
@@ -3311,6 +3424,41 @@ const styles = StyleSheet.create({
   sentMeta: { ...type.label, color: color.onAccent, opacity: 0.8 },
   receivedMeta: { ...type.label, color: color.textSecondary },
   systemRow: { alignItems: "center", paddingVertical: space.xs },
+  /*
+    The "Last read" rule: a line through the conversation with the label sitting in it.
+
+    In the accent rather than in a neutral, and that is the point of it - it is the one horizontal
+    line in the conversation that means something, and a grey rule between two messages reads as a
+    separator rather than as a place. It gets more vertical room than a system line for the same
+    reason: it is a boundary between two states of the conversation, not a remark inside it.
+  */
+  lastReadRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm + 2,
+  },
+  lastReadRule: { flex: 1, height: 1, backgroundColor: color.accent },
+  lastReadLabel: { ...type.label, color: color.accent, textTransform: "none" },
+  /*
+    A day heading: a centred chip, not a full-width rule.
+
+    Deliberately quieter than the "Last read" line above, and the contrast is the point - a date
+    tells you where you are in the conversation, where the rule tells you where to start reading.
+    Two full-width lines in the same list would compete, and the one that matters would lose.
+  */
+  dayRow: { alignItems: "center", paddingVertical: space.sm },
+  dayLabel: {
+    ...type.label,
+    color: color.textSecondary,
+    textTransform: "none",
+    backgroundColor: color.cardSunken,
+    borderRadius: radius.pill,
+    paddingHorizontal: space.sm + 4,
+    paddingVertical: space.xs,
+    overflow: "hidden",
+  },
   /* Full width under the sentence, so the options are real targets rather than a preview. */
   cardWrap: { alignSelf: "stretch", paddingHorizontal: space.md, paddingTop: space.sm },
   cardMenu: { alignSelf: "flex-end", paddingTop: space.xs, paddingHorizontal: space.xs },
