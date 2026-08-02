@@ -11,13 +11,13 @@
 
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Link, Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { Link, Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { RemoteImage } from '../../../../../src/media-bubble.tsx';
 import { BackAlwaysTo } from '../../../../../src/nav.tsx';
 import { unreadCount } from '@clubchat/shared';
-import { clubApi, raceApi } from '../../../../../src/api.ts';
+import { channelApi, clubApi, raceApi } from '../../../../../src/api.ts';
 import { useSession } from '../../../../../src/chat-provider.tsx';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import { DataScreen, SearchField } from '../../../../../src/ui.tsx';
@@ -59,9 +59,32 @@ export default function ClubHubScreen() {
   // header below can show the club's identity rather than the screen's.
   useDeclareClub(clubId, club.data?.club.name, club.data?.club.image);
 
+  /*
+   * Per-channel unread, from a LIVE read rather than from the session's copy.
+   *
+   * The session's `channels` is filled once at sign-in and never replaced, so badging from it
+   * showed the counts as they stood when the app started - which is how this screen came to
+   * disagree with the chat list and how "it says nine and I cannot find them" happened.
+   */
+  const states = useLoad(() => channelApi.states(), [revision]);
+  useFocusEffect(
+    useCallback(() => {
+      states.reload();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []),
+  );
+
   const unreadFor = (channelId: string | null): number => {
     if (channelId === null) return 0;
-    const channel = channels.find((entry) => entry.id === channelId);
+    const channel = states.data?.channels.find((entry) => entry.id === channelId);
+    return channel ? unreadCount(channel) : 0;
+  };
+
+  /** Unread in the one channel of a given scope belonging to this club. */
+  const unreadForScope = (scope: 'eboard' | 'race', scopeId: string): number => {
+    const channel = states.data?.channels.find(
+      (entry) => entry.scope === scope && entry.scopeId === scopeId,
+    );
     return channel ? unreadCount(channel) : 0;
   };
 
@@ -134,6 +157,16 @@ export default function ClubHubScreen() {
                     label="Eboard & Council"
                     subtitle="Private space for admins"
                     href={`/eboard/${data.club.eboardId}`}
+                    /*
+                      The row that had no badge, which is what made unread in the board's chat
+                      invisible everywhere: the club row totalled it and nothing here said where
+                      it was. A total that does not resolve to a place is worse than no total.
+                    */
+                    badge={
+                      unreadForScope('eboard', data.club.eboardId) > 0
+                        ? String(unreadForScope('eboard', data.club.eboardId))
+                        : undefined
+                    }
                   />
                 </>
               )}

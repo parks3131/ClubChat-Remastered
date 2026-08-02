@@ -79,6 +79,31 @@ export type AccessContext = {
    */
   readonly blockedEither: ReadonlySet<string>;
   /**
+   * Channels this user keeps at the top of their own chat list.
+   *
+   * A **conversation** pin, which is a different thing from a **message** pin and shares only
+   * the word. A message pin is an act of authority in a shared room, gated by
+   * `canPinInChannel` and visible to everybody; this is a fact about one person's list that
+   * nobody else can observe. Scope-agnostic, so a club and a DM sort by one rule.
+   */
+  readonly pinnedChannels: ReadonlySet<string>;
+  /**
+   * Channel id -> the highest seq this user has hidden from their own view.
+   *
+   * > **The floor "Delete chat" writes, and the reason it does not contradict invariant 7.**
+   * > Nothing is deleted: the log is untouched and the other participant keeps every message.
+   * > One person's view starts higher up it.
+   *
+   * Loaded here rather than queried per read for the reason `dmThreads` is: a rule this many
+   * reads have to honour must have exactly one definition, or it becomes the hand-copied
+   * predicate that shipped a whole phase of invisible race chat. Ask it through
+   * `clearedFloor` and never re-derive it.
+   *
+   * Absent means nothing cleared, which is the overwhelmingly common case, so this map is
+   * empty for almost everybody.
+   */
+  readonly clearedFloors: ReadonlyMap<string, number>;
+  /**
    * Gates the DM report queue, and nothing else.
    *
    * Not a role in any club and not a tier above Owner: it grants exactly one capability,
@@ -104,6 +129,20 @@ type ContextRow = {
   detail: string | null;
   flag: boolean | null;
 };
+
+/**
+ * How far up this channel's log the viewer's own view starts.
+ *
+ * Zero when they have never cleared it, which is every channel for almost everybody - so a
+ * reader of this can always compare `seq > clearedFloor(...)` without branching on absence.
+ *
+ * **One definition, asked everywhere.** Six reads return messages and every one of them has to
+ * honour this; a rule honoured by five of six is a leak rather than a feature, and the shape of
+ * that mistake is written into this codebase twice already.
+ */
+export function clearedFloor(ctx: AccessContext, channelId: string): number {
+  return ctx.clearedFloors.get(channelId) ?? 0;
+}
 
 /**
  * Load everything the predicates need for one user, in one round trip.
@@ -161,6 +200,19 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
       FROM member_blocks b
      WHERE b.blocker_id = ${userId} OR b.blocked_id = ${userId}
     UNION ALL
+    -- A presence row: pinned is the existence of the row, so there is no detail to carry.
+    SELECT 'pin'::text AS kind, p.channel_id::text AS id, NULL::text AS detail,
+           NULL::boolean AS flag
+      FROM channel_pins p
+     WHERE p.user_id = ${userId}
+    UNION ALL
+    -- Not a presence row: the floor rides in the detail column as text, because every branch
+    -- of this UNION has to agree on column types and the others are already text.
+    SELECT 'clear'::text AS kind, c.channel_id::text AS id,
+           c.cleared_before_seq::text AS detail, NULL::boolean AS flag
+      FROM channel_clears c
+     WHERE c.user_id = ${userId}
+    UNION ALL
     SELECT 'moderator'::text AS kind, u.id::text AS id, NULL::text AS detail,
            NULL::boolean AS flag
       FROM users u
@@ -197,6 +249,8 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
   const raceRoster = new Set<string>();
   const dmThreads = new Map<string, DmThread>();
   const blockedEither = new Set<string>();
+  const pinnedChannels = new Set<string>();
+  const clearedFloors = new Map<string, number>();
   let isPlatformModerator = false;
   let signinBlocked = false;
   let displayName: string | null = null;
@@ -217,6 +271,13 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
       });
     } else if (row.kind === 'block') {
       blockedEither.add(row.id);
+    } else if (row.kind === 'pin') {
+      pinnedChannels.add(row.id);
+    } else if (row.kind === 'clear' && row.detail !== null) {
+      // `::text` in the query, so this is a string here. Parsed rather than cast, because a
+      // cast would hand a NaN straight into a comparison that then hides nothing.
+      const floor = Number.parseInt(row.detail, 10);
+      if (Number.isFinite(floor)) clearedFloors.set(row.id, floor);
     } else if (row.kind === 'moderator') {
       isPlatformModerator = true;
     } else if (row.kind === 'signin_blocked') {
@@ -237,6 +298,8 @@ export async function loadAccessContext(db: Db, userId: string): Promise<AccessC
     raceRoster,
     dmThreads,
     blockedEither,
+    pinnedChannels,
+    clearedFloors,
     isPlatformModerator,
     signinBlocked,
   };
@@ -255,6 +318,9 @@ export function accessContextOf(init: {
    */
   dmThreads?: Iterable<{ conversationId: string; otherUserId: string; sharesClub?: boolean }>;
   blockedEither?: Iterable<string>;
+  pinnedChannels?: Iterable<string>;
+  /** Channel id to the floor below which that channel's messages are hidden from this user. */
+  clearedFloors?: Iterable<readonly [string, number]>;
   isPlatformModerator?: boolean;
   signinBlocked?: boolean;
   displayName?: string | null;
@@ -278,6 +344,8 @@ export function accessContextOf(init: {
     raceRoster: new Set(init.raceRoster ?? []),
     dmThreads,
     blockedEither: new Set(init.blockedEither ?? []),
+    pinnedChannels: new Set(init.pinnedChannels ?? []),
+    clearedFloors: new Map(init.clearedFloors ?? []),
     isPlatformModerator: init.isPlatformModerator ?? false,
     signinBlocked: init.signinBlocked ?? false,
   };

@@ -7,7 +7,20 @@
  * inbox, no drain-on-connect path and no delete-after-delivery job. See ADR-0003.
  */
 
-import { and, asc, desc, eq, getTableColumns, gt, gte, isNull, lt, lte, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  gt,
+  gte,
+  isNull,
+  lt,
+  lte,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
   conversationPreview,
@@ -20,7 +33,7 @@ import {
 import type { Db } from '../db/client.ts';
 import { channels, messages, users } from '../db/schema.ts';
 import { isoUtc } from '../db/sql-helpers.ts';
-import type { AccessContext } from '../policy/context.ts';
+import { clearedFloor, type AccessContext } from '../policy/context.ts';
 import { canPostInChannel, type ChannelRef } from '../policy/predicates.ts';
 import {
   accessibleChannelPredicate,
@@ -199,12 +212,14 @@ export async function listAccessibleChannels(db: Db, userId: string): Promise<Ch
   const result = await db.execute<{
     id: string;
     scope: string;
+    scope_id: string;
     club_id: string | null;
     last_seq: number;
     last_read_seq: number;
   }>(sql`
     SELECT c.id,
            c.scope,
+           c.scope_id,
            c.club_id,
            c.last_seq,
            COALESCE(rc.last_read_seq, 0) AS last_read_seq
@@ -219,10 +234,27 @@ export async function listAccessibleChannels(db: Db, userId: string): Promise<Ch
   return result.rows.map((row) => ({
     id: row.id,
     scope: row.scope as ChannelState['scope'],
+    scopeId: row.scope_id,
     clubId: row.club_id,
     lastSeq: row.last_seq,
     lastReadSeq: row.last_read_seq,
   }));
+}
+
+/**
+ * The viewer's own floor into a channel, as a `WHERE` fragment.
+ *
+ * > **Every read that returns messages composes this, and that is why each of them takes an
+ * > access context rather than a bare channel id.** The floor is per person - "Delete chat"
+ * > hides one participant's view of a shared log without touching the other's - so a read that
+ * > does not know who is asking cannot honour it. Making the context a required argument turns
+ * > "this read forgot the floor" into a type error instead of a leak nobody would notice.
+ *
+ * Almost always `seq > 0`, which every row satisfies, so this costs nothing for the
+ * overwhelming majority of reads.
+ */
+function visibleToViewer(ctx: AccessContext, channelId: string): SQL {
+  return gt(messages.seq, clearedFloor(ctx, channelId));
 }
 
 /**
@@ -233,14 +265,16 @@ export async function listAccessibleChannels(db: Db, userId: string): Promise<Ch
  */
 export async function readHistory(
   db: Db,
+  ctx: AccessContext,
   channelId: string,
   opts: { before?: number | undefined; limit?: number | undefined } = {},
 ): Promise<MessageEnvelope[]> {
   const limit = Math.min(opts.limit ?? HISTORY_PAGE_SIZE, 200);
+  const floor = visibleToViewer(ctx, channelId);
   const where =
     opts.before === undefined
-      ? eq(messages.channelId, channelId)
-      : and(eq(messages.channelId, channelId), lt(messages.seq, opts.before));
+      ? and(eq(messages.channelId, channelId), floor)
+      : and(eq(messages.channelId, channelId), lt(messages.seq, opts.before), floor);
 
   const rows = await selectMessages(db)
     .where(where)
@@ -269,6 +303,7 @@ export async function readHistory(
  */
 export async function readAround(
   db: Db,
+  ctx: AccessContext,
   channelId: string,
   seq: number,
   radius = 20,
@@ -285,6 +320,10 @@ export async function readAround(
         eq(messages.channelId, channelId),
         gte(messages.seq, seq - span),
         lte(messages.seq, seq + span),
+        // A jump target below the viewer's own floor lands on an empty window rather than on
+        // messages they cleared - a deep link from a notification predating the clear is
+        // exactly how that would otherwise be reachable.
+        visibleToViewer(ctx, channelId),
       ),
     )
     .orderBy(asc(messages.seq));
@@ -323,6 +362,7 @@ export async function readAround(
  */
 export async function readHighlights(
   db: Db,
+  ctx: AccessContext,
   channelId: string,
   kind: 'pinned' | 'announcements',
   opts: { before?: number | undefined; limit?: number | undefined } = {},
@@ -333,6 +373,9 @@ export async function readHighlights(
     eq(messages.channelId, channelId),
     isNull(messages.deletedAt),
     kind === 'pinned' ? eq(messages.pinned, true) : eq(messages.type, 'announcement'),
+    // Highlights reads the WHOLE channel by design, which is exactly why it needs the floor:
+    // it is the one read that would happily reach back past a clear to the oldest pin.
+    visibleToViewer(ctx, channelId),
   ];
   if (opts.before !== undefined) conditions.push(lt(messages.seq, opts.before));
 
@@ -393,12 +436,22 @@ async function withReactions(db: Db, envelopes: MessageEnvelope[]): Promise<Mess
  */
 export async function syncSince(
   db: Db,
+  ctx: AccessContext,
   channelId: string,
   sinceSeq: number,
   limit = SYNC_PAGE_SIZE,
 ): Promise<{ messages: MessageEnvelope[]; hasMore: boolean }> {
   const rows = await selectMessages(db)
-    .where(and(eq(messages.channelId, channelId), gt(messages.seq, sinceSeq)))
+    .where(
+      and(
+        eq(messages.channelId, channelId),
+        gt(messages.seq, sinceSeq),
+        // Without this a clear would undo itself on the next reconnect: sync pulls everything
+        // above the client's local max, and a cleared client's local max is now below the
+        // messages it just hid.
+        visibleToViewer(ctx, channelId),
+      ),
+    )
     .orderBy(asc(messages.seq))
     .limit(limit + 1);
 
@@ -531,6 +584,7 @@ export async function listConversations(
     other_user_id: string | null;
     unread: number;
     muted: boolean;
+    pinned: boolean;
     last_seq: number | null;
     last_type: string | null;
     last_body: string | null;
@@ -540,6 +594,33 @@ export async function listConversations(
     last_sender_name: string | null;
     last_at: string | null;
   }>(sql`
+    /*
+      Unread per club, over every channel of it this viewer can REACH.
+
+      A CTE rather than a correlated subquery for one specific reason: the access fragment in
+      channel-access.ts is documented as assuming the table is aliased c, and that convention is
+      what stops a fifth hand-written copy of the membership join existing. Inside here the alias
+      is c and the fragment applies unchanged; a subquery would have needed either a second alias
+      or a parameterised fragment, and both are worse trades than one join.
+
+      A race the viewer is not on the roster of contributes nothing, because the predicate never
+      admits it - which is the same rule that keeps that race out of their channel list.
+    */
+    WITH reachable AS (
+      SELECT c.id,
+             c.club_id,
+             GREATEST(c.last_seq - COALESCE(rc.last_read_seq, 0), 0) AS unread
+        FROM channels c
+        LEFT JOIN read_cursors rc
+               ON rc.channel_id = c.id AND rc.user_id = ${ctx.userId}
+       WHERE ${accessibleChannelPredicate(ctx.userId)}
+    ),
+    club_totals AS (
+      SELECT club_id, SUM(unread) AS unread
+        FROM reachable
+       WHERE club_id IS NOT NULL
+       GROUP BY club_id
+    )
     SELECT c.id::text        AS channel_id,
            c.scope,
            c.scope_id::text  AS scope_id,
@@ -547,8 +628,25 @@ export async function listConversations(
            ${channelDisplayName()}  AS name,
            ${channelDisplayImage()} AS image,
            peer.id::text     AS other_user_id,
-           GREATEST(c.last_seq - COALESCE(rc.last_read_seq, 0), 0) AS unread,
+           /*
+             Unread for the ROW, which for a club means the whole club rather than its main
+             chat alone.
+
+             > **A club row stands for a place, not a channel.** It opens the hub, and the hub
+             > leads to the main chat, the Eboard space and every race the viewer is on. Counting
+             > the main chat alone made unread sitting in the Eboard invisible in the list, on the
+             > hub and everywhere else - reported from a phone as "it says nine and I cannot find
+             > them". The hub badges each row separately, so this total always resolves to a place
+             > somebody can actually go.
+
+             A DM has exactly one channel, so its own count is the whole answer.
+           */
+           CASE WHEN c.scope = 'dm'
+                THEN GREATEST(c.last_seq - COALESCE(rc.last_read_seq, 0), 0)
+                ELSE COALESCE(ct.unread, 0)
+           END AS unread,
            (mute.user_id IS NOT NULL) AS muted,
+           (pin.user_id IS NOT NULL) AS pinned,
            last.seq             AS last_seq,
            last.type            AS last_type,
            last.body            AS last_body,
@@ -565,19 +663,45 @@ export async function listConversations(
              ON mute.channel_id = c.id
             AND mute.user_id = ${ctx.userId}
             AND (mute.muted_until IS NULL OR mute.muted_until > now())
+      LEFT JOIN channel_pins pin
+             ON pin.channel_id = c.id AND pin.user_id = ${ctx.userId}
+      -- Null for a dm, which has no club and answers with its own count instead.
+      LEFT JOIN club_totals ct ON ct.club_id = c.club_id
+      -- The viewer's own floor, joined so the LATERAL below can compare against it. Absent for
+      -- every channel nobody has cleared, which COALESCE turns into 0.
+      LEFT JOIN channel_clears clr
+             ON clr.channel_id = c.id AND clr.user_id = ${ctx.userId}
       LEFT JOIN LATERAL (
         SELECT m.seq, m.type, m.body, m.document_name, m.deleted_at, m.sender_id, m.created_at
           FROM messages m
          WHERE m.channel_id = c.id
+           -- A cleared conversation must not preview the message it just hid. This is the same
+           -- floor every other read applies, expressed in SQL because this one is raw.
+           AND m.seq > COALESCE(clr.cleared_before_seq, 0)
          ORDER BY m.seq DESC
          LIMIT 1
       ) last ON true
       LEFT JOIN users sender ON sender.id = last.sender_id
      WHERE c.scope = ANY(${scopes}::text[])
        AND ${accessibleChannelPredicate(ctx.userId)}
-     -- A conversation nobody has spoken in yet sorts by when it was made, so a DM just opened
-     -- appears at the top rather than below everything ever said.
-     ORDER BY COALESCE(last.created_at, c.created_at) DESC
+       /*
+         A cleared conversation with nothing said since drops out of the list entirely, which is
+         what "Delete chat" promises. It comes back the moment anything arrives above the floor,
+         carrying only that - so the row cannot become a permanent hiding place for a
+         conversation somebody is still being sent messages in.
+
+         Note this is deliberately NOT applied to a channel nobody has cleared: a null last.seq
+         also describes a brand-new thread, which must stay in the list. And no backticks in
+         here - inside a sql template literal one of those ends the string.
+       */
+       AND (clr.user_id IS NULL OR last.seq IS NOT NULL)
+     /*
+       Pinned first, then by activity within each group. Pinning exists precisely to defeat
+       recency, so this cannot be a tiebreak on the timestamp - it has to be the primary key of
+       the sort.
+     */
+     ORDER BY (pin.user_id IS NOT NULL) DESC,
+              COALESCE(last.created_at, c.created_at) DESC
   `);
 
   return result.rows.map((row) => {
@@ -591,6 +715,7 @@ export async function listConversations(
       otherUserId: row.other_user_id,
       unread: Number(row.unread),
       muted: row.muted,
+      pinned: row.pinned,
       canPost: canPostInChannel(ctx, {
         id: row.channel_id,
         scope,

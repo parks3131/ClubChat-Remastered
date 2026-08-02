@@ -390,6 +390,14 @@ export function reactionSummary(
 export const ChannelState = z.object({
   id: Uuid,
   scope: ChannelScope,
+  /**
+   * What this channel belongs to - the club, race, Eboard space or conversation.
+   *
+   * Carried so a screen holding a race or an Eboard id can find its channel's unread count
+   * without a second read. Without it the club hub could badge its main chat and nothing else,
+   * which is how unread sitting in the Eboard space became invisible everywhere.
+   */
+  scopeId: Uuid,
   clubId: Uuid.nullable(),
   lastSeq: z.number().int().nonnegative(),
   lastReadSeq: z.number().int().nonnegative(),
@@ -468,6 +476,14 @@ export const ConversationSummary = z.object({
   unread: z.number().int().nonnegative(),
   /** Muted silences the push, not the count, so a muted row can still be unread. */
   muted: z.boolean(),
+  /**
+   * Kept at the top of this viewer's list.
+   *
+   * A **conversation** pin, personal and invisible to everybody else - not the message pin that
+   * `canPinInChannel` gates. Pinned rows sort above every unpinned one regardless of how recent
+   * either is, which is the whole reason somebody pins one.
+   */
+  pinned: z.boolean().default(false),
   /** The owning club, for a club row. Null in a DM, which belongs to no club. */
   clubId: Uuid.nullable().default(null),
   /** The other participant, for a DM row. Null in every other scope. */

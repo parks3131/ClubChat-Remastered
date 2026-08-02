@@ -700,6 +700,71 @@ export const channelMutes = pgTable(
 );
 
 /**
+ * A conversation kept at the top of one person's chat list.
+ *
+ * **Personal, exactly like `race_pins`**, and the contrast with a *message* pin is worth being
+ * precise about because the word does two jobs in this product. Pinning a message is an act of
+ * authority in a shared room: an admin does it, everybody sees it, and `canPinInChannel` gates
+ * it. Pinning a conversation is a fact about one person's own list - it needs no permission
+ * beyond being able to read the channel, and nobody else can tell.
+ *
+ * Scope-agnostic on purpose: a club chat and a DM are pinned by the same row, so the list sorts
+ * by one rule rather than by two that depend on what kind of row it is.
+ *
+ * The row's existence IS the pin, so unpinning is a delete and both directions are idempotent.
+ */
+export const channelPins = pgTable(
+  'channel_pins',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => channels.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.channelId] })],
+);
+
+/**
+ * How far into a channel one person has cleared their own view.
+ *
+ * > **This is what "Delete chat" is, and what it deliberately is not.** Domain invariant 7 says a
+ * > message is soft-deleted with a tombstone and never removed, and PRD/14 rule 3 says a thread
+ * > goes read-only rather than being deleted. Both still hold: nothing here destroys a message or
+ * > touches the other participant, who keeps the entire conversation and is never told. What it
+ * > changes is one person's own floor into the log.
+ *
+ * `cleared_before_seq` is the highest seq the clearer has hidden, so every read of this channel
+ * BY THIS USER filters `seq > cleared_before_seq`. Storing the watermark rather than deleting
+ * rows is the only version that can be per-user at all - one log, two readers, two floors.
+ *
+ * Clearing advances `read_cursors.last_read_seq` in the same transaction. Without that a cleared
+ * conversation would show zero messages and claim three unread, which is a contradiction the
+ * reader cannot resolve or clear.
+ */
+export const channelClears = pgTable(
+  'channel_clears',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => channels.id, { onDelete: 'cascade' }),
+    clearedBeforeSeq: integer('cleared_before_seq').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.channelId] }),
+    // A floor below zero is meaningless and a negative one would silently hide nothing, which
+    // reads as "clear did not work" rather than as a bad write.
+    check('channel_clears_seq_nonneg', sql`${t.clearedBeforeSeq} >= 0`),
+  ],
+);
+
+/**
  * Reactions on a chat message.
  *
  * `PK (message_id, user_id, emoji)` is the whole behaviour: a member may add several

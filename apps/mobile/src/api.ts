@@ -11,6 +11,7 @@
  */
 
 import type {
+  ChannelState,
   Club,
   ClubRole,
   ConversationSummary,
@@ -164,11 +165,25 @@ export type ChannelMeta = {
   /** Whether to offer Delete on somebody else's message. Own messages never need it. */
   canDeleteAnyMessage: boolean;
   muted: boolean;
+  /**
+   * Kept at the top of this viewer's chat list.
+   *
+   * The CONVERSATION pin, and not `canPin` above - that one asks whether this person may pin a
+   * MESSAGE here. Deriving either from the other would offer the wrong control: a DM has no
+   * admins, so `canPin` is about the participants, while this is about one person's own list.
+   */
+  pinned: boolean;
   peer: { userId: string; name: string; blockedByMe: boolean } | null;
 };
 
 export const dmApi = {
   threads: () => apiFetch<{ threads: DmThread[] }>('/dm/threads'),
+
+  /** The clubs you and this member are both in. Discloses nothing you cannot already see. */
+  sharedClubs: (userId: string) =>
+    apiFetch<{
+      clubs: Array<{ clubId: string; name: string; sport: string; image: string | null }>;
+    }>(`/dm/shared-clubs/${userId}`),
 
   candidates: (query: string) =>
     apiFetch<{ candidates: DmCandidate[] }>(
@@ -642,6 +657,35 @@ export const channelApi = {
    */
   conversations: () =>
     apiFetch<{ conversations: ConversationSummary[] }>('/conversations'),
+
+  /**
+   * Keep a conversation at the top of your own list, or stop.
+   *
+   * The CONVERSATION pin, not the message one - personal, invisible to everybody else, and
+   * needing no permission beyond being able to read the channel.
+   */
+  /**
+   * Per-channel sync state: ids, scopes and the two numbers unread is computed from.
+   *
+   * A LIVE read. The session's own copy is filled at sign-in and never replaced, so a screen
+   * badging from it shows the counts as they stood when the app started - which is exactly how
+   * the club hub came to disagree with the chat list.
+   */
+  states: () => apiFetch<{ channels: ChannelState[] }>('/channels'),
+
+  pin: (channelId: string, pinned: boolean) =>
+    apiFetch<{ pinned: boolean }>(`/channels/${channelId}/pin`, {
+      method: pinned ? 'POST' : 'DELETE',
+    }),
+
+  /**
+   * "Delete chat": hide everything said so far, for you only.
+   *
+   * Nothing is destroyed and the other participant keeps the whole conversation. Refused
+   * outside a DM, where the product does not offer it.
+   */
+  clear: (channelId: string) =>
+    apiFetch<{ clearedBeforeSeq: number }>(`/channels/${channelId}/clear`, { method: 'POST' }),
 
   /**
    * Report a message, from wherever it is being looked at.

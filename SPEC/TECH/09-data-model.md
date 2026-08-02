@@ -281,6 +281,28 @@ channel_mutes         user_id, channel_id, muted_until NULL  PK (user_id, channe
                       -- the table has existed since Phase 1 so mute had somewhere to
                       -- live once the audience function did.
 
+channel_pins          user_id, channel_id, created_at   PK (user_id, channel_id)
+                      -- A CONVERSATION pin, personal like race_pins: it changes one member's
+                      -- own list ordering and nobody else can observe it. Emphatically not
+                      -- messages.pinned, which is an act of authority in a shared room. The
+                      -- row's existence IS the pin, so both directions are idempotent.
+                      -- Scope-agnostic: a club chat and a DM pin through the same row.
+
+channel_clears        user_id, channel_id, cleared_before_seq, created_at
+                      PK (user_id, channel_id)
+                      CHECK (cleared_before_seq >= 0)
+                      -- What "Delete chat" writes. NOT a deletion: the log is untouched and
+                      -- the other participant keeps every message. One person's floor into a
+                      -- shared log moves up, which is the only per-user "delete" expressible
+                      -- against one row per message (invariant 7, ADR-0003).
+                      -- EVERY read that returns messages must filter seq > this: history,
+                      -- the jump window, sync, the gallery, both Highlights queries and the
+                      -- conversation row's last-message join. It is loaded into the access
+                      -- context and asked through clearedFloor() so there is one definition -
+                      -- a floor honoured by five reads of six is a leak, not a feature.
+                      -- Clearing also advances read_cursors in the same transaction, or the
+                      -- conversation would show nothing while claiming unread messages.
+
 moderation_reads      id, moderator_id, message_id, channel_id, from_seq, to_seq, created_at
                       CHECK (from_seq <= to_seq)
                       INDEX (moderator_id, created_at DESC)

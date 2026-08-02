@@ -28,7 +28,7 @@ import { canPostInChannel, canReactInChannel, isChannelMember } from '../policy/
 import { drainOnce } from '../worker/drain.ts';
 import { RecordingPushSender } from '../push/sender.ts';
 import { users } from '../db/schema.ts';
-import { startTestDb, type TestDb } from './harness.ts';
+import { anyViewer, startTestDb, type TestDb } from './harness.ts';
 import type { EffectDeps } from '../worker/effects.ts';
 import type { ChannelRef } from '../policy/predicates.ts';
 
@@ -213,7 +213,7 @@ describe('reactions travel with the messages they belong to', () => {
     await say(f.ownerId, f.channel, 'two');
     await toggleReaction(h.db, await ctxFor(f.memberId), f.channel, first.seq, '❤️');
 
-    const history = await readHistory(h.db, f.channel.id);
+    const history = await readHistory(h.db, anyViewer(), f.channel.id);
     const reacted = history.find((m) => m.seq === first.seq);
     expect(reacted?.reactions).toEqual([{ emoji: '❤️', userIds: [f.memberId] }]);
     // Untouched messages carry an empty list rather than undefined, so the client never has
@@ -222,7 +222,7 @@ describe('reactions travel with the messages they belong to', () => {
 
     // The backlog path too. A client offline for a week must come back to the conversation as
     // it stands, not to messages with their reactions stripped off.
-    const synced = await syncSince(h.db, f.channel.id, 0);
+    const synced = await syncSince(h.db, anyViewer(), f.channel.id, 0);
     expect(synced.messages.find((m) => m.seq === first.seq)?.reactions).toEqual([
       { emoji: '❤️', userIds: [f.memberId] },
     ]);
@@ -236,7 +236,7 @@ describe('reactions travel with the messages they belong to', () => {
     }
     // Asserted by outcome rather than by counting queries: every one of the twelve comes back
     // populated from a single batched load.
-    const history = await readHistory(h.db, f.channel.id);
+    const history = await readHistory(h.db, anyViewer(), f.channel.id);
     const withReactions = history.filter((m) => m.reactions.length > 0);
     expect(withReactions).toHaveLength(12);
   });
@@ -267,7 +267,7 @@ describe('a soft delete clears reactions', () => {
       sql`SELECT COUNT(*)::int AS n FROM message_reactions`,
     );
     expect(rows.rows[0]?.n).toBe(0);
-    expect((await readHistory(h.db, f.channel.id))[0]?.reactions).toEqual([]);
+    expect((await readHistory(h.db, anyViewer(), f.channel.id))[0]?.reactions).toEqual([]);
 
     // And every open client is told, rather than keeping the pills until a refresh.
     await drainOnce(h.db, deps);

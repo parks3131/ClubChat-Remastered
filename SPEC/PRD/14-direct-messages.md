@@ -48,6 +48,40 @@ should be refused on those grounds.
    accrues.
 9. **A DM is never visible on the calendar, in Highlights, or in any club-scoped surface.**
 
+10. **A conversation has a profile of its own**, reached by tapping the person's name in the
+    chat header *(2026-08-02; it previously led nowhere, because a DM has no space behind it)*.
+    It carries their picture and name, **the clubs the two of you share** - each tappable
+    through to that club - and this conversation's **Gallery**. Everything on it is about the
+    conversation rather than the person, which is why it is a different screen from the member
+    profile a roster leads to: "Delete chat" on a screen reached from a roster would be a
+    control over nothing.
+
+    The clubs listed are only ones **the viewer is already in**. A DM must not become a window
+    onto somebody's whole membership.
+
+11. **A conversation can be pinned to the top of your own chat list.** Personal and
+    unobservable: the other participant cannot tell, and pinning needs no permission beyond
+    being able to read the conversation. Pinned conversations sort above every unpinned one
+    regardless of recency, which is the entire point of pinning one.
+
+    **This is a different thing from pinning a message** ([Chat](05-chat.md) rules 5-7), which
+    is an act of authority in a shared room that everybody sees. The two share a word and
+    nothing else, and neither should ever be derived from the other.
+
+12. **"Delete chat" clears the conversation for you, and only for you.** The other participant
+    keeps every message and is never told. Nothing is destroyed: your own view starts higher up
+    the same log, which is the only reading of "delete" compatible with
+    [Domain model](01-domain-model.md) invariant 7 and with rule 3's promise that a thread is
+    never deleted.
+
+    The conversation **leaves your list** until they write again, and comes back carrying only
+    what arrived after you cleared it. It is confirmation-gated, and the confirmation says
+    whose copy goes and whose does not - "delete" reads as mutual, and somebody using it
+    believing it reaches the other person would be badly misled.
+
+    Offered on direct messages only. The mechanism is scope-agnostic and clubs simply do not
+    offer it.
+
 **Permissions**
 
 | Action | Participant | The other participant | Anyone else |

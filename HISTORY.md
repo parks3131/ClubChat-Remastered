@@ -13,6 +13,173 @@ Newest first.
 
 ---
 
+## 2026-08-02 (last) - Three reports from one screenshot, and a count that told nobody
+
+A photograph of the chat list on a real phone, and three separate faults in it. Worth keeping
+together because only one was a coding mistake in the usual sense.
+
+### The header was under the status bar, and that one is mine from this morning
+
+Making the list draw its own "Chats" title meant turning off the stack header, which also turned
+off the inset it was applying. The title rendered over the clock and both buttons behind the
+battery. **A browser has no notch**, so every check I ran was clean - the same reason chat lost
+this exact inset on 2026-08-01, in a file whose sibling had had it since it was written.
+
+The padding is the safe-area inset at the call site rather than a constant, because a notch is
+59pt on one phone and 20 on another and a guess is wrong on both.
+
+### Reading a chat told nobody, which is why counts never cleared
+
+The report was "I read the messages and the number is still there", and the instinct is to
+suspect the cursor. The cursor was right the whole time, committed to Postgres, and the server
+would have answered correctly to anybody who asked. Nobody asked.
+
+`ChatClient.markRead` advanced its own copy and sent the frame, and **never called `onChange`**.
+That is the only thing that bumps `revision`, and `revision` is the only dependency the chat
+list's loader has. So the list, the club hub and the badge all kept whatever they had loaded -
+which for a session open a while meant the counts as they stood at sign-in.
+
+Two fixes rather than one, because they cover different failures. `markRead` now notifies, but
+only when the mark actually moved - opening an already-read chat should not refetch every list.
+And the list re-reads **on focus**, which is the one that cannot be reasoned wrong: a count can
+also move because another device read the conversation, or a push was opened, or the socket was
+down while somebody wrote.
+
+### A number that could not be found
+
+"It says nine and I do not know where they are." The club row counted its **main chat only**, so
+messages waiting in the Eboard space were invisible - not in the list, not on the hub, nowhere.
+Reported as a mystery number, and it was really a missing one.
+
+A club row now totals every channel of that club the viewer can **reach**, and the hub badges
+each of those separately, so the total always resolves to a place. A race they have no roster row
+for contributes nothing: authority is not access, and a number they could never open would be the
+same failure pointing the other way.
+
+The total is a CTE rather than a correlated subquery, for one specific reason: the access
+fragment in `channel-access.ts` is documented as assuming the table is aliased `c`, and that
+convention is what stops a fifth hand-written copy of the membership join existing. Inside the
+CTE the alias is `c` and the fragment applies untouched.
+
+`ChannelState` gained `scopeId` so a screen holding an Eboard or race id can find its channel's
+count - without it the hub could badge its main chat and nothing else, which is how the count
+became unfindable in the first place. The hub also stopped reading the session's channel copy,
+which is filled at sign-in and never replaced.
+
+### What the tests are shaped around
+
+Nine cases about the number's relationship to reality rather than about any screen: what a club
+row covers, that it excludes a race the viewer cannot reach, that reading one channel clears that
+one and **not** the rest, that a new message brings it back, and that the badge counts
+conversations while the row counts messages - so asserting they are equal would be asserting the
+wrong design. Reverting the total to main-chat-only fails three of them.
+
+Two of the nine failed first time on my own bad setup rather than on the code, and both are worth
+recording. A club membership inserted **directly** does not auto-join the Eboard - promotion does
+that, and a raw insert is not a promotion - so the second admin was correctly refused. And
+**creating a race auto-adds its creator to the roster**, so the actor I picked to prove "a race
+you cannot reach is not counted" could reach it, and the assertion proved nothing. That is
+exactly the negative-assertion trap recorded on 2026-08-01, hit again while writing tests about
+something else.
+
+### Verified
+
+770 tests, 82 constraint assertions, typecheck and both gates. Live: reading a DM cleared its row
+and dropped the badge from 3 to 2 while the other rows kept their counts, and a message posted
+into a club's Eboard took that club's row from 3 to 4 with the per-channel read showing where -
+eboard 1, club 3.
+
+**Not verified on the device.** The phone was locked when this finished, so the safe-area fix and
+the tab label have been proved in a browser that has neither a notch nor the device's font
+metrics - which is precisely the gap that produced two of these three reports.
+
+---
+
+## 2026-08-02 (later) - A conversation gets a profile, a pin, and a delete that deletes nothing
+
+Four things asked for on the DM screen: shared clubs, a gallery, a pin that keeps somebody at the
+top of the list, and a three-dot menu of exactly Pin, Block and Delete chat. Two of them were
+already built and only needed a way in. One of them was a day's work hiding behind one word.
+
+### "Delete chat" is a visibility rule, not a deletion
+
+The word collides with two settled rules - a message is soft-deleted with a tombstone and never
+removed (invariant 7), and a DM thread goes read-only rather than being deleted (PRD/14 rule 3) -
+so it was worth asking what it should mean rather than guessing. Settled as **clear it for me
+only**: the other participant keeps every message, is never told, and nothing is destroyed. One
+person's floor into a shared log moves up.
+
+That is the only per-user "delete" expressible against one row per message, and it is what the
+word means to anybody arriving from another messenger. It also has a bill, which was stated
+before it was agreed: **six reads return messages and every one has to honour the floor.** History,
+the jump window, sync, the gallery, both Highlights queries and the conversation row's
+last-message join. A floor honoured by five of six is not a partial feature, it is a leak - and
+the specific shape it takes is "I deleted that chat and the photographs are still one tap away".
+
+So the floor is loaded into the access context beside `dmThreads` and `blockedEither`, asked
+through one `clearedFloor()`, and - the part that actually prevents the bug - **the reads that
+return messages now take an access context as a required argument**. `readHistory(db, channelId)`
+became `readHistory(db, ctx, channelId)`. Forgetting the floor is a type error rather than a
+silent leak, and the compiler found all eighteen call sites the moment the signature changed.
+
+Two mutation tests hold it: neutralising the shared fragment fails the history and read-path
+tests, and neutralising the raw-SQL copy in the list's LATERAL fails exactly the one test about
+the row dropping out. The second exists because that one is not covered by the fragment - it is
+the copy, and a copy needs its own proof.
+
+Clearing also advances the read cursor in the same transaction. Without it the conversation shows
+nothing and simultaneously claims three unread, which the reader cannot resolve, because the only
+thing that clears an unread count is opening a chat and there would be nothing in it to open.
+
+And the client half, which is the same class of bug one layer over: the phone renders from SQLite
+before any network call resolves, so a server-side clear with no local wipe leaves the messages
+fully visible on the device. `ChatClient.forgetChannel` drops them.
+
+### A pin, and the word it collides with
+
+Pinning a conversation and pinning a message share a word and nothing else. A message pin is an
+act of authority in a shared room - `canPinInChannel` gates it and everybody sees it. A
+conversation pin is a fact about one person's list that nobody else can observe, needing no
+permission beyond being able to read the channel. So `canPinChannel` is its own predicate with a
+one-word body, which is AGENTS.md failure mode 10 applied deliberately: the day somebody
+restricts message pinning, this must not move with it.
+
+Pinned rows sort above every unpinned one **as the primary sort key rather than a tiebreak**,
+because defeating recency is the entire reason to pin something. The test pins the least recent
+conversation and asserts it leads.
+
+### The screen the DM header used to not have
+
+Tapping a person's name in a DM did nothing, and the code said why: every other scope has a space
+behind it, so linking to the club would have been the wrong screen with the right person on it.
+That screen exists now, and it is the *conversation's* profile rather than the person's - which is
+why it is not `/users/:id`. A member profile is reachable from any roster where no conversation
+need exist, and "Delete chat" there would be a control over nothing.
+
+Shared clubs are **listed rather than counted behind a chevron**, departing from the design: you
+will share one or two, not nine, so a whole screen to show one row is a tap for nothing, and each
+row opens that club, which a count could not. They are also only clubs the viewer is already in -
+a DM must not become a window onto somebody's whole membership.
+
+### Verified
+
+761 tests, typecheck, `db:prove` at 82 assertions, `check:runtime`, the em-dash gate. Then live,
+with two seeded accounts:
+
+- Pinning the **least recent** conversation moved it to the top with a pin glyph, above two more
+  recent ones.
+- Delete chat, through the confirmation that says whose copy goes: the thread left her list
+  entirely, and her history read empty.
+- **His view was untouched** - his message still there, and he was told nothing.
+- He wrote again, and her thread came back carrying **only the new message**, at unread 1. The
+  one she cleared did not return.
+
+One mistake worth recording because it is in AGENTS.md already: a backtick inside a `sql` template
+literal ends the string. I put one in a SQL comment and got three parse errors pointing at the
+wrong lines. Same trap, second time, now with a note in the comment that caused it.
+
+---
+
 ## 2026-08-02 - One list instead of two, and a web client that had stopped booting
 
 The founder asked for the landing screen to work the way GroupMe's does: every conversation in

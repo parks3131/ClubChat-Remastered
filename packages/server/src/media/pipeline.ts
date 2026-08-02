@@ -20,7 +20,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { mediaObjects, outbox } from '../db/schema.ts';
-import type { AccessContext } from '../policy/context.ts';
+import { clearedFloor, type AccessContext } from '../policy/context.ts';
 import { canPostInChannel, isChannelMember, type ChannelRef } from '../policy/predicates.ts';
 import { getChannelRef } from '../domain/reads.ts';
 import {
@@ -442,6 +442,11 @@ export async function readGallery(
        AND mo.status = 'ready'
        -- Photos only. A document is an attachment, not something a photo grid should show.
        AND mo.mime LIKE 'image/%'
+       -- The viewer's own clear floor, the same one every other message read applies. A
+       -- gallery is the easiest of the six to forget and the most obviously wrong to leave
+       -- out: clearing a conversation and still finding its photographs one tap away would
+       -- make the whole action read as broken.
+       AND m.seq > ${clearedFloor(ctx, channelId)}
        ${before !== null ? sql`AND m.seq < ${before}` : sql``}
      ORDER BY m.seq DESC
      LIMIT ${limit + 1}

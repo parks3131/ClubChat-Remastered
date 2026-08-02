@@ -2120,18 +2120,23 @@ export default function ChatScreen() {
         */}
         <Pressable
           style={styles.headerTitleColumn}
-          disabled={spaceScope === undefined}
-          onPress={() =>
-            spaceScope !== undefined &&
-            meta !== null &&
-            router.push(spaceProfileHref(spaceScope, meta.scopeId))
-          }
-          accessibilityRole={spaceScope === undefined ? undefined : "button"}
-          accessibilityLabel={
-            spaceScope === undefined || meta === null
-              ? undefined
-              : `${meta.name}. Open its profile`
-          }
+          disabled={meta === null}
+          onPress={() => {
+            if (meta === null) return;
+            /*
+              A DM now has a profile of its own - the shared clubs, this thread's gallery, and
+              pin/block/delete chat. It could not before, which is why this used to be disabled
+              for the scope: there was no space behind the name and the club would have been the
+              wrong screen with the right person on it.
+            */
+            router.push(
+              spaceScope === undefined
+                ? `/dm/${meta.channelId}/profile`
+                : spaceProfileHref(spaceScope, meta.scopeId),
+            );
+          }}
+          accessibilityRole={meta === null ? undefined : "button"}
+          accessibilityLabel={meta === null ? undefined : `${meta.name}. Open its profile`}
         >
           <Text style={styles.headerTitle} numberOfLines={1}>
             {meta?.name ?? (metaResolved ? "Chat" : "")}

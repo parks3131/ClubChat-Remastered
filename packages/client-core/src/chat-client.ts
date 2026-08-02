@@ -523,9 +523,27 @@ export class ChatClient {
      * history they had already read. Monotonic, like the server's own `GREATEST`.
      */
     const channel = this.channels.find((entry) => entry.id === channelId);
-    if (channel && upToSeq > channel.lastReadSeq) channel.lastReadSeq = upToSeq;
+    const advanced = channel !== undefined && upToSeq > channel.lastReadSeq;
+    if (advanced && channel) channel.lastReadSeq = upToSeq;
 
     this.flushReads();
+
+    /*
+     * **Tell whoever is drawing a count that one just changed.**
+     *
+     * This was missing, and it is the whole reason unread counts appeared not to clear: reading
+     * a chat advanced the cursor on the server and updated the line above, and then nothing
+     * announced it. Every screen showing a number watches `onChange` - the chat list, the club
+     * hub, the tab badge - so all three kept whatever they had loaded, which for a session that
+     * had been open a while meant the count as it stood at sign-in.
+     *
+     * The failure is worth naming precisely because it looked like a server bug and was not: the
+     * cursor was correct in Postgres the whole time. Only the client never asked again.
+     *
+     * Fired only when the mark actually moved. Opening an already-read chat changes nothing, and
+     * a notification per open would refetch every list on every navigation.
+     */
+    if (advanced) this.opts.onChange?.();
   }
 
   /** Send whatever reads are outstanding, if the socket can carry them. Silent when it cannot. */
@@ -720,6 +738,23 @@ export class ChatClient {
     for (const channelId of targets) {
       await this.syncChannel(channelId, await this.store.localMaxSeq(channelId));
     }
+  }
+
+  /**
+   * Drop this device's cached copy of a conversation, after the server has raised the floor.
+   *
+   * > **The client half of "Delete chat", and it is not optional.** The server hides those
+   * > messages from every future read; this device is already holding them and renders from
+   * > SQLite before any network call resolves. Without this the conversation clears on the
+   * > server and stays fully visible on the phone until the cache happens to be rebuilt - a rule
+   * > enforced at one end and ignored at the other, which is the shape of bug this codebase has
+   * > shipped more than once.
+   *
+   * Safe to call before or after the server, because sync will never bring the messages back:
+   * it now pulls only what is above the floor.
+   */
+  async forgetChannel(channelId: string): Promise<void> {
+    await this.store.forgetChannel(channelId);
   }
 
   async syncChannel(channelId: string, sinceSeq: number): Promise<void> {

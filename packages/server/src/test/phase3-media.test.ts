@@ -32,7 +32,7 @@ import {
 } from '../media/pipeline.ts';
 import { deriveVariants, runMediaGc, STALE_PENDING_HOURS } from '../media/derive.ts';
 import { eboardChannels, mediaObjects, messages, users } from '../db/schema.ts';
-import { startTestDb, type TestDb } from './harness.ts';
+import { anyViewer, startTestDb, type TestDb } from './harness.ts';
 import type { EffectDeps } from '../worker/effects.ts';
 
 let h: TestDb;
@@ -156,7 +156,7 @@ describe('a media message reaches the client with its attachment on it', () => {
     });
     expect(sent.ok).toBe(true);
 
-    const history = await readHistory(h.db, f.mainChannelId);
+    const history = await readHistory(h.db, anyViewer(), f.mainChannelId);
     const photo = history.find((m) => m.type === 'photo');
     expect(photo?.mediaId, 'a photo with no media id cannot be rendered').toBe(media);
     // A photo carries neither of the document fields.
@@ -164,7 +164,7 @@ describe('a media message reaches the client with its attachment on it', () => {
     expect(photo?.documentSize).toBeNull();
 
     // The backlog path too, or a client that was offline comes back to an unrenderable photo.
-    const synced = await syncSince(h.db, f.mainChannelId, 0);
+    const synced = await syncSince(h.db, anyViewer(), f.mainChannelId, 0);
     expect(synced.messages.find((m) => m.type === 'photo')?.mediaId).toBe(media);
   });
 
@@ -206,7 +206,7 @@ describe('a media message reaches the client with its attachment on it', () => {
     });
     expect(sent.ok).toBe(true);
 
-    const document = (await readHistory(h.db, f.mainChannelId)).find((m) => m.type === 'document');
+    const document = (await readHistory(h.db, anyViewer(), f.mainChannelId)).find((m) => m.type === 'document');
     // PRD/05 lists a document bubble as showing its filename and size, so both have to travel.
     expect(document?.mediaId).toBe(intent.mediaId);
     expect(document?.documentName).toBe('meet-schedule.pdf');
@@ -222,7 +222,7 @@ describe('a media message reaches the client with its attachment on it', () => {
       body: 'just words',
     });
 
-    const text = (await readHistory(h.db, f.mainChannelId)).find((m) => m.body === 'just words');
+    const text = (await readHistory(h.db, anyViewer(), f.mainChannelId)).find((m) => m.body === 'just words');
     expect(text?.mediaId).toBeNull();
     expect(text?.documentName).toBeNull();
     expect(text?.documentSize).toBeNull();

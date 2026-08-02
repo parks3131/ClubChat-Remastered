@@ -18,6 +18,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import type pg from 'pg';
+import { accessContextOf, type AccessContext } from '../policy/context.ts';
 import { createDb, createPool, type Db } from '../db/client.ts';
 import { channels, clubMemberships, clubs, users } from '../db/schema.ts';
 
@@ -137,4 +138,16 @@ export async function seedUser(db: Db, name = 'Member'): Promise<string> {
     email: `user-${id.slice(0, 8)}@test.invalid`,
   });
   return id;
+}
+
+/**
+ * A viewer who has cleared nothing and pinned nothing.
+ *
+ * The reads that return messages take an access context so they can apply that viewer's own
+ * clear floor - see `visibleToViewer`. Most tests are asserting what a channel CONTAINS rather
+ * than what one person can see of it, and this says so in one word instead of a context literal
+ * in fourteen places. A test that actually cares about the floor builds its own.
+ */
+export function anyViewer(userId: string = crypto.randomUUID()): AccessContext {
+  return accessContextOf({ userId });
 }

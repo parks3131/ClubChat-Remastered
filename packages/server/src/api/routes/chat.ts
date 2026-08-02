@@ -9,7 +9,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ReactionEmoji } from '@clubchat/shared';
-import { readChannelMeta, muteChannel, unmuteChannel } from '../../domain/dm.ts';
+import {
+  clearChannel,
+  muteChannel,
+  pinChannel,
+  readChannelMeta,
+  unmuteChannel,
+} from '../../domain/dm.ts';
 import { openChat } from '../../domain/inbox.ts';
 import { mentionableMembers } from '../../domain/mentions.ts';
 import { readReactions, toggleReaction } from '../../domain/reactions.ts';
@@ -68,7 +74,7 @@ export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
     const query = HistoryQuery.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
 
-    const page = await readHistory(deps.db, request.params.id, query.data);
+    const page = await readHistory(deps.db, request.access!, request.params.id, query.data);
     return { messages: page };
   });
 
@@ -92,7 +98,7 @@ export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
     const query = AroundQuery.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
 
-    return readAround(deps.db, request.params.id, query.data.around, query.data.radius);
+    return readAround(deps.db, request.access!, request.params.id, query.data.around, query.data.radius);
   });
 
   const HighlightQuery = z.object({
@@ -118,7 +124,7 @@ export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
     const query = HighlightQuery.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
 
-    return readHighlights(deps.db, request.params.id, 'pinned', query.data);
+    return readHighlights(deps.db, request.access!, request.params.id, 'pinned', query.data);
   });
 
   /**
@@ -144,7 +150,7 @@ export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
     const query = HighlightQuery.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
 
-    return readHighlights(deps.db, request.params.id, 'announcements', query.data);
+    return readHighlights(deps.db, request.access!, request.params.id, 'announcements', query.data);
   });
 
   const ReadBody = z.object({ upToSeq: z.number().int().nonnegative() });
@@ -347,6 +353,52 @@ export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (!guard.ok) return reply.code(guard.code).send({ error: 'not_found' });
 
     const result = await unmuteChannel(deps.db, request.access!, guard.channel);
+    if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+    return result;
+  });
+
+  /**
+   * Keep a conversation at the top of your own chat list, or stop.
+   *
+   * POST and DELETE rather than a body carrying a boolean, matching mute above: the two are
+   * separate intents and neither can be got wrong by sending the wrong payload.
+   *
+   * Nothing here is admin-gated, because this is a **conversation** pin and not a message one -
+   * it changes nobody's view but the caller's, and is invisible to the other participants.
+   */
+  app.post<{ Params: { id: string } }>('/channels/:id/pin', async (request, reply) => {
+    const guard = await authorizeChannel(deps, request, request.params.id);
+    if (!guard.ok) return reply.code(guard.code).send({ error: 'not_found' });
+
+    const result = await pinChannel(deps.db, request.access!, guard.channel, true);
+    if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+    return result;
+  });
+
+  app.delete<{ Params: { id: string } }>('/channels/:id/pin', async (request, reply) => {
+    const guard = await authorizeChannel(deps, request, request.params.id);
+    if (!guard.ok) return reply.code(guard.code).send({ error: 'not_found' });
+
+    const result = await pinChannel(deps.db, request.access!, guard.channel, false);
+    if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+    return result;
+  });
+
+  /**
+   * "Delete chat": hide everything said so far, for the caller only.
+   *
+   * A POST rather than a DELETE on the channel, deliberately - `DELETE /channels/:id` would say
+   * the channel is being destroyed, and nothing here destroys anything. The other participant
+   * keeps every message and is never told.
+   *
+   * Refused outside a DM by `canClearChannel`, so the narrower product rule is enforced at the
+   * policy rather than by this route remembering it.
+   */
+  app.post<{ Params: { id: string } }>('/channels/:id/clear', async (request, reply) => {
+    const guard = await authorizeChannel(deps, request, request.params.id);
+    if (!guard.ok) return reply.code(guard.code).send({ error: 'not_found' });
+
+    const result = await clearChannel(deps.db, request.access!, guard.channel);
     if (!result.ok) return reply.code(404).send({ error: 'not_found' });
     return result;
   });

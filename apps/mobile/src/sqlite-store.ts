@@ -337,6 +337,10 @@ class SqliteMessageStore implements MessageStore {
     );
     return rows.map((row) => row.seq);
   }
+
+  async forgetChannel(channelId: string): Promise<void> {
+    await this.db.runAsync('DELETE FROM messages WHERE channel_id = ?', channelId);
+  }
 }
 
 /**

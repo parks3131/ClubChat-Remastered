@@ -733,4 +733,56 @@ SELECT pg_temp.assert_accepted(
             'e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1e1',
             'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1', 1, 1)$$);
 
+-- A conversation pin is personal, so one member pinning a channel twice is one pin. The primary
+-- key IS that rule: without it a double tap leaves two rows and the list would have to
+-- de-duplicate something the database should never have accepted.
+SELECT pg_temp.assert_accepted(
+  'channel pins - a member pins a conversation',
+  $$INSERT INTO channel_pins (user_id, channel_id)
+    VALUES ('22222222-2222-4222-8222-222222222222',
+            'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1')$$);
+
+SELECT pg_temp.assert_rejected(
+  'channel pins - the same member pinning the same conversation twice',
+  $$INSERT INTO channel_pins (user_id, channel_id)
+    VALUES ('22222222-2222-4222-8222-222222222222',
+            'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1')$$);
+
+-- And the pin is PER MEMBER, which is the whole point: a second person pinning the same
+-- conversation is a different pin and must be accepted.
+SELECT pg_temp.assert_accepted(
+  'channel pins - a second member pinning the same conversation is their own pin',
+  $$INSERT INTO channel_pins (user_id, channel_id)
+    VALUES ('33333333-3333-4333-8333-333333333333',
+            'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1')$$);
+
+-- The clear floor, same shape: one floor per person per channel, and two people clearing the
+-- same conversation hold two independent floors. That is what makes "clear it for me only"
+-- expressible at all against a single shared log.
+SELECT pg_temp.assert_accepted(
+  'channel clears - a member clears their own view of a conversation',
+  $$INSERT INTO channel_clears (user_id, channel_id, cleared_before_seq)
+    VALUES ('22222222-2222-4222-8222-222222222222',
+            'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1', 12)$$);
+
+SELECT pg_temp.assert_rejected(
+  'channel clears - a second floor for the same member and conversation',
+  $$INSERT INTO channel_clears (user_id, channel_id, cleared_before_seq)
+    VALUES ('22222222-2222-4222-8222-222222222222',
+            'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1', 20)$$);
+
+SELECT pg_temp.assert_accepted(
+  'channel clears - the other participant holds their own floor, untouched',
+  $$INSERT INTO channel_clears (user_id, channel_id, cleared_before_seq)
+    VALUES ('33333333-3333-4333-8333-333333333333',
+            'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1', 3)$$);
+
+-- A negative floor hides nothing and reads as "clear did not work" rather than as a bad write,
+-- so it is refused where it is written rather than diagnosed later.
+SELECT pg_temp.assert_rejected(
+  'channel clears - a negative floor',
+  $$INSERT INTO channel_clears (user_id, channel_id, cleared_before_seq)
+    VALUES ('44444444-4444-4444-8444-444444444444',
+            'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1', -1)$$);
+
 ROLLBACK;

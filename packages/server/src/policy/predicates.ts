@@ -232,6 +232,29 @@ export const canUnblock = (ctx: AccessContext, otherUserId: string): boolean =>
 export const canMuteChannel = isChannelMember;
 
 /**
+ * May this user pin this conversation to the top of their own list?
+ *
+ * Reading it is the whole check, because a **conversation** pin is personal and unobservable by
+ * anybody else. Note this is emphatically not `canPinInChannel`, which is about pinning a
+ * **message** - an act of authority in a shared room that an admin performs and everybody sees.
+ * The two share a word and nothing else, and giving this its own name is the mitigation for the
+ * alias trap in AGENTS.md failure mode 10: the day somebody restricts message pinning, this must
+ * not move with it.
+ */
+export const canPinChannel = isChannelMember;
+
+/**
+ * May this user clear their own view of this conversation?
+ *
+ * **Direct messages only, and that is a product decision rather than a technical limit.** The
+ * clear floor is scope-agnostic and would work identically on a club chat; "Delete chat" is
+ * offered only on a DM, and a capability reachable over HTTP but offered nowhere is the shape
+ * Phase 2 shipped a whole domain in. If clubs ever want it, this is one branch.
+ */
+export const canClearChannel = (ctx: AccessContext, channel: ChannelRef): boolean =>
+  channel.scope === 'dm' && isChannelMember(ctx, channel);
+
+/**
  * May this user post here **now**?
  *
  * > **This is the one place where posting stopped being the same thing as membership.**

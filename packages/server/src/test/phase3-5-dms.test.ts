@@ -65,7 +65,7 @@ import { notificationKey, NOTIFICATION_SLOTS } from '../worker/notify.ts';
 import { RecordingPushSender } from '../push/sender.ts';
 import { registerDevice } from '../push/dispatch.ts';
 import { users } from '../db/schema.ts';
-import { startTestDb, type TestDb } from './harness.ts';
+import { anyViewer, startTestDb, type TestDb } from './harness.ts';
 import type { EffectDeps } from '../worker/effects.ts';
 
 let h: TestDb;
@@ -399,7 +399,7 @@ describe('GATE: a blocked member can neither open a thread nor send, in either d
     for (const id of [f.aliceId, f.bobId]) {
       const ctx = await ctxFor(id);
       expect(isChannelMember(ctx, f.dmChannel), `read access for ${id}`).toBe(true);
-      const history = await readHistory(h.db, f.dmChannelId);
+      const history = await readHistory(h.db, anyViewer(), f.dmChannelId);
       expect(history).toHaveLength(2);
       expect(history[0]?.body).toBe('can you drive saturday');
     }
@@ -457,7 +457,7 @@ describe('GATE: a blocked member can neither open a thread nor send, in either d
     const now = await say(f.bobId, f.dmChannel, 'back');
     expect(now.ok).toBe(true);
 
-    const history = await readHistory(h.db, f.dmChannelId);
+    const history = await readHistory(h.db, anyViewer(), f.dmChannelId);
     // Exactly one message: nothing was retroactively delivered.
     expect(history.map((m) => m.body)).toEqual(['back']);
     // Unblocking somebody who is not blocked is a no-op rather than an error.
@@ -541,7 +541,7 @@ describe('losing the last shared club makes a thread read-only, and re-joining u
 
     // History survives. The thread is read-only, not deleted - the same principle as a message
     // never being hard-deleted.
-    expect(await readHistory(h.db, f.dmChannelId)).toHaveLength(1);
+    expect(await readHistory(h.db, anyViewer(), f.dmChannelId)).toHaveLength(1);
     const threads = await listDmThreads(h.db, await ctxFor(f.bobId));
     expect(threads.map((t) => t.conversationId)).toContain(f.conversationId);
     expect(threads[0]?.canPost).toBe(false);

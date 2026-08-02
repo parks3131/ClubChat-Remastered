@@ -121,6 +121,18 @@ export interface MessageStore {
   list(channelId: string): Promise<MessageEnvelope[]>;
   /** Every seq held for a channel, ascending. For gap auditing. */
   seqs(channelId: string): Promise<number[]>;
+  /**
+   * Forget every message held for a channel.
+   *
+   * For "Delete chat", which hides a conversation for one person by moving their floor up the
+   * server's log. **The local cache has to be dropped in the same breath**, or the phone keeps
+   * rendering from SQLite exactly the messages the clear was meant to hide - a server-side rule
+   * with no client half, which is this project's most repeated shape of bug.
+   *
+   * Not a deletion of anything durable: the log is untouched and the other participant keeps
+   * the conversation. This only drops what this device had cached.
+   */
+  forgetChannel(channelId: string): Promise<void>;
 }
 
 export class InMemoryMessageStore implements MessageStore {
@@ -183,6 +195,10 @@ export class InMemoryMessageStore implements MessageStore {
     const channel = this.byChannel.get(channelId);
     if (!channel) return [];
     return [...channel.keys()].sort((a, b) => a - b);
+  }
+
+  async forgetChannel(channelId: string): Promise<void> {
+    this.byChannel.delete(channelId);
   }
 }
 

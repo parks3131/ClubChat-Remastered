@@ -15,9 +15,16 @@
  * > to know in advance how long that window lasts.
  */
 
-import { sql, type SQL } from 'drizzle-orm';
+import { eq, sql, type SQL } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { channelMutes, memberBlocks } from '../db/schema.ts';
+import {
+  channelClears,
+  channelMutes,
+  channelPins,
+  channels,
+  memberBlocks,
+  readCursors,
+} from '../db/schema.ts';
 import {
   channelDisplayImage,
   channelDisplayName,
@@ -37,6 +44,8 @@ import {
   canUnblock,
   dmThreadWith,
   isChannelMember,
+  canPinChannel,
+  canClearChannel,
   type ChannelRef,
   type DmCandidate,
 } from '../policy/predicates.ts';
@@ -417,6 +426,15 @@ export type ChannelMeta = {
    */
   canDeleteAnyMessage: boolean;
   muted: boolean;
+  /**
+   * Kept at the top of this viewer's chat list.
+   *
+   * The **conversation** pin, and emphatically not `canPin` above - that one asks whether this
+   * person may pin a MESSAGE here, which is an authority question with a shared answer. This is
+   * personal and nobody else can observe it. Carried here so the profile and the chat header can
+   * draw the control without fetching the whole conversation list to learn one boolean.
+   */
+  pinned: boolean;
   /** Present for a dm, so the client can offer block, unblock and report. */
   peer: { userId: string; name: string; blockedByMe: boolean } | null;
 };
@@ -441,6 +459,7 @@ export async function readChannelMeta(
     name: string;
     image: string | null;
     muted: boolean;
+    pinned: boolean;
     peer_id: string | null;
     peer_name: string | null;
     blocked_by_me: boolean;
@@ -455,6 +474,7 @@ export async function readChannelMeta(
            -- Paired with the name above, and ordered identically. See the fragment.
            ${channelDisplayImage()} AS image,
            (mute.user_id IS NOT NULL) AS muted,
+           (pin.user_id IS NOT NULL) AS pinned,
            peer.id::text AS peer_id,
            peer.full_name AS peer_name,
            -- Asymmetric ON PURPOSE, and read here rather than from the access context. The
@@ -471,6 +491,8 @@ export async function readChannelMeta(
              ON mute.channel_id = c.id
             AND mute.user_id = ${ctx.userId}
             AND (mute.muted_until IS NULL OR mute.muted_until > now())
+      LEFT JOIN channel_pins pin
+             ON pin.channel_id = c.id AND pin.user_id = ${ctx.userId}
      WHERE c.id = ${channelId}
   `);
 
@@ -505,6 +527,7 @@ export async function readChannelMeta(
     canAnnounce: canAnnounceInChannel(ctx, channel),
     canDeleteAnyMessage: canDeleteOthersMessages(ctx, channel),
     muted: row.muted,
+    pinned: row.pinned,
     peer:
       row.peer_id === null
         ? null
@@ -658,4 +681,131 @@ export async function unmuteChannel(
   `);
 
   return { ok: true, muted: false };
+}
+
+/**
+ * The clubs the caller and one other member are both in.
+ *
+ * `sharesAClub` answers this as a boolean, for eligibility. The DM profile needs the list, and
+ * it is the same join asked for its rows rather than its existence.
+ *
+ * **Discloses nothing.** Every club it can return is one the caller is already a member of, so
+ * the only new fact is that this person is in it too - which the club's own roster already says
+ * to anyone who opens it. It deliberately does NOT return clubs the other person is in and the
+ * caller is not: that would turn a DM into a window onto somebody's whole membership.
+ */
+export async function sharedClubs(
+  db: Db,
+  ctx: AccessContext,
+  otherUserId: string,
+): Promise<Array<{ clubId: string; name: string; sport: string; image: string | null }>> {
+  const rows = await db.execute<{
+    id: string;
+    name: string;
+    sport: string;
+    image: string | null;
+  }>(sql`
+    SELECT cl.id::text AS id, cl.name, cl.sport, cl.image
+      FROM clubs cl
+      JOIN club_memberships mine ON mine.club_id = cl.id AND mine.user_id = ${ctx.userId}
+      JOIN club_memberships theirs ON theirs.club_id = cl.id AND theirs.user_id = ${otherUserId}
+     ORDER BY cl.name
+  `);
+
+  return rows.rows.map((row) => ({
+    clubId: row.id,
+    name: row.name,
+    sport: row.sport,
+    image: row.image,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Pinning a conversation, and clearing one's own view of it
+// ---------------------------------------------------------------------------
+
+/**
+ * Keep this conversation at the top of the caller's own chat list.
+ *
+ * Idempotent in both directions - the row's existence is the pin, so pinning twice is one pin
+ * and unpinning something unpinned is a no-op. Nobody else can observe either.
+ */
+export async function pinChannel(
+  db: Db,
+  ctx: AccessContext,
+  channel: ChannelRef,
+  pinned: boolean,
+): Promise<DmResult<{ pinned: boolean }>> {
+  if (!canPinChannel(ctx, channel)) return { ok: false, code: 'not_found' };
+
+  if (pinned) {
+    await db
+      .insert(channelPins)
+      .values({ userId: ctx.userId, channelId: channel.id })
+      // Targeted at the primary key, never bare. An untargeted clause claims every current and
+      // future unique constraint on the table means "ignore this write", which is the defect
+      // that silently swallowed the one-car-group-per-race invariant.
+      .onConflictDoNothing({ target: [channelPins.userId, channelPins.channelId] });
+  } else {
+    await db.execute(sql`
+      DELETE FROM channel_pins
+       WHERE user_id = ${ctx.userId} AND channel_id = ${channel.id}
+    `);
+  }
+
+  return { ok: true, pinned };
+}
+
+/**
+ * Hide everything said so far in this conversation, for the caller only.
+ *
+ * > **What "Delete chat" is, and what it deliberately is not.** No message is deleted, no row is
+ * > removed, and the other participant keeps the entire conversation and is never told. One
+ * > person's floor into a shared log moves up. That is the only reading of "delete" compatible
+ * > with domain invariant 7, and it is also what the word means to somebody coming from any
+ * > other messenger.
+ *
+ * Two writes, one transaction, and the second is not optional: **clearing advances the read
+ * cursor**. Without it the conversation would show nothing and simultaneously claim unread
+ * messages, a contradiction the reader has no way to resolve - the only thing that clears an
+ * unread count is opening the chat, and there would be nothing in it to open.
+ *
+ * The floor is the channel's head at this instant rather than the caller's last-read mark:
+ * clearing means "everything up to now", including messages that arrived while they were
+ * deciding.
+ */
+export async function clearChannel(
+  db: Db,
+  ctx: AccessContext,
+  channel: ChannelRef,
+): Promise<DmResult<{ clearedBeforeSeq: number }>> {
+  if (!canClearChannel(ctx, channel)) return { ok: false, code: 'not_found' };
+
+  return db.transaction(async (tx) => {
+    const head = await tx
+      .select({ lastSeq: channels.lastSeq })
+      .from(channels)
+      .where(eq(channels.id, channel.id));
+    const lastSeq = head[0]?.lastSeq ?? 0;
+
+    await tx
+      .insert(channelClears)
+      .values({ userId: ctx.userId, channelId: channel.id, clearedBeforeSeq: lastSeq })
+      .onConflictDoUpdate({
+        target: [channelClears.userId, channelClears.channelId],
+        // Clearing again moves the floor UP to the new head. It can never move down, because
+        // the head only grows - so a second clear cannot resurrect what a first one hid.
+        set: { clearedBeforeSeq: lastSeq },
+      });
+
+    await tx
+      .insert(readCursors)
+      .values({ userId: ctx.userId, channelId: channel.id, lastReadSeq: lastSeq })
+      .onConflictDoUpdate({
+        target: [readCursors.userId, readCursors.channelId],
+        set: { lastReadSeq: lastSeq, updatedAt: new Date() },
+      });
+
+    return { ok: true as const, clearedBeforeSeq: lastSeq };
+  });
 }

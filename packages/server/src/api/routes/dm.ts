@@ -18,6 +18,7 @@ import {
   openDm,
   searchDmCandidates,
   unblockMember,
+  sharedClubs,
 } from '../../domain/dm.ts';
 import type { AppDeps } from '../plumbing.ts';
 
@@ -46,6 +47,17 @@ export function registerDmRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   app.get('/dm/threads', async (request) => ({
     threads: await listDmThreads(deps.db, request.access!),
+  }));
+
+  /**
+   * The clubs the caller and this member are both in, for the DM profile.
+   *
+   * Addressed by the other person rather than by the conversation, because the answer is about
+   * two people and does not need a thread to exist - the same read serves a profile reached from
+   * a roster. It discloses nothing new: every club returned is one the caller is already in.
+   */
+  app.get<{ Params: { uid: string } }>('/dm/shared-clubs/:uid', async (request) => ({
+    clubs: await sharedClubs(deps.db, request.access!, request.params.uid),
   }));
 
   const OpenDmBody = z.object({ userId: z.string().uuid() });

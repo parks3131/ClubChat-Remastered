@@ -134,7 +134,12 @@ async function setup(): Promise<Fixture> {
       displayName: 'Test Sender',
       displayImage: null,
       serverTime: new Date(2026, 0, 1).toISOString(),
-      channels: [{ id: CHANNEL, scope: 'club', clubId: CLUB, lastSeq: 0, lastReadSeq: 0 }],
+      channels: [
+        // `scopeId` is what a club channel's own id is: the club it belongs to. Fixed rather
+        // than defaulted in the schema, because a channel with no scope is not a thing that
+        // exists and a fixture that omits it is a payload no server could produce.
+        { id: CHANNEL, scope: 'club', scopeId: CLUB, clubId: CLUB, lastSeq: 0, lastReadSeq: 0 },
+      ],
     },
   });
   await connected;

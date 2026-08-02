@@ -26,7 +26,7 @@ Envelope: `{ "t": <type>, "id": <correlation id>, "d": <payload> }`
 
 | Type | Payload | Notes |
 |---|---|---|
-| `auth.ok` | `{ sessionId, userId, displayName, displayImage, serverTime, channels: [{id, scope, clubId, lastSeq, lastReadSeq}] }` | The client immediately knows every channel with a gap. `displayName` and `displayImage` ride here rather than on every ack, because neither can change for the life of the connection and the client needs both to draw its own optimistic bubble. |
+| `auth.ok` | `{ sessionId, userId, displayName, displayImage, serverTime, channels: [{id, scope, scopeId, clubId, lastSeq, lastReadSeq}] }` | The client immediately knows every channel with a gap. `displayName` and `displayImage` ride here rather than on every ack, because neither can change for the life of the connection and the client needs both to draw its own optimistic bubble. |
 | `auth.err` | `{ code }` | Socket closed. `invalid_token`, `expired_token`, `signin_blocked`, `timeout`, `malformed`. |
 | `msg.ack` | `{ clientMsgId, messageId, channelId, seq, createdAt }` | **Gap-checked exactly like `msg.new`** - a skipped `seq` here leaves a permanent hole. See [Client architecture](08-client-architecture.md). |
 | `msg.err` | `{ clientMsgId, code }` | `rate_limited`, `forbidden`, `channel_gone`, `malformed`, `media_not_ready` |
@@ -85,6 +85,9 @@ PATCH  /me/profile                           ← self only; there is deliberatel
 DELETE /me                                   ← anonymize + block future sign-in; 409 while they own a club
 
 GET    /conversations                        ← the chat list: club chats + DMs, newest first
+                                               a club row's unread covers EVERY channel of that
+                                               club the caller can reach, not the main chat alone
+GET    /channels                             ← per-channel sync state; what the hub badges from
 GET    /sync?channels[]={id}:{since_seq}     ← the reconnect / foreground path
 GET    /channels/:id/messages?before={seq}&limit=40
 GET    /channels/:id/messages/around?around={seq}&radius=20   ← jump-to-message window
@@ -99,8 +102,11 @@ POST   /channels/:id/messages/:seq/reactions ← toggle; returns the FULL result
 GET    /channels/:id/messages/:seq/reactions ← who reacted
 POST   /channels/:id/messages/:seq/report
 POST   /channels/:id/mute | DELETE           ← per-conversation, every scope
+POST   /channels/:id/pin  | DELETE           ← personal; sorts it to the top of YOUR list
+POST   /channels/:id/clear                   ← "Delete chat": hides it for the caller only, dm only
 
 GET    /dm/threads | /dm/candidates?q=       ← no global user search
+GET    /dm/shared-clubs/:uid                 ← the clubs you both belong to, for the DM profile
 POST   /dm/threads                           ← open or re-open; idempotent per pair
 GET    /blocks | POST /blocks | DELETE /blocks/:uid
 

@@ -191,6 +191,23 @@ export default function MainStackLayout() {
           headerLeft: () => <BackTo href="/clubs" label="Chats" variant="icon" />,
         }}
       />
+      {/*
+        A conversation's own profile. Its back target is the conversation rather than the chat
+        list, because that is one meaningful level up - it is reached from the DM's header.
+      */}
+      <Stack.Screen
+        name="dm/[channelId]/profile"
+        options={({ route }) => {
+          const params = (route.params ?? {}) as Record<string, string>;
+          const channelId = params['channelId'] ?? '';
+          return {
+            title: 'Chat info',
+            headerLeft: () => (
+              <BackTo href={`/chat/${channelId}`} label="Chat" variant="icon" />
+            ),
+          };
+        }}
+      />
 
       {/* Clubs. A club falls back to the list; everything inside it falls back to the club. */}
       {/*

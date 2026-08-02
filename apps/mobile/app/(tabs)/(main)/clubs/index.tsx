@@ -31,20 +31,29 @@
  * already hold is a different and much smaller thing than indexing every message in the product.
  */
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Redirect, useRouter } from 'expo-router';
+import { Redirect, useFocusEffect, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   conversationSummaryText,
   type ConversationSummary,
 } from '@clubchat/shared';
-import { channelApi } from '../../../../src/api.ts';
+import { channelApi, dmApi } from '../../../../src/api.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { useClearClub } from '../../../../src/current-space.tsx';
 import { formatConversationTimestamp } from '../../../../src/dates.ts';
 import { color, radius, space, type } from '../../../../src/theme.ts';
-import { Avatar, DataScreen, EmptyState, SearchField, Tabs } from '../../../../src/ui.tsx';
+import {
+  Avatar,
+  ConfirmDialog,
+  DataScreen,
+  EmptyState,
+  SearchField,
+  SheetMenu,
+  Tabs,
+} from '../../../../src/ui.tsx';
 import { useLoad } from '../../../../src/use-load.ts';
 
 /** The three chips, in the order the design shows them. */
@@ -130,13 +139,54 @@ export default function ChatsScreen() {
    * > surfacing at the club's front door.
    */
   useClearClub();
-  const { authState, revision, userId } = useSession();
+  const { authState, revision, userId, client } = useSession();
   const router = useRouter();
+  /*
+   * This screen opts out of the stack header to draw its own title and actions, which means it
+   * also owns the inset the header would have applied. Without it the title renders behind the
+   * clock and the two buttons behind the battery - and a browser has no notch, so it looks
+   * perfect right up until somebody holds a phone. Chat lost the same inset the same way.
+   */
+  const insets = useSafeAreaInsets();
 
   const [filter, setFilter] = useState<Filter | null>(null);
   const [query, setQuery] = useState('');
+  /** The row a long press opened the menu for, or null. */
+  const [sheetFor, setSheetFor] = useState<ConversationSummary | null>(null);
+  const [confirmClear, setConfirmClear] = useState<ConversationSummary | null>(null);
 
   const load = useLoad(() => channelApi.conversations(), [revision]);
+
+  /*
+   * Re-read whenever this screen comes back into view.
+   *
+   * `revision` covers changes this client made or was told about, and it is not enough on its
+   * own: a count can move because another device read the conversation, or because a push was
+   * opened, or simply because the socket was down while somebody wrote. Coming back to a list
+   * and seeing what it said ten minutes ago is the specific complaint this fixes, and asking on
+   * focus is the only version that cannot be reasoned wrong.
+   *
+   * Cheap: one small query, and only when the screen is actually being looked at.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      load.reload();
+      // Deliberately not depending on `load` - it is a fresh object every render, and depending
+      // on it would refetch in a loop rather than on focus.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []),
+  );
+
+  const act = async (run: () => Promise<unknown>) => {
+    setSheetFor(null);
+    try {
+      await run();
+    } finally {
+      // Reload either way: a refusal usually means the row is stale rather than that the
+      // action was wrong, and showing the truth is more use than an error here.
+      load.reload();
+    }
+  };
 
   // A guarded screen renders a placeholder in its denied branch, because the redirect lands a
   // frame later and an unguarded render would flash real chrome first.
@@ -145,7 +195,7 @@ export default function ChatsScreen() {
 
   return (
     <View style={styles.flex}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + space.sm }]}>
         <Text style={styles.title}>Chats</Text>
         <View style={styles.headerActions}>
           {/*
@@ -212,12 +262,78 @@ export default function ChatsScreen() {
                   row={item}
                   viewerId={userId}
                   onPress={() => router.push(destinationOf(item))}
+                  onLongPress={() => setSheetFor(item)}
                 />
               )}
             />
           );
         }}
       </DataScreen>
+
+      {/*
+        The long-press menu. Pin and Mute apply to every row because both are per-person facts
+        about a conversation in any scope; Delete chat is a DM only, which is the product
+        decision `canClearChannel` enforces server-side rather than this menu remembering it.
+      */}
+      {sheetFor !== null && (
+        <SheetMenu
+          title={sheetFor.name}
+          onDismiss={() => setSheetFor(null)}
+          items={[
+            {
+              label: sheetFor.pinned ? 'Unpin' : 'Pin',
+              onPress: () => void act(() => channelApi.pin(sheetFor.channelId, !sheetFor.pinned)),
+            },
+            {
+              label: sheetFor.muted ? 'Unmute' : 'Mute',
+              onPress: () =>
+                void act(() =>
+                  sheetFor.muted
+                    ? dmApi.unmute(sheetFor.channelId)
+                    : dmApi.mute(sheetFor.channelId),
+                ),
+            },
+            ...(sheetFor.scope === 'dm'
+              ? [
+                  {
+                    label: 'Delete chat',
+                    destructive: true,
+                    onPress: () => {
+                      const row = sheetFor;
+                      setSheetFor(null);
+                      setConfirmClear(row);
+                    },
+                  },
+                ]
+              : []),
+          ]}
+        />
+      )}
+
+      {/*
+        The wording is the important part. "Delete" reads as mutual and is not, so the dialog
+        says whose copy goes and whose does not - which is what stops somebody using it thinking
+        it reaches the other person, or avoiding it thinking it destroys the record for good.
+      */}
+      {confirmClear !== null && (
+        <ConfirmDialog
+          title="Delete this chat?"
+          body={`This clears the conversation for you only. ${confirmClear.name} will still have every message, and will not be told.`}
+          confirmLabel="Delete chat"
+          dismissLabel="Keep it"
+          onCancel={() => setConfirmClear(null)}
+          onConfirm={() => {
+            const row = confirmClear;
+            setConfirmClear(null);
+            void act(async () => {
+              await channelApi.clear(row.channelId);
+              // The device is holding exactly the messages that clear was meant to hide, and
+              // renders from the cache before any network call resolves.
+              await client?.forgetChannel(row.channelId);
+            });
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -249,10 +365,12 @@ function ConversationRow({
   row,
   viewerId,
   onPress,
+  onLongPress,
 }: {
   row: ConversationSummary;
   viewerId: string | null;
   onPress: () => void;
+  onLongPress: () => void;
 }) {
   const unread = row.unread > 0;
   const timestamp = useMemo(
@@ -265,6 +383,7 @@ function ConversationRow({
     <Pressable
       style={[styles.row, unread && styles.rowUnread]}
       onPress={onPress}
+      onLongPress={onLongPress}
       accessibilityRole="button"
       accessibilityLabel={
         unread
@@ -279,6 +398,15 @@ function ConversationRow({
           <Text style={[styles.name, unread && styles.nameUnread]} numberOfLines={1}>
             {row.name}
           </Text>
+          {/* Why this row is at the top, said rather than left to be inferred. */}
+          {row.pinned && (
+            <MaterialIcons
+              name="push-pin"
+              size={13}
+              color={color.textSecondary}
+              accessibilityLabel="Pinned"
+            />
+          )}
           <Text style={[styles.timestamp, unread && styles.timestampUnread]}>{timestamp}</Text>
         </View>
 
@@ -320,7 +448,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: space.md,
-    paddingTop: space.sm,
+    // paddingTop comes from the safe-area inset at the call site, never from a constant: the
+    // notch is 59pt on one phone and 20 on another, and a hardcoded guess is wrong on both.
   },
   title: { ...type.title, color: color.textPrimary },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: space.xs },

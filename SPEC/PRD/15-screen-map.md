@@ -23,6 +23,15 @@ the other behind a button at the bottom of a list.
    reach. Their unread still arrives through the Notifications inbox and the badge.
 2. **Each row shows** the scope's own avatar and name, the last message prefixed with who sent
    it, and when. A row with unread messages is tinted and carries a count.
+
+   **A club's count covers every channel of that club the viewer can reach** - its main chat,
+   the Eboard space, and any race they are on the roster of - because the row opens the club
+   rather than one conversation inside it. The hub then badges each of those separately, so the
+   total always resolves to somewhere to go. *(Corrected 2026-08-02: it counted the main chat
+   alone, which made unread sitting in the Eboard invisible in the list, on the hub and
+   everywhere else - reported from a phone as "it says nine and I cannot find them".)*
+
+   A race the viewer has no roster row for contributes nothing, since they could never open it.
 3. **Three filter chips - Unread, DMs, Clubs - and none of them is selected on arrival.**
    Landing on a filter would mean opening the app to an empty screen on every day the reader is
    caught up, which is most days, and an empty list reads as a broken app rather than as good
@@ -47,6 +56,11 @@ the other behind a button at the bottom of a list.
 7. **The empty state says which of three things happened** - no chats at all, nothing matching
    the search, or nothing unread - because "No chats yet" under an active Unread filter is a
    lie.
+8. **A long press on any row opens Pin/Unpin and Mute/Unmute, plus Delete chat on a DM.**
+   Pinned rows sort above every unpinned one and carry a pin glyph, so the ordering explains
+   itself rather than looking arbitrary. The first two apply in every scope because both are
+   per-person facts about a conversation; the third is a direct-message action - see
+   [Direct messages](14-direct-messages.md) rules 11 and 12.
 
 ```
 Chats  (every club chat and DM, newest first; chips: Unread | DMs | Clubs)
@@ -115,10 +129,17 @@ New message             (search over people the viewer shares a club with; no gl
 └─ Member profile       ← a result opens the PROFILE
    └─ Send message      ← which is where a conversation actually starts
       └─ DM chat        ← the same chat screen, not a fork
-         ├─ Gallery
+         ├─ Chat info   ← the header NAME opens this
+         │  ├─ Shared clubs      (listed, each opening that club)
+         │  ├─ Gallery           (this conversation's photos)
+         │  └─ ⋯ menu: Pin · Block / Unblock · Delete chat
          ├─ Member profile card
          └─ header options: Mute · Block / Unblock
 ```
+
+**Chat info is the conversation's profile, not the person's.** A member profile is reachable
+from any roster, where there may be no conversation at all - so the things that act on a
+*thread* live here instead, and this screen exists only where a thread does.
 
 **DMs are listed in the Chats destination, alongside club chats**, and are reached by the DMs
 chip rather than by a screen of their own. A DM belongs to no club - two people who share three

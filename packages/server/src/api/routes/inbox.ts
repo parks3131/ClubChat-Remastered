@@ -86,7 +86,7 @@ export function registerInboxRoutes(app: FastifyInstance, deps: AppDeps): void {
       const guard = await authorizeChannel(deps, request, channelId);
       if (!guard.ok) continue;
 
-      const page = await syncSince(deps.db, channelId, since);
+      const page = await syncSince(deps.db, request.access!, channelId, since);
       results.push({ channelId, messages: page.messages, hasMore: page.hasMore });
     }
 

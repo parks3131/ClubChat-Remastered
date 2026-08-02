@@ -30,7 +30,22 @@ import { useBadge } from '../../src/use-badge.ts';
  * its own loses the design.
  */
 function TabLabel({ label, focused }: { label: string; focused: boolean }) {
-  return <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>{label}</Text>;
+  return (
+    <Text
+      style={[styles.tabLabel, focused && styles.tabLabelActive]}
+      /*
+       * One line, always. "NOTIFICATIONS" is long enough to wrap into "NOTIFICATIO / NS" at a
+       * quarter of a phone's width, and a tab bar with one two-line label is visibly crooked.
+       *
+       * The fit comes from the STYLE rather than from `adjustsFontSizeToFit`, which is iOS-only
+       * - on web it does nothing and `numberOfLines` then truncates instead, trading a wrap for
+       * an ellipsis. A smaller size and tighter tracking fit the word on both.
+       */
+      numberOfLines={1}
+    >
+      {label}
+    </Text>
+  );
 }
 
 /**
@@ -229,7 +244,15 @@ export default function TabsLayout() {
 }
 
 const styles = StyleSheet.create({
-  tabLabel: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
+  tabLabel: {
+    ...type.label,
+    // Below the label token's 12/0.6, which is tuned for a badge rather than for a quarter of a
+    // phone's width. The longest destination name is what sets this.
+    fontSize: 10,
+    letterSpacing: 0.2,
+    color: color.textSecondary,
+    textTransform: 'uppercase',
+  },
   tabLabelActive: { color: color.accent },
   // Top-right of the icon, overlapping it slightly, which is where a badge is read for.
   badge: {

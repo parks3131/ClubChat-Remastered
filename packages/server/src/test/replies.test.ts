@@ -28,7 +28,7 @@ import { sendMessage, softDeleteMessage } from '../domain/send-message.ts';
 import { getChannelRef, readHistory, syncSince } from '../domain/reads.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { messages, users } from '../db/schema.ts';
-import { startTestDb, type TestDb } from './harness.ts';
+import { anyViewer, startTestDb, type TestDb } from './harness.ts';
 import type { ChannelRef } from '../policy/predicates.ts';
 
 let h: TestDb;
@@ -84,7 +84,7 @@ async function setup(): Promise<Fixture> {
 
 /** The one message in a page, by seq. Reads go through the real query, never a hand-built row. */
 async function reread(channel: ChannelRef, seq: number) {
-  const page = await readHistory(h.db, channel.id, {});
+  const page = await readHistory(h.db, anyViewer(), channel.id, {});
   const found = page.find((message) => message.seq === seq);
   if (!found) throw new Error(`seq ${seq} not in history`);
   return found;
@@ -136,7 +136,7 @@ describe('a reply carries the message it answers', () => {
       replyToSeq: original.seq,
     });
 
-    const backlog = await syncSince(h.db, f.channel.id, 0);
+    const backlog = await syncSince(h.db, anyViewer(), f.channel.id, 0);
     const synced = backlog.messages.find((message) => message.seq === reply.seq);
     expect(synced?.replyTo?.preview).toBe('meet at seven');
   });
