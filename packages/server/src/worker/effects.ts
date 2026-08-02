@@ -414,6 +414,29 @@ async function clubContext(
 }
 
 /**
+ * The club's Eboard space and the channel inside it.
+ *
+ * Two things need this and they are the same lookup: the space narrates its own membership
+ * changes in its own chat, and somebody who loses access has to be force-unsubscribed from that
+ * exact channel. The scope predicate matters here for the same reason it does in `clubContext` -
+ * `scope_id` is a plain uuid shared by four scopes (ADR-0014), so matching on it alone would
+ * match any channel whose scope happens to hold the same id.
+ */
+async function eboardContext(
+  db: Db,
+  clubId: string,
+): Promise<{ eboardId: string; channelId: string } | null> {
+  const rows = await db.execute<{ eboard_id: string; channel_id: string }>(sql`
+    SELECT e.id AS eboard_id, ch.id AS channel_id
+      FROM eboard_channels e
+      JOIN channels ch ON ch.scope = 'eboard' AND ch.scope_id = e.id
+     WHERE e.club_id = ${clubId}::uuid
+  `);
+  const row = rows.rows[0];
+  return row ? { eboardId: row.eboard_id, channelId: row.channel_id } : null;
+}
+
+/**
  * Someone joined.
  *
  * Posts a system message and, when an admin did the adding, tells the person they were
@@ -537,12 +560,26 @@ const onJoinDecided: EffectHandler = async (event, deps) => {
   });
 };
 
-/** A role changed. Announced in chat, and the affected member is told. */
+/**
+ * A role changed.
+ *
+ * **One act with consequences in two rooms**, because promotion to admin auto-joins the Eboard
+ * and demotion auto-removes (`PRD/10` rule 2). The club sees who was promoted; the board sees
+ * who just arrived in it. Both lines name the actor - "X is now an admin" said what happened and
+ * not who did it, which is the half people ask about afterwards.
+ *
+ * **Demotion also has to cut the socket, and that is the part with teeth.** `changeRole` deletes
+ * the `eboard_memberships` row, but access was checked once at subscribe time and is never
+ * rechecked per message (ADR-0007) - so without the revocation below, a demoted admin keeps
+ * receiving the board's private chat live until they happen to reconnect. The gateway's own
+ * contract names this case; it was the only one of the four that never called it.
+ */
 const onRoleChanged: EffectHandler = async (event, deps) => {
   const clubId = String(event.payload['clubId']);
   const userId = String(event.payload['userId']);
   const actorId = String(event.payload['actorId']);
   const newRole = String(event.payload['newRole']) as 'admin' | 'member';
+  const promoted = newRole === 'admin';
 
   const club = await clubContext(deps.db, clubId);
   if (!club) return;
@@ -550,14 +587,34 @@ const onRoleChanged: EffectHandler = async (event, deps) => {
   const name = await displayName(deps.db, userId);
   const actorName = await displayName(deps.db, actorId);
 
+  // No `scope`, so this keeps the derived client id it has always had. A message already
+  // posted must stay the same message, or a redelivery would post a second copy beside it.
   await postSystemMessage(deps, {
     channelId: club.mainChannelId,
-    body:
-      newRole === 'admin'
-        ? `${name} is now an admin`
-        : `${name} is no longer an admin`,
+    body: promoted
+      ? `${actorName} promoted ${name} as admin`
+      : `${actorName} removed ${name} as admin`,
     eventId: event.id,
   });
+
+  const eboard = await eboardContext(deps.db, clubId);
+  if (eboard) {
+    await postSystemMessage(deps, {
+      channelId: eboard.channelId,
+      body: promoted
+        ? `${actorName} added ${name} to the group`
+        : `${actorName} removed ${name} from the group`,
+      eventId: event.id,
+      // Distinct from the line above, which shares this event id. Same event, two messages,
+      // two identities - otherwise the second would collide with the first's idempotency key.
+      scope: 'eboard',
+    });
+
+    if (!promoted) {
+      await publishRevocation(deps.redis, { userId, channelIds: [eboard.channelId] });
+      deps.log('info', 'revoked Eboard subscription after demotion', { userId, clubId });
+    }
+  }
 
   await writeNotifications(deps.db, {
     outboxEventId: notificationKey(event.id),
@@ -567,6 +624,151 @@ const onRoleChanged: EffectHandler = async (event, deps) => {
     actorId,
     clubId,
   });
+};
+
+/**
+ * The Eboard's own membership effects.
+ *
+ * > **All three of these were emitted and had no handler at all.** The domain wrote
+ * > `eboard.join_requested`, `eboard.membership_decided` and `eboard.member_departed` into the
+ * > outbox from the day the space was built; `dispatch` throws on an unknown type, so every one
+ * > of them retried five times and parked. The notification type was declared, its params had a
+ * > schema, `audience.ts` resolved it to the current members and the inbox already cleared it
+ * > when the roster opened. Only the handler was missing - failure mode 11, both ends complete
+ * > with nothing joining them, and it is silent because the outbox is a retry queue and parking
+ * > is what it does with work nobody claims.
+ *
+ * They are three calls into machinery that already existed, which is the point.
+ */
+const onEboardJoinRequested: EffectHandler = async (event, deps) => {
+  const clubId = String(event.payload['clubId']);
+  const eboardId = String(event.payload['eboardId']);
+  const userId = String(event.payload['userId']);
+
+  const club = await clubContext(deps.db, clubId);
+  if (!club) return;
+
+  // Current members only. An admin outside the space must not learn its business - which is
+  // why this is not `clubAdminTier`, even though every member of it is an admin.
+  const recipients = await resolveAudience(deps.db, {
+    type: 'eboard_join_request',
+    actorId: userId,
+    clubId,
+  });
+
+  await writeNotifications(deps.db, {
+    outboxEventId: notificationKey(event.id),
+    type: 'eboard_join_request',
+    params: {
+      clubId,
+      clubName: club.name,
+      eboardId,
+      requesterName: await displayName(deps.db, userId),
+      requesterId: userId,
+    },
+    recipients,
+    actorId: userId,
+    clubId,
+  });
+};
+
+/**
+ * Somebody was let into the Eboard, by an approval or by being added outright.
+ *
+ * **One sentence for one fact.** An approval and a direct add are the same thing happening -
+ * an existing member let somebody in - so the group reads one line either way rather than two
+ * wordings for a distinction only the database cares about. A DENIAL posts nothing: it is
+ * addressed to the person who asked, and announcing a refusal to the room they were refused
+ * entry to is a different and worse act.
+ */
+const onEboardMembershipDecided: EffectHandler = async (event, deps) => {
+  const clubId = String(event.payload['clubId']);
+  const userId = String(event.payload['userId']);
+  const actorId = event.payload['actorId'] as string | null;
+  const approved = event.payload['approved'] === true;
+  const added = event.payload['added'] === true;
+
+  const club = await clubContext(deps.db, clubId);
+  const eboard = await eboardContext(deps.db, clubId);
+  if (!club || !eboard) return;
+
+  const name = await displayName(deps.db, userId);
+  const actorName = actorId ? await displayName(deps.db, actorId) : 'An admin';
+
+  if (approved) {
+    await postSystemMessage(deps, {
+      channelId: eboard.channelId,
+      body: `${actorName} added ${name} to the group`,
+      eventId: event.id,
+      scope: 'eboard',
+    });
+  }
+
+  await writeNotifications(deps.db, {
+    outboxEventId: notificationKey(event.id),
+    /*
+     * `member_added` for a direct add and `request_approved` for a decision, because the two
+     * answer different questions for the person receiving them: one is news, the other is the
+     * reply to something they asked. `PRD/12` lists them as separate rows for that reason.
+     */
+    type: added ? 'member_added' : approved ? 'request_approved' : 'request_denied',
+    params: {
+      clubId,
+      clubName: club.name,
+      actorName,
+      scope: 'eboard',
+      scopeName: 'Eboard & Council',
+      // A denial has nowhere to send them, so it carries no scope id - the schema says so.
+      ...(approved ? { scopeId: eboard.eboardId } : {}),
+    } as never,
+    recipients: [userId],
+    actorId,
+    clubId,
+  });
+};
+
+/**
+ * Somebody left the Eboard, or was removed from it by the Owner.
+ *
+ * The revocation is the whole reason this cannot be a notification-only handler: the space is
+ * private to its members and a live subscription outlives the row that justified it. Leaving is
+ * announced but not notified - they were there when it happened, the same rule `onMemberJoined`
+ * follows for somebody who joined an open club under their own steam.
+ */
+const onEboardMemberDeparted: EffectHandler = async (event, deps) => {
+  const clubId = String(event.payload['clubId']);
+  const userId = String(event.payload['userId']);
+  const actorId = event.payload['actorId'] as string | null;
+
+  const club = await clubContext(deps.db, clubId);
+  const eboard = await eboardContext(deps.db, clubId);
+  if (!club || !eboard) return;
+
+  const name = await displayName(deps.db, userId);
+  const actorName = actorId ? await displayName(deps.db, actorId) : null;
+
+  await postSystemMessage(deps, {
+    channelId: eboard.channelId,
+    body: actorName ? `${actorName} removed ${name} from the group` : `${name} left the group`,
+    eventId: event.id,
+    scope: 'eboard',
+  });
+
+  if (actorId) {
+    await writeNotifications(deps.db, {
+      outboxEventId: notificationKey(event.id),
+      type: 'member_removed',
+      params: { clubId, clubName: club.name, actorName: actorName ?? 'An admin' },
+      recipients: [userId],
+      actorId,
+      clubId,
+    });
+  }
+
+  // Their club membership is untouched, so this revokes the Eboard channel alone - a
+  // club-wide revocation would cut them out of chat they are still entitled to.
+  await publishRevocation(deps.redis, { userId, channelIds: [eboard.channelId] });
+  deps.log('info', 'revoked Eboard subscription after departure', { userId, clubId });
 };
 
 /**
@@ -1161,6 +1363,11 @@ export const handlers: Record<string, EffectHandler> = {
   'club.member_removed': makeDepartureHandler('removed'),
   'club.member_left': makeDepartureHandler('left'),
   'club.deleted': onClubDeleted,
+
+  // The Eboard space. Emitted since the space was built, handled since none of it worked.
+  'eboard.join_requested': onEboardJoinRequested,
+  'eboard.membership_decided': onEboardMembershipDecided,
+  'eboard.member_departed': onEboardMemberDeparted,
 
   // Phase 2. Each is one call into machinery that already existed.
   'race.created': makeCreationHandler({

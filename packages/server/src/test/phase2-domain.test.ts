@@ -37,10 +37,16 @@ import {
 import { sendMessage } from '../domain/send-message.ts';
 import { getChannelRef } from '../domain/reads.ts';
 import { reportMessage } from '../domain/moderation.ts';
-import { addEboardMember } from '../domain/eboard.ts';
+import {
+  addEboardMember,
+  decideEboardRequest,
+  removeEboardMember,
+  requestEboardAccess,
+} from '../domain/eboard.ts';
 import { canReadReports } from '../policy/predicates.ts';
 import { readCalendarFeed, readMonthMarkers } from '../domain/calendar.ts';
 import { loadAccessContext } from '../policy/context.ts';
+import { REVOKE_TOPIC } from '../bus/redis.ts';
 import { drainOnce } from '../worker/drain.ts';
 import { runScheduledTick } from '../worker/scheduled.ts';
 import { RecordingPushSender } from '../push/sender.ts';
@@ -61,7 +67,25 @@ let h: TestDb;
 let push: RecordingPushSender;
 let deferred: Array<() => Promise<void>>;
 let deps: EffectDeps;
+/**
+ * Every Redis publish an effect made.
+ *
+ * Recorded rather than discarded because **revocation is only observable here.** Losing access
+ * to a channel has two halves - the row goes, and the live socket is force-unsubscribed - and
+ * the second half is a publish and nothing else. A fake that answered `1` and forgot made the
+ * half that matters untestable, which is how the Eboard's two paths lost theirs unnoticed.
+ */
+let published: Array<{ topic: string; payload: string }>;
 const silent = () => undefined;
+
+/** The channel ids a revocation was published for, for one user. */
+function revokedChannelsFor(userId: string): string[] {
+  return published
+    .filter((entry) => entry.topic === REVOKE_TOPIC)
+    .map((entry) => JSON.parse(entry.payload) as { userId: string; channelIds: string[] })
+    .filter((instruction) => instruction.userId === userId)
+    .flatMap((instruction) => instruction.channelIds);
+}
 
 beforeAll(async () => {
   h = await startTestDb();
@@ -74,9 +98,15 @@ beforeEach(async () => {
   await h.db.execute(sql`TRUNCATE notifications, outbox, push_deliveries, devices RESTART IDENTITY CASCADE`);
   push = new RecordingPushSender();
   deferred = [];
+  published = [];
   deps = {
     db: h.db,
-    redis: { publish: async () => 1 } as never,
+    redis: {
+      publish: async (topic: string, payload: string) => {
+        published.push({ topic, payload });
+        return 1;
+      },
+    } as never,
     push,
     log: silent,
     defer: (fn) => deferred.push(fn),
@@ -1186,5 +1216,201 @@ describe('reporting, by scope', () => {
     expect(told).not.toContain(offRaceAdminId);
     // The reporter is on the roster but not an admin, and reported it themselves anyway.
     expect(told).not.toContain(f.memberId);
+  });
+});
+
+// ===========================================================================
+// The Eboard's own notifications, and the access that has to end with them
+// ===========================================================================
+
+/**
+ * **Every one of these failed when it was written, and three of them failed silently.**
+ *
+ * `eboard.join_requested`, `eboard.membership_decided` and `eboard.member_departed` were emitted
+ * by the domain and had no handler in the effects table at all. `dispatch` throws on an unknown
+ * type, so each one retried five times and PARKED - no notification, ever, and an error line per
+ * attempt. The notification type was declared in shared, its params had a schema, `audience.ts`
+ * resolved it to the current members and the inbox already cleared it when the roster opened.
+ * Only the line that writes the row was missing: both ends complete, nothing joining them.
+ *
+ * Nothing caught it because `drainOnce` deliberately absorbs a handler failure into the retry
+ * column rather than rethrowing - correct for a queue, and it means a missing consumer is
+ * invisible unless a test asserts on the notification or on the outbox. So these assert on both,
+ * and `every event type a domain emits has a handler` closes the door on the next one.
+ */
+describe('the Eboard tells its own members', () => {
+  /** An admin who has left the Eboard, which is the only way the request path is ever used. */
+  async function adminOutsideTheEboard(f: Awaited<ReturnType<typeof setup>>) {
+    const strayId = await makeUser('EboardStray');
+    await addMember(h.db, await ctxFor(f.ownerId), f.clubId, strayId);
+    // Promotion auto-joins the Eboard (PRD/10 rule 2)...
+    await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, strayId, 'admin');
+    // ...so they have to leave it for there to be anything to request.
+    const left = await removeEboardMember(h.db, await ctxFor(strayId), f.eboardId, strayId);
+    expect(left.ok, 'the stray admin could not leave the Eboard').toBe(true);
+    await settleFixture();
+    return strayId;
+  }
+
+  async function eboardChannelId(clubId: string): Promise<string> {
+    const rows = await h.db.execute<{ id: string }>(sql`
+      SELECT ch.id
+        FROM eboard_channels e
+        JOIN channels ch ON ch.scope = 'eboard' AND ch.scope_id = e.id
+       WHERE e.club_id = ${clubId}::uuid
+    `);
+    return rows.rows[0]!.id;
+  }
+
+  /** Nothing may be left parked: a parked effect is a notification that will never arrive. */
+  async function expectNothingParked() {
+    const parked = await h.db.execute<{ event_type: string; last_error: string | null }>(sql`
+      SELECT event_type, last_error FROM outbox WHERE attempts > 0
+    `);
+    expect(parked.rows, `an effect failed: ${JSON.stringify(parked.rows)}`).toHaveLength(0);
+  }
+
+  it('tells the current members when an admin asks to join', async () => {
+    const f = await setup();
+    const strayId = await adminOutsideTheEboard(f);
+
+    const requested = await requestEboardAccess(h.db, await ctxFor(strayId), f.eboardId);
+    expect(requested.ok, 'the request itself was refused').toBe(true);
+    await drainAll();
+
+    await expectNothingParked();
+    const rows = await h.db.select().from(notifications);
+    expect(rows.map((r) => r.recipientId), 'the Eboard was not told').toEqual([f.ownerId]);
+    expect(rows[0]?.type).toBe('eboard_join_request');
+  });
+
+  it('tells the requester when the answer arrives, either way', async () => {
+    const f = await setup();
+    const strayId = await adminOutsideTheEboard(f);
+    await requestEboardAccess(h.db, await ctxFor(strayId), f.eboardId);
+    await settleFixture();
+
+    const pending = await h.db.execute<{ id: string }>(sql`
+      SELECT id FROM eboard_join_requests WHERE user_id = ${strayId}::uuid AND status = 'pending'
+    `);
+    const decided = await decideEboardRequest(
+      h.db,
+      await ctxFor(f.ownerId),
+      pending.rows[0]!.id,
+      true,
+    );
+    expect(decided.ok, 'the decision was refused').toBe(true);
+    await drainAll();
+
+    await expectNothingParked();
+    const rows = await h.db.select().from(notifications);
+    expect(rows.map((r) => r.recipientId)).toEqual([strayId]);
+    expect(rows[0]?.type).toBe('request_approved');
+  });
+
+  it('tells somebody added to the Eboard directly, and narrates it in the group', async () => {
+    const f = await setup();
+    const strayId = await adminOutsideTheEboard(f);
+
+    const added = await addEboardMember(h.db, await ctxFor(f.ownerId), f.eboardId, strayId);
+    expect(added.ok, 'the add was refused').toBe(true);
+    await drainAll();
+
+    await expectNothingParked();
+    const rows = await h.db.select().from(notifications);
+    expect(rows.map((r) => r.recipientId)).toEqual([strayId]);
+    expect(rows[0]?.type).toBe('member_added');
+
+    const said = await h.db.execute<{ body: string }>(sql`
+      SELECT body FROM messages
+       WHERE channel_id = ${await eboardChannelId(f.clubId)}::uuid AND type = 'system'
+       ORDER BY seq DESC LIMIT 1
+    `);
+    expect(said.rows[0]?.body).toBe('Owner added EboardStray to the group');
+  });
+
+  /*
+   * The two paths that END Eboard access, and the half of ending it that is invisible.
+   *
+   * The gateway's own contract says it in as many words: access is checked at subscribe time
+   * and NOT rechecked per message, so "removing someone from a club, a race roster or the
+   * Eboard must force-unsubscribe their sockets, not merely delete the row". Club and race
+   * departure both did. Neither Eboard path did - one had no handler at all, and the other
+   * deleted the membership row inside `changeRole` and revoked nothing - so a demoted admin
+   * kept receiving the board's private chat live until they happened to reconnect.
+   */
+  it('cuts off a member removed from the Eboard, not just their row', async () => {
+    const f = await setup();
+    const secondId = await makeUser('EboardSecond');
+    await addMember(h.db, await ctxFor(f.ownerId), f.clubId, secondId);
+    await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, secondId, 'admin');
+    await settleFixture();
+
+    const removed = await removeEboardMember(h.db, await ctxFor(f.ownerId), f.eboardId, secondId);
+    expect(removed.ok, 'the removal was refused').toBe(true);
+    await drainAll();
+
+    await expectNothingParked();
+    expect(
+      revokedChannelsFor(secondId),
+      'a removed member kept their live subscription to the private space',
+    ).toContain(await eboardChannelId(f.clubId));
+  });
+
+  it('cuts off a demoted admin, who loses the Eboard by demotion alone', async () => {
+    const f = await setup();
+    const secondId = await makeUser('EboardDemoted');
+    await addMember(h.db, await ctxFor(f.ownerId), f.clubId, secondId);
+    await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, secondId, 'admin');
+    await settleFixture();
+
+    await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, secondId, 'member');
+    await drainAll();
+
+    await expectNothingParked();
+    // The row is gone - `changeRole` has always done that half.
+    const still = await h.db.execute<{ n: number }>(sql`
+      SELECT COUNT(*)::int AS n FROM eboard_memberships
+       WHERE eboard_id = ${f.eboardId}::uuid AND user_id = ${secondId}::uuid
+    `);
+    expect(Number(still.rows[0]?.n)).toBe(0);
+    // ...and now the half that was missing.
+    expect(
+      revokedChannelsFor(secondId),
+      'a demoted admin kept reading the board they were just removed from',
+    ).toContain(await eboardChannelId(f.clubId));
+  });
+
+  it('narrates a promotion in both chats, naming who did it', async () => {
+    const f = await setup();
+    const secondId = await makeUser('EboardPromoted');
+    await addMember(h.db, await ctxFor(f.ownerId), f.clubId, secondId);
+    await settleFixture();
+
+    await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, secondId, 'admin');
+    await drainAll();
+
+    await expectNothingParked();
+    const mainChannel = await h.db.execute<{ id: string }>(sql`
+      SELECT id FROM channels WHERE club_id = ${f.clubId}::uuid AND scope = 'club'
+    `);
+    const inMain = await h.db.execute<{ body: string }>(sql`
+      SELECT body FROM messages
+       WHERE channel_id = ${mainChannel.rows[0]!.id}::uuid AND type = 'system'
+       ORDER BY seq DESC LIMIT 1
+    `);
+    expect(inMain.rows[0]?.body).toBe('Owner promoted EboardPromoted as admin');
+
+    const inEboard = await h.db.execute<{ body: string }>(sql`
+      SELECT body FROM messages
+       WHERE channel_id = ${await eboardChannelId(f.clubId)}::uuid AND type = 'system'
+       ORDER BY seq DESC LIMIT 1
+    `);
+    expect(inEboard.rows[0]?.body).toBe('Owner added EboardPromoted to the group');
+
+    // The affected member is told, and nobody else is (PRD/12: role_changed goes to them).
+    const rows = await h.db.select().from(notifications);
+    expect(rows.map((r) => r.recipientId)).toEqual([secondId]);
+    expect(rows[0]?.type).toBe('role_changed');
   });
 });

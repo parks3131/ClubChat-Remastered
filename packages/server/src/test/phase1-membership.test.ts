@@ -306,15 +306,22 @@ describe('roles', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('announces a role change in chat', async () => {
+  it('announces a role change in chat, naming who did it', async () => {
     const f = await setup();
     const member = await makeUser('Promoted');
     await addMember(h.db, await ctxFor(f.ownerId), f.clubId, member);
     await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, member, 'admin');
     await drainOnce(h.db, deps);
 
+    // The actor is the half that used to be missing: "Promoted is now an admin" said what
+    // happened and not who did it, which is what people ask about afterwards.
     const bodies = await systemMessages(f.mainChannelId);
-    expect(bodies.some((b) => b.includes('Promoted') && b.includes('now an admin'))).toBe(true);
+    expect(bodies.some((b) => b.includes('promoted Promoted as admin'))).toBe(true);
+
+    await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, member, 'member');
+    await drainOnce(h.db, deps);
+    const afterDemotion = await systemMessages(f.mainChannelId);
+    expect(afterDemotion.some((b) => b.includes('removed Promoted as admin'))).toBe(true);
   });
 
   it('lets an admin demote another admin but not remove them', async () => {
