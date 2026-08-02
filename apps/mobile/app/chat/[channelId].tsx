@@ -23,7 +23,13 @@ import {
   type ReactionEmoji,
 } from "@clubchat/shared";
 import { useSession } from "../../src/chat-provider.tsx";
-import { formatDaySeparator, toDateKey } from "../../src/dates.ts";
+import {
+  buildChatRows,
+  decideLastReadAnchor,
+  LAST_READ_ROW,
+  type Row,
+} from "../../src/chat-rows.ts";
+import { formatDaySeparator } from "../../src/dates.ts";
 import { channelApi, dmApi, type ChannelMeta } from "../../src/api.ts";
 import { DocumentBubble, PhotoBubble, RemoteImage } from "../../src/media-bubble.tsx";
 import { PhotoViewer } from "../../src/photo-viewer.tsx";
@@ -84,42 +90,11 @@ const PINNED_STRIP_FADE_AFTER = 400;
  */
 const JUMP_HIGHLIGHT_MS = 2200;
 
-type Row =
-  | { kind: "message"; message: MessageEnvelope }
-  /** An optimistic row from the send outbox, not yet acked. */
-  | {
-      kind: "pending";
-      clientMsgId: string;
-      body: string;
-      failed: boolean;
-      /** Mirrors the outbox entry, announcements included - see `store.ts`. */
-      type: "text" | "photo" | "document" | "announcement";
-      /** Renders the photo the sender just picked, before any round trip. */
-      localUri?: string | undefined;
-      documentName?: string | undefined;
-      documentSize?: number | undefined;
-      /** The quote to draw before the ack lands. Local only - see `PendingSend.replyTo`. */
-      replyTo?: MessageReplyRef | undefined;
-    }
-  /**
-   * The "Last read" rule, drawn above the first message that was unread on arrival.
-   *
-   * Carries nothing: where it sits is the entire content, so there is nothing to put on it.
-   */
-  | { kind: "lastRead" }
-  /** A day's heading, above the first message sent on that local date. */
-  | { kind: "day"; dateKey: string };
-
-/**
- * The one and only "Last read" row.
- *
- * **A module constant, so its identity survives every rebuild of the list**, which is what makes
- * it safe to hold. The arrival remembers its target row and re-applies it as cards and photos
- * finish measuring, and it finds that row by `indexOf` - so a target rebuilt into a fresh object
- * on the next render silently stops being found and the placement quietly gives up. A message row
- * has that hazard by nature; this one does not have to.
+/*
+ * `Row`, the markers and the arithmetic that places them live in `src/chat-rows.ts`, where they
+ * can be tested. They were here, and both of their bugs shipped: this file is 3,400 lines and a
+ * memo inside it has no way to be exercised except by opening a chat on a phone and looking.
  */
-const LAST_READ_ROW: Row = { kind: "lastRead" };
 
 /**
  * Whether a card bubble can be held to open the message menu.
@@ -1140,16 +1115,18 @@ export default function ChatScreen() {
   /** The photo being looked at full screen, or null. The whole message - see `openPhoto`. */
   const [viewingPhoto, setViewingPhoto] = useState<MessageEnvelope | null>(null);
   /**
-   * The read cursor as it stood on arrival, as STATE, because the "Last read" rule is drawn
-   * from it and the list has to be rebuilt when it lands.
+   * The message the "Last read" rule sits above - a DECISION, taken once, not a comparison.
    *
-   * The ref of the same name below is what the landing effect reads, in the same tick it is set.
-   * Both exist because they are needed at different moments: a ref cannot trigger the re-render
-   * that draws the divider, and state is not readable synchronously by the effect that captured
-   * it. See `entryLastReadRef` for why the capture has to happen before anything marks the
-   * channel read.
+   * > **This is the whole fix for the bug it shipped with.** The first version kept the entry
+   * > cursor and compared every message against it as the list changed, which is a different rule
+   * > wearing the same clothes: the cursor is frozen at arrival, so a message sent a minute later
+   * > has a higher `seq` and counts as unread against it. Open a chat you are caught up on, type
+   * > anything, and the rule appeared above your own message.
+   *
+   * Null means "no rule this visit", and it stays null: nothing that arrives after you got here
+   * was unread when you got here. `decideLastReadAnchor` is tested in `chat-rows.test.ts`.
    */
-  const [entryLastRead, setEntryLastRead] = useState<number | null>(null);
+  const [lastReadAnchor, setLastReadAnchor] = useState<number | null>(null);
   /**
    * Set once Delete is tapped. Deleting is irreversible and destroys somebody's words, so it
    * gets the same second deliberate step reporting does rather than firing off a long press.
@@ -1267,49 +1244,10 @@ export default function ChatScreen() {
    * because reversing on each render would allocate a new array per keystroke and defeat the
    * memoized rows underneath it.
    */
-  const invertedRows = useMemo(() => {
-    /*
-     * Both markers go in here rather than into `rows`, for the same reason the reversal does:
-     * `rows` is what history actually is, and a day heading and a "Last read" rule are facts
-     * about ONE READER looking at it. The pinned strip, the jump lookup and the unread arithmetic
-     * all read `rows`, and none of them should have to know a marker might be sitting in it.
-     *
-     * Built in chronological order and reversed at the end. Doing it the other way means
-     * reasoning about a list that reads bottom-upwards, which is where an off-by-one hides in
-     * plain sight.
-     */
-    const cutoff = entryLastRead;
-    const firstUnread =
-      cutoff === null
-        ? -1
-        : rows.findIndex((row) => row.kind === "message" && row.message.seq > cutoff);
-
-    const withMarkers: Row[] = [];
-    let previousDay: string | null = null;
-
-    rows.forEach((row, index) => {
-      // A pending row has no timestamp yet - it is being sent right now, so it belongs to today.
-      const dayKey =
-        row.kind === "message" ? toDateKey(new Date(row.message.createdAt)) : toDateKey(new Date());
-      if (dayKey !== previousDay) {
-        withMarkers.push({ kind: "day", dateKey: dayKey });
-        previousDay = dayKey;
-      }
-
-      /*
-       * The day heading comes FIRST where both land on the same message, which is the order the
-       * two facts are true in: the reader crossed into a new day, and then into what they had
-       * not read. Reversed, that draws the date above the rule above the message.
-       *
-       * No rule above the very first message either: one at the top of an empty history says
-       * "everything below is new" about a conversation the reader has simply never opened.
-       */
-      if (index === firstUnread && firstUnread > 0) withMarkers.push(LAST_READ_ROW);
-      withMarkers.push(row);
-    });
-
-    return withMarkers.reverse();
-  }, [rows, entryLastRead]);
+  const invertedRows = useMemo(
+    () => buildChatRows(rows, { lastReadAnchor }),
+    [rows, lastReadAnchor],
+  );
 
   /** The newest message this screen currently holds, or 0 for an empty conversation. */
   const newestSeq = useMemo(
@@ -1554,11 +1492,28 @@ export default function ChatScreen() {
   useEffect(() => {
     if (entryLastReadRef.current !== null || !client || !channelId) return;
     const channel = client.channels.find((entry) => entry.id === channelId);
-    if (channel) {
-      entryLastReadRef.current = channel.lastReadSeq;
-      setEntryLastRead(channel.lastReadSeq);
-    }
+    if (channel) entryLastReadRef.current = channel.lastReadSeq;
   }, [client, channelId, revision]);
+
+  /**
+   * Decide where the rule goes, ONCE, as soon as there are rows and a cursor to decide from.
+   *
+   * Separate from the landing effect below, which is guarded the same way but has a different
+   * job: that one places the reader and gives up the moment they touch the list, where this one
+   * settles a fact about the conversation that must not change while they are looking at it.
+   *
+   * Deliberately does NOT decide while the cursor is unknown - a cold open reaches this screen
+   * before the channel list has synced, and deciding then would answer "caught up" for every
+   * conversation. Leaving the ref unset lets the next render try again.
+   */
+  const anchorDecidedRef = useRef(false);
+  useEffect(() => {
+    if (anchorDecidedRef.current || loading || rows.length === 0) return;
+    const lastRead = entryLastReadRef.current;
+    if (lastRead === null) return;
+    anchorDecidedRef.current = true;
+    setLastReadAnchor(decideLastReadAnchor(rows, lastRead));
+  }, [loading, rows]);
 
   /**
    * Where the conversation opens: the first unread message, or the newest if there are none.
