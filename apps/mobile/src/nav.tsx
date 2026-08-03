@@ -111,6 +111,38 @@ export function useGoBack(href: string): () => void {
 }
 
 /**
+ * Returning to the screen that sent you here: **unwind to it, never navigate to it.**
+ *
+ * Chat's "+" menu PUSHES a composer, and the composer sent the member back with `replace` when it
+ * was done. Replace swaps the composer for the conversation rather than removing it, so the
+ * conversation ended up on the stack TWICE:
+ *
+ * ```
+ * [.., chat, composer]  --replace-->  [.., chat, chat]
+ * ```
+ *
+ * > **Back then popped one copy and revealed the other, which is the same conversation.** Creating
+ * > a poll from chat left the back arrow apparently dead - it moved every time and the screen
+ * > never changed, so it read as a button that did nothing rather than as a stack with a duplicate
+ * > in it.
+ *
+ * `dismissTo` unwinds to the entry already down there instead, which removes the composer and
+ * leaves exactly one conversation. It maps to React Navigation's `popTo`, which pushes the target
+ * when it is not on the stack, so a composer opened by deep link rather than from chat still ends
+ * up somewhere sensible.
+ *
+ * The same reasoning is written out at the Chats tab, which unwinds to the list for the same
+ * reason: `replace` there gave `[list, list]` and a back arrow on what looked like the root.
+ */
+export function useReturnTo(): (href: string) => void {
+  const router = useRouter();
+  return (href) => {
+    if (router.canDismiss()) router.dismissTo(href);
+    else router.replace(href);
+  };
+}
+
+/**
  * An explicit back control, rendered whether or not history exists.
  *
  * **Permanent furniture, never conditional.** A native back button renders only when there is

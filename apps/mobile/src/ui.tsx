@@ -29,6 +29,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RemoteImage } from './media-bubble.tsx';
 import { color, radius, space, type } from './theme.ts';
 import type { Loaded } from './use-load.ts';
@@ -957,6 +958,51 @@ export function DetailLine({
   );
 }
 
+/**
+ * The header a full-screen composer draws for itself.
+ *
+ * Three composers - poll, event, meeting - hide the navigator's header while creating and put
+ * their own in its place, and each had its own byte-identical copy of this.
+ *
+ * > **A screen that opts out of the navigator's header inherits the navigator's inset problem.**
+ * > None of the three applied the top inset, so all three drew their title and their back arrow
+ * > UNDER the status bar: the title collided with the clock, and the back control's hit area was
+ * > half-buried behind it, which is why it "didn't click properly". A browser has no notch, so it
+ * > looks perfect until somebody holds a phone - `clubs/index.tsx` and chat both lost the same
+ * > inset the same way, and fixing it in three more places would have been the fourth and fifth
+ * > copies of the fix.
+ *
+ * `hitSlop` on top of that: a 22pt arrow in `space.xs` padding is a target well under the 44pt
+ * minimum, and being at the very top of the screen is the worst place to make somebody aim.
+ */
+export function ComposerHeader({
+  title,
+  discardLabel,
+  onCancel,
+}: {
+  title: string;
+  /** What backing out throws away, said plainly. Required, per this module's own rule. */
+  discardLabel: string;
+  onCancel: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View style={[styles.composerHeader, { paddingTop: insets.top + space.sm }]}>
+      <Pressable
+        onPress={onCancel}
+        style={styles.composerBack}
+        hitSlop={space.md}
+        accessibilityRole="button"
+        accessibilityLabel={discardLabel}
+      >
+        <MaterialIcons name="arrow-back" size={22} color={color.accent} />
+      </Pressable>
+      <Text style={styles.composerTitle}>{title}</Text>
+    </View>
+  );
+}
+
 export const textStyles: Record<string, StyleProp<TextStyle>> = {
   title: { ...type.title, color: color.textPrimary },
   headline: { ...type.headline, color: color.textPrimary },
@@ -965,6 +1011,20 @@ export const textStyles: Record<string, StyleProp<TextStyle>> = {
 };
 
 const styles = StyleSheet.create({
+  composerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.md,
+    // `paddingTop` is set inline from the safe-area inset, so this is the bottom half only.
+    paddingBottom: space.sm,
+    backgroundColor: color.chrome,
+    borderBottomWidth: 1,
+    borderBottomColor: color.divider,
+  },
+  composerBack: { padding: space.xs },
+  composerTitle: { ...type.headerTitle, color: color.textPrimary },
+
   pickerField: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -29,12 +29,14 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { pollApi, type PollScope } from '../api.ts';
 import type { PollSummary, PollView } from '../api-types.ts';
 import { formatCountdown, formatInstant } from '../dates.ts';
+import { useReturnTo } from '../nav.tsx';
 import { color, radius, space, type } from '../theme.ts';
 import {
   Action,
   Avatar,
   Body,
   Card,
+  ComposerHeader,
   ConfirmDialog,
   DataScreen,
   EmptyState,
@@ -114,6 +116,7 @@ export function PollsList({
   const [composing, setComposing] = useState(create === '1' && canCreate);
   const load = useLoad(() => pollApi.list(scope, scopeId), [scope, scopeId]);
   const router = useRouter();
+  const returnToSender = useReturnTo();
 
   /*
    * Where to go once the poll exists.
@@ -152,17 +155,19 @@ export function PollsList({
           scopeId={scopeId}
           onCancel={() => {
             // Backing out of a composer opened from chat returns there too, empty-handed.
-            if (returnTo !== null) router.replace(returnTo);
+            if (returnTo !== null) returnToSender(returnTo);
             else setComposing(false);
           }}
           onCreated={() => {
             setComposing(false);
             if (returnTo !== null) {
               /*
-               * `replace`, not `push`: the composer is spent, and leaving it on the stack means
-               * back from chat walks into an empty form rather than out of the conversation.
+               * UNWIND to the conversation rather than navigating to it. The composer was pushed
+               * on top of it, so `replace` swapped the composer for a SECOND copy of the chat and
+               * back then popped one to reveal the other - a back arrow that moved every time and
+               * never changed the screen. See `useReturnTo`.
                */
-              router.replace(returnTo);
+              returnToSender(returnTo);
               return;
             }
             load.reload();
@@ -401,17 +406,11 @@ function CreatePoll({
 
   return (
     <View style={styles.flex}>
-      <View style={styles.composerHeader}>
-        <Pressable
-          onPress={onCancel}
-          style={styles.composerBack}
-          accessibilityRole="button"
-          accessibilityLabel="Discard this poll and go back"
-        >
-          <MaterialIcons name="arrow-back" size={22} color={color.accent} />
-        </Pressable>
-        <Text style={styles.composerTitle}>New poll</Text>
-      </View>
+      <ComposerHeader
+        title="New poll"
+        discardLabel="Discard this poll and go back"
+        onCancel={onCancel}
+      />
 
       <ScrollView
         style={styles.flex}
@@ -689,6 +688,13 @@ function PollBody({
               <Pressable
                 style={styles.optionEye}
                 onPress={() => onSeeVoters(option.id)}
+                /*
+                  A 16pt glyph in `xs` padding is a ~24pt target, well under the 44pt minimum, and
+                  it sits directly beside the option row - so a miss does not do nothing, it casts
+                  or withdraws a vote. Slop rather than padding, because widening the control
+                  itself would push the vote bar in.
+                */
+                hitSlop={space.md}
                 accessibilityRole="button"
                 accessibilityLabel={`See who voted for ${option.label}`}
               >
@@ -1056,18 +1062,6 @@ const styles = StyleSheet.create({
   // -------------------------------------------------------------------------
   // The composer. v1's PollCreateScreen, expressed in this app's tokens.
   // -------------------------------------------------------------------------
-  composerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    backgroundColor: color.chrome,
-    borderBottomWidth: 1,
-    borderBottomColor: color.divider,
-  },
-  composerBack: { padding: space.xs },
-  composerTitle: { ...type.headerTitle, color: color.textPrimary },
   /* The trailing space clears the tab bar: without it CREATE POLL sits under it and is half a button. */
   composerBody: { padding: space.md, paddingBottom: space.xl, gap: space.md },
   composerCard: {

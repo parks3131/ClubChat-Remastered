@@ -13,6 +13,80 @@ Newest first.
 
 ---
 
+## 2026-08-03 (last) - A back button that moved every time and changed nothing
+
+One video, three defects, all of them about a control that was present and not usable.
+
+### The conversation was on the stack twice
+
+Creating a poll, event or meeting from chat's "+" menu left the back arrow apparently dead: it
+could be tapped forever and the screen never changed.
+
+It was working perfectly. The "+" menu **pushes** the composer, and the composer **replaced**
+itself with the conversation when it was done - and a replace swaps the top entry rather than
+removing it:
+
+```
+[.., chat, composer]  --replace-->  [.., chat, chat]
+```
+
+**Back popped one copy and revealed the other, which is the same conversation.** A stack with a
+duplicate in it is indistinguishable, from the outside, from a button that does nothing.
+
+The choice of `replace` had been reasoned about and written down - *"the composer is spent, and
+leaving it on the stack means back from chat walks into an empty form rather than out of the
+conversation"* - which correctly rules out `push` and does not notice that replace leaves the
+duplicate. The answer is neither: **unwind to the entry already down there** rather than
+navigating to a new copy of it. That is `dismissTo`, which removes the composer and leaves exactly
+one conversation, and it is now `useReturnTo` in `nav.tsx` across all six call sites.
+
+The Chats tab had reached the same conclusion months earlier for the same reason, and its comment
+says so: `replace` there gave `[list, list]` and drew a back arrow on what looked like the root.
+Two independent discoveries of one rule is what turned it into a hook.
+
+`dismissTo` maps to React Navigation's `popTo`, which PUSHES the target when it is not on the
+stack - so a composer reached by deep link rather than from chat still lands somewhere sensible
+instead of throwing.
+
+### Three composers, three copies of a header, no inset
+
+The New poll header drew its title over the clock and its back arrow half-buried under the status
+bar, which is why that arrow "didn't click properly" - its hit area was behind the system's.
+
+**A screen that opts out of the navigator's header inherits the navigator's inset job**, and none
+of the three composers did it. This is the third time the same omission has shipped here: the
+chats list and chat itself both lost the same inset, and both say so in their own comments. A
+browser has no notch, so it looks perfect right up until somebody holds a phone.
+
+The three headers were byte-identical apart from the title, so the fix went into `ComposerHeader`
+in `ui.tsx` rather than into three files - otherwise this would have been the fourth and fifth
+copies of the same fix.
+
+### A 24pt target for a control that votes
+
+The eye on a poll option is a 16pt glyph in `xs` padding, well under the 44pt minimum. It worked;
+it had to be hit exactly. `hitSlop` rather than padding, because widening the control itself pushes
+the vote bar in.
+
+Worth stating why this one is not cosmetic: **the eye sits directly beside the option row, so a
+miss does not do nothing - it casts or withdraws a vote.** A small target next to a destructive
+neighbour is a different problem from a small target in open space.
+
+### The thing worth remembering
+
+None of the three was a broken control. The back button navigated correctly every time, the arrow
+rendered, the eye responded. What was wrong in each case was the space around them: a stack with a
+duplicate, a header under the status bar, a hit area smaller than a fingertip. **A control can be
+correct and unusable, and only the second of those is visible from the code.**
+
+### Verified
+
+789 tests, typecheck, `lint:emdash`, `check:runtime`. Confirmed on the device by the founder,
+which is the only place any of these three could have been found - a duplicated stack entry, an
+inset and a hit target are all invisible to a test and to a browser.
+
+---
+
 ## 2026-08-03 (later) - A screen kept alive by its own back button, and four navigations that did not check where they were
 
 A device video and four follow-ups. The reports came in as separate complaints and were mostly one

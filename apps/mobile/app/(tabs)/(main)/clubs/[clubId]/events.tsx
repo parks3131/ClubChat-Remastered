@@ -17,10 +17,12 @@ import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { calendarApi, clubApi, contentApi } from '../../../../../src/api.ts';
 import type { FeedItem } from '../../../../../src/api-types.ts';
 import { bibParts, formatDateOnly, formatInstant } from '../../../../../src/dates.ts';
+import { useReturnTo } from '../../../../../src/nav.tsx';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import {
   Action,
   Body,
+  ComposerHeader,
   DataScreen,
   DateField,
   EmptyState,
@@ -39,7 +41,7 @@ export default function ClubEventsScreen() {
     create?: string;
     from?: string;
   }>();
-  const backRouter = useRouter();
+  const returnToSender = useReturnTo();
 
   /*
    * Where to go once it exists. Chat's "+" menu sends `from=/chat/:channelId`, and an event made
@@ -85,13 +87,14 @@ export default function ClubEventsScreen() {
       <CreateEvent
         clubId={clubId}
         onCancel={() => {
-          if (returnTo !== null) backRouter.replace(returnTo);
+          if (returnTo !== null) returnToSender(returnTo);
           else setCreating(false);
         }}
         onCreated={() => {
           setCreating(false);
           if (returnTo !== null) {
-            backRouter.replace(returnTo);
+            // Unwind to the conversation, never navigate to it - see `useReturnTo`.
+            returnToSender(returnTo);
             return;
           }
           feed.reload();
@@ -312,17 +315,11 @@ function CreateEvent({
 
   return (
     <View style={styles.flex}>
-      <View style={styles.composerHeader}>
-        <Pressable
-          onPress={onCancel}
-          style={styles.composerBack}
-          accessibilityRole="button"
-          accessibilityLabel="Discard this event and go back"
-        >
-          <MaterialIcons name="arrow-back" size={22} color={color.accent} />
-        </Pressable>
-        <Text style={styles.composerTitle}>New event</Text>
-      </View>
+      <ComposerHeader
+        title="New event"
+        discardLabel="Discard this event and go back"
+        onCancel={onCancel}
+      />
 
       <ScrollView
         style={styles.flex}
@@ -415,18 +412,6 @@ function CreateEvent({
 }
 
 const styles = StyleSheet.create({
-  composerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    backgroundColor: color.chrome,
-    borderBottomWidth: 1,
-    borderBottomColor: color.divider,
-  },
-  composerBack: { padding: space.xs },
-  composerTitle: { ...type.headerTitle, color: color.textPrimary },
   composerBody: { padding: space.md, paddingBottom: space.xl, gap: space.sm },
   composerHeading: { ...type.title, color: color.textPrimary },
   composerRule: {

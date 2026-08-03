@@ -17,13 +17,15 @@
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import { contentApi } from '../../../../../src/api.ts';
 import { formatInstant } from '../../../../../src/dates.ts';
+import { useReturnTo } from '../../../../../src/nav.tsx';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import {
   Badge,
   Body,
+  ComposerHeader,
   DataScreen,
   DateField,
   EmptyState,
@@ -40,7 +42,7 @@ export default function MeetingsScreen() {
     create?: string;
     from?: string;
   }>();
-  const router = useRouter();
+  const returnToSender = useReturnTo();
   const [when, setWhen] = useState<'upcoming' | 'past'>('upcoming');
   /*
    * `?create=1` opens straight into the composer, which is how chat's "+" menu offers "Meeting".
@@ -83,13 +85,14 @@ export default function MeetingsScreen() {
         <NewMeeting
           eboardId={eboardId}
           onCancel={() => {
-            if (returnTo !== null) router.replace(returnTo);
+            if (returnTo !== null) returnToSender(returnTo);
             else setComposing(false);
           }}
           onCreated={() => {
             setComposing(false);
             if (returnTo !== null) {
-              router.replace(returnTo);
+              // Unwind to the conversation, never navigate to it - see `useReturnTo`.
+              returnToSender(returnTo);
               return;
             }
             load.reload();
@@ -219,17 +222,11 @@ function NewMeeting({
 
   return (
     <View style={styles.flex}>
-      <View style={styles.composerHeader}>
-        <Pressable
-          onPress={onCancel}
-          style={styles.composerBack}
-          accessibilityRole="button"
-          accessibilityLabel="Discard this meeting and go back"
-        >
-          <MaterialIcons name="arrow-back" size={22} color={color.accent} />
-        </Pressable>
-        <Text style={styles.composerTitle}>New meeting</Text>
-      </View>
+      <ComposerHeader
+        title="New meeting"
+        discardLabel="Discard this meeting and go back"
+        onCancel={onCancel}
+      />
 
       <ScrollView
         style={styles.flex}
@@ -323,18 +320,6 @@ const styles = StyleSheet.create({
   meta: { ...type.bodySmall, color: color.textSecondary },
   error: { ...type.bodySmall, color: color.error },
 
-  composerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    backgroundColor: color.chrome,
-    borderBottomWidth: 1,
-    borderBottomColor: color.divider,
-  },
-  composerBack: { padding: space.xs },
-  composerTitle: { ...type.headerTitle, color: color.textPrimary },
   composerBody: { padding: space.md, paddingBottom: space.xl, gap: space.sm },
   composerHeading: { ...type.title, color: color.textPrimary },
   composerRule: {
