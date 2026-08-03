@@ -101,18 +101,39 @@ async function setup() {
   };
 }
 
+/**
+ * A real, decodable image in the requested format.
+ *
+ * These were zero-filled buffers until `completeUpload` started decoding what it accepts, and
+ * the change is an improvement rather than a tax: a helper that produced bytes no image library
+ * would take meant the derivation tests could never derive anything, and the one that needed a
+ * variant hand-wrote the row instead. Cached per format because encoding is the slow part and
+ * every test in the file goes through here.
+ */
+const encodedImages = new Map<string, Buffer>();
+async function encodedImage(mime: string): Promise<Buffer> {
+  const cached = encodedImages.get(mime);
+  if (cached) return cached;
+
+  const sharp = (await import('sharp')).default;
+  // 64px so a 400px thumb is a genuine `withoutEnlargement` no-op and a resize still runs.
+  const canvas = sharp({
+    create: { width: 64, height: 64, channels: 3, background: '#3355aa' },
+  });
+  const encoded = await (mime === 'image/png' ? canvas.png() : canvas.jpeg()).toBuffer();
+  encodedImages.set(mime, encoded);
+  return encoded;
+}
+
 /** The whole upload flow: intent, the client's direct PUT, then complete. */
-async function uploadPhoto(
-  userId: string,
-  channelId: string,
-  opts: { bytes?: number; mime?: string } = {},
-) {
-  const bytes = opts.bytes ?? 2048;
+async function uploadPhoto(userId: string, channelId: string, opts: { mime?: string } = {}) {
   const mime = opts.mime ?? 'image/jpeg';
+  const image = await encodedImage(mime);
+  // The declared count is the real one. `completeUpload` compares with no tolerance.
   const intent = await createUploadIntent(h.db, store, config, await ctxFor(userId), {
     kind: 'photo',
     mime,
-    bytes,
+    bytes: image.byteLength,
     channelId,
   });
   if (!intent.ok) return { intent, media: null as string | null };
@@ -123,7 +144,7 @@ async function uploadPhoto(
     .where(eq(mediaObjects.id, intent.mediaId))
     .limit(1);
   // Stands in for the client PUTting straight to object storage.
-  store.simulateUpload(row[0]!.bucket, row[0]!.objectKey, new Uint8Array(bytes), mime);
+  store.simulateUpload(row[0]!.bucket, row[0]!.objectKey, new Uint8Array(image), mime);
 
   const completed = await completeUpload(h.db, store, await ctxFor(userId), intent.mediaId);
   expect(completed.ok, 'complete failed').toBe(true);
@@ -756,6 +777,169 @@ describe('galleries', () => {
 // Derivation and the GC
 // ===========================================================================
 
+/**
+ * The bytes that parked outbox row 49 for four days.
+ *
+ * A valid PNG signature, a valid `IHDR` declaring a 4x4 RGBA image, and an `IDAT` chunk
+ * announcing 42 bytes of pixel data with only 40 present - two bytes short of a file. Size and
+ * type both matched what was declared, so every check `completeUpload` had at the time passed
+ * it, and `sharp.metadata()` reads the header and reports 4x4 quite happily. Only a full decode
+ * reaches the damage.
+ */
+const TRUNCATED_PNG = Buffer.from(
+  '89504e470d0a1a0a0000000d4948445200000004000000040806000000a9f19e7e0000002a4944415478' +
+    '9c63fccfc0c0c0c0c0c4c0c0c0c0c0c4c0c0c0c0c0c4c0c0c0c0c0c4c0c0c0c0c0c400003b0801fd69b5' +
+    'c90000000049454e44ae426082',
+  'hex',
+);
+
+describe('bytes that are not an image', () => {
+  /** Intent, the client's PUT of whatever it likes, then complete. Returns the refusal. */
+  async function completeWith(userId: string, channelId: string, body: Uint8Array, mime: string) {
+    const intent = await createUploadIntent(h.db, store, config, await ctxFor(userId), {
+      kind: 'photo',
+      mime,
+      bytes: body.byteLength,
+      channelId,
+    });
+    if (!intent.ok) throw new Error('intent failed');
+    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, intent.mediaId));
+    store.simulateUpload(row[0]!.bucket, row[0]!.objectKey, body, mime);
+    return {
+      mediaId: intent.mediaId,
+      result: await completeUpload(h.db, store, await ctxFor(userId), intent.mediaId),
+    };
+  }
+
+  it('refuses an upload whose size and type match and which still does not decode', async () => {
+    const f = await setup();
+    const { mediaId, result } = await completeWith(
+      f.ownerId,
+      f.mainChannelId,
+      new Uint8Array(TRUNCATED_PNG),
+      'image/png',
+    );
+
+    expect(result.ok, 'a truncated PNG was accepted as a photo').toBe(false);
+    if (!result.ok) expect(result.code).toBe('undecodable');
+
+    // Left pending, so no message can ever reference it and the GC reclaims the bytes on the
+    // same path as an upload the client abandoned.
+    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, mediaId));
+    expect(row[0]?.status).toBe('pending');
+  });
+
+  it('accepts the same image intact, so the gate is not simply refusing everything', async () => {
+    // Mutation-proofing the test above: a probe hardwired to reject would pass it.
+    const f = await setup();
+    const sharp = (await import('sharp')).default;
+    const whole = await sharp({
+      create: { width: 4, height: 4, channels: 4, background: '#00000000' },
+    })
+      .png()
+      .toBuffer();
+
+    const { result } = await completeWith(
+      f.ownerId,
+      f.mainChannelId,
+      new Uint8Array(whole),
+      'image/png',
+    );
+    expect(result.ok, 'a valid PNG was refused').toBe(true);
+  });
+
+  it('does not decode a document, which has nothing to decode', async () => {
+    // The probe is for images. A PDF is bytes we never open, and running it through an image
+    // decoder would refuse every document ever uploaded.
+    const f = await setup();
+    const intent = await createUploadIntent(h.db, store, config, await ctxFor(f.ownerId), {
+      kind: 'document',
+      mime: 'application/pdf',
+      bytes: 512,
+      channelId: f.mainChannelId,
+      documentName: 'notes.pdf',
+    });
+    if (!intent.ok) throw new Error('intent failed');
+    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, intent.mediaId));
+    store.simulateUpload(row[0]!.bucket, row[0]!.objectKey, new Uint8Array(512), 'application/pdf');
+
+    const completed = await completeUpload(h.db, store, await ctxFor(f.ownerId), intent.mediaId);
+    expect(completed.ok, 'a document was put through an image decoder').toBe(true);
+  });
+
+  /**
+   * The half that matters most, and the reason any of this was written.
+   *
+   * An object that does not decode must not park its outbox row. `retention.ts` never prunes a
+   * parked row, on the reasoning that one means an effect never ran - so a corrupt upload, which
+   * is bad input rather than a broken effect, would pin that alarm on permanently. And it is
+   * user-reachable: enough truncated images and the signal is gone.
+   */
+  it('records an undecodable object and completes the event instead of parking it', async () => {
+    const f = await setup();
+    // Straight into storage past the gate above, standing in for an object that predates it -
+    // exactly how row 49 got there.
+    const intent = await createUploadIntent(h.db, store, config, await ctxFor(f.ownerId), {
+      kind: 'photo',
+      mime: 'image/png',
+      bytes: TRUNCATED_PNG.byteLength,
+      channelId: f.mainChannelId,
+    });
+    if (!intent.ok) throw new Error('intent failed');
+    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, intent.mediaId));
+    store.simulateUpload(
+      row[0]!.bucket,
+      row[0]!.objectKey,
+      new Uint8Array(TRUNCATED_PNG),
+      'image/png',
+    );
+    await h.db
+      .update(mediaObjects)
+      .set({ status: 'ready', completedAt: new Date() })
+      .where(eq(mediaObjects.id, intent.mediaId));
+    await h.db.execute(sql`
+      INSERT INTO outbox (partition_key, event_type, payload)
+      VALUES (
+        ${f.mainChannelId},
+        'media.uploaded',
+        ${JSON.stringify({ mediaId: intent.mediaId })}::jsonb
+      )
+    `);
+
+    const drained = await drainOnce(h.db, deps);
+    expect(drained.parked, 'a corrupt upload parked its event').toBe(0);
+    // Not an exact count: the batch also carries whatever `setup` left behind. Neither this
+    // event nor any other may fail, and the unprocessed check below is what proves it ran.
+    expect(drained.failed).toBe(0);
+
+    // The fact is recorded rather than lost: this is what the parked row used to be evidence of.
+    const after = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, intent.mediaId));
+    expect(after[0]?.deriveError).toContain('libpng');
+
+    // And nothing is left unprocessed for the retention sweep to keep shouting about.
+    const unprocessed = await h.db.execute<{ n: string }>(sql`
+      SELECT count(*)::text AS n FROM outbox WHERE processed_at IS NULL
+    `);
+    expect(unprocessed.rows[0]!.n).toBe('0');
+  });
+
+  it('does not re-fetch an object it already knows will not decode', async () => {
+    // The key is immutable, so the bytes behind it cannot have improved. Redelivery should cost
+    // nothing rather than another download and another doomed decode.
+    const f = await setup();
+    const { media } = await uploadPhoto(f.ownerId, f.mainChannelId);
+    await h.db
+      .update(mediaObjects)
+      .set({ deriveError: 'vipspng: libpng read error' })
+      .where(eq(mediaObjects.id, media!));
+
+    const result = await deriveVariants(h.db, store, media!);
+    expect(result.skipped).toBe(true);
+    expect(result.undecodable).toBe(true);
+    expect(result.derived).toEqual([]);
+  });
+});
+
 describe('thumbnail derivation', () => {
   it('is skipped for a document', async () => {
     const f = await setup();
@@ -799,13 +983,10 @@ describe('thumbnail derivation', () => {
     expect(original.mime).toBe('image/png');
 
     // A derived variant is WebP whatever was uploaded - which is exactly why the viewer saves
-    // the original, since Photos will not take a WebP. Recorded directly rather than derived:
-    // `simulateUpload` writes zeroes, and Sharp cannot resize bytes that are not an image.
-    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, media!));
-    await h.db
-      .update(mediaObjects)
-      .set({ variants: { display: `${row[0]!.objectKey}.display.webp` } })
-      .where(eq(mediaObjects.id, media!));
+    // the original, since Photos will not take a WebP. Derived for real, now that the upload
+    // helper puts a decodable image behind the key.
+    const derived = await deriveVariants(h.db, store, media!);
+    expect(derived.derived).toContain('display');
     const display = await resolveMediaRedirect(h.db, store, config, await ctxFor(f.ownerId), media!, {
       variant: 'display',
     });

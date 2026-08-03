@@ -319,7 +319,10 @@ moderation_reads      id, moderator_id, message_id, channel_id, from_seq, to_seq
 ### Infrastructure
 ```
 media_objects         id, owner_type, owner_id, bucket, object_key, mime, bytes, status,
-                      variants jsonb, created_at
+                      variants jsonb, derive_error NULL, created_at
+                      -- derive_error: why thumbnailing gave up, for bytes that will never
+                      -- decode. A permanent fact, so the effect records it and completes
+                      -- rather than retrying five times and parking. See TECH/07.
 notifications         id, recipient_id, actor_id NULL, club_id NULL, type, params jsonb,
                       outbox_event_id, read_at, created_at
                       UNIQUE (outbox_event_id, recipient_id)       ← at-least-once safety

@@ -1562,6 +1562,13 @@ export const handlers: Record<string, EffectHandler> = {
     }
     const mediaId = String(event.payload['mediaId']);
     const result = await deriveVariants(deps.db, deps.media, mediaId);
+    if (result.undecodable) {
+      // Warn, not error, and emphatically not a throw. The object is recorded as underivable
+      // and the event is done; see the catch in `deriveVariants` for why parking on this would
+      // be the wrong alarm.
+      deps.log('warn', 'media does not decode, derivation abandoned', { mediaId });
+      return;
+    }
     deps.log('info', 'derived media variants', { mediaId, ...result });
   },
 };

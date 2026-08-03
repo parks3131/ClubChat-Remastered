@@ -1,0 +1,1 @@
+ALTER TABLE "media_objects" ADD COLUMN "derive_error" text;

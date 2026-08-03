@@ -20,10 +20,26 @@ client PUTs directly to object storage
 
 POST /media/:id/complete
   → HEAD the object, verify size/type actually match what was declared
+  → for an image, decode it: bytes that are not an image are refused 422 undecodable
   → status='ready'; enqueue outbox('media.uploaded') → worker derives thumbnails
 ```
 
-The chat server never touches file bytes. This is the transcript's point and it stands.
+The chat server never proxies an upload. The client PUTs directly to object storage and the
+`MediaStore` interface deliberately has no method taking a buffer, which is the transcript's
+point and it stands. The one exception is the decode above, and it is the same job this endpoint
+already exists to do: verify afterwards that what arrived matches what was declared.
+
+**An image is decoded, not merely measured.** Size and type are claims a HEAD can check; "is an
+image" is not. A file can satisfy every declared fact and still be undecodable, so it is decoded
+here and refused with `422 undecodable` if it is not - see
+[ADR-0018](../decisions/0018-decode-uploads-at-the-boundary.md) for the cost and the rejected
+alternatives. A refused object is left `pending`, so nothing can reference it and the GC reclaims
+the bytes on the same path as an upload the client abandoned.
+
+**An object that does not decode never parks its outbox row.** `media.uploaded` is the one event
+type that can fail from bad input rather than from a bug, and parking is the alarm for "an effect
+never ran". So `deriveVariants` records the reason in `media_objects.derive_error` and completes
+the event. See [effects engine](04-effects-engine.md) for why the distinction matters.
 
 **A send referencing an incomplete upload is refused with its own code.** `msg.err` carries
 `media_not_ready`, deliberately distinct from `forbidden`: the client's correct response is to

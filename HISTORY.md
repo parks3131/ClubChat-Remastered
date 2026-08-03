@@ -13,6 +13,94 @@ Newest first.
 
 ---
 
+## 2026-08-03 (later) - A 97-byte PNG, and the alarm that could never clear
+
+The worker logged `outbox events are PARKED - an effect never ran` with `parked: 1` on the first
+tick after a restart. It had been true for four days.
+
+### What it was
+
+Outbox row 49, `media.uploaded`, five attempts, `last_error: vipspng: libpng read error`. Pulling
+the object back through the S3 API: 97 bytes, a valid PNG signature, a valid `IHDR` declaring a
+4x4 RGBA image, and an `IDAT` chunk announcing 42 bytes of pixel data with only 40 present before
+`IEND`. **Two bytes short of a file.** The arithmetic is worth keeping because it is what made the
+diagnosis certain rather than plausible: signature 8, `IHDR` 4+4+13+4, `IDAT` header 4+4, then 44
+bytes remaining before a 12-byte `IEND` where the declared chunk needs 46.
+
+It was the first upload in the database. Every later image derived fine, including three 74-byte
+PNGs - so it was never a size problem or a sharp problem.
+
+The owning message was still live and undeleted in the channel, `status = 'ready'` with
+`variants = {}`. The documented fallback - serve the original when a variant is missing - resolved
+to the 97 bytes that do not decode. There was no good image to fall back to.
+
+### The two bugs, and only one is about corrupt images
+
+**`/media/:id/complete` could not tell.** It verified everything a `HEAD` can see - the object
+exists, the byte count matches exactly, the content type matches - and all three passed. "Is this
+an image" is not a fact a `HEAD` carries.
+
+**The parked row was the wrong alarm.** Parking means an effect never ran, and the retention sweep
+never prunes a parked row because it is the only durable evidence of that. But `media.uploaded` is
+the one event type that can fail on bad input rather than on a bug, and bad input is
+user-reachable: enough corrupt uploads and `parked > 0` is pinned on permanently. Which is exactly
+why this went unnoticed - the alarm was true, permanent, and indistinguishable from an incident.
+
+### The thing that nearly made the fix useless
+
+The first instinct was a cheap header probe. `sharp.metadata()` parses `IHDR` and reports 4x4 for
+this file **without complaint** - the header is intact and the damage is at the tail. Only walking
+the pixel stream reaches it. Checked before building anything, which is the only reason the gate
+is a full decode.
+
+`resize(1, 1)` fails the same way for a different reason: libvips shrinks a JPEG on load, so a
+downscale can satisfy itself from a fraction of the file and never read as far as the damage.
+Settled on `stats()`, which walks every pixel with bounded memory, where `.raw().toBuffer()` would
+materialise ~70 MB for a 25 MB JPEG. `failOn: 'error'` rather than sharp's default `'warning'`,
+because refusing somebody's photograph over a warning is a worse failure than deriving it.
+
+Full decision, cost and rejected alternatives in
+[ADR-0018](SPEC/decisions/0018-decode-uploads-at-the-boundary.md). The uncomfortable part is
+recorded there too: this is the one place the server touches file bytes, and `TECH/07` said it
+does not.
+
+### Checked before committing to the gate
+
+Whether the installed sharp can decode HEIC. It can (0.35.3 / libvips 8.18.3, `heif` input
+`true`), which matters more than it looks: the gate makes HEIC support load-bearing for *uploads*
+rather than only for thumbnails. A build without libheif would reject every iPhone photo outright
+instead of merely failing to derive one. Noted as a follow-up if the base image ever changes.
+
+### What the tests were hiding
+
+`simulateUpload` wrote zero-filled buffers and completed them as `image/jpeg`, so the whole media
+suite uploaded things no image library would accept. A comment in the derivation test said so
+outright - "Sharp cannot resize bytes that are not an image" - and hand-wrote the variants row
+instead of deriving it. The helper now encodes a real 64px image per format and declares its
+actual length, and that test derives for real.
+
+Both halves were mutation-tested: removing the boundary refusal fails exactly the boundary test,
+and rethrowing instead of recording in `deriveVariants` fails exactly the parking test. A third
+test guards the other direction, that the gate is not simply refusing everything.
+
+### Verified on the real row, not just in tests
+
+Rather than hand-patching row 49 to `processed`, its `attempts` were reset to 0 and the running
+worker drove it through the new path: `media does not decode, derivation abandoned`, event
+processed, `derive_error` recorded on the media object, parked count 0.
+
+Then live through the running API with a real account and a real presigned PUT: the truncated PNG
+returns `422 {"error":"undecodable"}` and its row stays `pending`; the same image intact returns
+200, goes `ready`, and the worker derives both variants.
+
+### Left undone, deliberately
+
+The broken message is still in the channel. The media object is recorded as underivable and
+nothing surfaces that to a client, so it still renders as a broken image - deleting somebody's
+message is theirs to do. A viewer placeholder for `derive_error` is noted as follow-up in the ADR.
+
+---
+
 ## 2026-08-03 (close) - Four gaps closed, and the security audit written down before it is run
 
 The day started with "the features are in, how is the architecture" and ended with the four

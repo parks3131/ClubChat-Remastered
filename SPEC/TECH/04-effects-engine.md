@@ -32,6 +32,14 @@ A relay claims batches with `FOR UPDATE SKIP LOCKED`, publishes them in `id` ord
 partition key, and marks `published_at`. Failures retry with backoff; after N attempts the row
 is parked and alerted on.
 
+**Parking means an effect never ran, and nothing else may be allowed to mean it.** The retry
+path is built for a transient fault; a permanent one produces N identical failures and then an
+alarm that can never clear, because the retention sweep deliberately never prunes a parked row.
+So an effect that can fail on **bad input** must record that and complete rather than throw -
+otherwise the count only ever rises, and a signal that is rare by construction becomes noise.
+`media.uploaded` is the case that exists today: an upload whose bytes do not decode is refused
+at the boundary and, for anything already stored, recorded in `media_objects.derive_error`.
+
 **The outbox drains by polling - every 250 ms - and uses no `LISTEN`/`NOTIFY` anywhere.** This
 is a deliberate constraint, not an oversight: `LISTEN` requires a dedicated session pinned for
 the lifetime of the listener, which is incompatible with transaction-mode connection pooling and

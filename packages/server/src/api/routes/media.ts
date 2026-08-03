@@ -57,7 +57,17 @@ export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
       request.params.id,
     );
     if (!result.ok) {
-      const status = result.code === 'too_large' ? 413 : result.code === 'mismatch' ? 409 : 404;
+      // 422 for bytes that arrived intact and are not an image: the request was well formed and
+      // the object is the problem, which is a different thing for a client to say than either
+      // "too big" or "that is not what you told us you were sending".
+      const status =
+        result.code === 'too_large'
+          ? 413
+          : result.code === 'mismatch'
+            ? 409
+            : result.code === 'undecodable'
+              ? 422
+              : 404;
       return reply.code(status).send({ error: result.code });
     }
     return result;

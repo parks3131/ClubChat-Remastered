@@ -9,6 +9,7 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { mediaObjects } from '../db/schema.ts';
+import { DECODE_OPTIONS } from './probe.ts';
 import type { MediaStore } from './store.ts';
 
 /**
@@ -24,7 +25,17 @@ export const VARIANTS = {
   display: 1600,
 } as const;
 
-export type DeriveResult = { derived: string[]; skipped: boolean };
+export type DeriveResult = {
+  derived: string[];
+  skipped: boolean;
+  /**
+   * The bytes do not decode, and no number of retries will change that.
+   *
+   * Reported rather than thrown, and that distinction is the point: see the comment on the
+   * catch below.
+   */
+  undecodable: boolean;
+};
 
 /**
  * Derive thumbnails for an uploaded image.
@@ -43,11 +54,17 @@ export async function deriveVariants(
 ): Promise<DeriveResult> {
   const rows = await db.select().from(mediaObjects).where(eq(mediaObjects.id, mediaId)).limit(1);
   const media = rows[0];
-  if (!media) return { derived: [], skipped: true };
-  if (!media.mime.startsWith('image/')) return { derived: [], skipped: true };
+  if (!media) return { derived: [], skipped: true, undecodable: false };
+  if (!media.mime.startsWith('image/')) return { derived: [], skipped: true, undecodable: false };
 
   const existing = (media.variants ?? {}) as Record<string, string>;
-  if (existing['thumb'] && existing['display']) return { derived: [], skipped: true };
+  if (existing['thumb'] && existing['display']) {
+    return { derived: [], skipped: true, undecodable: false };
+  }
+  // Already known not to decode. The object key is immutable, so the bytes behind it cannot
+  // have improved since - redelivery should cost nothing rather than another fetch and another
+  // doomed decode.
+  if (media.deriveError !== null) return { derived: [], skipped: true, undecodable: true };
 
   const original = await store.get({ bucket: media.bucket, objectKey: media.objectKey });
   const sharp = (await import('sharp')).default;
@@ -57,12 +74,36 @@ export async function deriveVariants(
 
   for (const [name, width] of Object.entries(VARIANTS)) {
     if (variants[name]) continue;
-    const resized = await sharp(original)
-      // `withoutEnlargement` so a small original is not upscaled into a larger file than it
-      // started as, which would make the "thumbnail" bigger than the photo.
-      .resize({ width, withoutEnlargement: true })
-      .webp({ quality: name === 'thumb' ? 70 : 82 })
-      .toBuffer();
+
+    let resized: Buffer;
+    try {
+      resized = await sharp(original, DECODE_OPTIONS)
+        // `withoutEnlargement` so a small original is not upscaled into a larger file than it
+        // started as, which would make the "thumbnail" bigger than the photo.
+        .resize({ width, withoutEnlargement: true })
+        .webp({ quality: name === 'thumb' ? 70 : 82 })
+        .toBuffer();
+    } catch (error) {
+      /*
+       * **Recorded and returned, never thrown.**
+       *
+       * Throwing here is what parked outbox row 49 for four days. The retry-and-park path is
+       * built for a transient fault, and it is right for one - but bytes that do not decode
+       * are a permanent fact, so five attempts produce five identical failures and then an
+       * alarm that can never clear. `retention.ts` deliberately never prunes a parked row, so
+       * every corrupt upload would pin `parked > 0` on for the life of the database and drown
+       * the signal it exists to carry: that an effect never ran.
+       *
+       * A corrupt upload is not that. It is bad input, it is user-reachable, and the honest
+       * response is to record the fact on the object and let the event complete.
+       *
+       * Deliberately scoped to the decode alone. `store.put` below is outside it, because a
+       * storage write that fails IS transient and must keep its retries.
+       */
+      const reason = error instanceof Error ? error.message : String(error);
+      await db.update(mediaObjects).set({ deriveError: reason }).where(eq(mediaObjects.id, mediaId));
+      return { derived, skipped: false, undecodable: true };
+    }
 
     const key = `${media.objectKey}.${name}.webp`;
     await store.put({
@@ -75,8 +116,11 @@ export async function deriveVariants(
     derived.push(name);
   }
 
-  await db.update(mediaObjects).set({ variants }).where(eq(mediaObjects.id, mediaId));
-  return { derived, skipped: false };
+  await db
+    .update(mediaObjects)
+    .set({ variants, deriveError: null })
+    .where(eq(mediaObjects.id, mediaId));
+  return { derived, skipped: false, undecodable: false };
 }
 
 // ---------------------------------------------------------------------------

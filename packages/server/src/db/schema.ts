@@ -1545,6 +1545,15 @@ export const mediaObjects = pgTable(
     status: text('status').notNull().default('pending'),
     /** Derived sizes: { thumb: key, display: key }. Empty until the worker derives them. */
     variants: jsonb('variants').notNull().default({}),
+    /**
+     * Why derivation gave up, when it did. NULL is the normal case.
+     *
+     * Set only for bytes that will never decode, which is a permanent fact about an object
+     * rather than a transient fault - so the effect records it and completes instead of
+     * retrying five times and parking. A parked row must keep meaning "an effect never ran",
+     * and a corrupt upload is not that.
+     */
+    deriveError: text('derive_error'),
     /** Original filename, for a document bubble. Null for a photo. */
     documentName: text('document_name'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

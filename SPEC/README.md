@@ -112,6 +112,7 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0015](decisions/0015-a-direct-message-pushes-without-an-inbox-row.md) | A direct message pushes, and writes no inbox row |
 | [0016](decisions/0016-thread-writability-is-evaluated-never-stored.md) | A thread's writability is evaluated, never stored |
 | [0017](decisions/0017-reactions-travel-on-the-message-envelope.md) | Reactions travel on the message envelope, and updates carry full sets |
+| [0018](decisions/0018-decode-uploads-at-the-boundary.md) | Uploads are decoded at the boundary, and undecodable bytes never park an event |
 
 ## Templates
 

@@ -23,6 +23,7 @@ import { mediaObjects, outbox } from '../db/schema.ts';
 import { clearedFloor, type AccessContext } from '../policy/context.ts';
 import { canPostInChannel, isChannelMember, type ChannelRef } from '../policy/predicates.ts';
 import { getChannelRef } from '../domain/reads.ts';
+import { probeImage } from './probe.ts';
 import {
   DOCUMENT_MIME_ALLOWLIST,
   IMAGE_MIME_ALLOWLIST,
@@ -33,7 +34,15 @@ import {
 
 export type Refusal = {
   ok: false;
-  code: 'forbidden' | 'not_found' | 'mime_not_allowed' | 'too_large' | 'not_uploaded' | 'mismatch';
+  code:
+    | 'forbidden'
+    | 'not_found'
+    | 'mime_not_allowed'
+    | 'too_large'
+    | 'not_uploaded'
+    | 'mismatch'
+    /** The bytes arrived intact by every declared measure and still are not an image. */
+    | 'undecodable';
 };
 export type Result<T> = ({ ok: true } & T) | Refusal;
 
@@ -194,6 +203,32 @@ export async function completeUpload(
   // size, the declaration was wrong and the upload is not what was authorized.
   if (head.bytes !== media.bytes) return { ok: false, code: 'mismatch' };
   if (head.mime !== null && head.mime !== media.mime) return { ok: false, code: 'mismatch' };
+
+  /*
+   * The last thing a HEAD cannot tell you: whether the bytes are an image at all.
+   *
+   * > Size and type both matched for the 97-byte PNG in `probe.ts`, and it was still two bytes
+   * > short of a file. Every check above passed it.
+   *
+   * **This reads the object, which is the one place the server touches file bytes.** The
+   * module header says it does not, and that rule is about never proxying an upload - the
+   * client PUTs directly and the interface has deliberately no method taking a buffer. This is
+   * the other half of the same job: the function exists to verify afterwards that what arrived
+   * matches what was declared, and "is an image" is the declaration nothing else checks.
+   *
+   * It costs one object read and one full decode per image upload, on a path that is already
+   * a round trip to storage. Paid here because the alternative is worse: a member posts a
+   * photo, the send succeeds, and what appears in the conversation is a permanently broken
+   * image with no error anywhere the member can see.
+   */
+  if (media.mime.startsWith('image/')) {
+    const bytes = await store.get({ bucket: media.bucket, objectKey: media.objectKey });
+    const probe = await probeImage(bytes);
+    // Left `pending`, so the GC reclaims the bytes after `STALE_PENDING_HOURS` exactly as it
+    // does for an upload the client abandoned. Nothing references the row: `ready` is what a
+    // message may be attached to.
+    if (!probe.ok) return { ok: false, code: 'undecodable' };
+  }
 
   await db.transaction(async (tx) => {
     await tx
