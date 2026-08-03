@@ -106,6 +106,64 @@ Things that are built and not yet proved on every surface they claim to work on.
 | **Push** | The Expo transport, with a fake token that was correctly rejected | A real device token reaching a real backgrounded phone |
 | **`MEDIA_URL_MODE=cdn`** | Not at all | Only `presign` runs today. The CDN branch is the production one and has never served a byte |
 
+### Security audit: the planned scope
+
+**Planned 2026-08-03, not started.** The four operational gaps are closed; this is the next block
+of work and it is deliberately a **reading** exercise before it is a fixing one. Nothing below has
+been remediated, and three of the findings were turned up while writing the plan rather than by
+running it - they are recorded here because a plan that hides what it already knows is worse than
+no plan.
+
+**The scope is bounded by one thing worth stating up front:** this product will include minors, and
+it has private one-to-one conversations in it. That raises the stakes on the authorization and
+safety sections below relative to everything else, and it is the reason the audit is worth doing
+before a public release rather than after one.
+
+#### Already known, before the audit runs
+
+| Finding | Severity | Note |
+|---|---|---|
+| **`.env.bak` is tracked in git and not covered by `.gitignore`** | Low today, structural | It holds one placeholder (`dev-only-not-a-secret-regenerate-me`) so nothing real has leaked. The finding is the *pattern*: `.gitignore` covers `.env`, `.env.local` and `.env.*.local`, and a file named `.env.bak` matches none of them. The next backup taken next to a production value would be committed the same way |
+| **Every secret in `.env` is still its development placeholder** | Blocking for production | `BETTER_AUTH_SECRET`, `MEDIA_SIGNING_SECRET` and the S3 credentials are all dev values. They must be generated fresh and held by the platform, never in a file, before anything is deployed |
+| **No security headers on the API** | Medium | No HSTS, frame options, content-type-options or CSP. Zero occurrences in the codebase. Cheap to add and it should be one plugin, not per-route |
+| **`trustProxy` is not configured** | Medium, and it interacts with the new rate limits | Behind a proxy without it, `request.ip` is the proxy's, so the per-IP sign-in bucket becomes one shared bucket for the whole internet. Fails safe (too strict) rather than open, but it makes credential-stuffing protection useless |
+| **15 moderate dependency advisories** (production tree) | Medium | Mostly `@expo/config-plugins` transitives. Needs triage rather than a blind `npm audit fix --force` |
+| **`MEDIA_URL_MODE=cdn` has never served a byte** | Unverified, not a finding | The production media path is the one nobody has run. Listed under "verification owed" above |
+
+#### What the audit itself has to cover
+
+1. **Authorization, which is the one that matters most.** The permission matrix is asserted cell by
+   cell and that is genuinely strong - but a matrix proves the predicates, not that every route
+   *calls* them. The questions: does any of the 123 routes reach a domain read without passing
+   `authorizeChannel`; does every read that can return other people's rows go through
+   `visibleToViewer`; is the `404 rather than 403` discipline complete, since one route answering
+   403 confirms a resource exists to somebody who should not know it. **Column-level authority is
+   the specific v1 defect this architecture exists to fix**, and it is proved today for pin and
+   soft delete - the audit is whether it is proved for every mutable column.
+2. **Object storage.** Can a presigned upload be redirected at another channel's bucket path; can a
+   member attach an object somebody else uploaded (there is a check, and the audit is whether it is
+   complete); does a download signature actually bind to the viewer's access rather than only to
+   the object.
+3. **Raw SQL.** 207 `sql` template literals in non-test server code. Drizzle parameterises
+   interpolations, so the expected finding is none - but that is a claim to verify by reading for
+   any string concatenation into a query, not to assume from the library's docs.
+4. **Data exposure.** Email is asserted to live only on `/me`; the audit extends that to every
+   envelope, roster and search result. Blocking deliberately leaves history readable to both
+   parties (`PRD/14` rule 6) - the audit confirms that is what the code does everywhere rather
+   than what it does in the one place it was written.
+5. **The socket.** Auth arrives in the first frame with a five-second window. Channel access is
+   checked at subscribe and deliberately not re-checked per message, which is why revocation has to
+   force-unsubscribe - the audit is whether every path that removes access actually publishes that
+   revocation.
+6. **Safety surfaces, given minors are in scope.** Report reaches a queue, blocking works, DM
+   reports are metadata-only for platform moderators. The known gap is that the platform moderation
+   queue has no screen at all - `hrefFor` returns `undefined` for it on purpose.
+
+#### Explicitly not in scope
+
+Penetration testing, threat modelling of the infrastructure, and anything about Fly.io or Neon's
+own posture. This is an audit of code that has been written, by reading it.
+
 ### Deliberately deferred (do not "fix")
 
 Race-specific workout plans (in the original vision, never built; may have been absorbed by

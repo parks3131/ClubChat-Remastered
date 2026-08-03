@@ -13,6 +13,48 @@ Newest first.
 
 ---
 
+## 2026-08-03 (close) - Four gaps closed, and the security audit written down before it is run
+
+The day started with "the features are in, how is the architecture" and ended with the four
+operational gaps closed: error monitoring, HTTP rate limiting, sync reconciliation, retention. The
+structural decisions all held - authorization as function calls with a matrix asserted cell by
+cell, a monotonic `seq` on the channel log, the outbox as the transactional boundary. **Everything
+missing was about running the thing rather than about how it was built.**
+
+### The security audit is planned, not started
+
+Scope is in `PRD/17` under "Security audit: the planned scope". It is deliberately a reading
+exercise before it is a fixing one, and it is bounded by one fact worth restating: this product
+will include minors and it has private one-to-one conversations in it, which is what raises the
+stakes on authorization and safety relative to everything else.
+
+**Three findings exist already, from writing the plan rather than running it**, and they are
+recorded there rather than held back - a plan that hides what it already knows is worse than no
+plan:
+
+- `.env.bak` is tracked in git. It holds one placeholder, so nothing real has leaked, and the
+  finding is the pattern: `.gitignore` covers `.env`, `.env.local` and `.env.*.local`, and
+  `.env.bak` matches none of them. The next backup taken beside a production value would be
+  committed identically.
+- Every secret in `.env` is still its development placeholder, which is fine until the first
+  deploy and blocking at it.
+- No security headers anywhere, and `trustProxy` unconfigured - which interacts directly with the
+  rate limiting added today, because behind a proxy the per-IP sign-in bucket becomes one bucket
+  for the whole internet.
+
+### The thing worth remembering from today
+
+Two of the four tasks were misdiagnosed confidently before they were fixed correctly, and in both
+cases the correction came from checking whether the fix was doing anything rather than from the
+suite going green. The notification spinner was blamed on the focus effect when the socket's
+`revision` bump was the real caller. The container flake was blamed on a timeout that could not
+possibly have affected it, twice, while the failing message named the function the whole time.
+
+**A green suite is not evidence that the thing you changed is what made it green.** That sentence
+cost two wrong entries in this log, one of which had already been pushed.
+
+---
+
 ## 2026-08-03 (fifth) - Deleting what nobody will read again, and refusing to delete one thing
 
 The last of the four operational gaps, and the smallest: `notifications` and `outbox` both grew
