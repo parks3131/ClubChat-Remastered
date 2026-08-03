@@ -181,6 +181,31 @@ class SqliteMessageStore implements MessageStore {
     return row?.max_seq ?? 0;
   }
 
+  async syncMark(channelId: string): Promise<number> {
+    const row = await this.db.getFirstAsync<{ rev: number | null }>(
+      'SELECT rev FROM sync_state WHERE channel_id = ?',
+      channelId,
+    );
+    return row?.rev ?? 0;
+  }
+
+  async setSyncMark(channelId: string, rev: number): Promise<void> {
+    /*
+     * `MAX(excluded.rev, sync_state.rev)` rather than a plain overwrite.
+     *
+     * Two syncs for one channel can overlap - a foreground and a reconnect land together - and
+     * the one that finishes second is not necessarily the one that got furthest. Taking the
+     * larger makes the mark monotonic regardless of arrival order, which is the property that
+     * stops a stale writer rewinding reconciliation and re-pulling a channel's history.
+     */
+    await this.db.runAsync(
+      `INSERT INTO sync_state (channel_id, rev) VALUES (?, ?)
+       ON CONFLICT(channel_id) DO UPDATE SET rev = MAX(excluded.rev, sync_state.rev)`,
+      channelId,
+      rev,
+    );
+  }
+
   async upsert(messages: readonly MessageEnvelope[]): Promise<void> {
     if (messages.length === 0) return;
     // One transaction for the batch: a sync response can be hundreds of rows, and

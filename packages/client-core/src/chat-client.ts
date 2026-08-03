@@ -757,21 +757,39 @@ export class ChatClient {
     await this.store.forgetChannel(channelId);
   }
 
+  /**
+   * Reconcile a channel: everything new, and everything CHANGED.
+   *
+   * > **This used to ask for `seq > local max`, and a row already held was therefore never
+   * > fetched again.** Pins, tombstones and reactions all mutate rows below that mark, so a
+   * > client that was offline when a message was deleted kept showing it - with its text -
+   * > indefinitely. Every automated check passed, because each half was individually correct.
+   *
+   * The mark is now a channel REVISION, which an append and a mutation both advance, so one
+   * question covers both. `sinceSeq` is still sent: it is what a server that predates revisions
+   * would use, and it costs nothing to keep the request honest for both.
+   */
   async syncChannel(channelId: string, sinceSeq: number): Promise<void> {
     this.syncCount += 1;
     let since = sinceSeq;
+    let mark = await this.store.syncMark(channelId);
 
     // Keep pulling while the server says there is more, so a client that has been away
     // long enough to exceed one page does not stop half way and believe it is caught up.
     for (;;) {
-      const url = `${this.opts.apiUrl}/sync?channels[]=${encodeURIComponent(`${channelId}:${since}`)}`;
+      const url = `${this.opts.apiUrl}/sync?channels[]=${encodeURIComponent(`${channelId}:${since}:${mark}`)}`;
       const response = await this.fetch(url, {
         headers: { authorization: `Bearer ${this.opts.token}` },
       });
       if (!response.ok) throw new Error(`sync failed: ${response.status}`);
 
       const body = (await response.json()) as {
-        channels: Array<{ channelId: string; messages: MessageEnvelope[]; hasMore: boolean }>;
+        channels: Array<{
+          channelId: string;
+          messages: MessageEnvelope[];
+          hasMore: boolean;
+          maxRev?: number;
+        }>;
       };
       const result = body.channels.find((entry) => entry.channelId === channelId);
       if (!result || result.messages.length === 0) return;
@@ -786,8 +804,30 @@ export class ChatClient {
        * writes to the same table.
        */
       await this.serialize(channelId, () => this.store.upsert(result.messages));
-      since = result.messages[result.messages.length - 1]!.seq;
+
+      /*
+       * Advance BOTH marks, and page on the revision.
+       *
+       * The pages arrive ordered by `rev`, not by `seq` - a message changed today sorts after one
+       * sent an hour ago - so taking the last message's seq as the next cursor would page
+       * incoherently. The revision is the cursor; `since` is kept only for the pre-revision
+       * server, where the ordering is by seq and this is still the right value.
+       */
+      if (result.maxRev !== undefined && result.maxRev > mark) {
+        mark = result.maxRev;
+        await this.store.setSyncMark(channelId, mark);
+      }
+      since = Math.max(since, ...result.messages.map((message) => message.seq));
+
       if (!result.hasMore) return;
+
+      /*
+       * A server with no revisions returns no `maxRev`, so the mark never moves - and paging on
+       * `since` alone would loop forever if it also never moved. Stopping is correct there: the
+       * seq cursor did advance if there was anything new, and if it did not there is nothing
+       * left to fetch.
+       */
+      if (result.maxRev === undefined && since === sinceSeq) return;
     }
   }
 

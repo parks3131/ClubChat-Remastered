@@ -101,6 +101,20 @@ export type MessagePatch = {
 export interface MessageStore {
   /** Highest contiguous seq held for a channel, or 0 if empty. */
   localMaxSeq(channelId: string): Promise<number>;
+  /**
+   * How far reconciliation has got for a channel, or 0 if it never has.
+   *
+   * > **Not derivable from the messages held, which is the whole reason it is stored.** The
+   * > watermark is a channel REVISION, and revisions are not on the envelope - `seq` says where a
+   * > message sits, `rev` says when it last changed, and only the second one can answer "what has
+   * > changed since I last looked". The server reports the mark it reached; this holds it.
+   *
+   * Zero is the honest answer for a store that has never synced, and it costs one full
+   * reconciliation rather than silently skipping history.
+   */
+  syncMark(channelId: string): Promise<number>;
+  /** Record how far reconciliation got. Must be idempotent and monotonic per channel. */
+  setSyncMark(channelId: string, rev: number): Promise<void>;
   /** Insert or replace by (channelId, seq). Must be idempotent. */
   upsert(messages: readonly MessageEnvelope[]): Promise<void>;
   /**
@@ -152,6 +166,19 @@ export class InMemoryMessageStore implements MessageStore {
     const channel = this.byChannel.get(channelId);
     if (!channel || channel.size === 0) return 0;
     return Math.max(...channel.keys());
+  }
+
+  private readonly marks = new Map<string, number>();
+
+  async syncMark(channelId: string): Promise<number> {
+    return this.marks.get(channelId) ?? 0;
+  }
+
+  async setSyncMark(channelId: string, rev: number): Promise<void> {
+    // Monotonic: a page that returned nothing reports zero, and letting that overwrite a real
+    // mark would make every quiet sync ask for the whole channel again.
+    const current = this.marks.get(channelId) ?? 0;
+    if (rev > current) this.marks.set(channelId, rev);
   }
 
   async upsert(messages: readonly MessageEnvelope[]): Promise<void> {

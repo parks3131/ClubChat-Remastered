@@ -440,28 +440,55 @@ export async function syncSince(
   channelId: string,
   sinceSeq: number,
   limit = SYNC_PAGE_SIZE,
-): Promise<{ messages: MessageEnvelope[]; hasMore: boolean }> {
+  sinceRev?: number,
+): Promise<{ messages: MessageEnvelope[]; hasMore: boolean; maxRev: number }> {
+  /*
+   * Two shapes, and which one runs is decided by whether the client sent a revision.
+   *
+   * > **`seq > mine` cannot see a change to a row the client already has**, and a pin, a
+   * > tombstone and a reaction all mutate rows below that mark. A client offline when a message
+   * > was deleted kept showing it, with its text, indefinitely - `PRD/17` item 14, and a
+   * > moderation hole rather than staleness.
+   *
+   * `rev > mine` answers both halves at once: an append allocates a revision too, so a new
+   * message and a changed message are the same question. Ordering follows the same column, which
+   * is what lets the client page by the last `rev` it saw rather than needing two cursors.
+   *
+   * The seq form is kept for a client that has not been updated. It is the old behaviour exactly,
+   * including the old gap - a mixed fleet gets correct-but-incomplete reconciliation rather than
+   * a broken one, and upgrading is what closes it.
+   */
+  const reconciling = sinceRev !== undefined;
   const rows = await selectMessages(db)
     .where(
       and(
         eq(messages.channelId, channelId),
-        gt(messages.seq, sinceSeq),
+        reconciling ? gt(messages.rev, sinceRev) : gt(messages.seq, sinceSeq),
         // Without this a clear would undo itself on the next reconnect: sync pulls everything
         // above the client's local max, and a cleared client's local max is now below the
         // messages it just hid.
         visibleToViewer(ctx, channelId),
       ),
     )
-    .orderBy(asc(messages.seq))
+    .orderBy(reconciling ? asc(messages.rev) : asc(messages.seq))
     .limit(limit + 1);
 
   const hasMore = rows.length > limit;
+  const page = rows.slice(0, limit);
   return {
     // Reactions travel with the backlog too. A client that has been offline for a week must
     // come back to the conversation as it stands, not to messages with their reactions
     // stripped off and no way to notice.
-    messages: await withReactions(db, rows.slice(0, limit).map(toEnvelope)),
+    messages: await withReactions(db, page.map(toEnvelope)),
     hasMore,
+    /*
+     * The mark to resume from, computed here rather than by the client.
+     *
+     * A client cannot derive it: the envelope carries `seq`, not `rev`, and putting `rev` on the
+     * wire would make an internal counter part of the message shape for no gain. Zero for an
+     * empty page, which the client reads as "nothing moved, keep the mark you had".
+     */
+    maxRev: page.reduce((highest, row) => (row.rev > highest ? row.rev : highest), 0),
   };
 }
 

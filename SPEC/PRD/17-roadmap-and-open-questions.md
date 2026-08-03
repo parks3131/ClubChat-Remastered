@@ -70,7 +70,9 @@ designed in.
     **Per-conversation and per-club preferences remain open**, as does anything finer than a
     per-user bucket.
 13. **Backups and version parity** between development and production data stores. **Still open** - there is no production yet. Migrations already replay cleanly from zero, which is half of it.
-14. **A `msg.update` missed while disconnected is never recovered.** Found on 2026-08-01 while
+14. ~~**A `msg.update` missed while disconnected is never recovered.**~~ **Done 2026-08-03.** Sync now reconciles on a per-channel REVISION rather than on `seq`: `channels.last_rev` is bumped by an append and by every later mutation, each message carries the revision it last changed at, and the client asks for `rev > <its mark>`. One watermark covers both halves, because an append allocates a revision too. A reaction touches its message row explicitly - it lives in another table, so nothing of the message itself changes while the envelope every reader sees does. A client sending no mark gets the old seq behaviour unchanged, so a mixed fleet degrades rather than breaks. Original text follows.
+
+    **A `msg.update` missed while disconnected is never recovered.** Found on 2026-08-01 while
     verifying replies: `syncChannel` pulls strictly ABOVE the local max, so a row the client has
     already cached is never fetched again - and pins, tombstones and reactions all travel as
     updates against rows below that mark. A client that is offline when somebody deletes a

@@ -13,6 +13,72 @@ Newest first.
 
 ---
 
+## 2026-08-03 (fourth) - A delete that only reached the people already watching
+
+The third operational gap, and the only one of the four with a user-facing consequence: **a
+message deleted while a device was offline stayed on that device, with its text, forever.** Same
+for a pin and a reaction. `PRD/17` item 14, open since 2026-08-01.
+
+### Why it survived every test
+
+Sync asked for `seq > <the client's local max>`. Deleting message 12 does not create message 51 -
+it changes an old row, and an old row is below the mark by definition. So there was nothing
+"newer" to hand over and the tombstone simply never arrived.
+
+**Both halves were individually correct**, which is why nothing caught it. The live `msg.update`
+frame carried the change to everybody connected. Sync correctly returned everything new. No test
+asked the question that spans them: what happens to a change that arrives while nobody is
+listening. The client's own comment had even been corrected once to admit the loss was not
+self-healing - the behaviour just had no test.
+
+### Two counters, because one cannot answer two questions
+
+`last_seq` says where a message sits and must stay gapless. A second counter, `last_rev`, says
+what has changed - bumped by an append AND by every later mutation.
+
+> **Reusing `seq` was the obvious move and is wrong.** Bumping a message's seq when somebody
+> pinned it would move that message to the end of the conversation and punch a hole where it had
+> been - the phantom gap the gapless design exists to make unrepresentable.
+
+Because an append allocates a revision too, **one watermark covers both halves**: a new message and
+a changed message become the same question. That turned out simpler than the design it replaced -
+no second cursor, no merging two result sets.
+
+An integer rather than a timestamp, for the reason `seq` is one: two transactions committing out
+of order around a wall-clock watermark can both land on the wrong side of it, and the row that
+slips past is missed **permanently** rather than late. `TECH/00` made this argument for ordering;
+it applies unchanged to "what have I not seen change".
+
+### The mutation that changes nothing
+
+Three sites allocate a revision inside the transaction that makes the change, so a tombstone can
+never exist without the revision advertising it. The fourth is the interesting one.
+
+**A reaction lives in another table.** Not one column of the message row changes - and yet what
+every reader renders is the envelope, and the envelope carries its reactions. So the message HAS
+changed, and the row has to be touched to say so. That is exactly why reactions were among the
+three things being lost, and it is the case a schema-shaped fix would have missed.
+
+### The backfill was not optional
+
+Both columns default to 0 and sync asks for `rev > 0`. Deployed without a backfill, **every
+message already in the table would have been invisible to every sync forever** - the one row shape
+the new watermark cannot express is "changed at revision zero". `rev = seq` for existing history,
+since seq is already monotonic per channel and already at least 1 by check constraint. Verified
+against the development database rather than reasoned about: 0 of 267 rows left at zero.
+
+### Verified
+
+702 server tests, 7 of them new, plus typecheck across four workspaces, `db:prove` against the
+changed schema, and both lints. The new tests fail against the old code, which is the property
+that matters - and the last of them pins the pre-revision path deliberately, because a client that
+has not updated sends no mark and must keep working exactly as before. A mixed fleet gets
+correct-but-incomplete reconciliation rather than a broken one.
+
+Backfill checked against real data. Live stack healthy, Metro bundling 1663 modules.
+
+---
+
 ## 2026-08-03 (last, again) - Making failure visible, and finding out the suite had been lying about why it was red
 
 The MVP feature set is in, so the question turned to what the architecture is actually missing.

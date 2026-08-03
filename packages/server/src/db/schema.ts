@@ -313,6 +313,24 @@ export const channels = pgTable(
     // distinct by Postgres and would silently defeat the constraint below.
     scopeId: uuid('scope_id').notNull(),
     lastSeq: integer('last_seq').notNull().default(0),
+    /**
+     * The per-channel REVISION counter, which is not the message counter.
+     *
+     * `lastSeq` answers "how many messages are there" and must stay gapless, so it is bumped
+     * only by an append. `lastRev` answers a different question - **"what has changed"** - and is
+     * bumped by an append AND by every later mutation of a message: a pin, a soft delete, a
+     * reaction.
+     *
+     * > **Two counters rather than one, because reusing `seq` would reorder the log.** Bumping a
+     * > message's `seq` when somebody pins it would move it to the end of the conversation and
+     * > punch a hole where it used to be, which is exactly the phantom gap the gapless design
+     * > exists to make unrepresentable.
+     *
+     * A monotonic integer rather than a timestamp, for the reason `seq` is one: a client asking
+     * "what have I not seen" gets an integer comparison with no clock in it, and no two rows
+     * committing out of order can slip past the mark.
+     */
+    lastRev: integer('last_rev').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -408,9 +426,25 @@ export const messages = pgTable(
     // mid-conversation makes the replies unreadable (domain invariant 7).
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * The channel revision at which this row last changed. See `channels.lastRev`.
+     *
+     * > **This is what makes a deletion reach a device that was offline when it happened.** Sync
+     * > used to ask for `seq > mine`, so a row the client already held was never fetched again -
+     * > and a pin, a tombstone and a reaction all mutate rows BELOW that mark. A client that was
+     * > disconnected when a message was deleted kept showing that message, with its text,
+     * > indefinitely. `PRD/17` item 14, and it is a moderation hole rather than staleness.
+     *
+     * Every message has one from insert, so a single watermark answers both halves of sync: a new
+     * message and a changed message are the same question asked of `rev`.
+     */
+    rev: integer('rev').notNull().default(0),
   },
   (t) => [
     uniqueIndex('messages_channel_seq').on(t.channelId, t.seq),
+    // The sync index. Sync walks `rev` ascending within a channel, so this is to reconciliation
+    // what `messages_channel_seq_desc` is to history paging.
+    index('messages_channel_rev').on(t.channelId, t.rev),
     // Idempotency. A retry after a flaky network hits this index and the handler
     // returns the existing row's seq instead of erroring, which is what makes the
     // client's send outbox safe to retry aggressively.

@@ -127,6 +127,13 @@
       "when": 1785691322015,
       "tag": "0017_channel_pins_and_clears",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1785770376098,
+      "tag": "0018_message_revisions",
+      "breakpoints": true
     }
   ]
 }

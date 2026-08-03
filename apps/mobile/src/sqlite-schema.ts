@@ -65,6 +65,23 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at     TEXT NOT NULL,
   PRIMARY KEY (channel_id, seq)
 );
+/*
+ * How far reconciliation has got, per channel.
+ *
+ * Its own table rather than a column, because it is a fact about the CHANNEL and not about any
+ * message - and because the value cannot be derived from the rows. A revision is deliberately not
+ * on the envelope, so the server reports the high-water mark in the sync response and this is
+ * where it is kept between runs.
+ *
+ * A NEW table needs no entry in MIGRATIONS: that list exists for columns added to a table which
+ * already exists, where CREATE TABLE IF NOT EXISTS is a no-op. This statement runs on every open,
+ * so an existing device gains the table the first time it starts this build - with no rows, which
+ * reads as mark zero and costs one full reconciliation.
+ */
+CREATE TABLE IF NOT EXISTS sync_state (
+  channel_id TEXT PRIMARY KEY,
+  rev        INTEGER NOT NULL DEFAULT 0
+);
 `;
 
 /**

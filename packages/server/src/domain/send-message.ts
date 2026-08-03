@@ -20,6 +20,7 @@ import {
 } from '../db/schema.ts';
 import { appendMessage, type AppendMessageResult } from './append-message.ts';
 import { channelAudience } from './channel-access.ts';
+import { nextRevision } from './revisions.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
   canAnnounceInChannel,
@@ -306,20 +307,34 @@ export async function setPinned(
   const existing = await loadMessage(db, channel.id, seq);
   if (!existing) return { ok: false, code: 'not_found' };
 
-  const updated = await db
-    .update(messages)
-    /*
-     * Stamped on every pin, including re-pinning something that was pinned before, so a re-pin
-     * genuinely becomes the most recent - which is what the strip orders by. Cleared on unpin so
-     * the column never claims a pin that is not there.
-     */
-    .set({ pinned, pinnedAt: pinned ? new Date() : null })
-    // The type is deliberately NOT in this SET. A pin must never be able to carry a
-    // type change along with it.
-    .where(and(eq(messages.channelId, channel.id), eq(messages.seq, seq)))
-    .returning();
+  /*
+   * The pin and its revision commit together.
+   *
+   * A pin that landed without advancing `rev` would be invisible to any client that already held
+   * the message - which is every client that had the conversation open - because sync only
+   * returns rows above the mark. Inside one transaction so a pin can never exist without the
+   * revision that advertises it.
+   */
+  const row = await db.transaction(async (tx) => {
+    const rev = await nextRevision(tx, channel.id);
+    if (rev === null) return undefined;
 
-  const row = updated[0];
+    const updated = await tx
+      .update(messages)
+      /*
+       * Stamped on every pin, including re-pinning something that was pinned before, so a re-pin
+       * genuinely becomes the most recent - which is what the strip orders by. Cleared on unpin so
+       * the column never claims a pin that is not there.
+       */
+      .set({ pinned, pinnedAt: pinned ? new Date() : null, rev })
+      // The type is deliberately NOT in this SET. A pin must never be able to carry a
+      // type change along with it.
+      .where(and(eq(messages.channelId, channel.id), eq(messages.seq, seq)))
+      .returning();
+
+    return updated[0];
+  });
+
   if (!row) return { ok: false, code: 'not_found' };
 
   // Everyone with the chat open must see the pinned strip appear, so the change is published
@@ -355,6 +370,17 @@ export async function softDeleteMessage(
   }
 
   const updated = await db.transaction(async (tx) => {
+    /*
+     * The revision this delete happens at.
+     *
+     * **This is the case the whole mechanism exists for.** A tombstone that did not advance
+     * `rev` reached only the clients that were connected at the time; anybody offline kept the
+     * message and its body forever, because sync never looks below the mark. Allocated first, so
+     * the tombstone and its revision commit or roll back as one.
+     */
+    const rev = await nextRevision(tx, channel.id);
+    if (rev === null) return null;
+
     const rows = await tx
       .update(messages)
       .set({
@@ -363,6 +389,7 @@ export async function softDeleteMessage(
         // tombstone as pinned content.
         pinned: false,
         body: null,
+        rev,
       })
       .where(and(eq(messages.channelId, channel.id), eq(messages.seq, seq)))
       .returning();

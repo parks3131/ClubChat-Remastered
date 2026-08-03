@@ -74,20 +74,50 @@ export function registerInboxRoutes(app: FastifyInstance, deps: AppDeps): void {
       channelId: string;
       messages: unknown[];
       hasMore: boolean;
+      maxRev: number;
     }> = [];
 
     for (const entry of entries) {
-      const separator = entry.lastIndexOf(':');
-      if (separator <= 0) continue;
-      const channelId = entry.slice(0, separator);
-      const since = Number(entry.slice(separator + 1));
+      /*
+       * `{id}:{since_seq}` or `{id}:{since_seq}:{since_rev}`.
+       *
+       * Parsed from the LEFT rather than by splitting on the last colon, because a channel id is
+       * a uuid and contains none - and the previous `lastIndexOf` would read the rev as the seq
+       * the moment a third field appeared. The rev is optional so a client that has not been
+       * updated keeps the old behaviour exactly rather than being refused.
+       */
+      const parts = entry.split(':');
+      if (parts.length < 2 || parts.length > 3) continue;
+      const [channelId, sinceRaw, revRaw] = parts;
+      if (!channelId) continue;
+
+      const since = Number(sinceRaw);
       if (!Number.isInteger(since) || since < 0) continue;
+
+      let sinceRev: number | undefined;
+      if (revRaw !== undefined) {
+        const parsed = Number(revRaw);
+        if (!Number.isInteger(parsed) || parsed < 0) continue;
+        sinceRev = parsed;
+      }
 
       const guard = await authorizeChannel(deps, request, channelId);
       if (!guard.ok) continue;
 
-      const page = await syncSince(deps.db, request.access!, channelId, since);
-      results.push({ channelId, messages: page.messages, hasMore: page.hasMore });
+      const page = await syncSince(
+        deps.db,
+        request.access!,
+        channelId,
+        since,
+        undefined,
+        sinceRev,
+      );
+      results.push({
+        channelId,
+        messages: page.messages,
+        hasMore: page.hasMore,
+        maxRev: page.maxRev,
+      });
     }
 
     return { channels: results, serverTime: new Date().toISOString() };

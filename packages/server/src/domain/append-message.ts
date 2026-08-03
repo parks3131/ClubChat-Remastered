@@ -267,15 +267,25 @@ export async function appendMessage(
       // this - sequences are non-transactional and leak gaps on rollback, and a
       // phantom gap would send the client syncing forever after a hole that does
       // not exist.
-      const bumped = await tx.execute<{ last_seq: number }>(sql`
+      /*
+       * Both counters in one statement, under the one row lock this transaction already takes.
+       *
+       * `last_rev` advances with every append as well as every later mutation, so a new message
+       * and a changed message are the same question to sync. Bumping it here rather than in a
+       * second `UPDATE channels` matters: a second statement would take the same row lock again
+       * for no benefit, and could not be forgotten only in the append path if it is written here.
+       */
+      const bumped = await tx.execute<{ last_seq: number; last_rev: number }>(sql`
         UPDATE channels
-           SET last_seq = last_seq + 1
+           SET last_seq = last_seq + 1,
+               last_rev = last_rev + 1
          WHERE id = ${input.channelId}
-        RETURNING last_seq
+        RETURNING last_seq, last_rev
       `);
 
       const seq = bumped.rows[0]?.last_seq;
-      if (seq === undefined) {
+      const rev = bumped.rows[0]?.last_rev;
+      if (seq === undefined || rev === undefined) {
         // The channel is gone. Distinguished from a permission failure by the
         // caller, which has already authorized: this is `channel_gone`.
         throw new ChannelGoneError(input.channelId);
@@ -286,6 +296,7 @@ export async function appendMessage(
         .values({
           channelId: input.channelId,
           seq,
+          rev,
           senderId: input.senderId,
           type: input.type ?? 'text',
           body: input.body ?? null,

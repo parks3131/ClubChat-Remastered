@@ -15,6 +15,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { reactionEmoji, type MessageReaction, type ReactionEmoji } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { messageReactions, outbox } from '../db/schema.ts';
+import { touchMessage } from './revisions.ts';
 import type { AccessContext } from '../policy/context.ts';
 import { canReactInChannel, type ChannelRef } from '../policy/predicates.ts';
 
@@ -135,6 +136,17 @@ export async function toggleReaction(
         // no-op rather than a 500.
         .onConflictDoNothing();
     }
+
+    /*
+     * Touch the message, even though not one of its own columns changed.
+     *
+     * > **A reaction lives in another table, and that is exactly why it was being lost.** What a
+     * > client renders is the message's envelope, and the envelope carries its reactions - so the
+     * > message HAS changed as far as any reader is concerned, and sync has no way to know unless
+     * > the row says so. The three mutations that were invisible across a disconnect were the pin,
+     * > the tombstone and this one.
+     */
+    await touchMessage(tx, channel.id, seq);
 
     // Emitted inside the same transaction as the row change, so the published update can
     // never describe a state that was rolled back. The worker turns this into a msg.update.
