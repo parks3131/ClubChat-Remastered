@@ -26,6 +26,7 @@ import { Redirect, useNavigation, useRouter } from 'expo-router';
 import { useCurrentSpace } from '../../src/current-space.tsx';
 import { calendarApi } from '../../src/api.ts';
 import type { FeedItem } from '../../src/api-types.ts';
+import { bucketByDay, dayInView, type DayChoice } from '../../src/calendar-days.ts';
 import { useSession } from '../../src/chat-provider.tsx';
 import { formatDayTitle, formatMonthTitle, formatTimeOfDay, toDateKey } from '../../src/dates.ts';
 import { color, radius, space, type } from '../../src/theme.ts';
@@ -90,7 +91,7 @@ export default function CalendarScreen() {
  */
 export function CalendarView({ clubId }: { clubId?: string } = {}) {
   const [cursor, setCursor] = useState(todayParts());
-  const [selected, setSelected] = useState<string | null>(null);
+  const [choice, setChoice] = useState<DayChoice>(null);
 
   /*
    * One read for both views.
@@ -105,8 +106,22 @@ export function CalendarView({ clubId }: { clubId?: string } = {}) {
     [clubId],
   );
 
+  /*
+   * Both views' input, built once per load rather than once per render - it was inside the render
+   * body, which rebuilt the whole Map on every paged month and every tap.
+   *
+   * `selected` is derived from it rather than stored beside it, which is what makes today open on
+   * arrival: the feed is not loaded on the first render, so a default chosen then would be chosen
+   * from an empty map. See `calendar-days.ts` for the rest of that argument.
+   */
+  const byDay = useMemo(() => bucketByDay(feed.data?.items ?? []), [feed.data]);
+  const todayKey = toDateKey(new Date());
+  const selected = dayInView(choice, byDay, todayKey);
+
   const step = (delta: number) => {
-    setSelected(null);
+    // Paging is a deliberate move away from today, so it closes the day rather than reverting to
+    // "has not chosen yet" - which would reopen today the moment the current month came back.
+    setChoice({ day: null });
     setCursor((current) => {
       const zeroBased = current.month - 1 + delta;
       return {
@@ -119,17 +134,6 @@ export function CalendarView({ clubId }: { clubId?: string } = {}) {
   return (
     <DataScreen load={feed}>
       {(data) => {
-        // Polls are excluded from the grid: a poll has a closing deadline, not a day it happens
-        // on. They stay in the events list, which is where PRD/07 puts them.
-        const byDay = new Map<string, FeedItem[]>();
-        for (const item of data.items) {
-          if (item.kind === 'poll' || item.at === null) continue;
-          const day = item.at.slice(0, 10);
-          const bucket = byDay.get(day);
-          if (bucket) bucket.push(item);
-          else byDay.set(day, [item]);
-        }
-
         const dayItems = selected === null ? [] : (byDay.get(selected) ?? []);
 
         return (
@@ -138,8 +142,11 @@ export function CalendarView({ clubId }: { clubId?: string } = {}) {
               year={cursor.year}
               month={cursor.month}
               byDay={byDay}
+              today={todayKey}
               selected={selected}
-              onSelect={(day) => setSelected((current) => (current === day ? null : day))}
+              // Compared against the day actually open, not against the stored choice: on arrival
+              // today is open without having been chosen, and tapping it has to close it.
+              onSelect={(day) => setChoice({ day: day === selected ? null : day })}
               onPrev={() => step(-1)}
               onNext={() => step(1)}
             />
@@ -215,7 +222,14 @@ function DayRow({ item, showClub }: { item: FeedItem; showClub: boolean }) {
         {item.kind === 'race' && !item.accessible && <Text style={styles.clubTag}>NO ACCESS</Text>}
       </View>
       <Text style={styles.dayRowTitle}>{item.title}</Text>
-      {item.at !== null && <Text style={styles.meta}>{formatTimeOfDay(item.at)}</Text>}
+      {/*
+        An all-day item has no time to show, and inventing one is worse than showing nothing: a
+        race's date read as an instant is UTC midnight, so every race carried a confident "7:00 PM"
+        that was really the previous evening in New York.
+      */}
+      {item.at !== null && !item.allDay && (
+        <Text style={styles.meta}>{formatTimeOfDay(item.at)}</Text>
+      )}
     </>
   );
 
@@ -235,6 +249,7 @@ function MonthGrid({
   year,
   month,
   byDay,
+  today,
   selected,
   onSelect,
   onPrev,
@@ -243,13 +258,13 @@ function MonthGrid({
   year: number;
   month: number;
   byDay: ReadonlyMap<string, FeedItem[]>;
+  /** Passed in rather than read here, so the ring and the opened day cannot disagree about it. */
+  today: string;
   selected: string | null;
   onSelect: (day: string) => void;
   onPrev: () => void;
   onNext: () => void;
 }) {
-  const todayKey = toDateKey(new Date());
-
   const cells = useMemo(() => {
     // Built from components, never from a parsed ISO string: an ISO date is UTC midnight and
     // renders a day early in a negative-offset timezone.
@@ -302,7 +317,7 @@ function MonthGrid({
           // carry something must not render the same solid marker a real day gets, or it reads as
           // a prominent control sitting in the wrong month that does nothing when tapped.
           const marked = cell.inMonth && byDay.has(cell.key);
-          const isToday = cell.key === todayKey;
+          const isToday = cell.key === today;
           const isSelected = cell.key === selected;
 
           return (

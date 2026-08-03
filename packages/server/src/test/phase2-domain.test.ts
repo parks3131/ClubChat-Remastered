@@ -1025,6 +1025,28 @@ describe('the merged calendar feed', () => {
     expect(poll?.at).toBeNull();
   });
 
+  it('gives a race a date and an event an instant, and never converts one into the other', async () => {
+    // A race's date pushed through toISOString became UTC midnight, which the client could only
+    // read back as an instant: it printed a time of day under every race and could not ask which
+    // local day the race was on without moving it a day earlier. The two shapes stay apart.
+    const f = await setup();
+    await setupRace(f);
+    await createEvent(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId, type: 'practice', title: 'Track night',
+      startsAt: '2026-04-15T18:00:00.000Z',
+    });
+
+    const feed = await readCalendarFeed(h.db, await ctxFor(f.memberId), { clubId: f.clubId });
+
+    const race = feed.find((i) => i.kind === 'race');
+    expect(race?.allDay).toBe(true);
+    expect(race?.at, 'a race date was normalised into an instant').toBe('2026-04-12');
+
+    const event = feed.find((i) => i.kind === 'event');
+    expect(event?.allDay).toBe(false);
+    expect(event?.at).toBe('2026-04-15T18:00:00.000Z');
+  });
+
   it('excludes polls from the month grid but keeps events and races', async () => {
     const f = await setup();
     await setupRace(f);

@@ -281,8 +281,15 @@ export type FeedItem = {
   clubId: string;
   clubName: string;
   title: string;
-  /** Null for a poll with no deadline, which is why polls sort last and are off the grid. */
+  /**
+   * Null for a poll with no deadline, which is why polls sort last and are off the grid.
+   *
+   * An ISO instant, or a date-only `YYYY-MM-DD` when `allDay`. Never parse it without checking
+   * which - that is the whole point of the flag beside it.
+   */
   at: string | null;
+  /** True when `at` is a day rather than a moment, which today means a race. */
+  allDay: boolean;
   upcoming: boolean;
   open?: boolean;
   /** False for a race the viewer can see but not enter. Still shown.  */

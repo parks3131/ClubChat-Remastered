@@ -13,6 +13,83 @@ Newest first.
 
 ---
 
+## 2026-08-03 - The calendar marked the day and then showed nothing on it
+
+Reported from the device, and precisely: today is the 3rd, the 3rd has events, the grid draws the
+ring and the filled marker on the 3rd - and the page under it is empty until the 3rd is tapped.
+The screen was drawing a marker that said "there is something here" and then declining to say what.
+
+### The default that was never written
+
+`CalendarView` opened with `selected = null` and rendered the day list only `if (selected !== null)`.
+Nothing ever selected today. Every other part of the feature was correct: the buckets were per-day,
+the marker logic was right, tapping worked. The screen simply had no opinion about which day it
+was showing when you arrived, and null is an opinion.
+
+The fix is one line of intent and three of care, because the two obvious versions are both wrong:
+
+ 1. **Selecting today on mount reads an empty map.** The feed has not loaded on the first render,
+    so "does today carry anything" answers no, permanently.
+ 2. **An effect that selects today whenever nothing is selected makes today untappable.** Tapping
+    the open day collapses it, the effect reopens it on the next render, and the day cannot be
+    closed.
+
+So the open day is **derived, not stored**: `null` means the reader has not chosen yet, which is a
+different value from having chosen nothing, and only the first falls back to today. The default
+re-evaluates for free when the data lands and stops applying the moment the reader expresses a
+preference. Paging a month produces "chosen nothing", so returning to the current month does not
+resurrect today.
+
+Today only opens when it actually carries something, which is the rule the grid already applied to
+the gesture. Without that, an empty calendar greets you with a heading over "Nothing on this day"
+that no tap can dismiss, because the cell under it is disabled.
+
+### The bug underneath it, which nothing in the data had yet triggered
+
+The buckets were keyed on `at.slice(0, 10)`. That is the **UTC** date, and the grid's cells are
+**local** dates. West of Greenwich a 9pm event has tomorrow's UTC date, so it was marked and listed
+one square late with the correct time printed under it. Every event on the calendar had been
+created before 8pm, which is the only reason it looked right.
+
+Keying on the reader's local day is the fix and it could not be applied, because the server had
+already destroyed the distinction it needs. A race's `race_date` is a DATE, and it was being pushed
+through `new Date(...).toISOString()` to match the other three branches - turning `2027-01-01` into
+`2027-01-01T00:00:00.000Z`, an instant at UTC midnight. Asking that instant which local day it is
+on answers December 31, so the naive client fix would have moved every race a day earlier while
+fixing evening events.
+
+`FeedItem` therefore carries `allDay`, emitted per UNION branch rather than inferred downstream
+from the kind, and a race keeps the date it already had. The client asks the local-day question of
+instants and never parses an all-day value, which is the rule `dates.ts` opens with, applied at the
+one place that had quietly opted out of it.
+
+That also removed something nobody had reported: the day list printed `formatTimeOfDay(item.at)`
+under every race, and UTC midnight read in New York is **7:00 PM the evening before**. Every race
+carried a confident time it did not have.
+
+### The thing worth remembering
+
+The reported bug was a missing default. The bug found while fixing it was a type confusion two
+layers away, in a server file the report had nothing to do with, and it was only reachable because
+the fix required asking "which day is this item on" in a timezone-aware way for the first time.
+A date and an instant are different things, and the moment one is normalised into the other the
+question becomes unanswerable rather than merely wrong.
+
+### Verified
+
+783 tests across the workspaces, typecheck, `lint:emdash`, `check:runtime`. `calendar-days.ts` is
+new and holds both rules as pure functions, extracted for the reason `chat-rows.ts` was: inside a
+component the only way to exercise them is to open the app and look. Its tests assert the two
+regressions a fix invites - reopening a day the reader closed, and moving an all-day value earlier
+by parsing it - and express the evening case through `toDateKey` so it holds in whatever zone the
+suite runs in. On the server, a race's `at` is pinned to `2026-04-12` and an event's to
+`2026-04-15T18:00:00.000Z` in the same assertion, since the bug was the two becoming one shape.
+
+`/calendar/markers` still keys by UTC day. It is left alone deliberately: no screen calls it, and
+the server cannot know the reader's timezone, so the honest fix there is the client's.
+
+---
+
 ## 2026-08-02 (evening) - One motion everywhere, and a landing screen that was the real problem
 
 The ask was simple: going deeper slides right to left, coming back slides the other way, everywhere.
