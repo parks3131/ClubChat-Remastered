@@ -13,6 +13,53 @@ Newest first.
 
 ---
 
+## 2026-08-03 (fifth) - Deleting what nobody will read again, and refusing to delete one thing
+
+The last of the four operational gaps, and the smallest: `notifications` and `outbox` both grew
+without limit and had no archival path (`PRD/17` debt 10). `runRetentionSweep` follows `runMediaGc`
+exactly - same nightly slot, same bounded batches, same absorbed failure - because a second shape
+for "housekeeping" would be a second thing to reason about for no gain.
+
+### The interesting decision was what NOT to delete
+
+Two windows for notifications rather than one, and the difference is the point: **deleting an
+unread row silently decrements somebody's badge for something they never saw.** Read rows go at 90
+days, unread at 180. Keeping unread forever was the other option and leaks - an abandoned account
+accumulates them with nothing that will ever clear it.
+
+The outbox rule is `processed_at IS NOT NULL`, which leaves **parked events untouched forever**.
+
+> A parked event is the only durable evidence that an effect never ran. Three of them sat parked
+> for the entire life of the Eboard space and nothing said so, which is why `effect-coverage.test.ts`
+> exists at all. A sweep that removed them on a timer would delete the record of an unfixed bug on
+> a schedule, and nothing downstream could notice it had.
+
+They are rare by construction, and if they ever stop being rare then the table growing is the least
+of the problem.
+
+### One parked event, found by looking
+
+Checking the sweep against real data turned one up: `media.uploaded`, five attempts, `vipspng:
+libpng read error`, parked since 2026-07-30. A corrupt PNG - bad input rather than a code defect,
+and the thumbnail derivation correctly gave up. It had been sitting there for four days with
+nothing that would ever have mentioned it.
+
+That exposed a loose end in the first version of this work: `parkedEventCount` was exported and
+nothing called it. **A count nobody reads is not monitoring**, so the sweep now reports it every
+hour, on its own line rather than folded into a row count - a sweep that deleted nothing still has
+to be able to say this, and a sweep that deleted thousands must not bury it.
+
+### Verified
+
+709 tests, 7 of them new, and the two that matter assert what the sweep **refuses** to remove: a
+parked event ten years old, and an unprocessed row still within its retry budget. A retention bug
+deletes something and leaves nothing behind to notice with, so the assertions that earn their place
+are the ones pointing the other way.
+
+Checked against the development database: 411 notifications, 657 outbox rows, one parked.
+
+---
+
 ## 2026-08-03 (fourth) - A delete that only reached the people already watching
 
 The third operational gap, and the only one of the four with a user-facing consequence: **a

@@ -196,10 +196,23 @@ export function startScheduler(
 
         // Housekeeping on its own, much slower cadence, inside the same loop so there is one
         // timer to reason about rather than two racing.
-        if (deps.media && Date.now() - lastHousekeeping > HOUSEKEEPING_INTERVAL_MS) {
+        if (Date.now() - lastHousekeeping > HOUSEKEEPING_INTERVAL_MS) {
           lastHousekeeping = Date.now();
-          const { runMediaGc } = await import('../media/derive.ts');
-          await runMediaGc(db, deps.media, (message, extra) => deps.log('info', message, extra));
+
+          /*
+           * The media sweep still needs a store; retention does not.
+           *
+           * The `deps.media` guard used to wrap the whole housekeeping branch, which would have
+           * meant a worker configured without object storage silently kept no retention either -
+           * two unrelated jobs sharing one condition because they happened to share a slot.
+           */
+          if (deps.media) {
+            const { runMediaGc } = await import('../media/derive.ts');
+            await runMediaGc(db, deps.media, (message, extra) => deps.log('info', message, extra));
+          }
+
+          const { runRetentionSweep } = await import('./retention.ts');
+          await runRetentionSweep(db, (message, extra) => deps.log('info', message, extra));
         }
       } catch (error) {
         // A failed tick must not kill the loop: the next one re-claims whatever was missed,
