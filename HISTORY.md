@@ -73,21 +73,35 @@ in front, it would key on something an unauthenticated caller controls, and an a
 exhaust a stranger's bucket by guessing their id. And `/health` is deliberately unlimited, because
 a rate-limited health check reports the service down for the one reason it is not.
 
-### The suite had been telling the truth and I called it a flake
+### The suite had been telling the truth, and then it was misdiagnosed twice
 
 Container startup timeouts had been failing a different test file on nearly every run all day. Each
-time the retry passed, so each time it was written off as contention and re-run. Adding a 26th
-container-starting file made it consistent: three files, every run.
+retry passed, so each was written off as contention and re-run. Adding a 26th container-starting
+file made it consistent: three files, every run.
 
-The default startup timeout is **10 seconds**, and the suite outgrew it. Raised to 120, the whole
-suite passes 26/26 - and the duration barely moved, from ~60s to 67s, because **a container that
-starts in twelve seconds under load was never slow; the timeout was calling it a failure.**
-Serialising the files, tried earlier, made it worse: each container then waits behind a full
-file's teardown.
+**The first diagnosis was that the suite had outgrown a 10 second startup timeout, and it was
+wrong.** `withStartupTimeout` was raised to 120s, the suite went green, and the number was written
+down as the cause. It is inert against that error: testcontainers binds ports in
+`inspectContainerUntilPortsExposed`, whose timeout is a **hardcoded 10 second default parameter**
+never passed from the caller. `withStartupTimeout` governs the wait strategy that runs afterwards -
+a different clock entirely. The suite went green because load eased.
 
-The lesson is the habit rather than the number. Re-running until green is how a suite stops being
-believed, and the interesting detail - a *different* file each time - was visible from the first
-occurrence and read as noise.
+**The second wrong claim shipped in the same breath**: that serialising the files had made it
+worse. `fileParallelism: false` was already in `vitest.config.ts` and had been for a long time, so
+the experiment changed nothing and the observation was noise.
+
+Both were found only by going back to check whether the fix was even being applied - reading the
+library rather than the passing suite.
+
+The measured cause: **Docker takes ~4.3 seconds to bind a port for a single container on this
+machine with nothing else running**, against a hardcoded 10 second ceiling, 27 times per run, on a
+machine also hosting the dev stack. Thin margin, crossed occasionally. The standing fix is one
+container for the suite instead of one per file, recorded in `PRD/17`.
+
+The lesson is not the number, and it is not even the habit of re-running until green, though that
+is real. It is that **a green suite is not evidence that the thing you changed is what made it
+green.** Two plausible causes were stated confidently, neither was tested against the library's
+actual behaviour, and both were wrong. The failing message named the function the whole time.
 
 ### Verified
 

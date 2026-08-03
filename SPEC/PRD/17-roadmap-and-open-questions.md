@@ -81,6 +81,16 @@ designed in.
     watermark rather than rows *added* - and it is a design change to the sync contract rather
     than a patch, which is why it is recorded here rather than fixed in passing. Note the shape:
     every automated check passes, because each half is individually correct.
+15. **The test suite starts one Postgres container per file**, twenty-seven of them per run, and
+    intermittently fails one with `Timed out after 10000ms while waiting for container ports to be
+    bound to the host`. **Measured on 2026-08-03:** Docker binds a port in ~4.3s on this machine
+    with nothing else running, against a ceiling that is a **hardcoded default parameter** inside
+    `inspectContainerUntilPortsExposed` - not reachable through `withStartupTimeout`, which
+    configures the wait strategy that runs afterwards. `fileParallelism` is already false, so this
+    is not test concurrency. The fix is **one container for the suite** with a database per file,
+    which removes twenty-six container starts and the flake with them. Until then a failing run is
+    re-run, which is a habit worth being uneasy about - see the 2026-08-03 history entry for two
+    confident misdiagnoses of exactly this.
 
 ### Verification owed
 

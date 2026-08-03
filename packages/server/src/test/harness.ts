@@ -36,18 +36,24 @@ export type TestDb = {
 };
 
 /**
- * How long to wait for a container to bind its port.
+ * How long to wait for the container's WAIT STRATEGY, which is not the timeout that was failing.
  *
- * > **The default is 10 seconds and the suite outgrew it.** Two dozen test files each start their
- * > own Postgres, vitest runs them in parallel, and on a machine also hosting the development
- * > stack they contend for the same Docker daemon. The result was
- * > `Timed out after 10000ms while waiting for container ports to be bound`, on a **different
- * > file each run**, passing on a retry - the signature of contention rather than of a defect.
+ * > **Recorded because it was diagnosed wrong first.** The suite kept failing with
+ * > `Timed out after 10000ms while waiting for container ports to be bound to the host`, on a
+ * > different file each run. Raising this looked like the fix and is inert against that error:
+ * > testcontainers binds ports in `inspectContainerUntilPortsExposed`, whose timeout is a
+ * > **hardcoded 10 seconds** taken from a default parameter and never passed from here.
+ * > `withStartupTimeout` governs the wait strategy that runs afterwards - a different clock.
  *
- * Raised rather than worked around, because the alternatives are worse: serialising the files
- * made it *more* frequent (each container then waits behind a full file's teardown), and retrying
- * until green trains everyone to ignore a red suite. A slow start is not a failure, and this
- * timeout is the only thing that was calling it one.
+ * The real cause is measured rather than assumed: on this machine Docker takes **~4.3 seconds**
+ * to bind a port for a single container on an otherwise quiet system, against that 10 second
+ * ceiling. Two dozen container starts per run, on a machine also hosting the dev stack, and some
+ * of them cross it. `fileParallelism: false` was already set, so this was never about test
+ * concurrency either.
+ *
+ * This value is kept because bounding the wait strategy is still correct; it is simply not the
+ * flake. See `SPEC/PRD/17` for the standing fix - one container for the suite instead of one per
+ * file.
  */
 const CONTAINER_STARTUP_TIMEOUT_MS = 120_000;
 
