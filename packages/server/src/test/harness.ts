@@ -35,10 +35,26 @@ export type TestDb = {
   stop: () => Promise<void>;
 };
 
+/**
+ * How long to wait for a container to bind its port.
+ *
+ * > **The default is 10 seconds and the suite outgrew it.** Two dozen test files each start their
+ * > own Postgres, vitest runs them in parallel, and on a machine also hosting the development
+ * > stack they contend for the same Docker daemon. The result was
+ * > `Timed out after 10000ms while waiting for container ports to be bound`, on a **different
+ * > file each run**, passing on a retry - the signature of contention rather than of a defect.
+ *
+ * Raised rather than worked around, because the alternatives are worse: serialising the files
+ * made it *more* frequent (each container then waits behind a full file's teardown), and retrying
+ * until green trains everyone to ignore a red suite. A slow start is not a failure, and this
+ * timeout is the only thing that was calling it one.
+ */
+const CONTAINER_STARTUP_TIMEOUT_MS = 120_000;
+
 export async function startTestDb(): Promise<TestDb> {
-  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer(
-    'postgres:17-alpine',
-  ).start();
+  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer('postgres:17-alpine')
+    .withStartupTimeout(CONTAINER_STARTUP_TIMEOUT_MS)
+    .start();
 
   const pool = createPool(container.getConnectionUri());
   const db = createDb(pool);
@@ -70,6 +86,8 @@ export async function startTestRedis(): Promise<TestRedis> {
   const container: StartedTestContainer = await new GenericContainer('redis:8-alpine')
     .withExposedPorts(6379)
     .withWaitStrategy(Wait.forLogMessage(/Ready to accept connections/))
+    // Same contention, same reasoning as `CONTAINER_STARTUP_TIMEOUT_MS` above.
+    .withStartupTimeout(CONTAINER_STARTUP_TIMEOUT_MS)
     .start();
 
   return {

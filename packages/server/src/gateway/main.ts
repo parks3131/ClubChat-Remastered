@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import pino from 'pino';
 import { createAuth } from '../auth.ts';
 import { loadConfig } from '../config.ts';
+import { initMonitoring } from '../monitoring.ts';
 import { createDb, createPool } from '../db/client.ts';
 import { createRateLimiter, createRedis } from '../bus/redis.ts';
 import { createGateway } from './server.ts';
@@ -31,14 +32,23 @@ const redis = createRedis(config.REDIS_URL);
 // its own connection or every publish and registry write on the shared one would fail.
 const subscriber = createRedis(config.REDIS_URL);
 
+const monitor = initMonitoring(config, 'gateway', logger);
+
 const rateLimiter = createRateLimiter(redis, {
   burst: config.SEND_RATE_BURST,
   refillPerSec: config.SEND_RATE_REFILL_PER_SEC,
-  onFailOpen: (error) =>
+  onFailOpen: (error) => {
     logger.error(
       { error: error instanceof Error ? error.message : String(error) },
       'rate limiter failed OPEN - Redis unreachable',
-    ),
+    );
+    /*
+     * Failing open is the right call - a send limiter that refuses everything when Redis blinks
+     * would take chat down to protect it from spam. But "open" means UNLIMITED sends, so this is
+     * a security control silently switching itself off, and it must never be only a log line.
+     */
+    monitor.capture(error, 'gateway.rateLimiter.failOpen');
+  },
 });
 
 const gateway = createGateway(
@@ -49,6 +59,7 @@ const gateway = createGateway(
     subscriber,
     rateLimiter,
     gatewayId,
+    monitor,
     log: (level, message, extra) => logger[level](extra ?? {}, message),
   },
   { port: config.GATEWAY_PORT },
@@ -61,6 +72,7 @@ const shutdown = async (signal: string) => {
     redis.quit().catch(() => undefined),
     subscriber.quit().catch(() => undefined),
   ]);
+  await monitor.flush();
   await pool.end();
   process.exit(0);
 };

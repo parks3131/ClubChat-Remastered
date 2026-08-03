@@ -7,9 +7,12 @@
  * a refactor. See SPEC/TECH/00-overview.md.
  */
 
+import { pino } from 'pino';
 import { createAuth } from '../auth.ts';
 import { loadConfig } from '../config.ts';
 import { createDb, createPool } from '../db/client.ts';
+import { createKeyedRateLimiter, createRedis } from '../bus/redis.ts';
+import { initMonitoring } from '../monitoring.ts';
 import { buildApp } from './app.ts';
 import { S3MediaStore } from '../media/store.ts';
 
@@ -38,11 +41,34 @@ if (process.env['NODE_ENV'] !== 'production') {
     .catch((error) => console.warn('[media] could not ensure buckets', error));
 }
 
-const app = buildApp({ db, auth, config, mediaStore });
+/*
+ * One logger, given to both Fastify and the monitor.
+ *
+ * Built here rather than inside `buildApp` because the monitor needs it too, and two loggers
+ * would mean a captured error and the request that caused it printed in two different shapes.
+ */
+const logger = pino({ level: config.LOG_LEVEL });
+const monitor = initMonitoring(config, 'api', logger);
+
+/*
+ * Its own Redis connection, not the gateway's: these are separate processes. Failing open is
+ * reported rather than silent - an unreachable Redis means the API is briefly unlimited, and that
+ * is a window somebody should know about rather than infer.
+ */
+const redis = createRedis(config.REDIS_URL);
+const limiter = createKeyedRateLimiter(redis, {
+  onFailOpen: (error) => monitor.capture(error, 'api.rateLimiter.failOpen'),
+});
+
+const app = buildApp({ db, auth, config, mediaStore, monitor, limiter, logger });
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, 'shutting down');
   await app.close();
+  // Reports leave BEFORE the process does. Whatever knocked it over is the thing most worth
+  // seeing, and also the thing most likely to be still sitting in the queue.
+  await monitor.flush();
+  await redis.quit().catch(() => undefined);
   await pool.end();
   process.exit(0);
 };

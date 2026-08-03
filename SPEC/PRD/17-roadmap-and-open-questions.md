@@ -20,7 +20,7 @@
 | **A user interface for most of the product** | Races, polls, calendar, routines, news and Eboard are unreachable from the **app**, though no longer from the API | **Half closed 2026-07-30.** Phase 3.75a built the HTTP surface: 45 routes became 111, with the ~20 missing queries and the six capabilities that had no function of any kind. What is left is Phase 3.75b, the screens - and it is now ordinary client work rather than a screen with nothing to call |
 | **Legal review** of Privacy Policy and Terms | The shipped documents are an in-house first draft, explicitly not legal advice | Must happen before any public release |
 | **iOS distribution** | Blocked on paid developer-program enrolment | Not a code problem |
-| **Error monitoring** | A crash or failed load in real use is **invisible** | **Still true of the remaster.** [Stack and hosting](../TECH/15-stack-and-hosting.md) says Sentry "in the error path from the first commit"; there is no Sentry anywhere. Phase 4 |
+| ~~**Error monitoring**~~ | | **Done 2026-08-03, server side.** `monitoring.ts` reports from all three processes: 5xx on the API through a `setErrorHandler` that did not previously exist, parked outbox events, failed drain ticks, socket frames, and the rate limiter failing open. Reports to the process logger when `SENTRY_DSN` is absent, so the paths run in development and CI rather than first executing in production. **The mobile client is not covered** - a JS crash on the phone still reaches nobody, and closing that needs `@sentry/react-native` and a native rebuild |
 
 ### Important, not blocking
 
@@ -60,10 +60,15 @@ designed in.
 9. ~~**File size and MIME-type limits.**~~ **Done** - allowlist and cap enforced at intent and **re-verified against the real object** at complete, because a presigned URL cannot police bytes the client chose to send anyway.
 10. **Notification retention.** The table grows unbounded, with no archival path. **Still true.** Phase 4, along with pruning the outbox after 7 days.
 11. ~~**Localisation.**~~ **Designed away in Phase 1** - notifications store `type` plus structured `params` and render at read time (ADR-0013), so a second locale is another implementation of one function rather than a migration over every historical row. The English renderer is the only one that exists.
-12. **Rate limiting beyond messages** - reports, reactions, and join requests are still
-    unthrottled. **Still true**, and DMs add a second dimension: a per-sender,
-    per-new-conversation limit, because one sender opening many threads stays under any
-    per-sender bucket. Phase 4.
+12. ~~**Rate limiting beyond messages**~~ **Done 2026-08-03.** The entry understated it: it was not
+    only reports, reactions and join requests, it was every route except message send. A default
+    bucket now applies on the authenticated scope - the same structural place as the session hook,
+    so a new route is limited without anybody remembering - with tighter named buckets on media
+    intent, DM creation, join requests, invite redeem and reports. Sign-in and sign-up are keyed
+    per IP, being the routes reachable without an account. The per-new-conversation dimension this
+    entry called out is `POST /dm/threads` at 10 burst, refilling at one per twenty seconds.
+    **Per-conversation and per-club preferences remain open**, as does anything finer than a
+    per-user bucket.
 13. **Backups and version parity** between development and production data stores. **Still open** - there is no production yet. Migrations already replay cleanly from zero, which is half of it.
 14. **A `msg.update` missed while disconnected is never recovered.** Found on 2026-08-01 while
     verifying replies: `syncChannel` pulls strictly ABOVE the local max, so a row the client has

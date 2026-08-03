@@ -108,6 +108,24 @@ export async function drainOnce(db: Db, deps: EffectDeps): Promise<DrainResult> 
             attempts: nextAttempts,
             lastError: message,
           });
+          /*
+           * A parked event is the worst failure this system has and was the quietest.
+           *
+           * > It means an effect will now NEVER run: a notification nobody receives, a card that
+           * > never appears. `effect-coverage.test.ts` exists because three event types were
+           * > parked for the entire life of the Eboard space and nothing said so - the retry
+           * > path absorbs a handler failure into a column, which is right for a transient fault
+           * > and indistinguishable from a permanent one after five attempts.
+           *
+           * Captured only at the park, not on each retry: a flaky push that succeeds on attempt
+           * two is not an incident, and reporting every attempt would bury the one that matters.
+           */
+          deps.monitor?.capture(error, 'worker.outbox.parked', {
+            eventId: event.id,
+            eventType: event.eventType,
+            partitionKey: event.partitionKey,
+            attempts: nextAttempts,
+          });
         } else {
           result.failed += 1;
           deps.log('warn', 'outbox event failed, will retry', {
@@ -152,6 +170,9 @@ export function startDrainLoop(
         deps.log('error', 'drain tick failed', {
           error: error instanceof Error ? error.message : String(error),
         });
+        // Surviving the tick is not the same as the tick being fine. A drain that fails every
+        // time delivers nothing and looks, from outside, exactly like an empty outbox.
+        deps.monitor?.capture(error, 'worker.drain.tick');
       }
       await new Promise((resolve) => setTimeout(resolve, interval));
     }

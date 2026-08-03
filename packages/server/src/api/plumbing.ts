@@ -12,13 +12,15 @@
  * thing this avoids.
  */
 
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from 'fastify';
 import type { Auth } from '../auth.ts';
 import type { Config } from '../config.ts';
 import type { Db } from '../db/client.ts';
 import { getChannelRef } from '../domain/reads.ts';
 import type { MediaConfig } from '../media/pipeline.ts';
 import type { MediaStore } from '../media/store.ts';
+import type { Monitor } from '../monitoring.ts';
+import type { KeyedRateLimiter } from '../bus/redis.ts';
 import type { AccessContext } from '../policy/context.ts';
 import { isChannelMember, type ChannelRef } from '../policy/predicates.ts';
 
@@ -35,6 +37,26 @@ export type AppDeps = {
   config: Config;
   /** Injected so tests can use the in-memory fake and production uses S3. */
   mediaStore: MediaStore;
+  /**
+   * Where a 5xx goes. Injected like `mediaStore` and for the same reason: tests pass
+   * `silentMonitor()` and assert behaviour, production passes the real one.
+   */
+  monitor: Monitor;
+  /**
+   * How often one caller may hit the API.
+   *
+   * Injected like `mediaStore`: production passes a Redis-backed limiter, tests pass one that
+   * always allows so a suite is never throttled by its own speed.
+   */
+  limiter: KeyedRateLimiter;
+  /**
+   * The entrypoint's logger, when there is one.
+   *
+   * Shared with the monitor so a captured error and the request that caused it print in the same
+   * shape. Optional because a test does not need to care - Fastify builds its own from
+   * `LOG_LEVEL` when this is absent.
+   */
+  logger?: FastifyBaseLogger;
 };
 
 /**

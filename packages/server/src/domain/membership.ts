@@ -13,6 +13,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { ClubRole, JoinPolicy } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
+import { isUniqueViolation } from '../db/errors.ts';
 import { isoUtc } from '../db/sql-helpers.ts';
 import {
   clubJoinRequests,
@@ -108,10 +109,18 @@ export async function joinClub(
     });
 
     return { ok: true, status: 'requested' };
-  } catch {
-    // Hit the one-pending partial index. Re-requesting while a decision is outstanding is
-    // a no-op rather than an error - the UI shows "Requested" either way.
-    return { ok: false, code: 'already_pending' };
+  } catch (error) {
+    /*
+     * ONLY the one-pending partial index. Re-requesting while a decision is outstanding is a
+     * no-op rather than an error - the UI shows "Requested" either way.
+     *
+     * > **This caught everything**, so a lost connection or a broken constraint was reported to
+     * > the caller as "you have already asked" - a plausible, wrong answer that no monitor could
+     * > see, because nothing failed as far as the API was concerned. Anything that is not the
+     * > duplicate now propagates and becomes a 500 the error handler reports.
+     */
+    if (isUniqueViolation(error)) return { ok: false, code: 'already_pending' };
+    throw error;
   }
 }
 

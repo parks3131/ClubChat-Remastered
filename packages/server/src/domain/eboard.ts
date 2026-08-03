@@ -18,6 +18,7 @@
 
 import { eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
+import { isUniqueViolation } from '../db/errors.ts';
 import { isoUtc } from '../db/sql-helpers.ts';
 import { eboardChannels, eboardJoinRequests, eboardMemberships, outbox } from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
@@ -76,9 +77,11 @@ export async function requestEboardAccess(
       payload: { clubId: eboard.clubId, eboardId, userId: ctx.userId },
     });
     return { ok: true, status: 'requested' };
-  } catch {
-    // Hit the pending partial unique index.
-    return { ok: false, code: 'already_pending' };
+  } catch (error) {
+    // The pending partial unique index, and nothing else - see `requestToJoinClub` for why a
+    // bare catch here answered "already pending" to failures that were not that.
+    if (isUniqueViolation(error)) return { ok: false, code: 'already_pending' };
+    throw error;
   }
 }
 

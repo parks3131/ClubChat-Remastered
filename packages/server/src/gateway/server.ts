@@ -27,6 +27,7 @@ import {
   type ServerFrame,
 } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
+import type { Monitor } from '../monitoring.ts';
 import type { Auth } from '../auth.ts';
 import { resolveSessionFromToken } from '../auth.ts';
 import { ChannelGoneError } from '../domain/append-message.ts';
@@ -73,6 +74,13 @@ export type GatewayDeps = {
   rateLimiter: RateLimiter;
   gatewayId: string;
   log: (level: 'info' | 'warn' | 'error', message: string, extra?: unknown) => void;
+  /**
+   * Where a failed frame goes, beyond the log.
+   *
+   * Optional so the gateway's tests construct deps unchanged. A socket failure is the one class
+   * of server error with no HTTP status to carry it: the client sees a frame that never arrives.
+   */
+  monitor?: Monitor | undefined;
 };
 
 export type Gateway = {
@@ -516,6 +524,10 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
             frameType: frame.t,
             error: error instanceof Error ? error.message : String(error),
           });
+          // The socket stays open and the client is told nothing, which is deliberate - one bad
+          // frame must not drop a conversation. It does mean the failure is invisible from both
+          // ends unless it is reported from here.
+          deps.monitor?.capture(error, 'gateway.frame', { frameType: frame.t });
         }
       })();
     });

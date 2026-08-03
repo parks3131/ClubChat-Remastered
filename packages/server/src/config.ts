@@ -22,6 +22,24 @@ const Env = z.object({
   SEND_RATE_REFILL_PER_SEC: z.coerce.number().positive().default(1),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
+  // --- Error monitoring ---
+  /**
+   * Where captured errors are sent, or absent.
+   *
+   * **Optional on purpose.** Development and CI run without it and still exercise every capture
+   * path, because `initMonitoring` logs locally either way - see `monitoring.ts`. Making this
+   * required would mean the reporting code only ever ran in production, which is the one place
+   * nobody is watching it work.
+   */
+  SENTRY_DSN: z.string().optional(),
+  SENTRY_ENVIRONMENT: z.string().default('development'),
+  /**
+   * The commit this build came from, so a stack trace maps to a source.
+   *
+   * Set by the deploy, not by hand. Absent locally, where the source is on disk anyway.
+   */
+  SENTRY_RELEASE: z.string().optional(),
+
   // --- Object storage ---
   S3_ENDPOINT: z.string().url(),
   S3_REGION: z.string().default('auto'),

@@ -175,6 +175,47 @@ export function createRateLimiter(
   };
 }
 
+/**
+ * A limiter whose key and bucket vary per call, for the HTTP API.
+ *
+ * Separate from `createRateLimiter` because the questions differ: the gateway asks "may this user
+ * send another message", one bucket forever, and the API asks "may this caller do this particular
+ * thing", with a different allowance per route. Same script, deliberately - the compare-and-set
+ * that makes a bucket safe under concurrency should exist once.
+ *
+ * **Fails OPEN, like the gateway's, and for the same reason.** Redis holds no source of truth
+ * here. A Redis outage that took the whole API down would convert a cache failure into an outage,
+ * which is a worse trade than briefly unlimited requests - and `onFailOpen` reports it, so the
+ * window is visible rather than assumed.
+ */
+export type KeyedRateLimiter = {
+  tryConsume: (key: string, bucket: { burst: number; refillPerSec: number }) => Promise<boolean>;
+};
+
+export function createKeyedRateLimiter(
+  redis: Redis,
+  opts: { onFailOpen?: (error: unknown) => void } = {},
+): KeyedRateLimiter {
+  return {
+    async tryConsume(key, bucket): Promise<boolean> {
+      try {
+        const allowed = await redis.eval(
+          TOKEN_BUCKET_SCRIPT,
+          1,
+          key,
+          String(bucket.burst),
+          String(bucket.refillPerSec),
+          String(Date.now()),
+        );
+        return allowed === 1;
+      } catch (error) {
+        opts.onFailOpen?.(error);
+        return true;
+      }
+    },
+  };
+}
+
 /** Publish an envelope to a channel's topic. Gateways forward it to their sockets. */
 export async function publishToChannel(
   redis: Redis,

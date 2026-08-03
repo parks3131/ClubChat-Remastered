@@ -16,12 +16,18 @@
  * added by forgetting something - it can only be added by editing this file.
  */
 
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, {
+  type FastifyError,
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from 'fastify';
 import fastifyCors from '@fastify/cors';
 import { fromNodeHeaders } from 'better-auth/node';
 import { loadAccessContext } from '../policy/context.ts';
 import { isSessionUsable } from '../policy/predicates.ts';
 import { isUuid, type AppDeps } from './plumbing.ts';
+import { AUTH_BUCKET, bucketFor, limitKey } from './rate-limit.ts';
 import { readIdentity } from '../domain/account.ts';
 import { registerAccountRoutes } from './routes/account.ts';
 import { registerCalendarRoutes } from './routes/calendar.ts';
@@ -39,9 +45,21 @@ import { registerRaceRoutes } from './routes/races.ts';
 export type { AppDeps };
 
 export function buildApp(deps: AppDeps): FastifyInstance {
-  const app = Fastify({
-    logger: { level: deps.config.LOG_LEVEL },
-  });
+  const app = Fastify(
+    /*
+     * The entrypoint's logger when it has one, so captured errors and request logs share a
+     * stream. Tests build without it and get their own at the configured level.
+     *
+     * **`loggerInstance` and `logger` are different options and not interchangeable.** Fastify 5
+     * split them: `logger` takes CONFIGURATION, and passing a built pino instance to it fails at
+     * construction with `FST_ERR_LOG_INVALID_LOGGER_CONFIG`. Worth the comment because the type
+     * error is not obvious and every test builds down the other branch, so the suite stays green
+     * while the server refuses to start.
+     */
+    deps.logger === undefined
+      ? { logger: { level: deps.config.LOG_LEVEL } }
+      : { loggerInstance: deps.logger },
+  );
 
   app.register(fastifyCors, {
     origin: deps.config.CLIENT_ORIGIN,
@@ -50,11 +68,37 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     credentials: true,
   });
 
+  /**
+   * Refuse, in the one shape every limited route uses.
+   *
+   * `Retry-After` is not decoration: without it a client's only strategy is to try again
+   * immediately, which is what turns a limit into a hot loop against the thing it protects.
+   */
+  const refuseTooMany = (reply: FastifyReply, bucket: { refillPerSec: number }) =>
+    reply
+      .code(429)
+      .header('Retry-After', String(Math.max(1, Math.ceil(1 / bucket.refillPerSec))))
+      .send({ error: 'rate_limited' });
+
   // Mounted AFTER cors, which the better-auth Fastify integration requires for
   // header handling to work.
   app.route({
     method: ['GET', 'POST'],
     url: '/api/auth/*',
+    /**
+     * Sign-in and sign-up, limited **per IP**.
+     *
+     * The only limit in the API that is a security control rather than an abuse ceiling: there is
+     * no session yet, so there is no user to key on, and unlimited attempts here is unlimited
+     * credential guessing. `request.ip` honours `trustProxy` when that is configured; behind a
+     * proxy without it, every caller shares one bucket, which fails safe (too strict) rather than
+     * open.
+     */
+    async preHandler(request, reply) {
+      if (!(await deps.limiter.tryConsume(`rate:http:auth:${request.ip}`, AUTH_BUCKET))) {
+        return refuseTooMany(reply, AUTH_BUCKET);
+      }
+    },
     async handler(request, reply) {
       const url = new URL(request.url, deps.config.BETTER_AUTH_URL);
       const req = new Request(url.toString(), {
@@ -70,6 +114,38 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   app.get('/health', async () => ({ ok: true }));
+
+  /**
+   * Every unhandled failure in a route, in one place.
+   *
+   * > **There was no error handler at all.** Fastify's default logged through pino and answered
+   * > 500, which is correct behaviour and reaches nobody: the failure existed only in a log file
+   * > on a machine no one reads. This is the hook `SPEC/TECH/15` was describing.
+   *
+   * Two rules it holds:
+   *
+   *  1. **A 4xx is not an incident.** A validation failure or a refusal is the API working. Only
+   *     5xx is captured, or the signal drowns in ordinary client mistakes.
+   *  2. **The caller learns nothing new.** The response is the same opaque 500 it always was -
+   *     the detail goes to the monitor, not over the wire.
+   */
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    const status = error.statusCode ?? 500;
+
+    if (status >= 500) {
+      deps.monitor.capture(error, 'api.request', {
+        method: request.method,
+        // The route PATTERN, not the URL: `/clubs/:id/polls` groups, `/clubs/<uuid>/polls`
+        // makes a distinct issue per club and buries the fact that one route is failing.
+        route: request.routeOptions?.url ?? request.url,
+        userId: request.userId ?? null,
+      });
+    } else {
+      request.log.info({ err: error, status }, 'request refused');
+    }
+
+    return reply.code(status).send(status >= 500 ? { error: 'internal' } : { error: error.message });
+  });
 
   /**
    * Resolve the caller, then load their access context once for the request.
@@ -102,6 +178,32 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     protectedRoutes.addHook('preHandler', async (request, reply) => {
       if (!(await authenticate(request))) {
         return reply.code(401).send({ error: 'unauthenticated' });
+      }
+    });
+
+    /**
+     * Every authenticated route, limited per user.
+     *
+     * > **On the scope, so a route cannot opt out by being forgotten.** That is the same structural
+     * > argument the session hook above is built on, and it is the whole reason the default exists:
+     * > naming the routes that need limiting means the next route added is unlimited until somebody
+     * > remembers, which is precisely how the API came to have 123 unthrottled routes.
+     *
+     * AFTER authentication, because the key is the user id. That ordering also means an
+     * unauthenticated caller is refused by the 401 rather than spending somebody's tokens - a
+     * limiter in front of the session check would let an attacker exhaust a stranger's bucket by
+     * guessing their id.
+     */
+    protectedRoutes.addHook('preHandler', async (request, reply) => {
+      const pattern = request.routeOptions?.url;
+      const bucket = bucketFor(request.method, pattern);
+
+      if (!(await deps.limiter.tryConsume(limitKey(request.userId!, request.method, pattern), bucket))) {
+        request.log.warn(
+          { userId: request.userId, route: pattern, method: request.method },
+          'rate limited',
+        );
+        return refuseTooMany(reply, bucket);
       }
     });
 

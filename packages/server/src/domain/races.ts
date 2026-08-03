@@ -136,8 +136,11 @@ export async function requestRaceAccess(
       payload: { clubId: race.clubId, raceId, userId: ctx.userId },
     });
     return { ok: true, status: 'requested' };
-  } catch {
-    return { ok: false, code: 'already_pending' };
+  } catch (error) {
+    // The pending partial unique index, and nothing else - see `requestToJoinClub`. This module
+    // already narrows the same way at `already_member` below; the two now agree.
+    if (isUniqueViolation(error)) return { ok: false, code: 'already_pending' };
+    throw error;
   }
 }
 

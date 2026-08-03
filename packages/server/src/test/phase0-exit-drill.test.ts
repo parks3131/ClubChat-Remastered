@@ -28,6 +28,8 @@ import { createDb, createPool, type Db } from '../db/client.ts';
 import { channelTopic, createRateLimiter, createRedis } from '../bus/redis.ts';
 import { RecordingPushSender } from '../push/sender.ts';
 import { FakeMediaStore } from '../media/store.ts';
+import { silentMonitor } from '../monitoring.ts';
+import { allowAll } from './fake-limiter.ts';
 import { buildApp } from '../api/app.ts';
 import { createGateway, type Gateway } from '../gateway/server.ts';
 import { addMember } from '../domain/membership.ts';
@@ -131,7 +133,7 @@ beforeAll(async () => {
   auth = createAuth(db, { secret: 'test-secret-not-a-real-one', baseURL: config.BETTER_AUTH_URL });
 
   // The drill asserts nothing about media; the fake keeps it off the network.
-  app = buildApp({ db, auth, config, mediaStore: new FakeMediaStore() });
+  app = buildApp({ db, auth, config, mediaStore: new FakeMediaStore(), monitor: silentMonitor(), limiter: allowAll() });
   await app.listen({ port: 0, host: '127.0.0.1' });
   const address = app.server.address();
   if (typeof address === 'string' || address === null) throw new Error('no api address');

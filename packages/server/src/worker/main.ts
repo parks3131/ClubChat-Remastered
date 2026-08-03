@@ -4,6 +4,7 @@
 
 import pino from 'pino';
 import { loadConfig } from '../config.ts';
+import { initMonitoring } from '../monitoring.ts';
 import { createDb, createPool } from '../db/client.ts';
 import { createRedis } from '../bus/redis.ts';
 import { startDrainLoop } from './drain.ts';
@@ -21,9 +22,12 @@ const redis = createRedis(config.REDIS_URL);
 
 const controller = new AbortController();
 
+const monitor = initMonitoring(config, 'worker', logger);
+
 const deps: EffectDeps = {
   db,
   redis,
+  monitor,
   // One adapter, three platforms: Expo Push fronts APNs, FCM and web push.
   push: new ExpoPushSender(),
   media: new S3MediaStore({
@@ -39,9 +43,25 @@ const shutdown = async (signal: string) => {
   logger.info({ signal }, 'shutting down');
   controller.abort();
   await redis.quit().catch(() => undefined);
+  await monitor.flush();
   await pool.end();
   process.exit(0);
 };
+
+/*
+ * The two failures that kill a Node process outright.
+ *
+ * Registered on the WORKER specifically because it is the one role with no request/response cycle
+ * to surface a fault through: an API 500 at least reaches a caller, and a dead socket at least
+ * disconnects somebody. A worker that throws asynchronously just stops doing effects, silently.
+ */
+process.on('uncaughtException', (error) => {
+  monitor.capture(error, 'worker.uncaughtException');
+  void monitor.flush(1000).then(() => process.exit(1));
+});
+process.on('unhandledRejection', (reason) => {
+  monitor.capture(reason, 'worker.unhandledRejection');
+});
 
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));

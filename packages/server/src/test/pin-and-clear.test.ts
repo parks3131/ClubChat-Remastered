@@ -28,6 +28,8 @@ import { getChannelRef } from '../domain/reads.ts';
 import { sendMessage, setPinned } from '../domain/send-message.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { FakeMediaStore } from '../media/store.ts';
+import { silentMonitor } from '../monitoring.ts';
+import { allowAll } from './fake-limiter.ts';
 import { startTestDb, type TestDb } from './harness.ts';
 
 let h: TestDb;
@@ -128,7 +130,7 @@ beforeAll(async () => {
     secret: 'test-secret-not-a-real-one',
     baseURL: config.BETTER_AUTH_URL,
   });
-  app = buildApp({ db: h.db, auth, config, mediaStore: new FakeMediaStore() });
+  app = buildApp({ db: h.db, auth, config, mediaStore: new FakeMediaStore(), monitor: silentMonitor(), limiter: allowAll() });
   await app.ready();
 }, 120_000);
 

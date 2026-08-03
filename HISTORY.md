@@ -13,6 +13,98 @@ Newest first.
 
 ---
 
+## 2026-08-03 (last, again) - Making failure visible, and finding out the suite had been lying about why it was red
+
+The MVP feature set is in, so the question turned to what the architecture is actually missing.
+Reading the plan against the code gave a short answer worth recording: **the structural decisions
+held, and every real gap is operational.**
+
+Authorization is function calls with a matrix asserted cell by cell; the channel log has its
+monotonic `seq`; the outbox is the transactional boundary. Those were the whole point of the
+remaster and they are intact. 123 routes in 2,374 lines over 8,946 lines of domain is thin
+transport and thick domain, which is the healthy direction. The skipped Kafka phase is a correct
+call at ~50 writes/sec, not debt.
+
+What was missing was everything about running it.
+
+### Nothing was watching
+
+`TECH/15` asked for error monitoring "in the error path from the first commit" and there was none,
+which `PRD/17` listed under blocking a release: **a crash or failed load in real use was
+invisible.** Worse than absent - the API had no `setErrorHandler` at all, so a 500 was logged by
+pino and reached nobody.
+
+`monitoring.ts` now holds three properties, each a way this is usually built wrong:
+
+ 1. **Reporting cannot make an outage worse.** `capture` never throws, and the local log is written
+    BEFORE the remote send is attempted - the copy that cannot fail happens first.
+ 2. **No DSN is a supported state, not a degraded one.** Without one it still reports, to the
+    process logger. Every capture path therefore runs on every dev run and in CI; a no-op stub
+    would mean these lines first executed for real in production, which is the one place nobody is
+    watching them.
+ 3. **Reports name their commit**, or a stack trace is a puzzle against unknown source.
+
+Wired where failures had nowhere to go: 5xx only on the API (a 4xx is the API working, and would
+drown the signal); the outbox **park**, which means an effect will now never run; the drain tick,
+because a drain failing every time looks exactly like an empty outbox; socket frames, which have no
+status code to carry a failure; and the gateway's rate limiter failing open - correct behaviour,
+but "open" means unlimited sends, and a security control switching itself off must never be only a
+log line.
+
+### The catch that answered a plausible lie
+
+Three join-request commands caught **everything** and returned `already_pending`. A lost connection
+was reported to the member as "you have already asked": a believable, wrong answer that no monitor
+could ever have seen, because as far as the API was concerned nothing failed. They narrow to
+`isUniqueViolation` now - the helper this codebase already had, and which `races.ts` was already
+using correctly two hundred lines away from one of them.
+
+### One default beats twelve exceptions
+
+`SEND_RATE_*` covered the gateway. The other 123 routes were unlimited, including the ones that
+mint presigned S3 URLs and the ones that put a row in a stranger's inbox.
+
+The shape that matters is **a default on the scope plus named overrides**, not a list of limited
+routes: the same structural argument the session hook is built on. A route added next month is
+limited without anybody remembering, and forgetting is precisely how the gap opened.
+
+Two orderings are load-bearing and both are tested. The limiter runs **after** authentication -
+in front, it would key on something an unauthenticated caller controls, and an attacker could
+exhaust a stranger's bucket by guessing their id. And `/health` is deliberately unlimited, because
+a rate-limited health check reports the service down for the one reason it is not.
+
+### The suite had been telling the truth and I called it a flake
+
+Container startup timeouts had been failing a different test file on nearly every run all day. Each
+time the retry passed, so each time it was written off as contention and re-run. Adding a 26th
+container-starting file made it consistent: three files, every run.
+
+The default startup timeout is **10 seconds**, and the suite outgrew it. Raised to 120, the whole
+suite passes 26/26 - and the duration barely moved, from ~60s to 67s, because **a container that
+starts in twelve seconds under load was never slow; the timeout was calling it a failure.**
+Serialising the files, tried earlier, made it worse: each container then waits behind a full
+file's teardown.
+
+The lesson is the habit rather than the number. Re-running until green is how a suite stops being
+believed, and the interesting detail - a *different* file each time - was visible from the first
+occurrence and read as noise.
+
+### Verified
+
+810 tests, typecheck, `lint:emdash`, `check:runtime`. 21 new: 5 pinning the reporter contract,
+12 pinning limit policy as pure arithmetic, and 4 proving the hook is actually installed - a policy
+nothing consults is indistinguishable from one that always allows.
+
+Exercised against the running server rather than only in tests: eleven sign-in attempts, nine 401s
+then `429` with `Retry-After: 5`.
+
+Caught by the founder's `--watch` restart and not by the suite: the pino instance was first passed
+to Fastify's `logger` option, which in Fastify 5 takes configuration and rejects an instance. The
+server refused to start while **every test stayed green**, because tests build down the other
+branch. There is a comment at that line saying so.
+
+---
+
 ## 2026-08-03 (last) - A back button that moved every time and changed nothing
 
 One video, three defects, all of them about a control that was present and not usable.

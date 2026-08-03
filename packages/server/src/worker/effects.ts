@@ -16,6 +16,7 @@ import { eq, sql } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { SYSTEM_ACTOR_ID, type MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
+import type { Monitor } from '../monitoring.ts';
 import { users } from '../db/schema.ts';
 import { appendMessage, deriveClientMsgId } from '../domain/append-message.ts';
 import { publishToChannel, publishRevocation, publishUpdate } from '../bus/redis.ts';
@@ -41,6 +42,13 @@ export type EffectDeps = {
   /** Present in the worker, which derives thumbnails and runs the storage GC. */
   media?: MediaStore | undefined;
   log: (level: 'info' | 'warn' | 'error', message: string, extra?: unknown) => void;
+  /**
+   * Where a failed effect goes, beyond the log.
+   *
+   * Optional so every existing test constructs `EffectDeps` unchanged; the worker passes a real
+   * one. Absent, failures still reach `log` exactly as before - this only adds a destination.
+   */
+  monitor?: Monitor | undefined;
   /**
    * Schedule the deferred push evaluation.
    *
