@@ -170,17 +170,13 @@ export default function MainStackLayout() {
       />
 
       {/*
-        Messages sits beside Clubs rather than inside one. A DM belongs to no club - two people
-        who share three clubs have one conversation - so nesting it under a club would be a lie
-        about the model.
+        There is no standalone Messages list. A DM belongs to no club - two people who share three
+        clubs have one conversation - and it used to get its own flat list beside Clubs for that
+        reason. The Chats list now holds every conversation with a DMs filter over it, which is the
+        same model expressed once instead of twice, so the second list was removed rather than kept
+        in sync. What is left is the two screens that have no equivalent there: finding somebody,
+        and a conversation's own profile.
       */}
-      <Stack.Screen
-        name="dm/index"
-        options={{
-          title: 'Messages',
-          headerLeft: () => <BackTo href="/clubs" label="Chats" variant="icon" />,
-        }}
-      />
       {/*
         Finding somebody to message. Its results open a PROFILE rather than a conversation, so
         the thing that actually starts a DM lives in one place - see the screen's own note.

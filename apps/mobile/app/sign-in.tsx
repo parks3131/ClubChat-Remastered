@@ -14,6 +14,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Redirect } from 'expo-router';
 import { useSession } from '../src/chat-provider.tsx';
 import { config } from '../src/config.ts';
+import { ARRIVED_FORWARD } from '../src/nav.tsx';
 import { signIn, signUp } from '../src/session.ts';
 import { color, radius, space, type } from '../src/theme.ts';
 
@@ -29,7 +30,9 @@ export default function SignIn() {
   const [error, setError] = useState<string | null>(null);
 
   // Already signed in: never leave a signed-in user looking at sign-in.
-  if (authState === 'signed-in') return <Redirect href="/clubs" />;
+  // Entering the app is going IN, and a redirect is a replace - so it has to say so, or the
+  // stack's way-out default slides the app in from the left. See `ARRIVED_FORWARD`.
+  if (authState === 'signed-in') return <Redirect href={`/clubs?${ARRIVED_FORWARD}`} />;
 
   const submit = async () => {
     setBusy(true);

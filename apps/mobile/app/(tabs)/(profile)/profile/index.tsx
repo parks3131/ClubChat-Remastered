@@ -192,10 +192,21 @@ export default function ProfileScreen() {
 
             <Pressable
               style={styles.signOut}
-              onPress={() => {
-                void signOut();
-                router.replace('/sign-in');
-              }}
+              /*
+               * Sign out and navigate NOWHERE. The guard at the top of this screen already sends a
+               * signed-out reader to sign-in, and that is the rule stated once.
+               *
+               * > **This navigated itself, and the navigation raced the sign-out it belonged to.**
+               * > `signOut` is async and was not awaited, so `replace('/sign-in')` ran while the
+               * > session was still signed IN - and sign-in's own guard, which exists so a signed-in
+               * > reader never sits on it, bounced straight back to `/clubs` as a forward push.
+               * > Then the sign-out landed and the guards popped to sign-in. Two transitions in
+               * > opposite directions from one tap: "pop push at same time".
+               *
+               * Awaiting first would also fix it, and would still be two implementations of one
+               * rule sitting next to each other waiting to disagree again.
+               */
+              onPress={() => void signOut()}
               accessibilityRole="button"
               accessibilityLabel="Sign out"
             >
@@ -355,7 +366,6 @@ function ClubsSheet({
 
 function DeleteAccount({ ownedClubs }: { ownedClubs: Array<{ id: string; name: string }> }) {
   const { signOut } = useSession();
-  const router = useRouter();
   const [confirming, setConfirming] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 
@@ -363,8 +373,9 @@ function DeleteAccount({ ownedClubs }: { ownedClubs: Array<{ id: string; name: s
     setFailed(null);
     try {
       await accountApi.deleteAccount();
+      // Same rule as Sign out: clearing the session is the whole act, and the screen's guard is
+      // what moves. This one did await, so it never raced - it was only the second copy.
       await signOut();
-      router.replace('/sign-in');
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 409) {
         setFailed(

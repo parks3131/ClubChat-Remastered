@@ -155,17 +155,19 @@ opens who they are rather than jumping straight into a thread with them, which a
 "message this person" lives in exactly one place: reaching a profile from a roster, from a chat
 avatar or from the search all offer the same action rather than three different ones.
 
-*(A standalone Messages list still exists. Nothing navigates to it any more except a DM chat's
-back-fallback, which is the only reason it has not been deleted; it is redundant with the DMs
-chip and removing it means giving DM chat a new declared parent.)*
+*(There is no standalone Messages list. One existed until the Chats destination absorbed every
+conversation; after that the only thing still navigating to it was a DM chat's back-fallback, so
+it was a screen kept alive solely by the back control pointing at it. Removing it meant giving DM
+chat a new declared parent, which is the Chats list.)*
 
 Three things this screen group deliberately does **not** have: a Highlights **Reports** tab
 (there is no admin of the conversation to read it), an announcement or poll action in the "+"
 menu, and any club-scoped surface at all. A DM never appears on the calendar, in Highlights, or
 in any club-scoped list.
 
-The DM chat's **parent is the Messages list**, which matters for rule 2 below: every other chat
-screen falls back to the clubs list, and this one must not.
+The DM chat's **parent is the Chats list**, which is where its conversation is listed. It reaches
+that list under the DMs chip rather than under a list of its own, so the back control lands on the
+destination the conversation actually lives in.
 
 ### Profile
 
@@ -335,7 +337,7 @@ as an undifferentiated list.
    Every screen declares an explicit parent to fall back to.
 4. **Test direct URL entry and refresh, not just clicking through.** Click-through alone will
    never surface a missing back control. *Demonstrated again in Phase 3.5: the Messages list
-   showed a back link when reached from Clubs and none at all when its URL was entered
+   (since removed) showed a back link when reached from Clubs and none at all when its URL was entered
    directly, because the navigator only renders its own back button when history exists. A
    screen using the shared header must therefore declare an explicit back control, not merely
    an explicit parent.*

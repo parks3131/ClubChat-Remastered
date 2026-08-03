@@ -45,7 +45,7 @@ import { useSession } from '../../src/chat-provider.tsx';
 import { timeAgo } from '../../src/dates.ts';
 import { color, radius, space, type } from '../../src/theme.ts';
 import { DataScreen, Row } from '../../src/ui.tsx';
-import { useLoad } from '../../src/use-load.ts';
+import { useLoad, usePullToRefresh } from '../../src/use-load.ts';
 
 /**
  * Where a row goes when tapped.
@@ -144,6 +144,13 @@ export default function NotificationsScreen() {
   const load = useLoad(() => inboxApi.page(), [revision]);
 
   /*
+   * `revision` above is why this is needed rather than optional. The socket bumps it for
+   * everything it hears about, so this screen re-reads whenever any message lands anywhere - and
+   * a control bound to the loader's state would announce every one of those as a refresh.
+   */
+  const pull = usePullToRefresh(load);
+
+  /*
    * Older pages, held beside the first one.
    *
    * Kept in their own state rather than merged into `load`, so a live refresh of page one
@@ -204,8 +211,18 @@ export default function NotificationsScreen() {
        * The re-read does NOT undo the shade rule, because the marking happens on the way OUT. So
        * a visit loads rows in whatever state they were left in, keeps that state for the whole
        * visit, and finds them plain on the next visit. The two rules only look like they conflict.
+       *
+       * > **`refresh`, never `reload`.** Both re-read; only `reload` announces a load, and the
+       * > pull control below is bound to that state - so returning to this tab fired the refresh
+       * > spinner every single time, over content that was already on screen and about to be
+       * > replaced by identical content. Reported as the inbox loading "unusually" on tab switch.
+       * > This is the same mistake `use-load.ts` was split into two calls to prevent, and the
+       * > same one already fixed once for the chat list.
+       *
+       * The pull-to-refresh gesture still calls `reload`, because there the spinner is the point:
+       * somebody asked for a load and is owed the acknowledgement.
        */
-      load.reload();
+      load.refresh();
       setOlder([]);
       setOlderCursor(null);
       setExhausted(false);
@@ -247,13 +264,7 @@ export default function NotificationsScreen() {
             data={[...data.rows, ...older]}
             keyExtractor={(row) => `${row.kind}:${row.id}`}
             contentContainerStyle={styles.list}
-            refreshControl={
-              <RefreshControl
-                refreshing={load.state === 'loading'}
-                onRefresh={load.reload}
-                tintColor={color.accent}
-              />
-            }
+            refreshControl={<RefreshControl {...pull} tintColor={color.accent} />}
             /*
               Paging is silent: no page numbers, and deliberately NO end-of-history footer.
               Nothing in this feed expires, so there is no "that's everything" to announce -

@@ -13,6 +13,108 @@ Newest first.
 
 ---
 
+## 2026-08-03 (later) - A screen kept alive by its own back button, and four navigations that did not check where they were
+
+A device video and four follow-ups. The reports came in as separate complaints and were mostly one
+mistake wearing different clothes: **navigating without asking where you already are, or when you
+are allowed to go.**
+
+### The inbox spun its refresh control at rest, and the first fix was aimed at the wrong caller
+
+Reported as the notifications tab loading "unusually" on tab switch. The focus effect called
+`load.reload()`, which announces a load, so switching to the tab fired the pull spinner over
+content that was already correct. That got changed to `refresh()` - and the spinner stayed.
+
+Because the focus effect was never the main caller. The screen reads
+`useLoad(() => inboxApi.page(), [revision])`, and **the socket bumps `revision` for everything it
+hears about**, so the inbox re-read whenever any message landed in any chat. Tab switching was
+simply the trigger that could be reproduced on demand.
+
+The chat list had already solved this with a `pulling` flag held beside the loader; the inbox had
+never been given one. That rule is now `usePullToRefresh` in `use-load.ts`, next to the
+`reload`/`refresh` split it is the visible half of, and both screens use it. **A refresh spinner
+answers "did you ask for this?", not "is a request in flight".**
+
+### A standalone Messages list, reachable only from the back button that pointed at it
+
+Backing out of a new DM landed on the old Messages list rather than the chat list, and that screen
+showed names with no avatars. Both dissolved into one fact: `PRD/15` had already recorded that
+nothing navigated to it except a DM chat's back-fallback, "which is the only reason it has not been
+deleted". Every job it had - search, a DMs filter, the person+ button - moved into the Chats
+destination when that absorbed every conversation.
+
+So it is gone, and a DM's declared parent is `/clubs`. The avatar bug went with it, having only
+ever existed on the one screen nobody could reach on purpose.
+
+Worth noting how it survived: **the back control was the last thing keeping it alive, and a back
+control is exactly what nobody audits for reachability.** It pointed somewhere, that somewhere
+rendered, and the screen stayed in the tree long after the product had replaced it.
+
+### One option, two opposite journeys
+
+Leaving a chat animated as though you were entering one - the mirror of yesterday's race and
+Eboard bug. `app/_layout.tsx` declared `animationTypeForReplace: 'push'` on `(tabs)`, correct for
+signing in, and entering a DM replaces the whole `(tabs)` entry - so there is no history to pop and
+the back control replaces its way back in, inheriting the option meant for the other journey.
+
+The `arrived=forward` marker existed for exactly this and could not be read here:
+
+> **A group route is not handed the leaf's params, it is handed the route TO the leaf.** `(tabs)`
+> sees `{ screen: '(main)', params: { screen: 'clubs/index', params: { arrived: 'forward' } } }`,
+> so `params.arrived` is undefined one level above where the answer lives.
+
+`arrived.ts` walks that chain. `(tabs)` now defaults to `pop` - a replace that says nothing is a
+way out - and the two journeys that enter the app mark themselves.
+
+### Signing out navigated before it had signed out
+
+Reported as "pop push at same time". The button did `void signOut()` and then `router.replace('/sign-in')`
+on the next line, so the replace ran while the session was still signed IN - and sign-in's own
+guard, which exists so a signed-in reader never sits on it, bounced straight back to `/clubs` as a
+forward push. Then the sign-out landed and the guards popped to sign-in.
+
+The button now clears the session and navigates nowhere; the screen's guard is what moves. Delete
+account had the same second copy - it did await, so it never raced - and lost it too. **One rule,
+one implementation: the guard already says a signed-out reader belongs on sign-in, and a replace
+sitting next to it is a duplicate waiting to disagree.**
+
+### Tapping CHATS while on Chats
+
+It fell through to `replace('/clubs')`, which swaps the screen for an identical copy of itself and
+animates the swap, so spamming the tab played a pop per tap over a page that never changed. It now
+scrolls the list to the top instead, which is what a tab bar is expected to do.
+
+The interesting part is why the obvious fix would have been wrong. `preventDefault()` was the
+handler's first line, and `useScrollToTop` **checks `defaultPrevented` and declines to run when
+anything claimed the event** - so an early `return` after preventing would have killed the pop and
+the scroll together. The handler now claims the press only on the paths that actually move, and
+lets the "already here" press through untouched.
+
+### The thing worth remembering
+
+Four of the six were a navigation that did not check its own preconditions: going where you already
+are, going before the state you depend on has changed, or arriving somewhere that serves two
+journeys and assuming yours. None of them were reachable by reading the code for correctness,
+because each is individually correct - they are wrong only relative to where the user was standing
+when they fired.
+
+### Verified
+
+789 tests, typecheck, `lint:emdash`, `check:runtime`. `arrived.ts` is new and pure, with the
+nested-navigator case, a self-referencing params cycle, and the unmarked default all pinned - the
+default matters most, because it is what makes an unmarked replace read as a way out.
+
+Sign out, sign in and the DM back transition were confirmed on the device by the founder, which is
+the only place a native stack animation can be judged.
+
+The server suite failed three times during this work with
+`Timed out after 10000ms while waiting for container ports to be bound to the host`, on a different
+file each time, and passed 672/672 either side. No server code changed in this session. It is
+Docker contention between the running dev stack and the suite's throwaway containers, not a defect,
+and serialising the files made it worse rather than better.
+
+---
+
 ## 2026-08-03 - The calendar marked the day and then showed nothing on it
 
 Reported from the device, and precisely: today is the 3rd, the 3rd has events, the grid draws the

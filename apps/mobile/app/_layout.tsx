@@ -61,16 +61,25 @@ export default function RootLayout() {
             {/* The four destinations, and everything that keeps the tab bar beneath them. */}
             <Stack.Screen
               name="(tabs)"
-              options={{
+              options={({ route }) => ({
                 headerShown: false,
                 /*
-                  Signing in replaces sign-in with the app, and entering the app is going IN.
-                  The stack's default treats a replace as a way out, which is right for the many
-                  places that use one to leave something - and wrong for exactly this one, where
-                  it would slide the app in from the left as though you had retreated into it.
+                  TWO journeys replace into the app, in opposite directions, and this screen is
+                  the far end of both.
+
+                  Signing in is going IN: sign-in is swapped for the app, and the stack's `pop`
+                  default would slide it in from the left as though you had retreated into it.
+                  Leaving a conversation is going OUT: entering a DM replaces the whole `(tabs)`
+                  entry, so there is no history to pop and the back control replaces its way back
+                  here - which the same option has to animate the other way.
+
+                  This was hardcoded to `push` for the first of them, so the second - much the
+                  more frequent - slid backwards into the chat list on every exit. The marker on
+                  the route decides instead, and the default stays `pop`, because a replace that
+                  says nothing is a way out.
                 */
-                animationTypeForReplace: 'push',
-              }}
+                ...motionFor(route.params),
+              })}
             />
 
             {/*
@@ -88,7 +97,7 @@ export default function RootLayout() {
                   pushes - the profile was a step on the way and should not be behind you - so
                   without this it would slide out of a screen you were moving into.
                 */
-                ...motionFor((route.params ?? {}) as Record<string, string>),
+                ...motionFor(route.params),
               })}
             />
 

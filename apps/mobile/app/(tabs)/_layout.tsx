@@ -186,10 +186,28 @@ export default function TabsLayout() {
         */
         listeners={{
           tabPress: (event) => {
-            event.preventDefault();
             const club = clubRef.current;
 
             if (club === null) {
+              /*
+                Already ON the list, so this tap is not a journey - it is the "take me back to the
+                top" every tab bar answers. Let it through UNTOUCHED and the list scrolls itself.
+
+                > **`preventDefault` used to be the first line of this handler, and it is exactly
+                > what stopped both halves of that.** Falling through to the `replace` below
+                > swapped the screen for an identical copy of itself and animated the swap, so
+                > tapping CHATS from the chats list played a pop per tap over a page that never
+                > changed. And `useScrollToTop` - which the list uses to answer this tap - checks
+                > `defaultPrevented` and declines to run when anything claimed the event, so
+                > intercepting here is precisely what would have swallowed the scroll.
+
+                The navigator's own default for a tab you are already on is a no-op, which is why
+                nothing has to be prevented here.
+              */
+              if (pathRef.current === '/clubs') return;
+
+              event.preventDefault();
+
               /*
                 Not in a club, so this is a plain "go to the list" - and it must UNWIND to the
                 list rather than stack a second copy on top of whatever the Clubs stack was left
@@ -201,6 +219,9 @@ export default function TabsLayout() {
               else router.replace('/clubs');
               return;
             }
+
+            // Everything below is a real move, so the navigator's own action must not also run.
+            event.preventDefault();
 
             const hub = `/clubs/${club.clubId}`;
             if (pathRef.current === hub) {

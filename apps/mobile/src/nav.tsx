@@ -13,6 +13,7 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { Link, useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { arrivedMarker } from './arrived.ts';
 import { useCurrentSpace, type SpaceKind } from './current-space.tsx';
 import { RemoteImage } from './media-bubble.tsx';
 import { color, radius, space, type } from './theme.ts';
@@ -62,8 +63,10 @@ export const ARRIVED_FORWARD = 'arrived=forward';
  */
 export const ARRIVED_REDIRECT = 'arrived=redirect';
 
-export function motionFor(params: Record<string, string> | undefined) {
-  switch (params?.['arrived']) {
+export function motionFor(params: unknown) {
+  // Through `arrivedMarker` rather than off `params` directly, because a GROUP route is handed the
+  // route to the leaf rather than the leaf's params - which is why `(tabs)` could not see this.
+  switch (arrivedMarker(params)) {
     case 'forward':
       return { animationTypeForReplace: 'push' } as const;
     case 'redirect':

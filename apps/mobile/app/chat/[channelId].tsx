@@ -2015,8 +2015,17 @@ export default function ChatScreen() {
   const parent =
     meta === null
       ? "/clubs"
-      : meta.scope === "dm"
-        ? "/dm"
+      : /*
+         * A DM falls back to the CHATS list, which is where DMs live now.
+         *
+         * > It pointed at `/dm`, the standalone Messages list, and that had become the only way to
+         * > reach that screen. Opening a conversation from the person+ flow crosses navigators with
+         * > a `replace`, so the chat has no history to pop and this fallback is what actually runs -
+         * > every new DM ended on a list the product had already replaced. Reported as "instead of
+         * > coming to the main page, it's taking me to the message page".
+         */
+        meta.scope === "dm"
+        ? "/clubs"
         : meta.scope === "club"
           ? `/clubs/${meta.scopeId}`
           : // Race and Eboard chat both fall back to the CLUB hub. Neither falls back to its own
@@ -2024,12 +2033,7 @@ export default function ChatScreen() {
             // no races list to fall back to, because the product does not have one.
             `/clubs/${meta.clubId}`;
 
-  const parentLabel =
-    meta === null
-      ? "Clubs"
-      : meta.scope === "dm"
-        ? "Messages"
-        : "Club";
+  const parentLabel = meta === null ? "Clubs" : meta.scope === "dm" ? "Chats" : "Club";
 
   // One definition of "back" for the whole app: pop if there is history, use the declared
   // parent if there is not. See `useGoBack`.

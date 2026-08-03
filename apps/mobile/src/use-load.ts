@@ -121,3 +121,42 @@ export function useLoad<T>(read: () => Promise<T>, deps: readonly unknown[] = []
     set: setData,
   };
 }
+
+/**
+ * The pull control's state, which is **not** the loader's state.
+ *
+ * > **A refresh spinner answers "did you ask for this?", not "is a request in flight".** Bound
+ * > straight to `load.state === 'loading'`, a `<RefreshControl>` spins for every background read
+ * > the screen does for its own reasons - and screens here re-read on a session `revision` bump,
+ * > which the socket raises for everything it hears about. The inbox therefore flashed its
+ * > spinner whenever any message arrived anywhere, over content that was already correct.
+ *
+ * This is the same distinction `reload` and `refresh` draw one layer down, and it needs its own
+ * flag because a pull IS a reload: the state alone cannot say who started it. The flag is cleared
+ * when the read settles, which is not optional - left true, it would spin the next *background*
+ * refresh instead, reintroducing the bug one read later.
+ *
+ * Spread the result into the control:
+ *
+ * ```tsx
+ * <RefreshControl {...usePullToRefresh(load)} tintColor={color.accent} />
+ * ```
+ */
+export function usePullToRefresh(load: { state: LoadState; reload: () => void }): {
+  refreshing: boolean;
+  onRefresh: () => void;
+} {
+  const [pulling, setPulling] = useState(false);
+
+  useEffect(() => {
+    if (load.state !== 'loading') setPulling(false);
+  }, [load.state]);
+
+  return {
+    refreshing: pulling && load.state === 'loading',
+    onRefresh: () => {
+      setPulling(true);
+      load.reload();
+    },
+  };
+}

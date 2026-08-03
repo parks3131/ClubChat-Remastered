@@ -1,6 +1,7 @@
 import { Redirect } from 'expo-router';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { useSession } from '../src/chat-provider.tsx';
+import { ARRIVED_FORWARD } from '../src/nav.tsx';
 import { color, space, type } from '../src/theme.ts';
 
 /**
@@ -22,7 +23,14 @@ export default function Index() {
     );
   }
 
-  return <Redirect href={authState === 'signed-in' ? '/clubs' : '/sign-in'} />;
+  // Both branches are a replace out of this stub. Entering the app is marked as going IN for the
+  // same reason sign-in's is: unmarked, the stack reads a replace as a way out and slides the app
+  // in backwards. Sign-in is left unmarked, because being sent back to it IS a way out.
+  return authState === 'signed-in' ? (
+    <Redirect href={`/clubs?${ARRIVED_FORWARD}`} />
+  ) : (
+    <Redirect href="/sign-in" />
+  );
 }
 
 const styles = StyleSheet.create({

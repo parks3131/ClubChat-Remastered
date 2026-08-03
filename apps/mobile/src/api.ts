@@ -101,17 +101,6 @@ export async function apiFetch<T>(
 // Direct messages
 // ---------------------------------------------------------------------------
 
-export type DmThread = {
-  conversationId: string;
-  channelId: string;
-  otherUserId: string;
-  otherName: string;
-  unread: number;
-  canPost: boolean;
-  muted: boolean;
-  lastMessage: { body: string | null; seq: number; createdAt: string } | null;
-};
-
 export type DmCandidate = { userId: string; name: string; image: string | null };
 
 /**
@@ -177,7 +166,12 @@ export type ChannelMeta = {
 };
 
 export const dmApi = {
-  threads: () => apiFetch<{ threads: DmThread[] }>('/dm/threads'),
+  /*
+   * There is no `threads()` read here, deliberately. `GET /dm/threads` exists and works, and the
+   * standalone Messages list was its only caller - the chat list now answers "which conversations
+   * do I have" for every scope at once, so binding the DM-only version again would be a second
+   * answer to a question that already has one.
+   */
 
   /** The clubs you and this member are both in. Discloses nothing you cannot already see. */
   sharedClubs: (userId: string) =>

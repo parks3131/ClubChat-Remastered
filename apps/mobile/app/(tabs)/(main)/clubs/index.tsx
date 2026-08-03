@@ -31,10 +31,10 @@
  * already hold is a different and much smaller thing than indexing every message in the product.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Redirect, useFocusEffect, useRouter } from 'expo-router';
+import { Redirect, useFocusEffect, useRouter, useScrollToTop } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   conversationSummaryText,
@@ -54,7 +54,7 @@ import {
   SheetMenu,
   Tabs,
 } from '../../../../src/ui.tsx';
-import { useLoad } from '../../../../src/use-load.ts';
+import { useLoad, usePullToRefresh } from '../../../../src/use-load.ts';
 
 /** The three chips, in the order the design shows them. */
 const FILTERS = [
@@ -180,19 +180,27 @@ export default function ChatsScreen() {
     }, []),
   );
 
-  /** A pull, and only a pull, spins the control. A background refresh must look like nothing. */
-  const [pulling, setPulling] = useState(false);
-  const pullToRefresh = () => {
-    setPulling(true);
-    load.reload();
-  };
-  /*
-   * Cleared when the read settles, and it has to be: a flag left true would make the NEXT
-   * background refresh spin, which is the bug this exists to prevent, one refresh later.
+  /**
+   * A pull, and only a pull, spins the control. A background refresh must look like nothing.
+   *
+   * This screen had the rule written out inline and the inbox did not, which is how the inbox
+   * came to spin on every arriving message. It lives in `use-load.ts` now, beside the `reload`
+   * and `refresh` split it is the visible half of.
    */
-  useEffect(() => {
-    if (load.state !== 'loading') setPulling(false);
-  }, [load.state]);
+  const pull = usePullToRefresh(load);
+
+  /*
+   * Tapping CHATS while already on this list scrolls it back to the top.
+   *
+   * The tab handler deliberately does NOT claim that press - see `(tabs)/_layout.tsx`. This hook
+   * checks `defaultPrevented` and stays out of the way if anything did, which is the whole reason
+   * the handler returns early instead of preventing and navigating to the screen you are on.
+   *
+   * It also declines unless this screen is focused AND is the first route of its stack, so being
+   * three screens deep in a club still means "come back out" rather than a silent scroll.
+   */
+  const listRef = useRef<FlatList<ConversationSummary>>(null);
+  useScrollToTop(listRef);
 
   const act = async (run: () => Promise<unknown>) => {
     setSheetFor(null);
@@ -258,16 +266,11 @@ export default function ChatsScreen() {
           const rows = data.conversations.filter((row) => matchesFilter(row, filter, query));
           return (
             <FlatList<ConversationSummary>
+              ref={listRef}
               data={rows}
               keyExtractor={(row) => row.channelId}
               contentContainerStyle={styles.list}
-              refreshControl={
-                <RefreshControl
-                  refreshing={pulling && load.state === 'loading'}
-                  onRefresh={pullToRefresh}
-                  tintColor={color.accent}
-                />
-              }
+              refreshControl={<RefreshControl {...pull} tintColor={color.accent} />}
               ListEmptyComponent={
                 <EmptyState
                   title={emptyTitle(filter, query, data.conversations.length)}
