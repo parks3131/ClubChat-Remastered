@@ -32,6 +32,19 @@ A relay claims batches with `FOR UPDATE SKIP LOCKED`, publishes them in `id` ord
 partition key, and marks `published_at`. Failures retry with backoff; after N attempts the row
 is parked and alerted on.
 
+**The backoff is the load-bearing half of that sentence, and it was missing until 2026-08-04.**
+A failed row carries `next_attempt_at`, and the claim query will not take it before that time.
+Without it the 250ms poll re-claimed a failing row on every tick, so eight attempts would span
+about a second and any outage longer than that parked the row permanently. The delays grow
+from a few seconds to an hour, jittered so a recovering provider is not flattened by the whole
+herd retrying in the same millisecond, and the budget covers over an hour end to end.
+
+**A failure known to be permanent skips the schedule entirely.** `PermanentEffectError` parks on
+the first attempt, because spreading retries over hours makes a hopeless event strictly worse:
+the answer is available immediately and nothing would be reported for an hour. An unknown event
+type is deliberately **not** in that class - the commonest cause is a rolling deploy, which
+heals itself well inside the schedule.
+
 **Parking means an effect never ran, and nothing else may be allowed to mean it.** The retry
 path is built for a transient fault; a permanent one produces N identical failures and then an
 alarm that can never clear, because the retention sweep deliberately never prunes a parked row.

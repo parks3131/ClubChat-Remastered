@@ -580,6 +580,14 @@ export const outbox = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     processedAt: timestamp('processed_at', { withTimezone: true }),
     attempts: integer('attempts').notNull().default(0),
+    /**
+     * When this row may be claimed again. `now()` for a row that has never failed.
+     *
+     * Without this the drain re-claims a failing row on every 250ms tick, so the whole
+     * attempt budget is spent in about a second and any outage longer than that parks the
+     * row permanently. The delay is what makes the retries mean anything.
+     */
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
     lastError: text('last_error'),
   },
   (t) => [

@@ -89,7 +89,7 @@ export async function deriveVariants(
        *
        * Throwing here is what parked outbox row 49 for four days. The retry-and-park path is
        * built for a transient fault, and it is right for one - but bytes that do not decode
-       * are a permanent fact, so five attempts produce five identical failures and then an
+       * are a permanent fact, so the whole budget produces identical failures and then an
        * alarm that can never clear. `retention.ts` deliberately never prunes a parked row, so
        * every corrupt upload would pin `parked > 0` on for the life of the database and drown
        * the signal it exists to carry: that an effect never ran.

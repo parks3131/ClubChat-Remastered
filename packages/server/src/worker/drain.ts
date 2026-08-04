@@ -19,7 +19,7 @@
 
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { dispatch, type EffectDeps, type OutboxEvent } from './effects.ts';
+import { dispatch, PermanentEffectError, type EffectDeps, type OutboxEvent } from './effects.ts';
 
 export const POLL_INTERVAL_MS = 250;
 export const BATCH_SIZE = 50;
@@ -31,8 +31,61 @@ export const BATCH_SIZE = 50;
  * stuck event means system messages and notifications have silently stopped for that
  * partition, which is the kind of failure nobody notices until someone complains that
  * a club chat "went quiet".
+ *
+ * Eight rather than five, because a count is only meaningful together with the delays
+ * between the attempts - see `backoffDelayMs`. Five attempts with no delay at all, which
+ * is what this was, spans about a second.
  */
-export const MAX_ATTEMPTS = 5;
+export const MAX_ATTEMPTS = 8;
+
+/**
+ * The retry schedule.
+ *
+ * > **Attempts without delays are not retries.** This drain polls every 250ms and used to
+ * > re-claim a failing row on every tick, so the entire budget was spent in roughly 1.25
+ * > seconds. Any outage lasting longer than that - which is every real outage - parked the
+ * > row permanently and required a human to replay it.
+ *
+ * The first retry is deliberately quick, because the common case is a blip that is already
+ * over. The growth is steep after that, so a genuine outage is absorbed rather than raced:
+ *
+ * | attempt | delay before it (jittered) |
+ * |---|---|
+ * | 1 | 2.5s to 5s |
+ * | 2 | 10s to 20s |
+ * | 3 | 40s to 80s |
+ * | 4 | 2.5m to 5m |
+ * | 5 | 11m to 21m |
+ * | 6 | 30m to 60m (capped) |
+ * | 7 | 30m to 60m (capped) |
+ *
+ * Roughly 75 minutes of coverage at worst and two and a half hours at best, so a provider
+ * having an hour is survived without anybody being told.
+ */
+export const RETRY_BASE_MS = 5_000;
+export const RETRY_FACTOR = 4;
+/** No single wait longer than an hour, however many attempts remain. */
+export const RETRY_MAX_DELAY_MS = 60 * 60 * 1000;
+
+/**
+ * How long to wait before the next attempt.
+ *
+ * **Jittered, and that is not decoration.** Without it, a provider that fails ten thousand
+ * events at once retries all ten thousand in the same millisecond, and the recovering
+ * service is knocked straight back over by the herd it just released.
+ *
+ * Equal jitter - half the delay fixed, half random - rather than full jitter, which can
+ * schedule a retry almost immediately and waste an attempt on an outage that has not moved.
+ *
+ * `random` is injectable so a test can assert the bounds rather than approximate them.
+ */
+export function backoffDelayMs(attempts: number, random: () => number = Math.random): number {
+  const exponential = Math.min(
+    RETRY_BASE_MS * RETRY_FACTOR ** Math.max(0, attempts - 1),
+    RETRY_MAX_DELAY_MS,
+  );
+  return Math.round(exponential / 2 + random() * (exponential / 2));
+}
 
 type ClaimedRow = {
   id: string;
@@ -67,6 +120,9 @@ export async function drainOnce(db: Db, deps: EffectDeps): Promise<DrainResult> 
         FROM outbox
        WHERE processed_at IS NULL
          AND attempts < ${MAX_ATTEMPTS}
+         -- The backoff gate. A row that failed recently is not claimable yet, which is
+         -- what stops the 250ms tick from spending the whole budget in a second.
+         AND next_attempt_at <= now()
        ORDER BY id
          FOR UPDATE SKIP LOCKED
        LIMIT ${BATCH_SIZE}
@@ -90,12 +146,22 @@ export async function drainOnce(db: Db, deps: EffectDeps): Promise<DrainResult> 
         result.processed += 1;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const nextAttempts = row.attempts + 1;
+        /*
+         * A permanent failure goes straight to the floor rather than counting up to it.
+         *
+         * Retrying it cannot change the outcome, and with the delays above it would take
+         * over an hour to reach the same conclusion - an hour in which nothing is reported
+         * and the row looks, from outside, like an effect that is merely slow.
+         */
+        const permanent = error instanceof PermanentEffectError;
+        const nextAttempts = permanent ? MAX_ATTEMPTS : row.attempts + 1;
+        const delayMs = permanent ? 0 : backoffDelayMs(nextAttempts);
 
         await tx.execute(sql`
           UPDATE outbox
              SET attempts = ${nextAttempts},
-                 last_error = ${message}
+                 last_error = ${message},
+                 next_attempt_at = now() + (${delayMs} * interval '1 millisecond')
            WHERE id = ${row.id}
         `);
 
@@ -106,6 +172,9 @@ export async function drainOnce(db: Db, deps: EffectDeps): Promise<DrainResult> 
             eventType: event.eventType,
             partitionKey: event.partitionKey,
             attempts: nextAttempts,
+            // So the log distinguishes "we tried for two hours" from "this could never work",
+            // which are the same outcome reached for opposite reasons.
+            permanent,
             lastError: message,
           });
           /*
@@ -115,7 +184,11 @@ export async function drainOnce(db: Db, deps: EffectDeps): Promise<DrainResult> 
            * > never appears. `effect-coverage.test.ts` exists because three event types were
            * > parked for the entire life of the Eboard space and nothing said so - the retry
            * > path absorbs a handler failure into a column, which is right for a transient fault
-           * > and indistinguishable from a permanent one after five attempts.
+           * > and indistinguishable from a permanent one once the budget runs out.
+           *
+           * `PermanentEffectError` narrows that: a failure known to be about the data arrives
+           * here on its first attempt rather than its eighth. What cannot be classified still
+           * takes the long road, which is the safe default.
            *
            * Captured only at the park, not on each retry: a flaky push that succeeds on attempt
            * two is not an incident, and reporting every attempt would bury the one that matters.
@@ -125,6 +198,7 @@ export async function drainOnce(db: Db, deps: EffectDeps): Promise<DrainResult> 
             eventType: event.eventType,
             partitionKey: event.partitionKey,
             attempts: nextAttempts,
+            permanent,
           });
         } else {
           result.failed += 1;
@@ -132,6 +206,9 @@ export async function drainOnce(db: Db, deps: EffectDeps): Promise<DrainResult> 
             eventId: event.id,
             eventType: event.eventType,
             attempts: nextAttempts,
+            // The wait is the useful half of this line. "Failed, will retry" with no interval
+            // reads as "any moment now", which was true before and is not any more.
+            retryInMs: delayMs,
             error: message,
           });
         }

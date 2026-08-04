@@ -4,7 +4,7 @@
  * > **This exists because three did not, for the entire life of the Eboard space.** The domain
  * > wrote `eboard.join_requested`, `eboard.membership_decided` and `eboard.member_departed` into
  * > the outbox; nothing handled them. `dispatch` throws on an unknown type, which routes the
- * > event through the retry path and parks it after five attempts - the right behaviour for a
+ * > event through the retry path and parks it once the budget runs out - the right behaviour for a
  * > producer deployed ahead of its consumer, and completely silent when the consumer is never
  * > written at all. No notification ever arrived from that space and no test noticed, because
  * > `drainOnce` absorbs a handler failure into the `attempts` column rather than rethrowing.

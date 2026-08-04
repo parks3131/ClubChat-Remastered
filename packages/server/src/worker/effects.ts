@@ -28,6 +28,33 @@ import type { PushSender } from '../push/sender.ts';
 import type { MediaStore } from '../media/store.ts';
 import { deriveVariants } from '../media/derive.ts';
 
+/**
+ * A failure that retrying cannot fix.
+ *
+ * The retry path exists for a **transient** fault: a connection reset, a provider having a
+ * bad minute, a lock contended for a moment. Waiting helps, so the drain waits and tries
+ * again on a growing delay.
+ *
+ * Nothing about that helps a payload referencing a row that no longer exists, or bytes that
+ * are not an image. Those produce the same failure on attempt eight as on attempt one, and
+ * running them through the transient machinery costs twice over: the whole attempt budget is
+ * burned discovering an answer already known, and once retries are spread across hours the
+ * row sits unresolved for that entire time before anybody is told.
+ *
+ * Throw this instead and the drain parks the row immediately, with the same alarm it raises
+ * for an exhausted budget - because the outcome is identical. An effect will never run.
+ *
+ * > **The default stays retryable, on purpose.** Misclassifying a transient fault as permanent
+ * > loses the effect on its first bad second; misclassifying the reverse only wastes some
+ * > retries. Reach for this where the failure is provably about the data, not the moment.
+ */
+export class PermanentEffectError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'PermanentEffectError';
+  }
+}
+
 export type OutboxEvent = {
   id: number;
   partitionKey: string;
@@ -149,7 +176,9 @@ const onClubCreated: EffectHandler = async (event, deps) => {
   const clubName = event.payload['clubName'];
 
   if (typeof mainChannelId !== 'string' || typeof creatorId !== 'string') {
-    throw new Error(`club.created payload missing mainChannelId or creatorId`);
+    // Permanent: the payload is written once and frozen. A field absent on the first attempt
+    // is absent on the eighth, so this is worth reporting now rather than in two hours.
+    throw new PermanentEffectError('club.created payload missing mainChannelId or creatorId');
   }
 
   const rows = await deps.db
@@ -1576,9 +1605,18 @@ export const handlers: Record<string, EffectHandler> = {
 export async function dispatch(event: OutboxEvent, deps: EffectDeps): Promise<void> {
   const handler = handlers[event.eventType];
   if (!handler) {
-    // An unknown event type is a bug, not something to swallow: it means a producer
-    // was deployed ahead of its consumer. Throwing routes it through the retry and
-    // parking path where it is visible.
+    /*
+     * An unknown event type is a bug, not something to swallow: it means a producer
+     * was deployed ahead of its consumer. Throwing routes it through the retry and
+     * parking path where it is visible.
+     *
+     * **Deliberately NOT a `PermanentEffectError`,** which it superficially resembles. The
+     * commonest way to reach this line is a rolling deploy: an old worker briefly sees an
+     * event type only the new code handles. That resolves itself the moment the deploy
+     * finishes, which makes it transient - and the retry schedule covers well over an hour,
+     * so it heals with nobody paged. Parking on sight would turn every rolling deploy into
+     * an incident.
+     */
     throw new Error(`no handler for event type "${event.eventType}"`);
   }
   await handler(event, deps);

@@ -13,6 +13,95 @@ Newest first.
 
 ---
 
+## 2026-08-04 - The retry budget that lasted 1.25 seconds
+
+Started as a conversation about what a microservices ClubChat would look like, went through the
+outbox pattern from first principles, and ended with two defects found by reasoning about the
+code rather than by anything failing.
+
+### The budget was a formality
+
+`MAX_ATTEMPTS` was 5, the drain polls every 250ms, and the claim query filtered on
+`attempts < MAX_ATTEMPTS` and nothing else. No delay between attempts, no `next_attempt_at`, no
+backoff of any kind. So a failing row was re-claimed on every tick and parked roughly **1.25
+seconds** after its first failure.
+
+Concretely: a provider goes down at 10:00, every dependent event has parked by 10:00:01, the
+provider recovers at 11:00, and nothing retries, because parked rows are never re-claimed.
+
+`TECH/04` said "failures retry with backoff." It had said so since Phase 0 and it was never true.
+That is the worst way for a doc to be wrong, because a policy written down is a policy nobody
+rereads the code to verify.
+
+### Backoff, and why jitter is not decoration
+
+Added `next_attempt_at`, gated the claim on it, raised the budget to 8. Delays start at 2.5 to 5
+seconds and grow by a factor of four, capped at an hour: roughly 75 minutes of coverage at worst,
+two and a half hours at best.
+
+Equal jitter rather than full jitter. The failure jitter prevents is the thundering herd - ten
+thousand events failing against one dead provider, all waiting the identical interval, all
+retrying in the same millisecond and flattening the service the moment it recovers. Full jitter
+spreads them more but can schedule a retry almost immediately, wasting an attempt on an outage
+that has not moved. Equal jitter keeps a floor under the wait.
+
+The first retry is deliberately quick, because the commonest failure is a blip already over.
+
+### The change that only works as a pair
+
+Backoff alone makes a hopeless event **worse**. Yesterday's corrupt PNG would now take over an
+hour to reach a conclusion available on attempt one, reporting nothing in the meantime.
+
+So `PermanentEffectError` landed in the same change: a failure known to be about the data parks
+immediately instead of counting to eight. Applied to `club.created` with a malformed payload,
+since the payload is frozen at write time.
+
+Deliberately **not** applied to an unknown event type, which superficially looks like the same
+thing. The commonest way to reach that line is a rolling deploy where an old worker briefly sees
+an event only the new code handles. It heals well inside the schedule, and parking on sight would
+turn every deploy into an incident. There is a test asserting it stays retryable.
+
+### Found and deliberately not fixed
+
+The partition key's ordering guarantee is not enforced on the failure path. When an event fails,
+the drain records the error and moves to the next row in the batch, including rows in the same
+partition, so ordering holds while everything succeeds and breaks silently when anything does not.
+
+It matters less than it sounds for user messages, whose `seq` is allocated in the send
+transaction: a failed effect only delays the live fanout, and the client's gap rule detects the
+hole and syncs into the correct order. It matters for **cards**, which the worker appends, so
+their `seq` is decided by when the effect ran. A failed poll card and a later successful event
+card land reversed, permanently, with no hole for the gap rule to find.
+
+Left alone on purpose. The fix introduces head-of-line blocking, which combined with hours of
+backoff could freeze a channel until tomorrow. The real answer is that the lane is too wide -
+ordering is causally required per entity, not per channel - and that is a bigger change than the
+problem currently justifies.
+
+### Verification
+
+Both features mutation-tested: removing the `next_attempt_at` gate fails exactly the two backoff
+tests, and forcing `permanent = false` fails exactly the fast-park test.
+
+Then live, against the running worker. A corrupt image was pushed past the boundary the way row
+49 originally got there, and completed on attempt 0 with `derive_error` recorded rather than
+retrying eight times. A permanently failing event was watched for two minutes: attempt 4 of 8,
+counting down five minutes to the next try, where the old code would have parked it in 1.25
+seconds.
+
+One self-inflicted false positive worth recording. The first live media check appeared to pass
+while proving nothing: the media id was reconstructed from an 8-character prefix the smoke script
+printed, so the `UPDATE` hit zero rows and the event succeeded because the object was **missing**,
+not because it was corrupt. `deriveVariants` returns `skipped` for a missing row, which looks
+identical in the outbox. Re-run against the real UUID.
+
+### Notes
+
+Long-form study notes on the outbox, backoff, jitter and the three defects live in
+`learnings/outbox-retries-and-backoff.md`, which is gitignored and therefore local only.
+
+---
+
 ## 2026-08-03 (later) - A 97-byte PNG, and the alarm that could never clear
 
 The worker logged `outbox events are PARKED - an effect never ran` with `parked: 1` on the first
