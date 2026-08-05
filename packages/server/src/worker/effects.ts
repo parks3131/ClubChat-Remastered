@@ -474,6 +474,28 @@ async function eboardContext(
 }
 
 /**
+ * A race's name and its chat, in one read.
+ *
+ * The join and departure handlers both need both, and both used to fetch the name alone -
+ * which is exactly why neither narrated anything into race chat. `INNER JOIN` on the channel:
+ * a race without one cannot be talked about, and there is nothing sensible to say into a
+ * channel that does not exist.
+ */
+async function raceContext(
+  db: Db,
+  raceId: string,
+): Promise<{ name: string; channelId: string } | null> {
+  const rows = await db.execute<{ name: string; channel_id: string }>(sql`
+    SELECT r.name, ch.id AS channel_id
+      FROM races r
+      JOIN channels ch ON ch.scope = 'race' AND ch.scope_id = r.id
+     WHERE r.id = ${raceId}::uuid
+  `);
+  const row = rows.rows[0];
+  return row ? { name: row.name, channelId: row.channel_id } : null;
+}
+
+/**
  * Someone joined.
  *
  * Posts a system message and, when an admin did the adding, tells the person they were
@@ -1144,7 +1166,15 @@ const onInchargeLeft: EffectHandler = async (event, deps) => {
   });
 };
 
-/** Someone gained race access. Force-unsubscribe on departure is the mirror of this. */
+/**
+ * Someone gained race access. Force-unsubscribe on departure is the mirror of this.
+ *
+ * **Narrates the arrival into race chat**, which is the half that was missing entirely. Club
+ * chat and Eboard chat have always said who joined and who let them in; race chat said nothing
+ * at all, so approving somebody was completely invisible - not just quiet in the room, but
+ * invisible everywhere, because an ordinary chat message is what gives a channel its unread
+ * count. No message meant no unread, meant no badge, for every member of that race.
+ */
 const onRaceMembershipDecided: EffectHandler = async (event, deps) => {
   const clubId = String(event.payload['clubId']);
   const approved = event.payload['approved'] === true;
@@ -1155,11 +1185,31 @@ const onRaceMembershipDecided: EffectHandler = async (event, deps) => {
   const club = await clubContext(deps.db, clubId);
   if (!club) return;
 
-  const raceRows = await deps.db.execute<{ name: string }>(
-    sql`SELECT name FROM races WHERE id = ${String(event.payload['raceId'])}::uuid`,
-  );
-  const raceName = raceRows.rows[0]?.name ?? 'the race';
+  const race = await raceContext(deps.db, String(event.payload['raceId']));
+  const raceName = race?.name ?? 'the race';
   const actorName = actorId ? await displayName(deps.db, actorId) : 'An admin';
+
+  /*
+   * Only an approval is announced. A DENIAL posts nothing, for the reason
+   * `onEboardMembershipDecided` already gives: it is addressed to the person who asked, and
+   * announcing a refusal to the room they were refused entry to is a different, worse act.
+   *
+   * Three ways onto a roster and two sentences, split the way club chat splits them: somebody
+   * who got themselves here "joined", somebody an admin put here "was added by" them. The Owner
+   * letting themselves in is the first kind, not the second - "Owner was added by Owner" is
+   * what naming the actor unconditionally would produce.
+   */
+  if (approved && race) {
+    const joinerName = await displayName(deps.db, userId);
+    await postSystemMessage(deps, {
+      channelId: race.channelId,
+      body:
+        added && actorId && actorId !== userId
+          ? `${joinerName} was added by ${actorName}`
+          : `${joinerName} joined the race`,
+      eventId: event.id,
+    });
+  }
 
   /*
    * Nobody is told about their own act (PRD/12 rule 10), and here that is not a nicety: the
@@ -1211,19 +1261,32 @@ const onRaceMembershipDecided: EffectHandler = async (event, deps) => {
  *
  * Drops their subscription to that race's channel specifically. Their club membership is
  * untouched, so a blanket club-wide revocation would wrongly cut them out of club chat.
+ *
+ * **The revocation happens BEFORE the message is posted**, and the order is the point: the
+ * line is about somebody's departure, and publishing it while they are still subscribed
+ * delivers "Mike was removed by Sarah" to Mike, live, in a room he has just lost. Club chat
+ * has no equivalent worry because leaving a club takes the channel with it.
  */
 const onRaceMemberDeparted: EffectHandler = async (event, deps) => {
   const raceId = String(event.payload['raceId']);
   const userId = String(event.payload['userId']);
+  const actorId = event.payload['actorId'] as string | null;
 
-  const rows = await deps.db.execute<{ id: string }>(
-    sql`SELECT id FROM channels WHERE scope = 'race' AND scope_id = ${raceId}::uuid`,
-  );
-  const channelIds = rows.rows.map((r) => r.id);
-  if (channelIds.length === 0) return;
+  const race = await raceContext(deps.db, raceId);
+  if (!race) return;
 
-  await publishRevocation(deps.redis, { userId, channelIds });
+  await publishRevocation(deps.redis, { userId, channelIds: [race.channelId] });
   deps.log('info', 'revoked race subscriptions', { userId, raceId });
+
+  // `actorId` is null when they left under their own steam, which is the same signal the club
+  // departure handler reads to choose between the two sentences.
+  const name = await displayName(deps.db, userId);
+  const actorName = actorId ? await displayName(deps.db, actorId) : null;
+  await postSystemMessage(deps, {
+    channelId: race.channelId,
+    body: actorName ? `${name} was removed by ${actorName}` : `${name} left the race`,
+    eventId: event.id,
+  });
 };
 
 /** A race was deleted. Its channel is gone, so every roster member's socket must drop it. */

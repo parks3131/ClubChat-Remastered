@@ -29,6 +29,14 @@ logistics - replacing the throwaway group chat spun up per race.
 7. **A race member is redirected straight into race chat** on entering the race. Chat is the
    race's home screen; everything else is reached from its header menu.
 8. Any race member can leave the race, which also removes them from their car group.
+
+   8a. **Race chat narrates its own roster**, the way club chat does (rule 8 of
+   [Clubs and membership](04-clubs-and-membership.md)): "Mike joined the race", "Mike was
+   added by Sarah", "Mike left the race", "Mike was removed by Sarah". A denial is never
+   announced - it is addressed to the person refused, and announcing it to the room they were
+   kept out of is a different and worse act. **This is also how the roster hears about it at
+   all**: an ordinary chat message is what gives a channel its unread count, so before these
+   lines existed a race could gain and lose members with no sign of it anywhere.
 9. Leaving the parent club removes the user from every race in it.
 
 #### Meet Information

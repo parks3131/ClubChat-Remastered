@@ -52,7 +52,15 @@ beforeEach(async () => {
   );
   deps = {
     db: h.db,
-    redis: null as never,
+    /*
+     * A stub that answers rather than a null.
+     *
+     * These handlers publish - the departure path revokes a subscription and both paths post a
+     * system message - and a null client throws inside the drain, which the outbox absorbs as a
+     * retry. The effect would silently park and the assertions below would still pass, since
+     * they would simply be looking at a database nothing had written to.
+     */
+    redis: { publish: async () => 1 } as never,
     push: { send: async () => [] } as never,
     log: silent,
     // Push evaluation is not what these tests are about; dropping the deferred work keeps
@@ -76,6 +84,7 @@ const ctxFor = (userId: string) => loadAccessContext(h.db, userId);
 type Fixture = {
   clubId: string;
   raceId: string;
+  raceChannelId: string;
   /** Creates the race, so auto-rostered on it. */
   hostAdminId: string;
   /** Admin tier, deliberately NOT on the race roster. */
@@ -121,11 +130,22 @@ async function setup(): Promise<Fixture> {
   return {
     clubId: club.clubId,
     raceId: race.raceId,
+    raceChannelId: race.channelId,
     hostAdminId,
     ownerId,
     offRosterAdminId,
     requesterId,
   };
+}
+
+/** The system lines in race chat, oldest first. */
+async function raceChatLines(f: Fixture): Promise<string[]> {
+  const rows = await h.db.execute<{ body: string }>(sql`
+    SELECT body FROM messages
+     WHERE channel_id = ${f.raceChannelId}::uuid AND type = 'system'
+     ORDER BY seq
+  `);
+  return rows.rows.map((r) => r.body);
 }
 
 /** Every notification this user can see, newest first, as `[body, read]` pairs. */
@@ -376,6 +396,128 @@ describe('deciding a request settles it in every admin inbox', () => {
       ['Requester asked to join Fall Classic', false],
     ]);
     expect(await unreadNotifications(f.hostAdminId)).toBe(1);
+  });
+});
+
+// ===========================================================================
+// What race chat says about its own roster
+// ===========================================================================
+
+/**
+ * Race chat said nothing at all about who was on the roster.
+ *
+ * Club chat and Eboard chat have narrated joins and departures since Phase 1; this handler
+ * wrote the requester's notification and stopped. The founder's report was that approving
+ * somebody "didn't say anything in the chat, and the notification doesn't pop up to anyone" -
+ * and the second half follows from the first, because a channel's unread count comes from its
+ * messages. No message meant no unread, so no badge for anybody on the roster.
+ */
+describe('race chat narrates its roster, like club chat does', () => {
+  it('says who joined when a request is approved', async () => {
+    const f = await setup();
+    await requestAndDrain(f);
+
+    await decideRaceRequest(
+      h.db,
+      await ctxFor(f.hostAdminId),
+      await pendingRequestId(f, f.requesterId),
+      true,
+    );
+    await drainOnce(h.db, deps);
+
+    expect(await raceChatLines(f)).toEqual(['Requester joined the race']);
+  });
+
+  it('names the admin when somebody is added rather than approved', async () => {
+    const f = await setup();
+
+    await addRaceMember(h.db, await ctxFor(f.hostAdminId), f.raceId, f.requesterId);
+    await drainOnce(h.db, deps);
+
+    expect(await raceChatLines(f)).toEqual(['Requester was added by HostAdmin']);
+  });
+
+  /** The Owner let themselves in, so they joined - "Owner was added by Owner" is nonsense. */
+  it('says the Owner joined, not that they added themselves', async () => {
+    const f = await setup();
+
+    await joinRaceDirectly(h.db, await ctxFor(f.ownerId), f.raceId);
+    await drainOnce(h.db, deps);
+
+    expect(await raceChatLines(f)).toEqual(['Owner joined the race']);
+  });
+
+  it('says nothing when a request is denied', async () => {
+    const f = await setup();
+    await requestAndDrain(f);
+
+    await decideRaceRequest(
+      h.db,
+      await ctxFor(f.hostAdminId),
+      await pendingRequestId(f, f.requesterId),
+      false,
+    );
+    await drainOnce(h.db, deps);
+
+    // A refusal is addressed to the person refused. Announcing it to the room they were kept
+    // out of is a different and worse act - the same rule the Eboard handler follows.
+    expect(await raceChatLines(f)).toEqual([]);
+  });
+
+  it('says who left, and who removed them', async () => {
+    const f = await setup();
+
+    await addRaceMember(h.db, await ctxFor(f.hostAdminId), f.raceId, f.requesterId);
+    await drainOnce(h.db, deps);
+
+    // Removed by somebody else.
+    await removeRaceMember(h.db, await ctxFor(f.hostAdminId), f.raceId, f.requesterId);
+    await drainOnce(h.db, deps);
+
+    // And leaving under their own steam.
+    await addRaceMember(h.db, await ctxFor(f.hostAdminId), f.raceId, f.offRosterAdminId);
+    await drainOnce(h.db, deps);
+    await removeRaceMember(h.db, await ctxFor(f.offRosterAdminId), f.raceId, f.offRosterAdminId);
+    await drainOnce(h.db, deps);
+
+    expect(await raceChatLines(f)).toEqual([
+      'Requester was added by HostAdmin',
+      'Requester was removed by HostAdmin',
+      'OffRosterAdmin was added by HostAdmin',
+      'OffRosterAdmin left the race',
+    ]);
+  });
+
+  /**
+   * The point of the whole thing: a message is what gives a channel an unread count, so the
+   * roster now hears about an arrival without anybody being sent a discrete notification.
+   */
+  it('gives the rest of the roster an unread chat, which is what nobody was getting', async () => {
+    const f = await setup();
+    await requestAndDrain(f);
+
+    const before = await badgeCount(h.db, f.hostAdminId);
+
+    await decideRaceRequest(
+      h.db,
+      await ctxFor(f.hostAdminId),
+      await pendingRequestId(f, f.requesterId),
+      true,
+    );
+    await drainOnce(h.db, deps);
+
+    const page = await readInbox(h.db, f.hostAdminId);
+    const unreadChat = page.rows.find(
+      (r) => r.kind === 'chat_unread' && r.channelId === f.raceChannelId,
+    );
+    expect(unreadChat).toBeDefined();
+
+    /*
+     * The badge holds steady rather than climbing: the request row it was counting has just
+     * been settled, and the race chat it is now counting has just gained a line. One piece of
+     * outstanding work became one thing to read.
+     */
+    expect(await badgeCount(h.db, f.hostAdminId)).toBe(before);
   });
 });
 
