@@ -101,12 +101,19 @@ export default function RaceRosterScreen() {
             actionsFor={actionsFor}
             {...(isManager
               ? {
-                  addSearch: {
+                  addPeople: {
+                    /*
+                     * Pick, not search. This pool is one club's members, which is a list you
+                     * read down and tick off - so it is shown before anything is typed and a
+                     * whole selection goes on the roster in one act. The club roster's pool
+                     * spans every club you are in and stays type-to-search for that reason.
+                     */
+                    mode: 'pick' as const,
                     // Narrower than the club's on purpose: only this race's own club members.
                     placeholder: 'Search club members',
                     find: (q: string) =>
-                      raceApi.memberCandidates(raceId, q).then((r) => r.candidates),
-                    add: (id: string) => raceApi.addMember(raceId, id),
+                      raceApi.memberCandidates(raceId, q, 100).then((r) => r.candidates),
+                    addMany: (ids: string[]) => raceApi.addMembers(raceId, ids),
                   },
                 }
               : {})}

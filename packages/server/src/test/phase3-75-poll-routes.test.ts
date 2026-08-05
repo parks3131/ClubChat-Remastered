@@ -156,7 +156,7 @@ describe('poll routes: the race scope, by direct URL', () => {
       raceDate: '2027-09-09',
     });
     const raceId = race.body.raceId;
-    await as(owner, 'POST', `/races/${raceId}/members`, { userId: racer.userId });
+    await as(owner, 'POST', `/races/${raceId}/members`, { userIds: [racer.userId] });
 
     // The owner created the race, so they hold both a roster row and club-admin status -
     // which is exactly what creating a race poll requires.
@@ -201,7 +201,7 @@ describe('poll routes: the race scope, by direct URL', () => {
       raceDate: '2027-10-10',
     });
     const raceId = race.body.raceId;
-    await as(victimOwner, 'POST', `/races/${raceId}/members`, { userId: attacker.userId });
+    await as(victimOwner, 'POST', `/races/${raceId}/members`, { userIds: [attacker.userId] });
 
     // ...and an owner, therefore an admin, of a club of their own.
     await createClubAs(attacker);

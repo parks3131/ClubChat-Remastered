@@ -122,7 +122,14 @@ export default function ClubMembersScreen() {
             actionsFor={actionsFor}
             {...(isAdmin
               ? {
-                  addSearch: {
+                  addPeople: {
+                    /*
+                     * Search, not pick, and the pool is the reason. A club's candidates are
+                     * everybody you share ANY club with, which is not a list anybody reads down
+                     * - opening the panel onto it would be a wall of near-strangers. The race
+                     * and Eboard rosters draw from one club and do offer the pick list.
+                     */
+                    mode: 'search' as const,
                     placeholder: 'Search by name',
                     find: (q: string) =>
                       clubApi.memberCandidates(clubId, q).then((r) => r.candidates),

@@ -19,6 +19,14 @@ logistics - replacing the throwaway group chat spun up per race.
    the way back in must not itself need an approver. Not the admin tier, because an admin who
    could walk onto any roster would make rule 4 true only until they chose otherwise. Once on
    the roster the Owner is an ordinary race member who also manages the club.
+
+   3b. **Adding people is a pick list, not a search box.** The race form and the race roster
+   both show the club's members straight away, to be scrolled and tapped; a selected person is
+   tinted with the accent so the answer to "who have I chosen" is the list already on screen.
+   Search narrows that list rather than being the only way to see any of it, and the whole
+   selection is added in one act. **The club roster is deliberately the exception** and stays
+   type-to-search: its pool is everybody you share *any* club with, which is not a list anybody
+   reads down. The Eboard roster picks, like a race.
 4. **A club admin is a "manager" of every race in their club** - full management authority -
    but **management authority is not access**. Chat, polls, and car-group assignment all
    require a real roster row, for admins too.
@@ -37,6 +45,11 @@ logistics - replacing the throwaway group chat spun up per race.
    kept out of is a different and worse act. **This is also how the roster hears about it at
    all**: an ordinary chat message is what gives a channel its unread count, so before these
    lines existed a race could gain and lose members with no sign of it anywhere.
+
+   8b. **A batch add is one line, not one per person**: "Sarah added Mike, Alex and 3 others to
+   the race". Two names then a count - listing eight makes a line nobody finishes, and a bare
+   "8 people" answers with a number when the question is who. Each person still gets their own
+   notification, because that one is addressed to them individually.
 9. Leaving the parent club removes the user from every race in it.
 
 #### Meet Information
@@ -60,8 +73,10 @@ logistics - replacing the throwaway group chat spun up per race.
 17. **Each group can have one designated Incharge**, who must be a current member of that
     group.
 18. **If the Incharge leaves or is removed, the group's Incharge is cleared automatically and
-    every club admin is notified that the group needs a new one.** The rest of the group is
-    untouched, and the group is not dissolved.
+    the admins on that race's roster are notified that the group needs a new one.** The rest of
+    the group is untouched, and the group is not dissolved. *Narrowed from "every club admin" on
+    2026-08-05, with the race join request: a stranded car group is the business of whoever is
+    travelling, not of every admin in the club.*
     *Exception, added 2026-07-29: when the Incharge leaves **the whole club**, the Incharge is
     still cleared but no notification fires. Leaving a club is a larger event than vacating a
     car seat, and one "needs a new Incharge" notification per affected group on top of "X left

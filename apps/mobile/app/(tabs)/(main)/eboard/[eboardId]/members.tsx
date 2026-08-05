@@ -99,11 +99,14 @@ export default function EboardMembersScreen() {
                 eboardApi.decideRequest(requestId, approve)
               }
               actionsFor={actionsFor}
-              addSearch={{
+              addPeople={{
+                // Pick, not search: the pool is this club's admins, which is a short list to
+                // read down rather than one to interrogate a name at a time.
+                mode: 'pick',
                 placeholder: 'Search club admins',
                 find: (q: string) =>
-                  eboardApi.memberCandidates(eboardId, q).then((r) => r.candidates),
-                add: (id: string) => eboardApi.addMember(eboardId, id),
+                  eboardApi.memberCandidates(eboardId, q, 100).then((r) => r.candidates),
+                addMany: (ids: string[]) => eboardApi.addMembers(eboardId, ids),
               }}
               emptyTitle="Nobody in the space yet"
               onChanged={roster.reload}

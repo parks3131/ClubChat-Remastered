@@ -227,8 +227,8 @@ describe('a read that names somebody carries their picture', () => {
       raceDate: '2027-04-04',
     });
     const raceId = race.body.raceId;
-    await as(owner, 'POST', `/races/${raceId}/members`, { userId: seated.userId });
-    await as(owner, 'POST', `/races/${raceId}/members`, { userId: waiting.userId });
+    await as(owner, 'POST', `/races/${raceId}/members`, { userIds: [seated.userId] });
+    await as(owner, 'POST', `/races/${raceId}/members`, { userIds: [waiting.userId] });
 
     const group = await as(owner, 'POST', `/races/${raceId}/car-groups`);
     await as(owner, 'POST', `/car-groups/${group.body.groupId}/members`, {

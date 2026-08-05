@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { markRosterSeen } from '../../domain/inbox.ts';
 import { searchMemberCandidates } from '../../domain/member-candidates.ts';
 import {
-  addRaceMember,
+  addRaceMembers,
   assignToCarGroup,
   createCarGroup,
   createRace,
@@ -234,31 +234,43 @@ export function registerRaceRoutes(app: FastifyInstance, deps: AppDeps): void {
     return result;
   });
 
-  /** Who this race could add: members of its own club who are not already on the roster. */
-  app.get<{ Params: { id: string }; Querystring: { q?: string } }>(
-    '/races/:id/member-candidates',
-    async (request, reply) => {
-      const result = await searchMemberCandidates(
-        deps.db,
-        request.access!,
-        { kind: 'race', raceId: request.params.id },
-        { query: request.query.q },
-      );
-      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
-      return result;
-    },
-  );
+  /**
+   * Who this race could add: members of its own club who are not already on the roster.
+   *
+   * `limit` is here for the roster's picker, which lists the club to be scrolled rather than
+   * waiting to be searched. The read caps it at 100 whatever is asked for; past that the
+   * search box is the way through, which is why both still exist.
+   */
+  app.get<{ Params: { id: string } }>('/races/:id/member-candidates', async (request, reply) => {
+    const query = ListQuery.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
 
-  const AddRaceMemberBody = z.object({ userId: z.string().uuid() });
+    const result = await searchMemberCandidates(
+      deps.db,
+      request.access!,
+      { kind: 'race', raceId: request.params.id },
+      { query: query.data.q, limit: query.data.limit },
+    );
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  /**
+   * Add people to the roster. A list, because the picker adds a whole selection in one act.
+   *
+   * One shape rather than a `userId` and a `userIds` form: two bodies meaning the same thing is
+   * how one of them ends up with a rule the other is missing.
+   */
+  const AddRaceMembersBody = z.object({ userIds: z.array(z.string().uuid()).min(1).max(100) });
 
   app.post<{ Params: { id: string } }>('/races/:id/members', async (request, reply) => {
-    const body = AddRaceMemberBody.safeParse(request.body);
+    const body = AddRaceMembersBody.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
-    const result = await addRaceMember(
+    const result = await addRaceMembers(
       deps.db,
       request.access!,
       request.params.id,
-      body.data.userId,
+      body.data.userIds,
     );
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return result;

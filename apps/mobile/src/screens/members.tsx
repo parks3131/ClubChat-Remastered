@@ -35,6 +35,7 @@ import type { MemberCandidate } from '../api.ts';
 import { timeAgo } from '../dates.ts';
 import { color, radius, space, type } from '../theme.ts';
 import { Action, Avatar, Card, EmptyState, SearchField, SheetMenu } from '../ui.tsx';
+import { MemberPicker } from './member-picker.tsx';
 
 /** One person on a roster, already reduced to what this screen draws. */
 export type MemberRow = {
@@ -71,7 +72,7 @@ export function MembersScreen({
   pendingRequests,
   onDecideRequest,
   actionsFor,
-  addSearch,
+  addPeople,
   emptyTitle,
   onChanged,
 }: {
@@ -93,12 +94,29 @@ export function MembersScreen({
    * menu is therefore the caller's decision, which is where the rule actually lives.
    */
   actionsFor: (row: MemberRow) => readonly MemberAction[];
-  /** Absent for a caller who may not add anybody, which hides the control entirely. */
-  addSearch?: {
-    placeholder: string;
-    find: (query: string) => Promise<MemberCandidate[]>;
-    add: (userId: string) => Promise<unknown>;
-  };
+  /**
+   * How this scope adds people. Absent for a caller who may not, which hides the control.
+   *
+   * **Two shapes, because the pools are different sizes of thing.** A race or the Eboard draws
+   * from one club, which is a list somebody can read down and tick off - so it is shown up
+   * front and adds a whole selection at once. The club roster's pool is everybody you share
+   * *any* club with, which is not a list anybody browses; it stays type-to-search, one at a
+   * time. Making both the same would mean opening the club roster onto a wall of strangers.
+   */
+  addPeople?:
+    | {
+        mode: 'search';
+        placeholder: string;
+        find: (query: string) => Promise<MemberCandidate[]>;
+        add: (userId: string) => Promise<unknown>;
+      }
+    | {
+        mode: 'pick';
+        placeholder: string;
+        /** Called with '' on open to fill the list, then with whatever is typed. */
+        find: (query: string) => Promise<MemberCandidate[]>;
+        addMany: (userIds: string[]) => Promise<unknown>;
+      };
   emptyTitle: string;
   /** Called after any write, so the caller can re-read the roster it owns. */
   onChanged: () => void;
@@ -266,15 +284,26 @@ export function MembersScreen({
         )}
       </View>
 
-      {addSearch !== undefined && !adding && (
+      {addPeople !== undefined && !adding && (
         <View style={styles.footer}>
           <Action label="Add members" onPress={() => setAdding(true)} />
         </View>
       )}
 
-      {addSearch !== undefined && adding && (
+      {addPeople !== undefined && adding && addPeople.mode === 'search' && (
         <AddMembers
-          config={addSearch}
+          config={addPeople}
+          onClose={() => setAdding(false)}
+          onAdded={() => {
+            setAdding(false);
+            onChanged();
+          }}
+        />
+      )}
+
+      {addPeople !== undefined && adding && addPeople.mode === 'pick' && (
+        <PickMembers
+          config={addPeople}
           onClose={() => setAdding(false)}
           onAdded={() => {
             setAdding(false);
@@ -413,6 +442,125 @@ function AddMembers({
   );
 }
 
+/**
+ * Pick several people at once.
+ *
+ * The pool is shown **before anything is typed**, because for a race or the Eboard it is one
+ * club's worth of people - a list you read down and tick off, not a haystack you interrogate.
+ * Searching narrows the same list rather than being the only way to see any of it.
+ *
+ * **Selection is held apart from the visible list**, in `chosen`, and that is the detail that
+ * makes searching and selecting work together: pick two people, type a name to find a third,
+ * and the first two are still selected even though they are no longer on screen. A component
+ * that tracked selection as a flag on the current results would silently drop them.
+ */
+function PickMembers({
+  config,
+  onClose,
+  onAdded,
+}: {
+  config: {
+    placeholder: string;
+    find: (query: string) => Promise<MemberCandidate[]>;
+    addMany: (userIds: string[]) => Promise<unknown>;
+  };
+  onClose: () => void;
+  onAdded: () => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<MemberCandidate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [chosen, setChosen] = useState<MemberCandidate[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    setLoading(true);
+    // Debounced, and every in-flight result is discarded if the query moved on - otherwise a
+    // slow response for "al" can land after a fast one for "alex" and overwrite it. The empty
+    // query is the initial load and is not debounced away, it simply runs with the others.
+    let live = true;
+    const timer = setTimeout(
+      () => {
+        config
+          .find(trimmed)
+          .then((found) => {
+            if (live) setResults(found);
+          })
+          .catch(() => {
+            if (live) setResults([]);
+          })
+          .finally(() => {
+            if (live) setLoading(false);
+          });
+      },
+      trimmed.length === 0 ? 0 : 300,
+    );
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [query, config]);
+
+  const chosenIds = useMemo(() => new Set(chosen.map((c) => c.userId)), [chosen]);
+
+  const toggle = (candidate: MemberCandidate) => {
+    setChosen((current) =>
+      current.some((c) => c.userId === candidate.userId)
+        ? current.filter((c) => c.userId !== candidate.userId)
+        : [...current, candidate],
+    );
+  };
+
+  return (
+    <View style={styles.addPanel}>
+      <View style={styles.addHead}>
+        <Text style={styles.addTitle}>
+          {chosen.length === 0 ? 'Add members' : `${chosen.length} selected`}
+        </Text>
+        <Pressable
+          onPress={onClose}
+          hitSlop={space.sm}
+          accessibilityRole="button"
+          accessibilityLabel="Close the add-member list"
+        >
+          <MaterialIcons name="close" size={22} color={color.textPrimary} />
+        </Pressable>
+      </View>
+
+      <SearchField value={query} onChangeText={setQuery} placeholder={config.placeholder} />
+
+      <MemberPicker
+        candidates={results}
+        selectedIds={chosenIds}
+        onToggle={toggle}
+        loading={loading}
+        disabled={saving}
+        emptyText={
+          query.trim().length > 0
+            ? 'Nobody here by that name.'
+            : 'Everybody eligible is already here.'
+        }
+      />
+
+      <Action
+        label={saving ? 'Adding...' : chosen.length === 0 ? 'Add' : `Add ${chosen.length}`}
+        disabled={chosen.length === 0 || saving}
+        onPress={() => {
+          setSaving(true);
+          void config
+            .addMany(chosen.map((c) => c.userId))
+            .then(onAdded)
+            // The roster is re-read either way by the caller, so a refusal ends up showing the
+            // truth rather than this component's guess at it.
+            .catch(() => setSaving(false));
+        }}
+        accessibilityLabel={`Add ${chosen.length} selected ${chosen.length === 1 ? 'person' : 'people'}`}
+      />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
   body: { flex: 1, padding: space.md, gap: space.sm },
@@ -482,4 +630,5 @@ const styles = StyleSheet.create({
     borderColor: color.hairline,
     padding: space.sm + 4,
   },
+
 });

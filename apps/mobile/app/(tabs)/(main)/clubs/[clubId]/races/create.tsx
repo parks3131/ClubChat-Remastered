@@ -11,10 +11,16 @@
  *     afterwards, and the creator always has it - so an admin who is not sure who is going can
  *     create the race now and let the roster fill itself. Without that sentence the field reads as
  *     a decision that has to be made up front.
- *  2. **Members are added one by one after the race exists**, because there is no bulk-add route
- *     and inventing one would put the same authorization in two places. A failure part-way through
- *     leaves the race created with fewer members rather than no race - which is the better half to
- *     fail on, since the roster is editable and the race is the thing that was asked for.
+ *  2. **Members are added after the race exists, in one call**, because the race has to have an id
+ *     before anybody can be put on its roster. A failure there leaves the race created with fewer
+ *     members rather than no race - which is the better half to fail on, since the roster is
+ *     editable and the race is the thing that was asked for.
+ *
+ *     > It used to be one request per person, on the reasoning that a bulk route "would put the
+ *     > same authorization in two places". It did not have to: `addRaceMembers` is now the single
+ *     > implementation and the singular add calls it with a list of one, so there is one
+ *     > authorization and one transaction. The loop also produced one "was added by" line per
+ *     > person, so a race created with eight people opened onto eight near-identical lines.
  */
 
 import { useMemo, useState } from 'react';
@@ -31,12 +37,13 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { clubApi, raceApi } from '../../../../../../src/api.ts';
+import { MemberPicker } from '../../../../../../src/screens/member-picker.tsx';
 import { useSession } from '../../../../../../src/chat-provider.tsx';
 import { useDeclareClub } from '../../../../../../src/current-space.tsx';
 import { toDateKey } from '../../../../../../src/dates.ts';
 import { color, radius, space, type } from '../../../../../../src/theme.ts';
 import { ARRIVED_FORWARD } from '../../../../../../src/nav.tsx';
-import { Avatar, DataScreen } from '../../../../../../src/ui.tsx';
+import { DataScreen } from '../../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../../src/use-load.ts';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -63,15 +70,29 @@ export default function CreateRaceScreen() {
    */
   const roster = useLoad(() => clubApi.roster(clubId), [clubId]);
 
+  /*
+   * The whole club, shown at once and narrowed by the search rather than revealed by it.
+   *
+   * It used to require two characters before showing anybody and then hide whoever was already
+   * picked, which made choosing eight people eight searches and left no way to see who you had
+   * chosen except a row of chips. Now the list is simply the club, and the people you have
+   * picked stay in it wearing the selected tint - so the answer to "who is coming" is the
+   * screen you are already looking at.
+   *
+   * Still filtered in hand rather than searched over the wire: everybody eligible for a race is
+   * already a club member, the roster read is authorized, and this keeps working offline.
+   */
   const results = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (needle.length < 2) return [];
-    const taken = new Set([userId, ...picked.map((p) => p.userId)]);
     return (roster.data?.members ?? [])
-      .filter((member) => !taken.has(member.userId))
-      .filter((member) => member.name.toLowerCase().includes(needle))
-      .slice(0, 8);
-  }, [query, roster.data, picked, userId]);
+      // The creator is auto-rostered by `createRace`, so offering them would be a row that
+      // does nothing.
+      .filter((member) => member.userId !== userId)
+      .filter((member) => needle.length === 0 || member.name.toLowerCase().includes(needle))
+      .map((member) => ({ userId: member.userId, name: member.name, image: member.image }));
+  }, [query, roster.data, userId]);
+
+  const pickedIds = useMemo(() => new Set(picked.map((p) => p.userId)), [picked]);
 
   const submit = async () => {
     setFailed(null);
@@ -96,10 +117,16 @@ export default function CreateRaceScreen() {
         name: name.trim(),
         raceDate: raceDate.trim(),
       });
-      for (const person of picked) {
-        // Individually, and tolerated if one fails: the race exists either way and its roster
-        // is editable. Aborting here would leave a created race the screen never navigated to.
-        await raceApi.addMember(created.raceId, person.userId).catch(() => undefined);
+      if (picked.length > 0) {
+        /*
+         * One call, and tolerated if it fails: the race exists either way and its roster is
+         * editable, so aborting here would strand a created race the screen never navigated to.
+         *
+         * It used to be one request per person, which also meant one "was added by" line in the
+         * new race's chat per person. A race created with eight people opened onto eight
+         * near-identical lines before anybody had said anything.
+         */
+        await raceApi.addMembers(created.raceId, picked.map((p) => p.userId)).catch(() => undefined);
       }
       // `replace`, not push: going back from the new race must not return to a form that would
       // create a second one.
@@ -147,24 +174,6 @@ export default function CreateRaceScreen() {
           access as the creator.
         </Text>
 
-        {picked.length > 0 && (
-          <View style={styles.chipRow}>
-            {picked.map((person) => (
-              <Pressable
-                key={person.userId}
-                style={styles.chip}
-                onPress={() =>
-                  setPicked((current) => current.filter((p) => p.userId !== person.userId))
-                }
-                accessibilityRole="button"
-                accessibilityLabel={`Remove ${person.name}`}
-              >
-                <Text style={styles.chipLabel}>{person.name}  ✕</Text>
-              </Pressable>
-            ))}
-          </View>
-        )}
-
         <TextInput
           style={styles.input}
           placeholder="Search by name"
@@ -177,23 +186,23 @@ export default function CreateRaceScreen() {
 
         <DataScreen load={roster} errorMessage="Couldn't load the club's members.">
           {() => (
-            <>
-              {results.map((member) => (
-                <Pressable
-                  key={member.userId}
-                  style={styles.result}
-                  onPress={() => {
-                    setPicked((current) => [...current, { userId: member.userId, name: member.name }]);
-                    setQuery('');
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Add ${member.name}`}
-                >
-                  <Avatar name={member.name} image={member.image} size={32} />
-                  <Text style={styles.resultName}>{member.name}</Text>
-                </Pressable>
-              ))}
-            </>
+            <MemberPicker
+              candidates={results}
+              selectedIds={pickedIds}
+              disabled={saving}
+              onToggle={(candidate) =>
+                setPicked((current) =>
+                  current.some((p) => p.userId === candidate.userId)
+                    ? current.filter((p) => p.userId !== candidate.userId)
+                    : [...current, { userId: candidate.userId, name: candidate.name }],
+                )
+              }
+              emptyText={
+                query.trim().length > 0
+                  ? 'Nobody in this club by that name.'
+                  : 'Nobody else in this club yet.'
+              }
+            />
           )}
         </DataScreen>
 
@@ -240,27 +249,6 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm + 6,
   },
   error: { ...type.bodySmall, color: color.error, marginTop: space.sm },
-
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
-  chip: {
-    backgroundColor: color.accentSoft,
-    borderRadius: radius.pill,
-    paddingHorizontal: space.sm + 4,
-    paddingVertical: space.xs + 2,
-  },
-  chipLabel: { ...type.label, fontSize: 13, color: color.accent, textTransform: 'none' },
-
-  result: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm + 4,
-    backgroundColor: color.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.hairline,
-    padding: space.md,
-  },
-  resultName: { ...type.headline, color: color.textPrimary },
 
   create: {
     backgroundColor: color.accent,

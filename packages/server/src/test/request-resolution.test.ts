@@ -20,6 +20,7 @@ import { sql } from 'drizzle-orm';
 import { createClub } from '../domain/create-club.ts';
 import {
   addRaceMember,
+  addRaceMembers,
   createRace,
   decideRaceRequest,
   joinRaceDirectly,
@@ -518,6 +519,112 @@ describe('race chat narrates its roster, like club chat does', () => {
      * outstanding work became one thing to read.
      */
     expect(await badgeCount(h.db, f.hostAdminId)).toBe(before);
+  });
+});
+
+// ===========================================================================
+// Adding several people at once
+// ===========================================================================
+
+/**
+ * The roster picker adds a whole selection in one act, so the server has to treat it as one.
+ *
+ * Emitting an event per person would be simpler and wrong in a way the founder would see
+ * immediately: a race created with eight people would open onto eight near-identical "was added
+ * by" lines before anybody had said anything in it.
+ */
+describe('adding several people at once', () => {
+  /** Extra club members, so there is a real batch to add. */
+  async function extraMembers(f: Fixture, names: readonly string[]): Promise<string[]> {
+    const ids = [];
+    for (const name of names) {
+      const id = await makeUser(name);
+      await h.db.insert(clubMemberships).values({ clubId: f.clubId, userId: id, role: 'member' });
+      ids.push(id);
+    }
+    return ids;
+  }
+
+  it('posts one line for the batch, naming two and counting the rest', async () => {
+    const f = await setup();
+    const ids = await extraMembers(f, ['Ana', 'Ben', 'Cara', 'Dan']);
+
+    const result = await addRaceMembers(h.db, await ctxFor(f.hostAdminId), f.raceId, ids);
+    expect(result).toMatchObject({ ok: true, added: 4 });
+    await drainOnce(h.db, deps);
+
+    expect(await raceChatLines(f)).toEqual(['HostAdmin added Ana, Ben and 2 others to the race']);
+  });
+
+  it('says "and 1 other" rather than "1 others"', async () => {
+    const f = await setup();
+    const ids = await extraMembers(f, ['Ana', 'Ben', 'Cara']);
+
+    await addRaceMembers(h.db, await ctxFor(f.hostAdminId), f.raceId, ids);
+    await drainOnce(h.db, deps);
+
+    expect(await raceChatLines(f)).toEqual(['HostAdmin added Ana, Ben and 1 other to the race']);
+  });
+
+  it('names both when there are exactly two', async () => {
+    const f = await setup();
+    const ids = await extraMembers(f, ['Ana', 'Ben']);
+
+    await addRaceMembers(h.db, await ctxFor(f.hostAdminId), f.raceId, ids);
+    await drainOnce(h.db, deps);
+
+    expect(await raceChatLines(f)).toEqual(['HostAdmin added Ana and Ben to the race']);
+  });
+
+  it('still tells each person individually, because that part IS addressed to them', async () => {
+    const f = await setup();
+    const ids = await extraMembers(f, ['Ana', 'Ben', 'Cara']);
+
+    await addRaceMembers(h.db, await ctxFor(f.hostAdminId), f.raceId, ids);
+    await drainOnce(h.db, deps);
+
+    for (const id of ids) {
+      expect(await inboxOf(id)).toEqual([['HostAdmin added you to Fall Classic', false]]);
+    }
+  });
+
+  /**
+   * A stale selection must not sink the whole batch.
+   *
+   * The picker's list is a snapshot, so somebody in it may have joined a second before Add was
+   * pressed. Failing all eight because of one is a worse answer than adding the seven.
+   */
+  it('skips somebody already on the roster instead of refusing the batch', async () => {
+    const f = await setup();
+    const ids = await extraMembers(f, ['Ana', 'Ben']);
+
+    await addRaceMembers(h.db, await ctxFor(f.hostAdminId), f.raceId, [ids[0]!]);
+    await drainOnce(h.db, deps);
+
+    const second = await addRaceMembers(h.db, await ctxFor(f.hostAdminId), f.raceId, ids);
+    expect(second).toMatchObject({ ok: true, added: 1 });
+    await drainOnce(h.db, deps);
+
+    // The second line names only the person who was actually new.
+    expect(await raceChatLines(f)).toEqual([
+      'Ana was added by HostAdmin',
+      'Ben was added by HostAdmin',
+    ]);
+  });
+
+  it('refuses the batch if the manager put themselves in it', async () => {
+    const f = await setup();
+    const ids = await extraMembers(f, ['Ana']);
+
+    const attempt = await addRaceMembers(h.db, await ctxFor(f.offRosterAdminId), f.raceId, [
+      ...ids,
+      f.offRosterAdminId,
+    ]);
+    expect(attempt).toEqual({ ok: false, code: 'forbidden' });
+
+    // And nothing was added, so the refusal is not half-applied.
+    await drainOnce(h.db, deps);
+    expect(await raceChatLines(f)).toEqual([]);
   });
 });
 

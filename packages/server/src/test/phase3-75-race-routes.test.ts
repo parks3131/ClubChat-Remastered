@@ -231,7 +231,7 @@ describe('race routes: the authority-versus-access boundary', () => {
 
     // The admin holds full management authority and no roster row.
     const added = await as(admin, 'POST', `/races/${raceId}/members`, {
-      userId: member.userId,
+      userIds: [member.userId],
     });
     expect(added.status).toBe(200);
 
@@ -303,7 +303,7 @@ describe('race routes: the authority-versus-access boundary', () => {
       raceDate: '2027-02-14',
     });
     const raceId = created.body.raceId;
-    await as(owner, 'POST', `/races/${raceId}/members`, { userId: other.userId });
+    await as(owner, 'POST', `/races/${raceId}/members`, { userIds: [other.userId] });
 
     const group = await as(owner, 'POST', `/races/${raceId}/car-groups`);
     const groupId = group.body.groupId;
@@ -348,7 +348,7 @@ describe('race routes: the authority-versus-access boundary', () => {
       raceDate: '2027-03-03',
     });
     const raceId = created.body.raceId;
-    await as(owner, 'POST', `/races/${raceId}/members`, { userId: rider.userId });
+    await as(owner, 'POST', `/races/${raceId}/members`, { userIds: [rider.userId] });
 
     const group = await as(owner, 'POST', `/races/${raceId}/car-groups`);
     const groupId = group.body.groupId;
@@ -477,8 +477,8 @@ describe('race routes: requests and pins', () => {
       raceDate: '2027-05-05',
     });
     const raceId = created.body.raceId;
-    await as(owner, 'POST', `/races/${raceId}/members`, { userId: a.userId });
-    await as(owner, 'POST', `/races/${raceId}/members`, { userId: b.userId });
+    await as(owner, 'POST', `/races/${raceId}/members`, { userIds: [a.userId] });
+    await as(owner, 'POST', `/races/${raceId}/members`, { userIds: [b.userId] });
 
     // One race member cannot remove another: that is a manager's business.
     expect((await as(a, 'DELETE', `/races/${raceId}/members/${b.userId}`)).status).toBe(404);
@@ -503,7 +503,7 @@ describe('race routes: requests and pins', () => {
       raceDate: '2027-06-06',
     });
     const raceId = created.body.raceId;
-    await as(owner, 'POST', `/races/${raceId}/members`, { userId: member.userId });
+    await as(owner, 'POST', `/races/${raceId}/members`, { userIds: [member.userId] });
 
     expect((await as(member, 'DELETE', `/races/${raceId}`)).status).toBe(404);
 
@@ -573,7 +573,7 @@ describe('race routes: club scoping', () => {
     expect((await as(ownerB, 'POST', `/races/${raceId}/pin`, { pinned: true })).status).toBe(404);
     expect((await as(ownerB, 'DELETE', `/races/${raceId}`)).status).toBe(404);
     expect(
-      (await as(ownerB, 'POST', `/races/${raceId}/members`, { userId: ownerB.userId })).status,
+      (await as(ownerB, 'POST', `/races/${raceId}/members`, { userIds: [ownerB.userId] })).status,
     ).toBe(404);
 
     // And their own club's list is unaffected by the other club's races.
@@ -736,7 +736,7 @@ describe('a race has its own identity', () => {
     });
     const raceId = created.body.raceId;
     // On the roster - which is ACCESS, and deliberately not authority.
-    await as(owner, 'POST', `/races/${raceId}/members`, { userId: runner.userId });
+    await as(owner, 'POST', `/races/${raceId}/members`, { userIds: [runner.userId] });
 
     // 404 rather than 403, like every refusal in this codebase: it must not confirm what it
     // refused. The runner can read the race - they just cannot edit it.
@@ -806,7 +806,7 @@ describe('deleting a race takes its conversation with it', () => {
       raceDate: '2026-09-15',
     });
     const raceId = created.body.raceId;
-    await as(owner, 'POST', `/races/${raceId}/members`, { userId: runner.userId });
+    await as(owner, 'POST', `/races/${raceId}/members`, { userIds: [runner.userId] });
 
     expect((await as(runner, 'DELETE', `/races/${raceId}`)).status).toBe(404);
     expect((await as(owner, 'GET', `/races/${raceId}`)).status).toBe(200);

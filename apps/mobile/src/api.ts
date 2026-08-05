@@ -397,14 +397,20 @@ export const raceApi = {
       body: {},
     }),
 
-  /** Members of this race's own club who are not already on the roster. */
-  memberCandidates: (raceId: string, q: string) =>
+  /**
+   * Members of this race's own club who are not already on the roster.
+   *
+   * `limit` is what lets the roster's picker show the club to be scrolled rather than waiting
+   * to be searched. The server caps it at 100; past that the search box is the way through.
+   */
+  memberCandidates: (raceId: string, q: string, limit?: number) =>
     apiFetch<{ candidates: MemberCandidate[] }>(
-      `/races/${raceId}/member-candidates${query({ q })}`,
+      `/races/${raceId}/member-candidates${query({ q, limit: limit?.toString() })}`,
     ),
 
-  addMember: (raceId: string, userId: string) =>
-    apiFetch<unknown>(`/races/${raceId}/members`, { method: 'POST', body: { userId } }),
+  /** A list, because the picker adds a whole selection as one act. */
+  addMembers: (raceId: string, userIds: string[]) =>
+    apiFetch<{ added: number }>(`/races/${raceId}/members`, { method: 'POST', body: { userIds } }),
 
   removeMember: (raceId: string, userId: string) =>
     apiFetch<unknown>(`/races/${raceId}/members/${userId}`, { method: 'DELETE' }),
@@ -585,13 +591,17 @@ export const eboardApi = {
    * Narrower than the other two on purpose: `addEboardMember` refuses a plain member, so
    * offering one here would be a search result that fails on tap.
    */
-  memberCandidates: (eboardId: string, q: string) =>
+  memberCandidates: (eboardId: string, q: string, limit?: number) =>
     apiFetch<{ candidates: MemberCandidate[] }>(
-      `/eboards/${eboardId}/member-candidates${query({ q })}`,
+      `/eboards/${eboardId}/member-candidates${query({ q, limit: limit?.toString() })}`,
     ),
 
-  addMember: (eboardId: string, userId: string) =>
-    apiFetch<unknown>(`/eboards/${eboardId}/members`, { method: 'POST', body: { userId } }),
+  /** A list, because the picker adds a whole selection as one act. */
+  addMembers: (eboardId: string, userIds: string[]) =>
+    apiFetch<{ added: number }>(`/eboards/${eboardId}/members`, {
+      method: 'POST',
+      body: { userIds },
+    }),
 
   removeMember: (eboardId: string, userId: string) =>
     apiFetch<unknown>(`/eboards/${eboardId}/members/${userId}`, { method: 'DELETE' }),

@@ -1257,6 +1257,108 @@ const onRaceMembershipDecided: EffectHandler = async (event, deps) => {
 };
 
 /**
+ * Names, as a sentence: "Mike", "Mike and Alex", "Mike, Alex and 3 others".
+ *
+ * Two names in full and then a count. Listing eight makes a line nobody reads to the end, and
+ * a bare "8 people" tells the room a number when what it wants is who - the first two names
+ * are usually enough to know which group of people this was.
+ */
+function nameList(names: readonly string[]): string {
+  if (names.length === 1) return names[0]!;
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  const rest = names.length - 2;
+  return `${names[0]}, ${names[1]} and ${rest} other${rest === 1 ? '' : 's'}`;
+}
+
+/**
+ * Several people added to a roster in one act.
+ *
+ * **One event, one line, however many people.** The roster screen adds a whole selection at
+ * once, and emitting a separate event per person would post a separate "was added by" line per
+ * person - eight lines of near-identical text into a race that has just been filled, which is
+ * chat noise manufactured out of an implementation detail. Each person still gets their own
+ * `member_added` notification, because that one IS addressed to them individually.
+ *
+ * The singular add goes through here too, with a list of one, so there is no second wording to
+ * keep in step.
+ */
+function makeMembersAddedHandler(
+  scope: 'race' | 'eboard',
+  line: (actorName: string, names: readonly string[]) => string,
+): EffectHandler {
+  return async (event, deps) => {
+    const clubId = String(event.payload['clubId']);
+    const actorId = String(event.payload['actorId']);
+    const userIds = (event.payload['userIds'] as string[] | undefined) ?? [];
+    if (userIds.length === 0) return;
+
+    const club = await clubContext(deps.db, clubId);
+    if (!club) return;
+
+    /*
+     * The two scopes answer "which chat, and what is it called" from different tables, so this
+     * is the only branch in the handler. Everything after it is identical, which is the reason
+     * the two share one.
+     */
+    let target: { name: string; channelId: string; scopeId: string } | null = null;
+    if (scope === 'race') {
+      const race = await raceContext(deps.db, String(event.payload['raceId']));
+      if (race) target = { ...race, scopeId: String(event.payload['raceId']) };
+    } else {
+      const eboard = await eboardContext(deps.db, clubId);
+      if (eboard) {
+        target = {
+          name: 'Eboard & Council',
+          channelId: eboard.channelId,
+          scopeId: eboard.eboardId,
+        };
+      }
+    }
+    if (!target) return;
+
+    const actorName = await displayName(deps.db, actorId);
+    // Resolved in the order they were added rather than by a name sort, so the two names the
+    // line shows are the same two every time it is rendered.
+    const names = [];
+    for (const userId of userIds) names.push(await displayName(deps.db, userId));
+
+    await postSystemMessage(deps, {
+      channelId: target.channelId,
+      body: line(actorName, names),
+      eventId: event.id,
+      scope,
+    });
+
+    await writeNotifications(deps.db, {
+      outboxEventId: notificationKey(event.id),
+      type: 'member_added',
+      params: {
+        clubId,
+        clubName: club.name,
+        actorName,
+        scope,
+        scopeName: target.name,
+        scopeId: target.scopeId,
+      },
+      recipients: userIds,
+      actorId,
+      clubId,
+    });
+
+    // Being added answers an outstanding request, so anybody else's copy of it stops asking.
+    for (const userId of userIds) {
+      await resolvePendingRequests(deps.db, {
+        type: scope === 'race' ? 'race_join_request' : 'eboard_join_request',
+        scopeId: target.scopeId,
+        requesterId: userId,
+        decision: 'approved',
+        decidedByName: actorName,
+      });
+    }
+  };
+}
+
+/**
  * Someone left or was removed from a race.
  *
  * Drops their subscription to that race's channel specifically. Their club membership is
@@ -1520,6 +1622,14 @@ export const handlers: Record<string, EffectHandler> = {
   // The Eboard space. Emitted since the space was built, handled since none of it worked.
   'eboard.join_requested': onEboardJoinRequested,
   'eboard.membership_decided': onEboardMembershipDecided,
+  /*
+   * Same voice at every size, because "Sarah added Mike to the group" is already the shape a
+   * longer list wants: only the middle grows.
+   */
+  'eboard.members_added': makeMembersAddedHandler(
+    'eboard',
+    (actorName, names) => `${actorName} added ${nameList(names)} to the group`,
+  ),
   'eboard.member_departed': onEboardMemberDeparted,
 
   // Phase 2. Each is one call into machinery that already existed.
@@ -1572,6 +1682,16 @@ export const handlers: Record<string, EffectHandler> = {
     });
   },
   'race.membership_decided': onRaceMembershipDecided,
+  /*
+   * One person keeps the passive line the rest of race chat uses ("Mike was added by Sarah"),
+   * which sits beside "Mike joined the race" and "Mike left the race" as the same kind of
+   * sentence about one person. A batch is an act by the adder, so it names them first.
+   */
+  'race.members_added': makeMembersAddedHandler('race', (actorName, names) =>
+    names.length === 1
+      ? `${names[0]} was added by ${actorName}`
+      : `${actorName} added ${nameList(names)} to the race`,
+  ),
   'race.member_departed': onRaceMemberDeparted,
   'race.deleted': onRaceDeleted,
   'race.incharge_left': onInchargeLeft,

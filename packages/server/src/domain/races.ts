@@ -199,7 +199,17 @@ export async function decideRaceRequest(
 }
 
 /**
- * Add someone to the roster directly. Manager only, and **somebody else only**.
+ * Add people to the roster directly. Manager only, and **somebody else only**.
+ *
+ * Takes a list because that is how the roster screen works: you scroll the club, tap the
+ * people going, and add them in one act. One act should be one transaction and one line in
+ * chat - adding eight people one at a time would post eight "was added by" lines into a race
+ * that has just been filled, which is noise made out of an implementation detail.
+ *
+ * Everything is keyed off **who was actually inserted**, not off what was asked for. Somebody
+ * already on the roster is skipped silently rather than refused: with a multi-select the client
+ * cannot guarantee its list is fresh, and a whole batch failing because one person joined a
+ * second ago would be a worse answer than adding the other seven.
  *
  * > The self-target check is the point of this comment. Without it a manager could pass their
  * > own id and walk onto any roster in the club, which is `canJoinRaceDirectly` without the
@@ -207,25 +217,29 @@ export async function decideRaceRequest(
  * > who can add themselves has access whenever they feel like it. Found on 2026-08-05. The
  * > Owner's deliberate version of this is `joinRaceDirectly` below.
  */
-export async function addRaceMember(
+export async function addRaceMembers(
   db: Db,
   ctx: AccessContext,
   raceId: string,
-  userId: string,
-): Promise<Result<{ added: boolean }>> {
+  userIds: readonly string[],
+): Promise<Result<{ added: number }>> {
   const race = await raceRef(db, raceId);
   if (!race) return { ok: false, code: 'not_found' };
   if (!canManageRace(ctx, race)) return { ok: false, code: 'forbidden' };
   // Adding yourself is joining, and joining is by request for everyone but the Owner.
-  if (userId === ctx.userId) return { ok: false, code: 'forbidden' };
+  if (userIds.includes(ctx.userId)) return { ok: false, code: 'forbidden' };
+
+  const wanted = [...new Set(userIds)];
+  if (wanted.length === 0) return { ok: false, code: 'invalid' };
 
   const added = await db.transaction(async (tx) => {
     const rows = await tx
       .insert(raceMemberships)
-      .values({ raceId, userId })
+      .values(wanted.map((userId) => ({ raceId, userId })))
       .onConflictDoNothing()
-      .returning();
-    if (rows.length === 0) return false;
+      .returning({ userId: raceMemberships.userId });
+    const addedIds = rows.map((r) => r.userId);
+    if (addedIds.length === 0) return [];
 
     /*
      * Being added answers an outstanding request, so close it.
@@ -237,25 +251,36 @@ export async function addRaceMember(
     await tx.execute(sql`
       UPDATE race_join_requests
          SET status = 'approved', decided_by = ${ctx.userId}, decided_at = now()
-       WHERE race_id = ${raceId}::uuid AND user_id = ${userId}::uuid AND status = 'pending'
+       WHERE race_id = ${raceId}::uuid
+         AND user_id = ANY(${sql.param(addedIds)}::uuid[])
+         AND status = 'pending'
     `);
 
     await tx.insert(outbox).values({
       partitionKey: race.clubId,
-      eventType: 'race.membership_decided',
-      payload: {
-        clubId: race.clubId,
-        raceId,
-        userId,
-        actorId: ctx.userId,
-        approved: true,
-        added: true,
-      },
+      eventType: 'race.members_added',
+      payload: { clubId: race.clubId, raceId, userIds: addedIds, actorId: ctx.userId },
     });
-    return true;
+    return addedIds;
   });
 
-  return { ok: true, added };
+  return { ok: true, added: added.length };
+}
+
+/**
+ * Add one person. The list version with a list of one, so there is a single implementation.
+ *
+ * Kept as its own name because "add this member" is a real thing callers ask for, and reading
+ * `addRaceMembers(db, ctx, raceId, [userId])` at every call site says less than this does.
+ */
+export async function addRaceMember(
+  db: Db,
+  ctx: AccessContext,
+  raceId: string,
+  userId: string,
+): Promise<Result<{ added: boolean }>> {
+  const result = await addRaceMembers(db, ctx, raceId, [userId]);
+  return result.ok ? { ok: true, added: result.added > 0 } : result;
 }
 
 /**

@@ -432,7 +432,7 @@ describe('the Eboard rejoin path', () => {
     // The space is for the admin tier. Adding somebody who never was an admin would put
     // somebody in it whom demotion could never remove.
     const refused = await as(owner, 'POST', `/eboards/${eboardId}/members`, {
-      userId: member.userId,
+      userIds: [member.userId],
     });
     expect(refused.status).toBe(404);
   });

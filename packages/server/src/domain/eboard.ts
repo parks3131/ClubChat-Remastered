@@ -148,61 +148,77 @@ export async function decideEboardRequest(
 }
 
 /**
- * Add an admin directly. Existing members only.
+ * Add admins directly. Existing members only.
  *
- * The target must already be admin-tier in the club: this space is for the admin tier, and
+ * Every target must already be admin-tier in the club: this space is for the admin tier, and
  * adding a plain member would put somebody in it whom a later demotion could not remove -
  * demotion removes on the way down from admin, and they never were one.
+ *
+ * **The role check refuses the whole batch, and the already-a-member case skips quietly.**
+ * They are different kinds of wrong. A non-admin in the list means the caller is asking for
+ * something the space does not permit and should be told so; somebody already in the space
+ * means the client's list was a few seconds stale, which is not the caller's fault and not
+ * worth failing seven good additions over.
  */
+export async function addEboardMembers(
+  db: Db,
+  ctx: AccessContext,
+  eboardId: string,
+  userIds: readonly string[],
+): Promise<Result<{ added: number }>> {
+  const eboard = await eboardRef(db, eboardId);
+  if (!eboard) return { ok: false, code: 'not_found' };
+  if (!canApproveEboardRequest(ctx, eboard.id)) return { ok: false, code: 'not_found' };
+
+  const wanted = [...new Set(userIds)];
+  if (wanted.length === 0) return { ok: false, code: 'invalid' };
+
+  const eligible = await db.execute<{ user_id: string }>(sql`
+    SELECT user_id::text AS user_id FROM club_memberships
+     WHERE club_id = ${eboard.clubId}
+       AND user_id = ANY(${sql.param(wanted)}::uuid[])
+       AND role IN ('owner', 'admin')
+  `);
+  if (eligible.rows.length !== wanted.length) return { ok: false, code: 'forbidden' };
+
+  const added = await db.transaction(async (tx) => {
+    const rows = await tx
+      .insert(eboardMemberships)
+      .values(wanted.map((userId) => ({ eboardId, userId })))
+      .onConflictDoNothing({
+        target: [eboardMemberships.eboardId, eboardMemberships.userId],
+      })
+      .returning({ userId: eboardMemberships.userId });
+    const addedIds = rows.map((r) => r.userId);
+    if (addedIds.length === 0) return [];
+
+    await tx.execute(sql`
+      DELETE FROM eboard_join_requests
+       WHERE eboard_id = ${eboardId}::uuid
+         AND user_id = ANY(${sql.param(addedIds)}::uuid[])
+         AND status = 'pending'
+    `);
+
+    await tx.insert(outbox).values({
+      partitionKey: eboard.clubId,
+      eventType: 'eboard.members_added',
+      payload: { clubId: eboard.clubId, eboardId, userIds: addedIds, actorId: ctx.userId },
+    });
+    return addedIds;
+  });
+
+  return { ok: true, added: added.length };
+}
+
+/** Add one admin. The list version with a list of one, so there is a single implementation. */
 export async function addEboardMember(
   db: Db,
   ctx: AccessContext,
   eboardId: string,
   userId: string,
 ): Promise<Result<{ added: boolean }>> {
-  const eboard = await eboardRef(db, eboardId);
-  if (!eboard) return { ok: false, code: 'not_found' };
-  if (!canApproveEboardRequest(ctx, eboard.id)) return { ok: false, code: 'not_found' };
-
-  const targetRole = await db.execute<{ role: string }>(sql`
-    SELECT role::text AS role FROM club_memberships
-     WHERE club_id = ${eboard.clubId} AND user_id = ${userId}
-  `);
-  const role = targetRole.rows[0]?.role;
-  if (role !== 'owner' && role !== 'admin') return { ok: false, code: 'forbidden' };
-
-  const added = await db.transaction(async (tx) => {
-    const rows = await tx
-      .insert(eboardMemberships)
-      .values({ eboardId, userId })
-      .onConflictDoNothing({
-        target: [eboardMemberships.eboardId, eboardMemberships.userId],
-      })
-      .returning();
-    if (rows.length === 0) return false;
-
-    await tx
-      .delete(eboardJoinRequests)
-      .where(
-        sql`eboard_id = ${eboardId} AND user_id = ${userId} AND status = 'pending'`,
-      );
-
-    await tx.insert(outbox).values({
-      partitionKey: eboard.clubId,
-      eventType: 'eboard.membership_decided',
-      payload: {
-        clubId: eboard.clubId,
-        eboardId,
-        userId,
-        actorId: ctx.userId,
-        approved: true,
-        added: true,
-      },
-    });
-    return true;
-  });
-
-  return { ok: true, added };
+  const result = await addEboardMembers(db, ctx, eboardId, [userId]);
+  return result.ok ? { ok: true, added: result.added > 0 } : result;
 }
 
 /**
