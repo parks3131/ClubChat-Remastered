@@ -561,6 +561,25 @@ export const canRequestRaceAccess = (ctx: AccessContext, race: RaceRef): boolean
   isClubMember(ctx, race.clubId) && !isRaceMember(ctx, race);
 
 /**
+ * Walking onto a roster with no request, and **the Owner alone can do it**.
+ *
+ * The single exception to "access is always by request" (PRD/09 rule 3), and it exists for the
+ * case where a roster has no admin left on it: whoever created the race left, so a join request
+ * now notifies nobody, and the way back in must not itself require somebody to approve it.
+ *
+ * Deliberately not the admin tier. An admin who could walk into any race in the club would make
+ * rule 4's "management authority is not access" true only until they chose otherwise, and the
+ * whole point of that rule is that an admin is not silently on 30 rosters. The Owner is one
+ * person, and this is their escape hatch rather than a second way in.
+ *
+ * > Until 2026-08-05 `addRaceMember` allowed exactly this to **every** admin, by never checking
+ * > that the person being added was somebody else. That was an oversight rather than a decision;
+ * > this predicate is the decision, and `addRaceMember` now refuses a self-target.
+ */
+export const canJoinRaceDirectly = (ctx: AccessContext, race: RaceRef): boolean =>
+  isClubOwner(ctx, race.clubId) && !isRaceMember(ctx, race);
+
+/**
  * Being assigned to a car group requires real race access.
  *
  * So an admin who is not on the roster cannot be put in a car, **even though they manage

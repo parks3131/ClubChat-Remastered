@@ -384,6 +384,13 @@ export const raceApi = {
       body: {},
     }),
 
+  /**
+   * The Owner joining outright. Offered only when `viewer.canJoinDirectly` says so - the
+   * server decides who this is for, and the screen only draws what it is told.
+   */
+  joinDirectly: (raceId: string) =>
+    apiFetch<{ joined: boolean }>(`/races/${raceId}/join`, { method: 'POST', body: {} }),
+
   decideRequest: (requestId: string, approve: boolean) =>
     apiFetch<unknown>(`/race-join-requests/${requestId}/${approve ? 'approve' : 'deny'}`, {
       method: 'POST',

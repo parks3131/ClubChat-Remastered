@@ -101,18 +101,42 @@ export const PENDING_REQUEST_TYPES: readonly NotificationType[] = [
 const actor = z.object({ actorName: z.string() });
 const club = z.object({ clubId: Uuid, clubName: z.string() });
 
+/**
+ * The outcome, stamped onto a pending request row once somebody decides it.
+ *
+ * **Optional because a row is written without it and gains it later.** A request notification
+ * goes to every admin who could act on it, and exactly one of them acts - so the other rows
+ * are describing work that no longer exists the moment the first admin approves. Leaving them
+ * saying "X asked to join" is a row lying about the present, and clearing them outright loses
+ * the record `PRD/12` rule 5 exists to keep. Stamping the outcome resolves them in place.
+ *
+ * This is structured data rather than a rendered artefact, so it is what ADR-0013 asks for:
+ * `renderNotification` still produces every word at read time, and a resolved row is one more
+ * branch in that one function rather than a second stored sentence.
+ *
+ * `decidedByName` is a denormalised copy of the decider's name for the same reason every other
+ * `actorName` in this file is: the row must render without a join, and it is a record of who
+ * decided at the time, not a live pointer at their current profile.
+ */
+const decided = {
+  decision: z.enum(['approved', 'denied']).optional(),
+  decidedByName: z.string().optional(),
+};
+
 export const notificationParams = {
-  club_join_request: club.extend({ requesterName: z.string(), requesterId: Uuid }),
+  club_join_request: club.extend({ requesterName: z.string(), requesterId: Uuid, ...decided }),
   race_join_request: club.extend({
     raceId: Uuid,
     raceName: z.string(),
     requesterName: z.string(),
     requesterId: Uuid,
+    ...decided,
   }),
   eboard_join_request: club.extend({
     eboardId: Uuid,
     requesterName: z.string(),
     requesterId: Uuid,
+    ...decided,
   }),
 
   request_approved: club.merge(actor).extend({
@@ -244,6 +268,22 @@ export function parseNotificationParams<K extends NotificationType>(
   return notificationParams[type].parse(params) as NotificationParams[K];
 }
 
+/**
+ * The outcome of a request row, if it has been decided.
+ *
+ * The one place that knows a decision lives under `params.decision`, so the inbox can tag a
+ * row without reaching into the jsonb itself. Returns undefined for every other type and for
+ * a request still waiting on somebody.
+ */
+export function requestDecision(n: {
+  type: NotificationType;
+  params: Record<string, unknown>;
+}): 'approved' | 'denied' | undefined {
+  if (!PENDING_REQUEST_TYPES.includes(n.type)) return undefined;
+  const decision = n.params['decision'];
+  return decision === 'approved' || decision === 'denied' ? decision : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
@@ -359,6 +399,23 @@ export function notificationTarget(n: {
 }
 
 /**
+ * A request row's body, in whichever of its two states it is in.
+ *
+ * **The same row says two different things over its life**, which is the whole point: while it
+ * is waiting it names the work, and once it is decided it names the outcome and who reached it.
+ * "Approved" alone tells an admin arriving late that it is handled; naming the decider tells
+ * them who to go and ask, which is the question they actually have.
+ *
+ * `decidedByName` falls back rather than throwing, because a row stamped by an older build, or
+ * by a decider whose account has since gone, must still render - PRD/12 rule 6.
+ */
+function requestBody(p: Record<string, string>, joining: string): string {
+  if (!p['decision']) return `${p['requesterName']} asked to join ${joining}`;
+  const verb = p['decision'] === 'approved' ? 'approved' : 'denied';
+  return `${p['decidedByName'] ?? 'An admin'} ${verb} ${p['requesterName']}'s request to join ${joining}`;
+}
+
+/**
  * Render a notification's text.
  *
  * English only for now, but the point is that this is a pure function over structured
@@ -372,20 +429,11 @@ export function renderNotification(n: {
   const p = n.params as Record<string, string>;
   switch (n.type) {
     case 'club_join_request':
-      return {
-        title: p['clubName']!,
-        body: `${p['requesterName']} asked to join ${p['clubName']}`,
-      };
+      return { title: p['clubName']!, body: requestBody(p, p['clubName']!) };
     case 'race_join_request':
-      return {
-        title: p['raceName']!,
-        body: `${p['requesterName']} asked to join ${p['raceName']}`,
-      };
+      return { title: p['raceName']!, body: requestBody(p, p['raceName']!) };
     case 'eboard_join_request':
-      return {
-        title: p['clubName']!,
-        body: `${p['requesterName']} asked to join the Eboard space`,
-      };
+      return { title: p['clubName']!, body: requestBody(p, 'the Eboard space') };
     case 'request_approved':
       return {
         title: p['scopeName']!,

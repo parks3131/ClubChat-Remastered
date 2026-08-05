@@ -25,7 +25,7 @@ below therefore describes a destination, not a stored string.
 | Type | Trigger | Audience | Links to | Clears when |
 |---|---|---|---|---|
 | **Club join request** | Someone requests to join a request-policy club | Every club Owner and Admin | The club's member roster | The roster is opened |
-| **Race join request** | A club member requests to join a race | Every club Owner and Admin | That race's roster | The roster is opened |
+| **Race join request** | A club member requests to join a race | Every Owner and Admin **on that race's roster** | That race's roster | The roster is opened |
 | **Eboard join request** | An admin requests to join the Eboard space | Current Eboard members only | The Eboard roster | The roster is opened |
 | **Request approved** | An admin approves any of the above (or a club switches to open) | The requester | The club/race/Eboard | Inbox is opened |
 | **Request denied** | An admin denies any of the above | The requester | The club | Inbox is opened |
@@ -41,7 +41,7 @@ below therefore describes a destination, not a stored string.
 | **Announcement** | An admin posts an announcement in any chat | Everyone with access to that chat | That chat | Inbox is opened |
 | **Mentioned** | Someone @mentions a member | The mentioned member, **only if they can access that chat** | That chat | Inbox is opened |
 | **Message reported** | A member reports a message | **Whoever reviews reports in that channel**: club admins; race admins **on that roster**; platform moderators for a DM. Never the reporter. **Eboard has no reporting**, so it never produces one | The Reports tab for that channel, or the platform queue | Inbox is opened |
-| **Car-group Incharge left** | A group's Incharge leaves or is removed | Every club Owner and Admin | That race's car groups | Inbox is opened |
+| **Car-group Incharge left** | A group's Incharge leaves or is removed | Every Owner and Admin **on that race's roster** | That race's car groups | Inbox is opened |
 | **Chat caught up** | A member opens a chat that had unread messages | That member only | That chat | Recorded already-read, as history |
 | *(push only)* **Direct message** | Somebody sends a direct message | The other participant | That conversation | **Never a row.** Its inbox representation is the chat-unread row below |
 | *(live)* **Chat unread** | Unread messages exist in an accessible chat | That member | That chat | **Only by opening that chat** |
@@ -84,6 +84,19 @@ message would flood the feed with exactly the per-message noise rule 8 rejects. 
    a glance. (The founder lost real join requests this way.)
 5. **A decided join request stays in the feed, tagged "Approved" or "Denied"**, rather than
    disappearing - the admin keeps a record of what they decided.
+
+   5a. **Deciding settles the row in EVERY admin's inbox, not only the decider's.** A request
+   is sent to everyone who could act on it and exactly one of them acts; the other copies are
+   then describing work that no longer exists. Each one is restated to name the outcome and
+   who reached it ("Sarah approved Mike's request to join Fall Classic") and marked read, so
+   it stops counting against the badge. Without this, rule 4 keeps every other admin's row
+   unread until they each open that roster themselves, and an admin who was away meets a job
+   that was done hours ago.
+
+   5b. **Restated, not deleted.** The record is the point: an admin who remembers seeing
+   requests and finds an empty inbox cannot tell "handled" from "lost", which is the same
+   ambiguity rule 4 exists to prevent. Naming the decider answers the question they actually
+   have, which is not "was this dealt with" but "who dealt with it".
 6. **Every row deep-links to its target.** Tapping is always safe: a row pointing at something
    the user has since lost access to fails gracefully rather than crashing.
 7. Opening a chat with unread messages records a **"caught up on N messages"** row, so the

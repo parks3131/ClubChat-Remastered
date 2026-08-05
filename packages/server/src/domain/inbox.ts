@@ -19,6 +19,7 @@ import { sql } from 'drizzle-orm';
 import {
   notificationTarget,
   renderNotification,
+  requestDecision,
   PENDING_REQUEST_TYPES,
   type NotificationTarget,
   type NotificationType,
@@ -119,6 +120,9 @@ export async function readInbox(
     const type = row.type as NotificationType;
     // Rendered here, from params. The row itself stores no prose and no route.
     const rendered = renderNotification({ type, params: row.params });
+    // Present only on a request that somebody has since decided, which is what turns the row
+    // from a job into a record. The body already names the decider; this drives the tag.
+    const decision = requestDecision({ type, params: row.params });
     return {
       kind: 'notification' as const,
       id: row.id,
@@ -127,6 +131,7 @@ export async function readInbox(
       body: rendered.body,
       target: notificationTarget({ type, params: row.params }),
       read: row.read_at !== null,
+      ...(decision ? { decision } : {}),
       createdAt: toIso(row.created_at),
     };
   });

@@ -24,6 +24,7 @@ import {
 import type { AccessContext } from '../policy/context.ts';
 import {
   canBeInCarGroup,
+  canJoinRaceDirectly,
   canManageCarGroups,
   canManageRace,
   canPinRace,
@@ -197,7 +198,15 @@ export async function decideRaceRequest(
   return { ok: true, decided };
 }
 
-/** Add someone to the roster directly. Manager only. */
+/**
+ * Add someone to the roster directly. Manager only, and **somebody else only**.
+ *
+ * > The self-target check is the point of this comment. Without it a manager could pass their
+ * > own id and walk onto any roster in the club, which is `canJoinRaceDirectly` without the
+ * > decision to allow it - PRD/09 rule 4 says management authority is not access, and an admin
+ * > who can add themselves has access whenever they feel like it. Found on 2026-08-05. The
+ * > Owner's deliberate version of this is `joinRaceDirectly` below.
+ */
 export async function addRaceMember(
   db: Db,
   ctx: AccessContext,
@@ -207,6 +216,8 @@ export async function addRaceMember(
   const race = await raceRef(db, raceId);
   if (!race) return { ok: false, code: 'not_found' };
   if (!canManageRace(ctx, race)) return { ok: false, code: 'forbidden' };
+  // Adding yourself is joining, and joining is by request for everyone but the Owner.
+  if (userId === ctx.userId) return { ok: false, code: 'forbidden' };
 
   const added = await db.transaction(async (tx) => {
     const rows = await tx
@@ -215,6 +226,19 @@ export async function addRaceMember(
       .onConflictDoNothing()
       .returning();
     if (rows.length === 0) return false;
+
+    /*
+     * Being added answers an outstanding request, so close it.
+     *
+     * Otherwise the person is on the roster AND still listed as waiting to get on it, and the
+     * request sits there forever because the one thing that would settle it - a decision - is
+     * now impossible to make. `addEboardMember` has always done this; the race path never did.
+     */
+    await tx.execute(sql`
+      UPDATE race_join_requests
+         SET status = 'approved', decided_by = ${ctx.userId}, decided_at = now()
+       WHERE race_id = ${raceId}::uuid AND user_id = ${userId}::uuid AND status = 'pending'
+    `);
 
     await tx.insert(outbox).values({
       partitionKey: race.clubId,
@@ -232,6 +256,65 @@ export async function addRaceMember(
   });
 
   return { ok: true, added };
+}
+
+/**
+ * The Owner walks onto a roster, with no request and nobody to approve it.
+ *
+ * **The one exception to "access is always by request"** (PRD/09 rule 3), and it earns its place
+ * by fixing a state nothing else can reach: a race whose creator has left has no admin on its
+ * roster, so `race_join_request` notifies nobody and a request can sit unseen. The Owner letting
+ * themselves in is the recovery, and it must not itself need an approver - there isn't one.
+ *
+ * Owner only, by `canJoinRaceDirectly`. Once on the roster they are an ordinary race member who
+ * also happens to manage the club: no special standing inside the race, which is what the
+ * founder asked for.
+ *
+ * Emits the same `race.membership_decided` every other way onto a roster emits, with the actor
+ * and the subject being one person. The handler reads that and stays quiet rather than telling
+ * the Owner they added themselves.
+ */
+export async function joinRaceDirectly(
+  db: Db,
+  ctx: AccessContext,
+  raceId: string,
+): Promise<Result<{ joined: boolean }>> {
+  const race = await raceRef(db, raceId);
+  if (!race || !canSeeRace(ctx, race)) return { ok: false, code: 'not_found' };
+  if (!canJoinRaceDirectly(ctx, race)) return { ok: false, code: 'forbidden' };
+
+  const joined = await db.transaction(async (tx) => {
+    const rows = await tx
+      .insert(raceMemberships)
+      .values({ raceId, userId: ctx.userId })
+      .onConflictDoNothing()
+      .returning();
+    if (rows.length === 0) return false;
+
+    // An Owner who had already asked, and then gave up waiting, must not be left listed as a
+    // pending requester on a roster they are now on.
+    await tx.execute(sql`
+      UPDATE race_join_requests
+         SET status = 'approved', decided_by = ${ctx.userId}, decided_at = now()
+       WHERE race_id = ${raceId}::uuid AND user_id = ${ctx.userId}::uuid AND status = 'pending'
+    `);
+
+    await tx.insert(outbox).values({
+      partitionKey: race.clubId,
+      eventType: 'race.membership_decided',
+      payload: {
+        clubId: race.clubId,
+        raceId,
+        userId: ctx.userId,
+        actorId: ctx.userId,
+        approved: true,
+        added: true,
+      },
+    });
+    return true;
+  });
+
+  return { ok: true, joined };
 }
 
 /**
@@ -850,6 +933,12 @@ export type RaceDetail = {
     requestPending: boolean;
     pinned: boolean;
     channelId: string | null;
+    /**
+     * The Owner's join-without-asking, answered by the server rather than re-derived here.
+     * A client working it out from a role would be a second copy of `canJoinRaceDirectly`,
+     * and the two would disagree the first time the rule moved.
+     */
+    canJoinDirectly: boolean;
   };
 };
 
@@ -938,6 +1027,7 @@ export async function readRace(
         requestPending: row.request_pending,
         pinned: row.pinned,
         channelId: hasAccess ? row.channel_id : null,
+        canJoinDirectly: canJoinRaceDirectly(ctx, race),
       },
     },
   };

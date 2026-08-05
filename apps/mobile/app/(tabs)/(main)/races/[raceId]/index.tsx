@@ -99,7 +99,21 @@ export default function RaceHubScreen() {
               }}
             />
 
-            {viewer.requestPending || requested ? (
+            {/*
+              The Owner joins outright; everybody else asks. Checked before the pending state,
+              because an Owner who asked and then gave up waiting should still be offered the
+              door rather than being left staring at their own request - which is the situation
+              this exists for, a roster whose last admin has gone.
+            */}
+            {viewer.canJoinDirectly ? (
+              <Action
+                label="Join this race"
+                onPress={() => {
+                  void raceApi.joinDirectly(raceId).then(load.reload, load.reload);
+                }}
+                accessibilityLabel={`Join ${race.name}`}
+              />
+            ) : viewer.requestPending || requested ? (
               <Card>
                 <Text style={styles.meta}>Requested - waiting on an admin to approve.</Text>
               </Card>

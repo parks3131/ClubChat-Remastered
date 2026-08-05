@@ -32,6 +32,8 @@ export type AudienceRequest = {
   actorId: string | null;
   clubId: string | null;
   channelId?: string | undefined;
+  /** Required by the two race-scoped types, which resolve against that race's roster. */
+  raceId?: string | undefined;
   /** For a mention: exactly the people named, already filtered to those with access. */
   explicitRecipients?: readonly string[] | undefined;
 };
@@ -94,10 +96,28 @@ async function gather(db: Db, request: AudienceRequest): Promise<string[]> {
 
     // The club's admin tier. BOTH admin and owner.
     case 'club_join_request':
-    case 'race_join_request':
-    case 'car_group_incharge_left':
       if (!request.clubId) return [];
       return clubAdminTier(db, request.clubId);
+
+    /*
+     * The admins ON that race's roster, which is narrower than the club's admin tier and
+     * deliberately so.
+     *
+     * Rule 2 at the top of this file already said race audiences are roster members only; these
+     * two types were the ones still resolving to every club admin, so an owner running none of
+     * the races got every race's join requests and every stranded car group in the club.
+     *
+     * **This does not change who may decide.** `canManageRace` is still every club admin
+     * (PRD/09 rules 4 and 5), so an off-roster admin who opens the roster can still approve -
+     * they are simply not paged about a race they are not on. When a roster has no admin left
+     * on it, this resolves to nobody and the request waits on the roster screen rather than
+     * widening to people who are not involved. That is the founder's call, recorded here
+     * because "notifies nobody" looks like a bug to anyone reading it cold.
+     */
+    case 'race_join_request':
+    case 'car_group_incharge_left':
+      if (!request.raceId) return [];
+      return raceRosterAdmins(db, request.raceId);
 
     // Current Eboard members only. An admin outside the space must not see its business.
     case 'eboard_join_request':
@@ -152,6 +172,26 @@ async function clubAdminTier(db: Db, clubId: string): Promise<string[]> {
     SELECT user_id FROM club_memberships
      WHERE club_id = ${clubId}
        AND role = ANY(${sql.param([...ADMIN_TIER])}::text[])
+  `);
+  return rows.rows.map((r) => r.user_id);
+}
+
+/**
+ * The admin-tier members who hold a roster row on this race.
+ *
+ * The intersection of two facts, and it has to be a join rather than two queries and a filter:
+ * roster membership lives on the race, admin-tier lives on the club, and the race knows which
+ * club it belongs to. Uses the same `ADMIN_TIER` constant as `clubAdminTier` for the same
+ * reason - one list of which roles count as admin, not two that can drift apart.
+ */
+async function raceRosterAdmins(db: Db, raceId: string): Promise<string[]> {
+  const rows = await db.execute<{ user_id: string }>(sql`
+    SELECT rm.user_id
+      FROM race_memberships rm
+      JOIN races r ON r.id = rm.race_id
+      JOIN club_memberships cm ON cm.club_id = r.club_id AND cm.user_id = rm.user_id
+     WHERE rm.race_id = ${raceId}::uuid
+       AND cm.role = ANY(${sql.param([...ADMIN_TIER])}::text[])
   `);
   return rows.rows.map((r) => r.user_id);
 }

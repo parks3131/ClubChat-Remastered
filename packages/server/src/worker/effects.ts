@@ -22,7 +22,7 @@ import { appendMessage, deriveClientMsgId } from '../domain/append-message.ts';
 import { publishToChannel, publishRevocation, publishUpdate } from '../bus/redis.ts';
 import { reactionsForMessages } from '../domain/reactions.ts';
 import { resolveAudience } from './audience.ts';
-import { notificationKey, writeNotifications } from './notify.ts';
+import { notificationKey, resolvePendingRequests, writeNotifications } from './notify.ts';
 import { dispatchPush, PUSH_DEFERRAL_MS } from '../push/dispatch.ts';
 import type { PushSender } from '../push/sender.ts';
 import type { MediaStore } from '../media/store.ts';
@@ -595,6 +595,16 @@ const onJoinDecided: EffectHandler = async (event, deps) => {
     actorId,
     clubId,
   });
+
+  // And settle it in every admin's inbox, including the decider's. Without this the other
+  // admins keep an unread row asking them to do something that is already done.
+  await resolvePendingRequests(deps.db, {
+    type: 'club_join_request',
+    scopeId: clubId,
+    requesterId: userId,
+    decision: approved ? 'approved' : 'denied',
+    decidedByName: actorName,
+  });
 };
 
 /**
@@ -761,6 +771,16 @@ const onEboardMembershipDecided: EffectHandler = async (event, deps) => {
     recipients: [userId],
     actorId,
     clubId,
+  });
+
+  // Settle the other members' copies. `addEboardMember` already closes the request row on a
+  // direct add, so this is the inbox half of a decision the data has already taken.
+  await resolvePendingRequests(deps.db, {
+    type: 'eboard_join_request',
+    scopeId: eboard.eboardId,
+    requesterId: userId,
+    decision: approved ? 'approved' : 'denied',
+    decidedByName: actorName,
   });
 };
 
@@ -1102,6 +1122,9 @@ const onInchargeLeft: EffectHandler = async (event, deps) => {
     // happens to be that person still needs to know the group needs covering.
     actorId: null,
     clubId,
+    // The admins travelling to this race. A stranded car group is the business of whoever is
+    // going, not of every admin in the club.
+    raceId: String(event.payload['raceId']),
   });
 
   await writeNotifications(deps.db, {
@@ -1125,6 +1148,7 @@ const onInchargeLeft: EffectHandler = async (event, deps) => {
 const onRaceMembershipDecided: EffectHandler = async (event, deps) => {
   const clubId = String(event.payload['clubId']);
   const approved = event.payload['approved'] === true;
+  const added = event.payload['added'] === true;
   const userId = String(event.payload['userId']);
   const actorId = event.payload['actorId'] as string | null;
 
@@ -1135,21 +1159,50 @@ const onRaceMembershipDecided: EffectHandler = async (event, deps) => {
     sql`SELECT name FROM races WHERE id = ${String(event.payload['raceId'])}::uuid`,
   );
   const raceName = raceRows.rows[0]?.name ?? 'the race';
+  const actorName = actorId ? await displayName(deps.db, actorId) : 'An admin';
 
-  await writeNotifications(deps.db, {
-    outboxEventId: notificationKey(event.id),
-    type: approved ? 'request_approved' : 'request_denied',
-    params: {
+  /*
+   * Nobody is told about their own act (PRD/12 rule 10), and here that is not a nicety: the
+   * Owner joining a race directly is the actor and the subject at once, so without this they
+   * would be sent "you approved your request to join", about a request that never existed.
+   *
+   * `member_added` for a direct add and `request_approved` for a decision, which is the same
+   * split `onEboardMembershipDecided` and `onMemberJoined` already make. This handler ignored
+   * `added` and called every direct add an approval, so somebody an admin simply put on a
+   * roster was told their request had been approved.
+   */
+  if (actorId !== userId) {
+    await writeNotifications(deps.db, {
+      outboxEventId: notificationKey(event.id),
+      type: added ? 'member_added' : approved ? 'request_approved' : 'request_denied',
+      params: {
+        clubId,
+        clubName: club.name,
+        actorName,
+        scope: 'race',
+        scopeName: raceName,
+        ...(approved ? { scopeId: String(event.payload['raceId']) } : {}),
+      } as never,
+      recipients: [userId],
+      actorId,
       clubId,
-      clubName: club.name,
-      actorName: actorId ? await displayName(deps.db, actorId) : 'An admin',
-      scope: 'race',
-      scopeName: raceName,
-      ...(approved ? { scopeId: String(event.payload['raceId']) } : {}),
-    } as never,
-    recipients: [userId],
-    actorId,
-    clubId,
+    });
+  }
+
+  /*
+   * Settle the roster admins' copies.
+   *
+   * Runs for a direct add too, not only for a decision on a request. Adding somebody who
+   * happened to have a request open answers that request - `addRaceMember` closes the request
+   * row itself, and this closes the notifications that pointed at it. Leaving them would put
+   * the inbox and the roster into two different stories about the same person.
+   */
+  await resolvePendingRequests(deps.db, {
+    type: 'race_join_request',
+    scopeId: String(event.payload['raceId']),
+    requesterId: userId,
+    decision: approved ? 'approved' : 'denied',
+    decidedByName: actorName,
   });
 };
 
@@ -1426,12 +1479,18 @@ export const handlers: Record<string, EffectHandler> = {
     const raceRows = await deps.db.execute<{ name: string }>(
       sql`SELECT name FROM races WHERE id = ${String(event.payload['raceId'])}::uuid`,
     );
-    // The club's admin tier decides race requests, so they are the audience - not the
-    // race roster, who have no say in it.
+    /*
+     * The admins ON this roster, not the club's whole admin tier.
+     *
+     * Every club admin may decide a race request, but authority is not involvement: an owner
+     * running none of the club's races was being paged for all of them. The people who need
+     * to know somebody wants in are the ones already going. See `raceRosterAdmins`.
+     */
     const recipients = await resolveAudience(deps.db, {
       type: 'race_join_request',
       actorId: String(event.payload['userId']),
       clubId,
+      raceId: String(event.payload['raceId']),
     });
     await writeNotifications(deps.db, {
       outboxEventId: notificationKey(event.id),

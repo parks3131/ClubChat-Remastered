@@ -123,6 +123,8 @@ export type RaceDetail = {
     requestPending: boolean;
     pinned: boolean;
     channelId: string | null;
+    /** The Owner's join-without-asking. Decided by the server, never inferred from a role. */
+    canJoinDirectly: boolean;
   };
 };
 

@@ -11,6 +11,7 @@
  *    control ADR-0013 owes for having dropped the rendered body column.
  */
 
+import { sql } from 'drizzle-orm';
 import {
   parseNotificationParams,
   type NotificationParams,
@@ -96,4 +97,70 @@ export async function writeNotifications<K extends NotificationType>(
     .returning({ id: notifications.id });
 
   return { created: rows.length };
+}
+
+/** Which scope key a request type carries its target under. */
+const REQUEST_SCOPE_KEY = {
+  club_join_request: 'clubId',
+  race_join_request: 'raceId',
+  eboard_join_request: 'eboardId',
+} as const;
+
+export type ResolvePendingInput = {
+  type: keyof typeof REQUEST_SCOPE_KEY;
+  /** The club, race or Eboard the request was filed against. */
+  scopeId: string;
+  /** Whose request this was. Two people can have requests open on one roster at once. */
+  requesterId: string;
+  decision: 'approved' | 'denied';
+  decidedByName: string;
+};
+
+/**
+ * Settle every admin's copy of a request that has just been decided.
+ *
+ * **A request notification goes to everyone who could act on it, and exactly one of them
+ * does.** Every other copy is then describing work that no longer exists: it still says "X
+ * asked to join", still deep-links to a roster with nothing pending on it, and - because
+ * `markInboxRead` deliberately refuses to clear the three request types - still sits unread
+ * against the badge until that particular admin happens to open that particular roster. An
+ * admin who was away for the whole thing meets a job that was done hours ago.
+ *
+ * So the decision resolves them in place. `PRD/12` rule 5 already asked for this ("a decided
+ * join request stays in the feed, tagged Approved or Denied"); the row keeps its history and
+ * stops claiming to be work.
+ *
+ * Three details carry the weight:
+ *
+ *  - **`params ->> 'decision' IS NULL`** is what makes this safe to run against a scope where
+ *    the same person has asked before. A denied request can be re-filed (`races.ts`), so
+ *    `(scope, requester)` is not unique over time - without this guard a second decision would
+ *    reach back and rewrite the record of the first one.
+ *  - **`COALESCE(read_at, now())`** keeps an existing read timestamp. An admin who opened the
+ *    roster an hour ago read it then, and moving that forward would be inventing a moment.
+ *  - **The decider's own copy is resolved too**, and reads "Sarah approved Mike's request"
+ *    rather than "you approved". The renderer works from the row, not from who is looking at
+ *    it, and a row that says who acted is right for every reader including the actor.
+ *
+ * Not idempotency-keyed, because it does not need to be: it is an update whose predicate stops
+ * matching once it has run, so a redelivered decision event finds nothing left to stamp.
+ */
+export async function resolvePendingRequests(
+  db: Db,
+  input: ResolvePendingInput,
+): Promise<{ resolved: number }> {
+  const result = await db.execute<{ id: string }>(sql`
+    UPDATE notifications
+       SET params = params || ${JSON.stringify({
+         decision: input.decision,
+         decidedByName: input.decidedByName,
+       })}::jsonb,
+           read_at = COALESCE(read_at, now())
+     WHERE type = ${input.type}
+       AND params ->> ${REQUEST_SCOPE_KEY[input.type]} = ${input.scopeId}
+       AND params ->> 'requesterId' = ${input.requesterId}
+       AND params ->> 'decision' IS NULL
+    RETURNING id
+  `);
+  return { resolved: result.rows.length };
 }

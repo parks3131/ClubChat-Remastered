@@ -10,7 +10,15 @@ logistics - replacing the throwaway group chat spun up per race.
 2. **Every club member can see every race exists** - in the races list, on the calendar, and
    in the club hub preview.
 3. **Access is always by request.** There is no "open" race policy. A club member requests;
-   any club admin approves, denies, or adds them directly.
+   any club admin approves, denies, or adds them directly. An admin may not add *themselves* -
+   adding yourself is joining, and joining is by request.
+
+   3a. **The Owner, and only the Owner, may join a race outright**, with no request and nobody
+   to approve it. It exists for the roster with no admin left on it: a race join request goes
+   to the admins on that roster, so once the last one leaves the request notifies nobody, and
+   the way back in must not itself need an approver. Not the admin tier, because an admin who
+   could walk onto any roster would make rule 4 true only until they chose otherwise. Once on
+   the roster the Owner is an ordinary race member who also manages the club.
 4. **A club admin is a "manager" of every race in their club** - full management authority -
    but **management authority is not access**. Chat, polls, and car-group assignment all
    require a real roster row, for admins too.

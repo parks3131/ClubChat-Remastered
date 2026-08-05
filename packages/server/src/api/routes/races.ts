@@ -22,6 +22,7 @@ import {
   decideRaceRequest,
   deleteCarGroup,
   deleteRace,
+  joinRaceDirectly,
   leaveCarGroup,
   listRaces,
   readCarGroups,
@@ -201,6 +202,19 @@ export function registerRaceRoutes(app: FastifyInstance, deps: AppDeps): void {
   /** Access is always by request - there is no open race policy. */
   app.post<{ Params: { id: string } }>('/races/:id/join-requests', async (request, reply) => {
     const result = await requestRaceAccess(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return reply.code(201).send(result);
+  });
+
+  /**
+   * The Owner's way straight onto a roster, with no request behind it.
+   *
+   * Its own route rather than a flag on the request above, because it is a different act with a
+   * different predicate: one asks, the other joins. A client that cannot see the difference
+   * would be one refactor away from offering "request" to the Owner and silently joining them.
+   */
+  app.post<{ Params: { id: string } }>('/races/:id/join', async (request, reply) => {
+    const result = await joinRaceDirectly(deps.db, request.access!, request.params.id);
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return reply.code(201).send(result);
   });

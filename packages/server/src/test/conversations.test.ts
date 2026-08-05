@@ -164,13 +164,15 @@ describe('which conversations appear', () => {
       raceDate: '2026-09-12',
     });
     expect(race.status).toBe(201);
-    // A roster row, because management authority is not access - without this the race channel
-    // would be excluded by the access predicate rather than by the scope filter, and the test
-    // would pass for the wrong reason.
-    const added = await as(owner, 'POST', `/races/${race.body.raceId}/members`, {
-      userId: owner.userId,
-    });
-    expect(added.status).toBeLessThan(300);
+    /*
+     * The creator gets a roster row from `createRace` itself, which this test needs: management
+     * authority is not access, so without a roster row the race channel would be excluded by the
+     * access predicate rather than by the scope filter, and the test would pass for the wrong
+     * reason. It used to add the owner explicitly, which was a no-op on top of that auto-roster
+     * and only worked because `addRaceMember` let a manager add themselves. It no longer does.
+     */
+    const roster = await as(owner, 'GET', `/races/${race.body.raceId}/members`);
+    expect(roster.body.members.map((m: { userId: string }) => m.userId)).toContain(owner.userId);
 
     // Both other channels exist and the caller can reach both.
     const reachable = await as(owner, 'GET', '/channels');
