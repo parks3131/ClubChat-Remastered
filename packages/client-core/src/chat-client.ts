@@ -496,6 +496,34 @@ export class ChatClient {
   }
 
   /**
+   * Open a conversation: make sure this client is subscribed to it and has its history.
+   *
+   * > **A channel you gain access to mid-session was never backfilled.** `channels` is replaced
+   * > wholesale at `auth.ok` and never again, and `syncAll` walks exactly that list - so a race
+   * > you just joined, were added to, or created was not in it. Nothing fetched its messages,
+   * > and joining a race redirects straight into its chat, so the founder met "No messages yet"
+   * > in a room the server had already written "PwOwner joined the race" into. A reload fixed
+   * > it, which is what made it look like the server had not posted anything.
+   *
+   * Live frames were unaffected, which is exactly why this hid for so long: anything sent while
+   * you sat there appeared, and only the history you arrived too late for was missing. The two
+   * halves were each individually correct.
+   *
+   * Called on entering any chat, not only an unknown one. Syncing a channel already in hand is
+   * the cheap case - the server answers from the revision mark with nothing to send - and a
+   * method that only ran for unknown channels would be one more rule to get right at the call
+   * site.
+   */
+  async openChannel(channelId: string): Promise<void> {
+    if (!this.channels.some((entry) => entry.id === channelId)) {
+      // Subscribe before syncing, so anything posted during the fetch arrives rather than
+      // falling into the gap between the two.
+      this.subscribe([channelId]);
+    }
+    await this.syncChannel(channelId, await this.store.localMaxSeq(channelId));
+  }
+
+  /**
    * Tell the server this channel has been read up to `upToSeq`.
    *
    * > **Held and retried, not fire-and-forget.** `send` throws when the socket is not up, and this

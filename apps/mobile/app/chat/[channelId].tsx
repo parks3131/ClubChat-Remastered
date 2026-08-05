@@ -1495,6 +1495,27 @@ export default function ChatScreen() {
     if (channel) entryLastReadRef.current = channel.lastReadSeq;
   }, [client, channelId, revision]);
 
+  /*
+   * Subscribe to and backfill this conversation on arrival.
+   *
+   * > **Without this, a channel gained during the session never got its history.** The client's
+   * > channel list is fixed at `auth.ok` and `syncAll` walks exactly that list, so a race you
+   * > had just joined, been added to, or created was not in it. Joining a race redirects
+   * > straight into its chat, so the screen opened on "No messages yet" over a channel the
+   * > server had already written "X joined the race" into, and only a reload showed it.
+   *
+   * Runs for every channel rather than only unknown ones: syncing one already in hand is the
+   * cheap case, and a condition here would be a rule to get wrong.
+   */
+  useEffect(() => {
+    if (!client || !channelId) return;
+    void client
+      .openChannel(channelId)
+      // Local history still renders and the socket still delivers what arrives next, so a
+      // failed backfill degrades to what this screen did before rather than to an error.
+      .catch((error) => console.warn('[chat] backfill on open failed', error));
+  }, [client, channelId]);
+
   /**
    * Decide where the rule goes, ONCE, as soon as there are rows and a cursor to decide from.
    *

@@ -96,10 +96,18 @@ async function setup(): Promise<Fixture> {
     const url = String(input);
     syncCalls.push(url);
     const since = Number(url.split('%3A').pop() ?? url.split(':').pop());
+    /*
+     * Answers for the channel that was ASKED for, rather than always for `CHANNEL`.
+     *
+     * A fake that replies about one channel whatever it was asked cannot tell a sync of the
+     * wrong channel from a sync of the right one - which is exactly the distinction the
+     * backfill-on-open test below turns on.
+     */
+    const asked = decodeURIComponent(url.split('channels[]=')[1] ?? '').split(':')[0] ?? CHANNEL;
     const toSend = backlog.filter((message) => message.seq > since);
     return new Response(
       JSON.stringify({
-        channels: [{ channelId: CHANNEL, messages: toSend, hasMore: false }],
+        channels: [{ channelId: asked, messages: toSend, hasMore: false }],
       }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     );
@@ -504,5 +512,55 @@ describe('a frame that does not match the contract', () => {
     });
 
     await expect(connected).rejects.toThrow(/could not be understood/);
+  });
+});
+
+/**
+ * A conversation you gain access to DURING a session.
+ *
+ * > **This is the defect the founder hit on a phone on 2026-08-05, twice.** `channels` is
+ * > replaced wholesale at `auth.ok` and never again, and `syncAll` walks exactly that list -
+ * > so a race just joined, been added to, or created was not in it and nothing ever fetched
+ * > its history. Joining a race redirects straight into its chat, so the screen opened on
+ * > "No messages yet" over a channel the server had already written "X joined the race" into.
+ * > A reload showed it, which is what made it look like the server had posted nothing.
+ * >
+ * > Live frames were unaffected, so anything sent while you sat there appeared. Only the
+ * > history you arrived too late for was missing, and each half was individually correct.
+ */
+describe('opening a conversation gained mid-session', () => {
+  const FRESH = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+  it('subscribes to and backfills a channel that was not in auth.ok', async () => {
+    const { client, socket, syncCalls, backlog } = await setup();
+
+    // Not in the channel list the socket authenticated with.
+    expect(client.channels.some((entry) => entry.id === FRESH)).toBe(false);
+
+    backlog.push(envelope(1, { channelId: FRESH, body: 'PwOwner joined the race' }));
+    await client.openChannel(FRESH);
+
+    // The history is now local, which is what the screen renders from.
+    expect(await client.store.seqs(FRESH)).toEqual([1]);
+    expect(syncCalls.some((url) => url.includes(encodeURIComponent(FRESH)))).toBe(true);
+
+    // And the socket was told to subscribe, so what arrives NEXT lands too rather than
+    // needing a second reload.
+    expect(
+      socket.sent.some(
+        (frame) => frame.t === 'subscribe' && JSON.stringify(frame.d).includes(FRESH),
+      ),
+      'a channel gained mid-session must be subscribed, not only fetched',
+    ).toBe(true);
+  });
+
+  it('still syncs a channel it already knew about, rather than skipping it', async () => {
+    const { client, syncCalls, backlog } = await setup();
+
+    backlog.push(envelope(1));
+    await client.openChannel(CHANNEL);
+
+    expect(await client.store.seqs(CHANNEL)).toEqual([1]);
+    expect(syncCalls.some((url) => url.includes(encodeURIComponent(CHANNEL)))).toBe(true);
   });
 });
