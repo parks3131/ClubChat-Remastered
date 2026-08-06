@@ -154,7 +154,26 @@ export const notificationParams = {
     scopeName: z.string(),
     scopeId: Uuid,
   }),
-  member_removed: club.merge(actor),
+  /**
+   * Taken off a roster by somebody else.
+   *
+   * **`scopeName` is the space that was actually lost, and naming it is the difference between
+   * an accurate line and a false alarm.** Rendering only `clubName` tells a member removed from
+   * one race that they were removed from the club - while they still hold their club membership,
+   * their club chat and every other race in it.
+   *
+   * Carries no `scopeId`, unlike its `member_added` twin, and that asymmetry is the point: the
+   * space it names is precisely the one the reader can no longer open, so the row points at the
+   * club instead (PRD/12 line 33). `request_denied` is shaped this way for the same reason.
+   *
+   * Both fields are optional because rows written before 2026-08-05 carry neither and must keep
+   * rendering years later (PRD/12 rule 6) - `renderNotification` falls back to the club, which
+   * is what those rows always said. Every writer supplies them.
+   */
+  member_removed: club.merge(actor).extend({
+    scope: ChannelScope.optional(),
+    scopeName: z.string().optional(),
+  }),
   role_changed: club.merge(actor).extend({ newRole: ClubRole }),
 
   poll_created: club.merge(actor).extend({ pollId: Uuid, question: z.string() }),
@@ -449,10 +468,20 @@ export function renderNotification(n: {
         title: p['scopeName']!,
         body: `${p['actorName']} added you to ${p['scopeName']}`,
       };
+    /*
+     * The body names the space; the title stays the club.
+     *
+     * That split is deliberate and matches `request_denied`: the row navigates to the club,
+     * because the race or Eboard the sentence is about is exactly what the reader has just
+     * lost access to. Titling it with a space they cannot open would promise a destination
+     * the tap does not go to.
+     *
+     * The fallback carries rows written before this type knew about scopes.
+     */
     case 'member_removed':
       return {
         title: p['clubName']!,
-        body: `${p['actorName']} removed you from ${p['clubName']}`,
+        body: `${p['actorName']} removed you from ${p['scopeName'] ?? p['clubName']}`,
       };
     case 'role_changed':
       /*

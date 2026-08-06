@@ -76,7 +76,13 @@ const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
     scopeName: 'Eboard & Council',
     scopeId: EBOARD,
   },
-  member_removed: { clubId: CLUB, clubName: 'Hillside', actorName: 'Riley' },
+  member_removed: {
+    clubId: CLUB,
+    clubName: 'Hillside',
+    actorName: 'Riley',
+    scope: 'race',
+    scopeName: 'Spring Half',
+  },
   role_changed: { clubId: CLUB, clubName: 'Hillside', actorName: 'Riley', newRole: 'admin' },
   poll_created: {
     clubId: CLUB,
@@ -260,6 +266,42 @@ describe('rendering', () => {
     expect(promoted).toContain('an admin');
     expect(demoted).toContain('to member');
     expect(promoted).not.toBe(demoted);
+  });
+
+  /**
+   * A removal names the space it took away, not the club it happened in.
+   *
+   * The three writers of this type cover three different spaces, and only one of them is the
+   * club. Rendering `clubName` for the other two says "you were removed from Hillside" to
+   * somebody who lost one race and kept everything else - a false alarm about the membership
+   * they still hold.
+   */
+  it('names the space somebody was removed from, not the club around it', () => {
+    const fromRace = renderNotification({
+      type: 'member_removed',
+      params: { ...fixtures.member_removed, scope: 'race', scopeName: 'Spring Half' },
+    });
+    expect(fromRace.body).toBe('Riley removed you from Spring Half');
+    // The title stays the club, because that is where the row navigates - see the case comment.
+    expect(fromRace.title).toBe('Hillside');
+
+    expect(
+      renderNotification({
+        type: 'member_removed',
+        params: { ...fixtures.member_removed, scope: 'eboard', scopeName: 'Eboard & Council' },
+      }).body,
+    ).toBe('Riley removed you from Eboard & Council');
+  });
+
+  it('falls back to the club for a removal row written before it knew about scopes', () => {
+    // PRD/12 rule 6: a row must still render years later. Rows written before 2026-08-05 carry
+    // no scope at all, and the club is what they always said.
+    expect(
+      renderNotification({
+        type: 'member_removed',
+        params: { clubId: CLUB, clubName: 'Hillside', actorName: 'Riley' },
+      }).body,
+    ).toBe('Riley removed you from Hillside');
   });
 });
 

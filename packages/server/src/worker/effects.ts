@@ -837,7 +837,15 @@ const onEboardMemberDeparted: EffectHandler = async (event, deps) => {
     await writeNotifications(deps.db, {
       outboxEventId: notificationKey(event.id),
       type: 'member_removed',
-      params: { clubId, clubName: club.name, actorName: actorName ?? 'An admin' },
+      params: {
+        clubId,
+        clubName: club.name,
+        actorName: actorName ?? 'An admin',
+        // The Eboard, not the club - losing the private space leaves their club membership and
+        // their club chat exactly where they were.
+        scope: 'eboard',
+        scopeName: 'Eboard & Council',
+      },
       recipients: [userId],
       actorId,
       clubId,
@@ -918,7 +926,15 @@ function makeDepartureHandler(reason: 'removed' | 'left'): EffectHandler {
         await writeNotifications(deps.db, {
           outboxEventId: notificationKey(event.id),
           type: 'member_removed',
-          params: { clubId, clubName: club.name, actorName: actorName ?? 'An admin' },
+          params: {
+            clubId,
+            clubName: club.name,
+            actorName: actorName ?? 'An admin',
+            // Stated rather than left to the fallback, so all three writers of this type name
+            // their scope and the club case is not the one that reads as an omission.
+            scope: 'club',
+            scopeName: club.name,
+          },
           recipients: [userId],
           actorId,
           clubId,
@@ -1370,6 +1386,7 @@ function makeMembersAddedHandler(
  * has no equivalent worry because leaving a club takes the channel with it.
  */
 const onRaceMemberDeparted: EffectHandler = async (event, deps) => {
+  const clubId = String(event.payload['clubId']);
   const raceId = String(event.payload['raceId']);
   const userId = String(event.payload['userId']);
   const actorId = event.payload['actorId'] as string | null;
@@ -1389,6 +1406,42 @@ const onRaceMemberDeparted: EffectHandler = async (event, deps) => {
     body: actorName ? `${name} was removed by ${actorName}` : `${name} left the race`,
     eventId: event.id,
   });
+
+  /*
+   * Tell the person removed - the one member who cannot read the line just posted.
+   *
+   * The revocation above is deliberate, so the departure is narrated to the whole roster
+   * EXCEPT its subject. That left race removal completely silent: club and Eboard removal have
+   * written this row since Phase 1, race removal never did, and the founder's report was that
+   * the race simply vanished from the phone of the person taken off it with nothing said. The
+   * roster screen removes people the same way it adds them, and only one of the two halves was
+   * telling anybody.
+   *
+   * Nothing is written when they left of their own accord: `actorId` is null then, the same
+   * gate both sibling handlers use. Being told "you removed you" is noise, and they were the
+   * one who did it.
+   */
+  if (actorId && actorName) {
+    const club = await clubContext(deps.db, clubId);
+    if (club) {
+      await writeNotifications(deps.db, {
+        outboxEventId: notificationKey(event.id),
+        type: 'member_removed',
+        params: {
+          clubId,
+          clubName: club.name,
+          actorName,
+          // Named so the row says "removed you from Fall Classic" rather than naming the club,
+          // which they are still a member of.
+          scope: 'race',
+          scopeName: race.name,
+        },
+        recipients: [userId],
+        actorId,
+        clubId,
+      });
+    }
+  }
 };
 
 /** A race was deleted. Its channel is gone, so every roster member's socket must drop it. */

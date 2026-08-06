@@ -490,6 +490,45 @@ describe('race chat narrates its roster, like club chat does', () => {
   });
 
   /**
+   * The removed member is the one person who cannot read the line above.
+   *
+   * `onRaceMemberDeparted` revokes their subscription BEFORE it posts, deliberately - you do
+   * not deliver "Requester was removed by HostAdmin" to Requester, live, in a room they have
+   * just lost. So the departure is narrated to the whole roster except its subject, and with no
+   * notification the subject learned nothing at all: the founder's report on 2026-08-05 was
+   * that the race just disappeared. Club and Eboard removal have written this row since Phase 1.
+   */
+  it('tells the person removed, naming the race and not the club', async () => {
+    const f = await setup();
+
+    await addRaceMember(h.db, await ctxFor(f.hostAdminId), f.raceId, f.requesterId);
+    await drainOnce(h.db, deps);
+    await removeRaceMember(h.db, await ctxFor(f.hostAdminId), f.raceId, f.requesterId);
+    await drainOnce(h.db, deps);
+
+    // Newest first. "removed you from Hillside Running Club" would be a false alarm - they are
+    // still in the club, still in its chat, and still on every other race in it.
+    expect(await inboxOf(f.requesterId)).toEqual([
+      ['HostAdmin removed you from Fall Classic', false],
+      ['HostAdmin added you to Fall Classic', false],
+    ]);
+  });
+
+  /** They did it themselves, so there is nobody to tell. `actorId` is null on that path. */
+  it('says nothing to somebody who left the race under their own steam', async () => {
+    const f = await setup();
+
+    await addRaceMember(h.db, await ctxFor(f.hostAdminId), f.raceId, f.offRosterAdminId);
+    await drainOnce(h.db, deps);
+    await removeRaceMember(h.db, await ctxFor(f.offRosterAdminId), f.raceId, f.offRosterAdminId);
+    await drainOnce(h.db, deps);
+
+    expect(await inboxOf(f.offRosterAdminId)).toEqual([
+      ['HostAdmin added you to Fall Classic', false],
+    ]);
+  });
+
+  /**
    * The point of the whole thing: a message is what gives a channel an unread count, so the
    * roster now hears about an arrival without anybody being sent a discrete notification.
    */

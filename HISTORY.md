@@ -13,6 +13,74 @@ Newest first.
 
 ---
 
+## 2026-08-05 - The removal that nobody was told about
+
+The other half of the roster work below. That session taught race chat to narrate its own
+roster; this one found that the person the narration is *about* is the one member who cannot
+read it.
+
+### Race removal notified nobody, and the reason it went unnoticed
+
+`onRaceMemberDeparted` revoked the departing member's subscription, posted "Mike was removed by
+Sarah" into race chat, and stopped. It never wrote a notification. Club removal and Eboard
+removal have written a `member_removed` row since Phase 1; race was the only one of the three
+that did not, and the founder's report was simply that the race vanished from the phone of the
+person taken off it with nothing said.
+
+**What hid it is the ordering that the session below deliberately introduced.** The revocation
+happens *before* the line is posted, because you do not deliver "Mike was removed by Sarah" to
+Mike, live, in a room he has just lost. So a removal is narrated to the entire roster **except
+its subject**. Read from the roster side everything looked right - the line was there, the
+unread count moved - and the one person with no way to see any of it was the one the act was
+about. A departure has an audience of everybody and a subject of one, and only the audience
+half had been built.
+
+The gate is `actorId`, the same signal the two sibling handlers read: null means they left of
+their own accord, and "you removed you" is noise.
+
+### The wording bug found on the way, which was worse than the missing row
+
+`member_removed` carried `{clubId, clubName, actorName}` and rendered "**Sarah removed you from
+Hillside Running Club**". Reusing it unchanged for a race would have told somebody who lost one
+race roster that they had lost the whole club - while they still held their club membership,
+their club chat and every other race in it. A false alarm about exactly the thing the reader
+most wants stated accurately.
+
+**Eboard removal had been shipping that sentence since Phase 1.** It writes the same type with
+the same params, so it has always said "removed you from Hillside Running Club" to somebody who
+lost only the private space. Nobody had noticed, because the only way to see it is to be removed
+from an Eboard and read the notification carefully.
+
+So `member_removed` gained optional `scope` and `scopeName`, and all three writers now pass
+them. `member_added` and `request_denied` already carried the same fields, which is the tell:
+the add path had been scope-aware from the start and its mirror image never was.
+
+Two shape decisions worth keeping:
+
+- **No `scopeId`, unlike its `member_added` twin.** The space it names is precisely the one the
+  reader can no longer open, so the row points at the club. `request_denied` is shaped this way
+  already, for the same reason.
+- **The body names the space; the title stays the club.** Titling it with a race would promise
+  a destination the tap does not go to. That split is `request_denied`'s too.
+
+Both fields are optional rather than required, because rows written before today carry neither
+and PRD/12 rule 6 requires a row to keep rendering years later. The renderer falls back to the
+club, which is what those rows always said. A test pins the fallback so nobody "tidies" it away.
+
+### Scope, honestly
+
+Push was considered and deliberately not added. The accept and add paths write an inbox row and
+send no push - only announcements, mentions, DMs and new content push - so parity with "how we
+accept someone" is the row and the badge. Being removed is arguably louder than being added, but
+that is a change to the whole membership tier rather than to this one handler, and it was not
+what was asked for.
+
+Verified by full suite (751 server, 27 shared, 67 mobile) plus four new tests: the removal
+notification naming the race, silence on self-leave, the race and Eboard wording, and the
+legacy-row fallback.
+
+---
+
 ## 2026-08-05 - Four things that were right, and a fifth that never fetched them
 
 A day of notification and roster work that ended by finding the defect underneath the other

@@ -30,7 +30,7 @@ below therefore describes a destination, not a stored string.
 | **Request approved** | An admin approves any of the above (or a club switches to open) | The requester | The club/race/Eboard | Inbox is opened |
 | **Request denied** | An admin denies any of the above | The requester | The club | Inbox is opened |
 | **Member added** | An admin adds someone directly | The person added | That space | Inbox is opened |
-| **Member removed** | An admin removes someone | The person removed | The club | Inbox is opened |
+| **Member removed** | An admin removes someone from a club, a race roster or the Eboard | The person removed | The club | Inbox is opened |
 | **Role changed** | A member is promoted or demoted | The affected member | The club | Inbox is opened |
 | **Poll created** | A poll is created in any scope | Everyone who can access it, except the creator | The poll | Inbox is opened |
 | **Poll closing soon** | A poll is 10 minutes from its deadline | Everyone who can access it, **including the creator** | The poll | Inbox is opened |
@@ -99,6 +99,13 @@ message would flood the feed with exactly the per-message noise rule 8 rejects. 
    have, which is not "was this dealt with" but "who dealt with it".
 6. **Every row deep-links to its target.** Tapping is always safe: a row pointing at something
    the user has since lost access to fails gracefully rather than crashing.
+
+   6a. **A membership row names the space it is about, not the club around it.** "Sarah removed
+   you from Fall Classic", never "from Hillside Running Club" - being taken off one race roster
+   leaves the club membership, the club chat and every other race in it untouched, and naming
+   the club instead reads as though all of it was lost. It is a false alarm about the one thing
+   the reader would most want to be told accurately. The row still points at the **club**,
+   because the space it names is precisely what the reader can no longer open.
 7. Opening a chat with unread messages records a **"caught up on N messages"** row, so the
    history of having caught up survives even though the live count is gone.
 8. The badge reflects unread discrete notifications plus **one per channel** with unread

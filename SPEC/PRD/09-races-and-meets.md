@@ -50,6 +50,13 @@ logistics - replacing the throwaway group chat spun up per race.
    the race". Two names then a count - listing eight makes a line nobody finishes, and a bare
    "8 people" answers with a number when the question is who. Each person still gets their own
    notification, because that one is addressed to them individually.
+
+   8c. **Somebody removed by an admin is notified**, naming the race
+   ([Notifications](12-notifications.md) rule 6a). They are the one member who cannot read the
+   departure line: it is posted after their subscription is revoked, deliberately, so the roster
+   is told and its subject is not. Without the notification a removal is completely silent to
+   the only person it happens to, and the race simply disappears from their app. Leaving of
+   your own accord notifies nobody, since they are the one who did it.
 9. Leaving the parent club removes the user from every race in it.
 
 #### Meet Information
