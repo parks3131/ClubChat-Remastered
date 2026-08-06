@@ -81,6 +81,10 @@ A remaster is at parity when every line below passes on **iOS, Android, and web*
 
 - [ ] The grid marks exactly the days with an event, race, or meeting, and no filler days.
 - [ ] Paging months does not change the grid's height.
+- [ ] The grid swipes between months, one month per swipe, and the arrows still work.
+- [ ] The heading changes as the swipe crosses halfway, and reverts if the swipe is dragged back.
+- [ ] A swipe does not steal a day tap, and does not block the page's vertical scroll.
+- [ ] Tapping the heading picks any month and year; **This month** returns to today.
 - [ ] The list merges events, races, meetings, and polls into Upcoming/Past.
 - [ ] An open, deadline-less poll never falls into Past.
 - [ ] Eboard meetings are absent from a non-member's calendar; races are visible to everyone.

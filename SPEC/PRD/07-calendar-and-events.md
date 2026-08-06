@@ -11,6 +11,28 @@ Two views over **one merged feed**: a month grid for "what is happening when", a
    has a closing deadline, not a day it happens on.
 3. **Filler days from adjacent months are never marked or tappable**, so a marker always
    belongs to the month on screen.
+
+   3a. **The grid is swiped between months, and the arrows stay.** A swipe is the gesture people
+   arrive expecting; the arrows remain because a swipe cannot be announced to a screen reader or
+   performed with a switch, so removing them would take the feature away from whoever needs it
+   most. Both do the same thing.
+
+   3b. **The heading changes with the swipe, not after it.** It names the month owning most of
+   the screen, so it flips as the finger crosses halfway and reverts if the swipe is dragged back
+   without completing. A heading that waits for the animation to settle trails the grid it names
+   by about half a second, which reads as lag rather than as a heading.
+
+   3c. **Months are reached one at a time.** A flick cannot cross two, because the grid either
+   side of the current one is what a swipe moves to and there is no third to land on. Longer
+   journeys are the picker's job, below.
+
+   3d. **The month and year are chosen directly, from the heading.** Tapping it opens a year
+   stepper and the twelve months, so reaching next March is one tap rather than seven. The month
+   in view is filled and the real current month is ringed, answering "where am I" and "where is
+   now" before anything is tapped, and **This month** returns to today from wherever the browsing
+   went. Stepping the year alone changes nothing until a month is picked, so a stray tap costs
+   nothing. The year is a stepper rather than a list of years because a club calendar is used a
+   season either side of today; that is the assumption to revisit first if people jump further.
 4. The Upcoming/Past list is one merged, sorted feed across events, races, meetings, and
    polls. Past items are faded, most-recent-first.
 5. **A poll is "upcoming" while it is still open**, not by comparing its date - an open-ended

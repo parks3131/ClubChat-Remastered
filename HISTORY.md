@@ -13,6 +13,80 @@ Newest first.
 
 ---
 
+## 2026-08-06 - Swiping the calendar, and three wrong answers before the right one
+
+Asked for plainly: keep the arrows, add swiping, and put a year and month picker on top - the
+picker offered up to be looked at and reworked, the swipe called "very important".
+
+### The swipe, and why it is not a PanResponder
+
+The obvious build is a `PanResponder` translating three months across a row. It was built that
+way first and **it did not work**: the row moved 22 pixels, exactly one drag step, and froze.
+
+The instinct was that the responder was being taken away by the 42 day cells underneath, each of
+them a `Pressable` asking for the gesture as the finger crossed it - and
+`onPanResponderTerminationRequest` does default to true, so that fix went in and is right. It was
+not the cause. The row still stopped after one step.
+
+**The better answer was to stop hand-rolling it.** The hard part of this gesture is not the
+translation, it is the arbitration: a horizontal drag belongs to the pager, a vertical drag to
+the page scroll, and a tap to whichever day is under it. A horizontal `ScrollView` with
+`pagingEnabled` already resolves all three, on both platforms, and it brings the snap physics
+with it. Three months are rendered, it rests on the middle one, and a commit recentres it.
+
+### The heading was half a second behind the grid
+
+Reported from the phone: the swipe felt right, the month name did not arrive with it.
+
+The cause is that committing is deliberately LATE - it waits for the scroll to come to rest - so
+a heading driven by the committed cursor sits on the old month for the whole animation and then
+snaps. The heading now reads the live offset and flips at the halfway mark, which is also where
+the snap commits: the month owning most of the screen is the month named. Drag back without
+releasing and it reverts, so it never lies about a swipe that snapped back.
+
+`MonthGrid` is memoised as part of that. The live heading re-renders the pager mid-gesture, and
+without it that rebuilt 126 cells across three grids at the exact moment the frame budget is
+already going on a scroll.
+
+### Bugs hit, with root causes
+
+**A settle that acted on a 140ms-old offset.** The commit was scheduled on a timer and read the
+offset captured when the timer was set, which is most of a snap animation out of date - correct
+only when the scroll had already stopped. It reads the live value now, and `onMomentumScrollEnd`
+supplies the authoritative one on a device.
+
+**A commit that could fire twice.** Committing recentres, recentring scrolls, and the scroll
+came straight back into the handler. The second pass acted on an offset the first had already
+consumed, which surfaced as a swipe moving the calendar the wrong way.
+
+**A red screen on the founder's phone, caused by the editing rather than the code.** `memo` was
+added to `MonthGrid` in one save and to the import line two saves later. Fast Refresh pushed the
+window between them straight to the device: *"Property 'memo' doesn't exist"*. The served bundle
+was already correct by the time it was looked at.
+
+> **The app is live-reloading against files being edited, so an intermediate save is a crash on
+> somebody's phone.** Order edits so the file is never broken - imports before usage - or make
+> the change in one write.
+
+### Verification worth noting, and its limit
+
+Driven through the real web build rather than reasoned about: eight pages forward and back
+across a year boundary, the heading asserted at 30% dragged (unchanged), 60% dragged (already
+the next month) and dragged-back (reverted), the picker jumping to March 2027 and swiping on
+from there, and **This month** returning to today.
+
+Two of those runs produced results that looked like product bugs and were harness artifacts. A
+mouse drag does not scroll an overflow container on the web, so dragging proved nothing; and
+`scrollTo({behavior: 'smooth'})` into a mandatory snap container sent the offset to 0 rather
+than to the requested page, which the component then read correctly as "previous month". A probe
+printing the offsets the component actually received is what separated the two, and it is worth
+reaching for sooner than it was here.
+
+**What none of it covers is how the snap feels under a finger.** That is the phone's answer, not
+the browser's.
+
+---
+
 ## 2026-08-06 - The long-press menu, and a prop that went missing without failing
 
 Asked for from a phone in three parts, each one arriving after the last was built: the chat list
