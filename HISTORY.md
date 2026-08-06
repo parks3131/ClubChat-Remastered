@@ -13,6 +13,164 @@ Newest first.
 
 ---
 
+## 2026-08-05 - Four things that were right, and a fifth that never fetched them
+
+A day of notification and roster work that ended by finding the defect underneath the other
+four. Every one of them was reported from a real phone, and the last one is the reason the
+first four looked broken after they were fixed.
+
+### A race request went to people with no stake in the race
+
+`race_join_request` resolved to the club's whole admin tier, so an Owner running none of the
+club's races was paged for every one of them. It now resolves to the admin-tier members holding
+a **roster row on that race**.
+
+`worker/audience.ts` had said so at the top of the file since it was written - rule 2, "race
+audiences are roster members only, never roster union club admins" - and then did the opposite
+for join requests and for the stranded-Incharge notification. A rule stated in a comment and
+contradicted forty lines below it is worth more suspicion than a rule nobody wrote down.
+
+**Authority is untouched.** `canManageRace` is still every club admin (PRD/09 rules 4 and 5), so
+an off-roster admin who opens the roster can still approve. They are simply not paged about a
+race they are not on.
+
+The founder's call on the empty case, recorded because it looks like a bug when read cold: a
+roster with no admin left on it notifies **nobody**, and the request waits on the roster screen.
+No fallback, no widening to people who are not involved. The recovery is 3a below.
+
+### The decided request that kept asking
+
+A request notification goes to everyone who could act on it, and exactly one of them acts. Every
+other copy then described work that no longer existed: still "X asked to join", still
+deep-linking to a roster with nothing pending on it, and - because `markInboxRead` deliberately
+refuses to clear the three request types - still unread against the badge until that particular
+admin happened to open that particular roster. An admin who was away for the whole thing met a
+job that had been done hours earlier.
+
+`PRD/12` rule 5 had asked for the fix since Phase 1: *"a decided join request stays in the feed,
+tagged Approved or Denied."* It was half-built in the most invisible way. `InboxRow` declared
+`decision?: 'approved' | 'denied'`, the client already rendered the chip, and `readInbox` never
+populated it. Both ends complete, nothing joining them.
+
+`resolvePendingRequests` now stamps the outcome and the decider onto every copy and marks it
+read, so the row restates itself as "Sarah approved Mike's request to join Fall Classic".
+Naming the decider is the part that earns its place: an admin arriving late does not ask whether
+it was handled, they ask **who** handled it.
+
+Three details carry it. `params ->> 'decision' IS NULL` is what makes the sweep safe against a
+re-filed request, since `(scope, requester)` is not unique over time. `COALESCE(read_at, now())`
+keeps an existing read timestamp rather than inventing a moment. And the decider's own copy is
+resolved too, reading "Sarah approved" rather than "you approved", because the renderer works
+from the row and not from who is looking at it.
+
+**The founder kept roster-open clearing** rather than having a pending row stay unread until
+decided. Asked and answered; do not re-open it.
+
+### Race chat had never said a word about its own roster
+
+Club chat and Eboard chat have narrated joins and departures since Phase 1.
+`onRaceMembershipDecided` wrote the requester's notification and stopped, and
+`onRaceMemberDeparted` only revoked the socket. Approving somebody into a race was invisible.
+
+Invisible **everywhere**, not merely quiet in the room, and that is the half worth keeping. A
+channel's unread count is derived from its messages, so a roster change that posts no message
+produces no unread, no badge, and no sign for anybody already on that roster. The founder's
+report - *"it didn't say anything in the chat, and the notification doesn't pop up to anyone"* -
+is one symptom, not two.
+
+Four lines now, split the way club chat splits them: somebody who got themselves here joined,
+somebody an admin put here was added by them. A denial still announces nothing, which is the
+rule the Eboard handler already followed. On departure the revocation happens **before** the
+line is posted, or "Mike was removed by Sarah" is delivered live to Mike in a room he has just
+lost.
+
+### Three smaller things found in the same code
+
+- **`addRaceMember` never checked the target was somebody else**, so any manager could pass
+  their own id and walk onto any roster in the club. PRD/09 rule 4's "management authority is
+  not access" held only until an admin decided otherwise. That capability is now the Owner's
+  alone and deliberate (rule 3a), as the escape hatch for a roster whose last admin has gone.
+  One existing test turned out to be leaning on the loophole to give an owner a roster row, on
+  top of the auto-roster `createRace` already performs.
+- **A direct add told the person their request had been approved**, ignoring the `added` flag
+  the club and Eboard handlers both honour.
+- **A direct add left the pending request pending forever**, so the person was on the roster and
+  still listed as waiting, with no decision left available to settle it. `addEboardMember` had
+  always closed it; the race path never did.
+
+### Pick people off a list instead of interrogating a search box
+
+The race form required two characters before showing anybody, then hid whoever was already
+picked, so choosing eight people was eight searches and the only record of the choice was a row
+of chips. It now shows the club up front, tinting a chosen person in the accent, with search
+narrowing the list rather than being the only way to see it. The Eboard and race rosters got the
+same picker.
+
+**The club roster is deliberately excluded.** Its candidate pool is everybody you share *any*
+club with, which is not a list anybody reads down - the panel would open onto a wall of
+near-strangers. One presentational `MemberPicker` serves all three hosts and fetches nothing
+itself, because the pools come from opposite places: the race form filters a club roster it
+already holds, the roster panel asks the server for people who are **not** on the roster yet.
+
+Server side, adding is a list everywhere now and the singular calls it with a list of one, so
+there is one authorization and one transaction. That also fixed what the old client-side loop
+did to chat: one request per person meant one "was added by" line per person, so a race created
+with eight people opened onto eight near-identical lines before anybody had said anything. A
+batch is one event and one line - "Sarah added Mike, Alex and 3 others to the race" - while each
+person still gets their own notification, since that one is addressed to them individually.
+
+Somebody already on the roster is skipped rather than refused, because the picker's list is a
+snapshot and failing seven good additions over one stale row is the worse answer. A non-admin in
+an Eboard batch still refuses the whole thing: that is the caller asking for something the space
+does not permit, which is a different kind of wrong.
+
+### And then none of it showed up
+
+The founder joined a race and landed in a chat saying "No messages yet", over a channel the
+server had already written "PwOwner joined the race" into. The batch add looked equally silent.
+
+**The server was right the whole time.** The rows, the wording, `channels.last_seq` and the
+outbox were all correct in the database, with no parked events and no errors. The defect was in
+the client, and it was older than any of the day's work:
+
+> `channels` is replaced wholesale at `auth.ok` and never again, and `syncAll` walks exactly
+> that list. A channel gained **during** the session - a race just joined, been added to, or
+> created - was in nobody's list, so nothing ever fetched its history.
+
+Joining a race redirects straight into its chat, which put this on the worst possible screen:
+the first thing you see after joining is the room you are told is empty. Reloading fixed it,
+which is exactly what made it read as "the server never posted anything".
+
+Live frames were unaffected, and that is why it hid for so long. Anything sent while you sat in
+the room appeared immediately; only the history you arrived too late for was missing. Both
+halves were individually correct.
+
+`openChannel` now subscribes to a channel the session did not start with and syncs it, and the
+chat screen calls it on arrival for **every** channel rather than only unknown ones - syncing
+one already in hand is the cheap case, and a condition there would be one more rule to get
+wrong.
+
+### What the tests could not have caught
+
+Every server test passed at each step, and they were not wrong: the server was right. Nothing
+exercised the client actually displaying any of it, so a whole day's work could be correct
+end-to-end in the database and invisible on a phone.
+
+It was found by driving the real app in a browser with Playwright - reproduce, reload to prove
+the server, fix, re-verify. Two habits earned their keep and are worth repeating:
+
+- **The web target works** (`expo start --web`), and it is far faster than the device for
+  anything that is not native. It needs its own API on 3100 with `CLIENT_ORIGIN` pointed at it,
+  or CORS refuses every call and the app reports it as being offline.
+- **A test's fakes can hide the thing under test.** The new server tests stubbed Redis as
+  `null`; these handlers publish, a null client throws inside the drain, and the outbox absorbs
+  that as a retry - so the effect would have parked silently while the assertions passed against
+  a database nothing had written to. The client fixture had the mirror problem: its fake `/sync`
+  answered for one channel whatever it was asked, which cannot tell a sync of the right channel
+  from a sync of the wrong one.
+
+---
+
 ## 2026-08-04 - The retry budget that lasted 1.25 seconds
 
 Started as a conversation about what a microservices ClubChat would look like, went through the
