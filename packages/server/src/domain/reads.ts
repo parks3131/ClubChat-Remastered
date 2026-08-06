@@ -34,7 +34,7 @@ import type { Db } from '../db/client.ts';
 import { channels, messages, users } from '../db/schema.ts';
 import { isoUtc } from '../db/sql-helpers.ts';
 import { clearedFloor, type AccessContext } from '../policy/context.ts';
-import { canPostInChannel, type ChannelRef } from '../policy/predicates.ts';
+import { canLeaveClub, canPostInChannel, type ChannelRef } from '../policy/predicates.ts';
 import {
   accessibleChannelPredicate,
   channelDisplayImage,
@@ -743,6 +743,10 @@ export async function listConversations(
       unread: Number(row.unread),
       muted: row.muted,
       pinned: row.pinned,
+      // From the policy module for the same reason `canPost` is: the Owner-cannot-leave rule
+      // lives in one predicate, and a menu that decided it from a role would be a second copy
+      // of it that the endpoint could then refuse.
+      canLeave: row.club_id !== null && canLeaveClub(ctx, row.club_id),
       canPost: canPostInChannel(ctx, {
         id: row.channel_id,
         scope,

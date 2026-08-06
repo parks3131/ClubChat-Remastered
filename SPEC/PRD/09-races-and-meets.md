@@ -111,7 +111,17 @@ logistics - replacing the throwaway group chat spun up per race.
 
 21. **Pinning a race is personal.** Each member pins for themselves; it affects only their own
     club-hub preview, never anyone else's.
-22. **Any member can pin any race they can see** - pinning is not admin-gated.
+22. **Any member can pin any race they can see** - pinning is not admin-gated, and not
+    access-gated either: a race you have no roster row for is still pinnable, because somebody
+    waiting on a request is exactly who wants it at the top of their hub.
+23. **The gesture is a long press on the race row**, in the club hub's preview list and in its
+    "See all" sheet, and it is the race's own pin rather than its conversation's - the two are
+    different records, and only the race one exists for a race you cannot open. The race
+    preview screen keeps its explicit pin control for somebody already standing on the race.
+24. **The same long press also offers Mute, Delete chat and Leave group**, to a member who is on
+    the roster. A race with no roster row gets Pin alone, because the other three act on a chat
+    it does not have. Leave group is the same act as rule 8's Leave - it drops the car group with
+    it, and the club membership is untouched. See [Screen map](15-screen-map.md) rule 10.
 
 **Edge cases.** A pending request shows "Requested - waiting on an admin to approve" on both
 the row and the preview. A denied request can be re-filed. A group whose Incharge just left

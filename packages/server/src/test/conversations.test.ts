@@ -336,4 +336,33 @@ describe('unread, mute and whether the composer is live', () => {
     const club = (await conversations(owner)).find((r) => r.scope === 'club');
     expect(club!.canPost).toBe(true);
   });
+
+  /**
+   * Whether the long-press menu may offer "Leave club".
+   *
+   * The Owner cannot leave their own club - `canLeaveClub` refuses them and PRD/04 says the
+   * action is not even rendered. The row carries the answer so the menu never has to work it out
+   * from a role: a client that inferred it would be a second copy of the rule, and the copy that
+   * drifts is always the one drawing the button.
+   *
+   * A DM answers false for a different reason. There is nothing to leave, and Delete chat is not
+   * leaving - it hides your own view and the thread stays open.
+   */
+  it('says who may leave: a member yes, the Owner no, a DM never', async () => {
+    const owner = await signUp('LeaveOwner');
+    const member = await signUp('LeaveMember');
+    const { clubId, channelId } = await createClubAs(owner);
+    await join(clubId, member);
+    const opened = await as(owner, 'POST', '/dm/threads', { userId: member.userId });
+    const dmChannelId = opened.body.channelId;
+
+    const ownersRow = (await conversations(owner)).find((r) => r.channelId === channelId);
+    expect(ownersRow!.canLeave).toBe(false);
+
+    const membersRow = (await conversations(member)).find((r) => r.channelId === channelId);
+    expect(membersRow!.canLeave).toBe(true);
+
+    const dmRow = (await conversations(owner)).find((r) => r.channelId === dmChannelId);
+    expect(dmRow!.canLeave).toBe(false);
+  });
 });

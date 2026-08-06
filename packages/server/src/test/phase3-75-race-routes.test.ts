@@ -464,6 +464,42 @@ describe('race routes: requests and pins', () => {
     expect((await as(member, 'GET', `/clubs/${clubId}/races`)).body.races[0].pinned).toBe(false);
   });
 
+  /**
+   * The row carries whether its chat is silenced, for the club hub's long-press menu.
+   *
+   * Without it the menu would have to guess, and a menu offering "Mute" to somebody who already
+   * muted the race is a control that appears to do nothing when tapped.
+   *
+   * **False without access**, which is the half worth pinning: pinning is deliberately not
+   * access-gated, so a race with no roster row still appears in this list - and it has no chat
+   * to have silenced. Offering Unmute there would be offering to change something that does not
+   * exist.
+   */
+  it('reports whether the viewer has muted a race chat, and never for one they cannot open', async () => {
+    const owner = await signUp('MuteOwner');
+    const outsider = await signUp('MuteOutsider');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, outsider);
+
+    const created = await as(owner, 'POST', `/clubs/${clubId}/races`, {
+      name: 'Muted race',
+      raceDate: '2027-05-05',
+    });
+    const channelId = created.body.channelId;
+
+    const before = (await as(owner, 'GET', `/clubs/${clubId}/races`)).body.races[0];
+    expect(before.muted).toBe(false);
+
+    expect((await as(owner, 'POST', `/channels/${channelId}/mute`, {})).status).toBe(200);
+    expect((await as(owner, 'GET', `/clubs/${clubId}/races`)).body.races[0].muted).toBe(true);
+
+    // On the same race, from somebody with no roster row: visible and pinnable, but no chat.
+    const theirs = (await as(outsider, 'GET', `/clubs/${clubId}/races`)).body.races[0];
+    expect(theirs.hasAccess).toBe(false);
+    expect(theirs.channelId).toBeNull();
+    expect(theirs.muted).toBe(false);
+  });
+
   it('lets a member leave, and refuses one member removing another', async () => {
     const owner = await signUp('LeaveOwner');
     const a = await signUp('LeaveA');

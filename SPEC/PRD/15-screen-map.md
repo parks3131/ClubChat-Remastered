@@ -61,11 +61,67 @@ the other behind a button at the bottom of a list.
 7. **The empty state says which of three things happened** - no chats at all, nothing matching
    the search, or nothing unread - because "No chats yet" under an active Unread filter is a
    lie.
-8. **A long press on any row opens Pin/Unpin and Mute/Unmute, plus Delete chat on a DM.**
+8. **A long press on any row opens Pin/Unpin, Mute/Unmute, Delete chat and Leave club.**
    Pinned rows sort above every unpinned one and carry a pin glyph, so the ordering explains
-   itself rather than looking arbitrary. The first two apply in every scope because both are
-   per-person facts about a conversation; the third is a direct-message action - see
+   itself rather than looking arbitrary. The first three are per-person facts about a
+   conversation and apply in every scope; Leave club is absent on a DM, which has nothing to
+   leave, and absent for an Owner, who must transfer ownership first (`PRD/04`). See
    [Direct messages](14-direct-messages.md) rules 11 and 12.
+
+   8a. **Delete chat is personal in every scope, and the dialog says so in the scope's own
+   words.** It hides everything said so far from you alone: on a DM the other person keeps every
+   message and is not told, and on a club or race chat so does everybody else. It was a DM-only
+   action until 2026-08-06. Nothing is destroyed, which is what separates it from deleting a
+   message - that is authority over a shared room, and this is a view of your own.
+
+   8b. **Leaving is confirmed with the cascade named, not with "are you sure".** Leaving a club
+   takes its chat, every race in the club and any Eboard access, in one transaction; leaving a
+   race takes its chat and your car group place and leaves the club membership alone. The part
+   nobody expects from a menu opened on a chat row is the part the dialog has to state.
+
+   8c. **Every long press in the product buzzes, with one feel.** A medium impact fires the
+   moment the press registers, before the menu is drawn. A long press shows no progress, so
+   without it the only signal that it worked is the menu appearing, and the only signal that you
+   have not held long enough is nothing at all - which reads as a dead control. One shared
+   helper, not a call per screen, because the same gesture feeling different in two places is
+   the defect this fixes.
+
+9. **The row lifts, the screen blurs behind it, and the menu springs out of it.** Not a bottom
+   sheet: a sheet opens where the tab bar is, and on the club hub it opened *underneath* it, so
+   the first item was visible and Cancel was not.
+
+   9a. **The pressed row is redrawn floating at the exact rectangle it occupies**, and grows
+   slightly. It is the subject of the menu, so it stays sharp and in place while everything
+   around it recedes - which is what makes the menu read as belonging to that row rather than to
+   the app.
+
+   9b. **The background blurs rather than dimming to grey.** A dim says "something is in front of
+   your list"; a blur says "this is still your list, and it is waiting". The blur covers the
+   header and the tab bar too, so nothing is left looking still-usable.
+
+   9c. **Icons on the left, destructive item last and red, no Cancel row** - tapping anywhere
+   outside dismisses, and in a menu this short a Cancel would be a fifth of its height spent on
+   "never mind". The menu hangs below the row, flipping above it when the row sits too low, and
+   is clamped inside the safe area on all four sides.
+
+10. **A long press on a race row in the club hub opens the same menu**, in both the preview list
+    and the searchable "See all" sheet, with the menu opening over the sheet rather than closing
+    it. Leave group there leaves the race, not the club.
+
+    10a. **A race with no roster row gets Pin and nothing else.** The other three all act on the
+    race's chat, and a race you are not on has none. Pinning is the one act that was never gated
+    on access.
+
+    10b. **The race pin is personal, and it is not access-gated.** Any member can pin any race
+    they can see, which is every race in their club - a locked race is pinnable, and somebody
+    waiting on a roster request is exactly who wants it at the top of their hub. An admin pinning
+    a race pins it for themselves and for nobody else; club-wide admin pins were built in v1 and
+    deliberately removed. See [Races and meets](09-races-and-meets.md) rules 21 to 23.
+
+    10c. **No visible pin control on the row.** A toggle on every row is five controls in a
+    five-row list for something most people set once. The pin glyph at the end of the row is the
+    state the gesture sets, and it appears in both lists so pinning from the sheet is visibly not
+    a no-op.
 
 ```
 Chats  (every club chat and DM, newest first; chips: Unread | DMs | Clubs)

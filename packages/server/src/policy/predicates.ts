@@ -246,13 +246,20 @@ export const canPinChannel = isChannelMember;
 /**
  * May this user clear their own view of this conversation?
  *
- * **Direct messages only, and that is a product decision rather than a technical limit.** The
- * clear floor is scope-agnostic and would work identically on a club chat; "Delete chat" is
- * offered only on a DM, and a capability reachable over HTTP but offered nowhere is the shape
- * Phase 2 shipped a whole domain in. If clubs ever want it, this is one branch.
+ * **Every scope, since 2026-08-06.** This was DM-only, and the restriction was always a product
+ * decision rather than a technical one - the note here said so, and said "if clubs ever want it,
+ * this is one branch". They did, so this is that branch: the long-press menu now offers Delete
+ * chat on a club chat and a race chat as well as on a DM.
+ *
+ * Widening it is safe because **clearing is personal and destroys nothing**. It writes one
+ * `channel_clears` row for this user, and every other member's history is untouched and unaware.
+ * That is what makes it a different act from deleting a message, which is authority over a shared
+ * room and gated accordingly by `canPinInChannel` and the moderation predicates.
+ *
+ * Membership is still required, so this cannot be used to probe a channel the caller cannot read.
  */
 export const canClearChannel = (ctx: AccessContext, channel: ChannelRef): boolean =>
-  channel.scope === 'dm' && isChannelMember(ctx, channel);
+  isChannelMember(ctx, channel);
 
 /**
  * May this user post here **now**?

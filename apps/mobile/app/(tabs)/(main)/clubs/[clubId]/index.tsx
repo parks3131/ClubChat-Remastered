@@ -12,19 +12,41 @@
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Link, Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { RemoteImage } from '../../../../../src/media-bubble.tsx';
 import { BackAlwaysTo } from '../../../../../src/nav.tsx';
 import { unreadCount } from '@clubchat/shared';
-import { channelApi, clubApi, raceApi } from '../../../../../src/api.ts';
+import { channelApi, clubApi, dmApi, raceApi } from '../../../../../src/api.ts';
+import type { RaceListItem } from '../../../../../src/api-types.ts';
 import { useSession } from '../../../../../src/chat-provider.tsx';
+import { longPressFeedback } from '../../../../../src/haptics.ts';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
-import { DataScreen, SearchField } from '../../../../../src/ui.tsx';
+import {
+  ConfirmDialog,
+  ContextMenu,
+  DataScreen,
+  SearchField,
+  measureRow,
+  type PressAnchor,
+} from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
 /** How many races the hub previews before "See all". */
 const RACE_PREVIEW = 5;
+
+/**
+ * Where tapping a race goes.
+ *
+ * A race the member is ON opens its conversation directly; one they are not on opens the preview,
+ * which is where the request-to-join lives. `channelId` is null precisely when there is no roster
+ * row, so this cannot open a chat somebody may not read.
+ *
+ * One function because two lists navigate here - the hub preview and the "See all" sheet - and
+ * they had already been written out separately once.
+ */
+const raceHref = (race: { id: string; channelId: string | null }): string =>
+  race.channelId !== null ? `/chat/${race.channelId}` : `/races/${race.id}`;
 
 export default function ClubHubScreen() {
   const { clubId, from } = useLocalSearchParams<{ clubId: string; from?: string }>();
@@ -48,10 +70,24 @@ export default function ClubHubScreen() {
   const jumped = from === 'clubsTab' || from === 'profile';
   const backHref = from === 'profile' ? '/profile' : '/clubs';
   const backLabel = from === 'profile' ? 'Profile' : 'Clubs';
-  const { channels, revision } = useSession();
+  const { channels, revision, userId, client } = useSession();
   const router = useRouter();
   const [racesOpen, setRacesOpen] = useState(false);
   const [raceSearch, setRaceSearch] = useState('');
+  /**
+   * The race whose long-press menu is open, with the rectangle it occupies so it can be lifted.
+   *
+   * `from` decides which row to lift. The same race is drawn one way in the hub list and another
+   * in the "See all" sheet, and lifting the wrong one would float a row that looks nothing like
+   * the one under the finger.
+   */
+  const [menuFor, setMenuFor] = useState<{
+    race: RaceListItem;
+    anchor: PressAnchor;
+    from: 'list' | 'sheet';
+  } | null>(null);
+  const [confirmClear, setConfirmClear] = useState<RaceListItem | null>(null);
+  const [confirmLeave, setConfirmLeave] = useState<RaceListItem | null>(null);
 
   const club = useLoad(() => clubApi.detail(clubId), [clubId, revision]);
   const races = useLoad(() => raceApi.list(clubId), [clubId, revision]);
@@ -87,6 +123,32 @@ export default function ClubHubScreen() {
       (entry) => entry.scope === scope && entry.scopeId === scopeId,
     );
     return channel ? unreadCount(channel) : 0;
+  };
+
+  /*
+   * Pin or unpin a race, from the long press on its row.
+   *
+   * **`raceApi.setPin` and not `channelApi.pin`, and the distinction is not cosmetic.** A race
+   * pin is a row in `race_pins` keyed by the RACE, which is what this screen's pin icon reads
+   * and what the schema allows any club member to set "whether or not they can see the race" -
+   * so a locked race is pinnable, and a channel pin could not be, because a race you are not on
+   * has no `channelId` at all. The conversation pin is a different personal fact about a
+   * different object, and the Chats list owns that one.
+   *
+   * `refresh` rather than `reload`: a quiet swap, so toggling a pin does not blank the section
+   * behind a spinner for something the row can already show.
+   */
+  const act = async (run: () => Promise<unknown>) => {
+    setMenuFor(null);
+    try {
+      await run();
+    } finally {
+      // Both loaders, because these actions cross them: leaving a race changes its row AND the
+      // unread totals the badges come from. Refresh rather than reload, so a menu action does
+      // not blank the section behind a spinner.
+      races.refresh();
+      states.refresh();
+    }
   };
 
   return (
@@ -215,52 +277,25 @@ export default function ClubHubScreen() {
                 previewed.map((race, index) => (
                   <View key={race.id}>
                     {index > 0 && <View style={styles.divider} />}
-                    {/*
-                      A race the member is ON opens its conversation directly; one they are not
-                      on opens the preview, which is where the request-to-join lives. Same rule
-                      as the Eboard row above, and `channelId` is null precisely when there is no
-                      roster row - so this cannot open a chat somebody may not read.
-                    */}
-                    <Link
-                      href={race.channelId !== null ? `/chat/${race.channelId}` : `/races/${race.id}`}
-                      asChild
-                      accessibilityRole="link"
-                    >
-                      <Pressable
-                        style={styles.raceRow}
-                        accessibilityLabel={`${race.name}${race.hasAccess ? '' : ', no access'}`}
-                      >
-                        <RaceFace race={race} />
-                        <Text style={styles.raceName} numberOfLines={1}>
-                          {race.name}
-                        </Text>
-                        {/*
-                          A race's own unread.
+                    <RaceRow
+                      race={race}
+                      unread={unreadForScope('race', race.id)}
+                      onPress={() => router.push(raceHref(race))}
+                      /*
+                        Long press for the menu, the same gesture the Chats list uses. No
+                        visible control, because a toggle on every row is five controls in a
+                        five-row list for something most people set once - and the pin icon at
+                        the end of the row is the state it sets.
 
-                          The club row above totals every channel of the club this member can
-                          reach, races included - so without this a race's share of that number
-                          is real and unfindable, which is exactly the complaint the Eboard badge
-                          fixed one row up. `unreadForScope` was written for that and never
-                          carried across, which is how it happened.
-
-                          Zero for a race with no roster row, because the channel is not in the
-                          reachable set at all: no access, no count, nothing to explain.
-                        */}
-                        {unreadForScope('race', race.id) > 0 && (
-                          <Text style={styles.raceUnread}>
-                            {unreadForScope('race', race.id) > 99
-                              ? '99+'
-                              : unreadForScope('race', race.id)}
-                          </Text>
-                        )}
-                        {race.pinned && (
-                          <MaterialIcons name="push-pin" size={16} color={color.accent} />
-                        )}
-                        {!race.hasAccess && (
-                          <MaterialIcons name="lock" size={16} color={color.textSecondary} />
-                        )}
-                      </Pressable>
-                    </Link>
+                        Deliberately NOT gated on `hasAccess`: any member can pin any race they
+                        can see, which is the whole club's. Somebody waiting on a roster request
+                        is exactly who wants it at the top of their hub.
+                      */
+                      onLongPress={(anchor) => {
+                        longPressFeedback();
+                        setMenuFor({ race, anchor, from: 'list' });
+                      }}
+                    />
                   </View>
                 ))
               )}
@@ -277,13 +312,140 @@ export default function ClubHubScreen() {
                 onDismiss={() => setRacesOpen(false)}
                 onPick={(raceId) => {
                   setRacesOpen(false);
-                  // The same rule as the preview rows: a race you are on opens its conversation,
-                  // one you are not opens the preview. Picking from the sheet must not take a
-                  // different route to the same place, or the two would drift.
+                  // Through `raceHref`, the same function the preview rows use. Picking from the
+                  // sheet must not take a different route to the same place, or the two drift.
                   const picked = races.data?.races.find((race) => race.id === raceId);
-                  router.push(
-                    picked?.channelId != null ? `/chat/${picked.channelId}` : `/races/${raceId}`,
-                  );
+                  if (picked) router.push(raceHref(picked));
+                }}
+                /*
+                  The sheet pins too, and the menu opens OVER it rather than closing it.
+                  Somebody who searched a long list to find one race should not have to search
+                  again to pin the next one - and `RaceFace`'s own comment is the warning: these
+                  two lists drift every time one of them grows something the other did not.
+                */
+                onLongPin={(race, anchor) => {
+                  longPressFeedback();
+                  setMenuFor({ race, anchor, from: 'sheet' });
+                }}
+              />
+            )}
+
+            {/*
+              The race long-press menu, the same one the Chats list uses.
+
+              **Pin is the only item a locked race gets.** The other three all act on the race's
+              CHAT, and a race with no roster row has no chat to mute, clear or leave - which is
+              exactly why `channelId` is null there. Pinning is the one act that was never gated
+              on access, so somebody waiting on a request can still keep the race at the top.
+            */}
+            {menuFor !== null && (
+              <ContextMenu
+                anchor={menuFor.anchor}
+                preview={
+                  menuFor.from === 'sheet' ? (
+                    <SheetRaceRow race={menuFor.race} />
+                  ) : (
+                    <RaceRow race={menuFor.race} unread={unreadForScope('race', menuFor.race.id)} />
+                  )
+                }
+                onDismiss={() => setMenuFor(null)}
+                items={[
+                  {
+                    label: menuFor.race.pinned ? 'Unpin' : 'Pin',
+                    icon: 'push-pin',
+                    onPress: () => {
+                      const race = menuFor.race;
+                      void act(() => raceApi.setPin(race.id, !race.pinned));
+                    },
+                  },
+                  ...(menuFor.race.channelId !== null
+                    ? [
+                        {
+                          label: menuFor.race.muted ? 'Unmute' : 'Mute',
+                          icon: menuFor.race.muted
+                            ? ('notifications-active' as const)
+                            : ('notifications-off' as const),
+                          onPress: () => {
+                            const race = menuFor.race;
+                            const channelId = race.channelId;
+                            if (channelId === null) return;
+                            void act(() =>
+                              race.muted ? dmApi.unmute(channelId) : dmApi.mute(channelId),
+                            );
+                          },
+                        },
+                        {
+                          label: 'Delete chat',
+                          icon: 'delete-outline' as const,
+                          onPress: () => {
+                            const race = menuFor.race;
+                            setMenuFor(null);
+                            setConfirmClear(race);
+                          },
+                        },
+                        {
+                          label: 'Leave group',
+                          icon: 'logout' as const,
+                          destructive: true,
+                          onPress: () => {
+                            const race = menuFor.race;
+                            setMenuFor(null);
+                            setConfirmLeave(race);
+                          },
+                        },
+                      ]
+                    : []),
+                ]}
+              />
+            )}
+
+            {confirmClear !== null && (
+              <ConfirmDialog
+                title="Delete this chat?"
+                body={`This clears ${confirmClear.name} for you only. Everybody else on the roster keeps every message, and nobody is told.`}
+                confirmLabel="Delete chat"
+                dismissLabel="Keep it"
+                onCancel={() => setConfirmClear(null)}
+                onConfirm={() => {
+                  const race = confirmClear;
+                  const channelId = race.channelId;
+                  setConfirmClear(null);
+                  if (channelId === null) return;
+                  void act(async () => {
+                    await channelApi.clear(channelId);
+                    // The device holds exactly the messages the clear was meant to hide, and
+                    // renders from that cache before any network call resolves.
+                    await client?.forgetChannel(channelId);
+                  });
+                }}
+              />
+            )}
+
+            {/*
+              Leaving a race takes the car group with it - `removeRaceMember` shares
+              `departCarGroup` with the explicit car-group commands rather than reimplementing
+              it - so the dialog says so. Somebody who has been assigned a car is the person most
+              likely to be surprised, and the Incharge rule bites hardest there.
+            */}
+            {confirmLeave !== null && (
+              <ConfirmDialog
+                title={`Leave ${confirmLeave.name}?`}
+                body="You will lose its chat and your car group place. Your club membership is not affected, and you can ask to join again."
+                confirmLabel="Leave group"
+                dismissLabel="Stay"
+                onCancel={() => setConfirmLeave(null)}
+                onConfirm={() => {
+                  const race = confirmLeave;
+                  const channelId = race.channelId;
+                  setConfirmLeave(null);
+                  if (userId === null) return;
+                  void act(async () => {
+                    // Removing yourself IS leaving: `removeRaceMember` reads the self case and
+                    // emits `actorId: null`, which is what makes race chat say "left the race"
+                    // rather than "was removed by".
+                    await raceApi.removeMember(race.id, userId);
+                    if (channelId !== null) await client?.forgetChannel(channelId);
+                  });
                 }}
               />
             )}
@@ -317,18 +479,15 @@ function RacesSheet({
   onQuery,
   onDismiss,
   onPick,
+  onLongPin,
 }: {
-  races: ReadonlyArray<{
-    id: string;
-    name: string;
-    raceDate: string;
-    image: string | null;
-    hasAccess: boolean;
-  }>;
+  races: ReadonlyArray<RaceListItem>;
   query: string;
   onQuery: (next: string) => void;
   onDismiss: () => void;
   onPick: (raceId: string) => void;
+  /** Long press on a row, to open the menu over this sheet at the row. */
+  onLongPin: (race: RaceListItem, anchor: PressAnchor) => void;
 }) {
   const needle = query.trim().toLowerCase();
   const shown = needle.length === 0 ? races : races.filter((r) => r.name.toLowerCase().includes(needle));
@@ -361,24 +520,12 @@ function RacesSheet({
             <Text style={styles.emptyRaces}>No races match "{query}".</Text>
           ) : (
             shown.map((race) => (
-              <Pressable
+              <SheetRaceRow
                 key={race.id}
-                style={styles.sheetRow}
+                race={race}
                 onPress={() => onPick(race.id)}
-                accessibilityRole="button"
-                accessibilityLabel={`${race.name}${race.hasAccess ? '' : ', no access'}`}
-              >
-                <RaceFace race={race} />
-                <View style={styles.sheetRowText}>
-                  <Text style={styles.raceName} numberOfLines={1}>
-                    {race.name}
-                  </Text>
-                  <Text style={styles.emptyRaces}>{race.raceDate}</Text>
-                </View>
-                {!race.hasAccess && (
-                  <MaterialIcons name="lock" size={16} color={color.textSecondary} />
-                )}
-              </Pressable>
+                onLongPress={(anchor) => onLongPin(race, anchor)}
+              />
             ))
           )}
         </ScrollView>
@@ -393,6 +540,128 @@ function RacesSheet({
  * The filled circular icon well in its own tint is what stops the three destinations reading as an
  * undifferentiated list - chat on the accent, News on the secondary, Eboard on the tertiary.
  */
+/**
+ * One race inside the "See all" sheet.
+ *
+ * A second row rather than a reuse of `RaceRow`: the sheet shows the date under the name and the
+ * hub list does not, and the two have different paddings. Sharing one component would mean a
+ * prop toggling half its content, which is the shape that eventually renders the wrong one on the
+ * wrong screen. `RaceFace` is the part that IS shared, and its own comment says why.
+ */
+function SheetRaceRow({
+  race,
+  onPress,
+  onLongPress,
+}: {
+  race: RaceListItem;
+  onPress?: () => void;
+  onLongPress?: (anchor: PressAnchor) => void;
+}) {
+  const self = useRef<View>(null);
+
+  return (
+    <Pressable
+      ref={self}
+      style={styles.sheetRow}
+      onPress={onPress}
+      onLongPress={
+        onLongPress === undefined
+          ? undefined
+          : (event) =>
+              measureRow(
+                self.current,
+                { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY },
+                onLongPress,
+              )
+      }
+      accessibilityRole="button"
+      accessibilityLabel={`${race.name}${race.hasAccess ? '' : ', no access'}`}
+    >
+      <RaceFace race={race} />
+      <View style={styles.sheetRowText}>
+        <Text style={styles.raceName} numberOfLines={1}>
+          {race.name}
+        </Text>
+        <Text style={styles.emptyRaces}>{race.raceDate}</Text>
+      </View>
+      {/* The state the long press sets, shown here as well as in the preview list - otherwise
+          pinning from this sheet looks like it did nothing. */}
+      {race.pinned && <MaterialIcons name="push-pin" size={16} color={color.accent} />}
+      {!race.hasAccess && <MaterialIcons name="lock" size={16} color={color.textSecondary} />}
+    </Pressable>
+  );
+}
+
+/**
+ * One race in the club hub's list.
+ *
+ * Its own component so the long-press menu can draw it a second time, lifted, without describing
+ * the row twice - the copy that drifts is always the one written out by hand. It measures itself
+ * on long press, because the menu hangs off the row's rectangle rather than off the touch point.
+ *
+ * **Navigates by `onPress` and NOT by being wrapped in `<Link asChild>`.** Extracting this row
+ * out of a Link is what broke tapping a race on 2026-08-06: `asChild` clones its child and
+ * injects `onPress`, a plain function component silently drops every prop it does not
+ * destructure, and the result was a row that still looked and long-pressed correctly and simply
+ * did nothing when tapped. Nothing failed loudly, because dropping a prop is not an error. The
+ * Chats list had always navigated with `router.push` for its own rows; this now matches it.
+ *
+ * `onPress` and `onLongPress` are both optional and both omitted by the lifted copy, which is a
+ * picture rather than a control: pressing it again would open a second menu over the first.
+ */
+function RaceRow({
+  race,
+  unread,
+  onPress,
+  onLongPress,
+}: {
+  race: RaceListItem;
+  unread: number;
+  onPress?: () => void;
+  onLongPress?: (anchor: PressAnchor) => void;
+}) {
+  const self = useRef<View>(null);
+
+  return (
+    <Pressable
+      ref={self}
+      style={styles.raceRow}
+      onPress={onPress}
+      accessibilityRole="button"
+      onLongPress={
+        onLongPress === undefined
+          ? undefined
+          : (event) =>
+              measureRow(
+                self.current,
+                { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY },
+                onLongPress,
+              )
+      }
+      accessibilityLabel={`${race.name}${race.hasAccess ? '' : ', no access'}`}
+    >
+      <RaceFace race={race} />
+      <Text style={styles.raceName} numberOfLines={1}>
+        {race.name}
+      </Text>
+      {/*
+        A race's own unread.
+
+        The club row above totals every channel of the club this member can reach, races included
+        - so without this a race's share of that number is real and unfindable, which is exactly
+        the complaint the Eboard badge fixed one row up. `unreadForScope` was written for that and
+        never carried across, which is how it happened.
+
+        Zero for a race with no roster row, because the channel is not in the reachable set at
+        all: no access, no count, nothing to explain.
+      */}
+      {unread > 0 && <Text style={styles.raceUnread}>{unread > 99 ? '99+' : unread}</Text>}
+      {race.pinned && <MaterialIcons name="push-pin" size={16} color={color.accent} />}
+      {!race.hasAccess && <MaterialIcons name="lock" size={16} color={color.textSecondary} />}
+    </Pressable>
+  );
+}
+
 /**
  * A race's face: its own picture, or its initial.
  *

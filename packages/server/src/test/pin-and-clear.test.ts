@@ -252,10 +252,33 @@ describe('clearing your own view of a conversation', () => {
     expect(row!.unread).toBe(1);
   });
 
-  it('is refused outside a DM, where the product does not offer it', async () => {
-    const { alice, clubChannelId } = await pairWithDm();
-    const refused = await as(alice, 'POST', `/channels/${clubChannelId}/clear`);
-    expect(refused.status).toBe(404);
+  /**
+   * A club chat clears too, and this test used to assert the opposite.
+   *
+   * "Direct messages only" was a product decision rather than a technical limit - the note on
+   * `canClearChannel` said so, and said the branch was there if clubs ever wanted it. On
+   * 2026-08-06 the long-press menu grew Delete chat on every row, so this is that branch, and
+   * the test that pinned the refusal became the test that pins the behaviour.
+   *
+   * **The second half is the one that matters.** A DM has one other person; a club chat has the
+   * whole club, and a clear that reached any of them would not be a clear, it would be a
+   * deletion nobody authorised.
+   */
+  it('clears a club chat too, for the caller alone', async () => {
+    const { alice, bob, clubChannelId } = await pairWithDm();
+    await post(bob, clubChannelId, 'before the clear');
+
+    expect((await as(alice, 'POST', `/channels/${clubChannelId}/clear`)).status).toBe(200);
+
+    // Out of her list entirely, because nothing has been said above her floor - the same promise
+    // Delete chat makes on a DM.
+    expect(
+      (await conversations(alice)).find((r) => r.channelId === clubChannelId),
+    ).toBeUndefined();
+
+    // Untouched for him, down to the preview.
+    const his = (await conversations(bob)).find((r) => r.channelId === clubChannelId);
+    expect(his?.['lastMessage']?.preview).toBe('before the clear');
   });
 
   it('is refused to somebody who is not in the conversation at all', async () => {

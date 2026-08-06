@@ -40,19 +40,22 @@ import {
   conversationSummaryText,
   type ConversationSummary,
 } from '@clubchat/shared';
-import { channelApi, dmApi } from '../../../../src/api.ts';
+import { channelApi, clubApi, dmApi } from '../../../../src/api.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { useClearClub } from '../../../../src/current-space.tsx';
 import { formatConversationTimestamp } from '../../../../src/dates.ts';
+import { longPressFeedback } from '../../../../src/haptics.ts';
 import { color, radius, space, type } from '../../../../src/theme.ts';
 import {
   Avatar,
   ConfirmDialog,
+  ContextMenu,
   DataScreen,
   EmptyState,
   SearchField,
-  SheetMenu,
   Tabs,
+  measureRow,
+  type PressAnchor,
 } from '../../../../src/ui.tsx';
 import { useLoad, usePullToRefresh } from '../../../../src/use-load.ts';
 
@@ -152,8 +155,13 @@ export default function ChatsScreen() {
   const [filter, setFilter] = useState<Filter | null>(null);
   const [query, setQuery] = useState('');
   /** The row a long press opened the menu for, or null. */
-  const [sheetFor, setSheetFor] = useState<ConversationSummary | null>(null);
+  /** The row whose long-press menu is open, with the rectangle it occupies so it can be lifted. */
+  const [sheetFor, setSheetFor] = useState<{
+    row: ConversationSummary;
+    anchor: PressAnchor;
+  } | null>(null);
   const [confirmClear, setConfirmClear] = useState<ConversationSummary | null>(null);
+  const [confirmLeave, setConfirmLeave] = useState<ConversationSummary | null>(null);
 
   const load = useLoad(() => channelApi.conversations(), [revision]);
 
@@ -282,7 +290,13 @@ export default function ChatsScreen() {
                   row={item}
                   viewerId={userId}
                   onPress={() => router.push(destinationOf(item))}
-                  onLongPress={() => setSheetFor(item)}
+                  onLongPress={(anchor) => {
+                    // The same buzz a long press gets on a chat bubble. This list had none, so
+                    // the identical gesture felt like a different control depending on which
+                    // screen you were on.
+                    longPressFeedback();
+                    setSheetFor({ row: item, anchor });
+                  }}
                 />
               )}
             />
@@ -291,37 +305,69 @@ export default function ChatsScreen() {
       </DataScreen>
 
       {/*
-        The long-press menu. Pin and Mute apply to every row because both are per-person facts
-        about a conversation in any scope; Delete chat is a DM only, which is the product
-        decision `canClearChannel` enforces server-side rather than this menu remembering it.
+        The long-press menu.
+
+        Pin and Mute apply to every row because both are per-person facts about a conversation in
+        any scope. Delete chat now does too - it was a DM only until 2026-08-06, and widening it
+        was a change to `canClearChannel` rather than to this menu, because who may clear what is
+        a policy question. Leave club is last, red, and absent unless the server says the viewer
+        may leave: a DM has nothing to leave, and an Owner cannot leave their own club.
       */}
       {sheetFor !== null && (
-        <SheetMenu
-          title={sheetFor.name}
+        <ContextMenu
+          anchor={sheetFor.anchor}
+          /*
+            The same component the list draws, drawn again to be lifted. Reusing it rather than
+            describing the row a second time is what stops the floating copy from drifting from
+            the real one the next time a row grows a badge.
+          */
+          preview={
+            <ConversationRow
+              row={sheetFor.row}
+              viewerId={userId}
+              onPress={() => undefined}
+              onLongPress={() => undefined}
+            />
+          }
           onDismiss={() => setSheetFor(null)}
           items={[
             {
-              label: sheetFor.pinned ? 'Unpin' : 'Pin',
-              onPress: () => void act(() => channelApi.pin(sheetFor.channelId, !sheetFor.pinned)),
+              label: sheetFor.row.pinned ? 'Unpin' : 'Pin',
+              icon: 'push-pin',
+              onPress: () => {
+                const row = sheetFor.row;
+                void act(() => channelApi.pin(row.channelId, !row.pinned));
+              },
             },
             {
-              label: sheetFor.muted ? 'Unmute' : 'Mute',
-              onPress: () =>
+              label: sheetFor.row.muted ? 'Unmute' : 'Mute',
+              icon: sheetFor.row.muted ? 'notifications-active' : 'notifications-off',
+              onPress: () => {
+                const row = sheetFor.row;
                 void act(() =>
-                  sheetFor.muted
-                    ? dmApi.unmute(sheetFor.channelId)
-                    : dmApi.mute(sheetFor.channelId),
-                ),
+                  row.muted ? dmApi.unmute(row.channelId) : dmApi.mute(row.channelId),
+                );
+              },
             },
-            ...(sheetFor.scope === 'dm'
+            {
+              label: 'Delete chat',
+              icon: 'delete-outline',
+              onPress: () => {
+                const row = sheetFor.row;
+                setSheetFor(null);
+                setConfirmClear(row);
+              },
+            },
+            ...(sheetFor.row.canLeave
               ? [
                   {
-                    label: 'Delete chat',
+                    label: 'Leave club',
+                    icon: 'logout' as const,
                     destructive: true,
                     onPress: () => {
-                      const row = sheetFor;
+                      const row = sheetFor.row;
                       setSheetFor(null);
-                      setConfirmClear(row);
+                      setConfirmLeave(row);
                     },
                   },
                 ]
@@ -338,7 +384,14 @@ export default function ChatsScreen() {
       {confirmClear !== null && (
         <ConfirmDialog
           title="Delete this chat?"
-          body={`This clears the conversation for you only. ${confirmClear.name} will still have every message, and will not be told.`}
+          // Who keeps the messages depends on who else is in the room, so the sentence does too.
+          // Naming the other person is right in a DM and wrong in a club, where it would name the
+          // club as though a club could hold a copy.
+          body={
+            confirmClear.scope === 'dm'
+              ? `This clears the conversation for you only. ${confirmClear.name} will still have every message, and will not be told.`
+              : `This clears ${confirmClear.name} for you only. Everybody else keeps every message, and nobody is told.`
+          }
           confirmLabel="Delete chat"
           dismissLabel="Keep it"
           onCancel={() => setConfirmClear(null)}
@@ -349,6 +402,32 @@ export default function ChatsScreen() {
               await channelApi.clear(row.channelId);
               // The device is holding exactly the messages that clear was meant to hide, and
               // renders from the cache before any network call resolves.
+              await client?.forgetChannel(row.channelId);
+            });
+          }}
+        />
+      )}
+
+      {/*
+        Leaving is the one action here that cannot be undone by repeating it, so the dialog spells
+        out the cascade rather than asking "are you sure". Losing the races and the Eboard is the
+        part nobody expects from a menu they opened on a chat row - `cascadeOut` drops every race
+        roster row and Eboard membership in the club, in the same transaction.
+      */}
+      {confirmLeave !== null && (
+        <ConfirmDialog
+          title={`Leave ${confirmLeave.name}?`}
+          body="You will lose the club chat, every race in the club and any Eboard access. You can ask to join again later."
+          confirmLabel="Leave club"
+          dismissLabel="Stay"
+          onCancel={() => setConfirmLeave(null)}
+          onConfirm={() => {
+            const row = confirmLeave;
+            setConfirmLeave(null);
+            if (row.clubId === null) return;
+            const clubId = row.clubId;
+            void act(async () => {
+              await clubApi.leave(clubId);
               await client?.forgetChannel(row.channelId);
             });
           }}
@@ -390,8 +469,10 @@ function ConversationRow({
   row: ConversationSummary;
   viewerId: string | null;
   onPress: () => void;
-  onLongPress: () => void;
+  /** Given the row's own rectangle, so the menu can lift it and hang off it. */
+  onLongPress: (anchor: PressAnchor) => void;
 }) {
+  const self = useRef<View>(null);
   const unread = row.unread > 0;
   const timestamp = useMemo(
     () =>
@@ -401,9 +482,16 @@ function ConversationRow({
 
   return (
     <Pressable
+      ref={self}
       style={[styles.row, unread && styles.rowUnread]}
       onPress={onPress}
-      onLongPress={onLongPress}
+      onLongPress={(event) =>
+        measureRow(
+          self.current,
+          { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY },
+          onLongPress,
+        )
+      }
       accessibilityRole="button"
       accessibilityLabel={
         unread

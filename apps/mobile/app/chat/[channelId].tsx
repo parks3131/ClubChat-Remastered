@@ -44,8 +44,8 @@ import {
 } from "../../src/upload.ts";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Clipboard from "expo-clipboard";
-import * as Haptics from "expo-haptics";
 import { BlurView } from "expo-blur";
+import { longPressFeedback } from "../../src/haptics.ts";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   activeMentionQuery,
@@ -826,20 +826,9 @@ const MessageRow = memo(function MessageRow({
           cardId !== null && !CARDS_ARE_LONG_PRESSABLE
             ? undefined
             : () => {
-                /*
-                 * A tap you can feel, before anything appears on screen.
-                 *
-                 * A long press has no visual progress, so without haptics the only way
-                 * to learn it worked is the menu arriving - and the only way to learn
-                 * you have not held long enough is nothing happening. The buzz is the
-                 * acknowledgement.
-                 *
-                 * Fire-and-forget: on a device with the setting off, or on web where
-                 * there is no Taptic Engine, this rejects and the menu still opens.
-                 */
-                void Haptics.impactAsync(
-                  Haptics.ImpactFeedbackStyle.Medium,
-                ).catch(() => undefined);
+                // A tap you can feel, before anything appears on screen. Shared with the two
+                // list screens so one gesture has one feel - see `longPressFeedback`.
+                longPressFeedback();
                 onSelect(message.seq);
               }
         }

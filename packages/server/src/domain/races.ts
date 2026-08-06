@@ -888,6 +888,7 @@ export async function listRaces(
     race_date: string;
     image: string | null;
     pinned: boolean;
+    muted: boolean;
     has_access: boolean;
     request_pending: boolean;
     member_count: string;
@@ -898,6 +899,7 @@ export async function listRaces(
            r.race_date::text AS race_date,
            r.image,
            (rp.user_id IS NOT NULL) AS pinned,
+           (mute.user_id IS NOT NULL) AS muted,
            (rm.user_id IS NOT NULL) AS has_access,
            (jr.id IS NOT NULL) AS request_pending,
            (SELECT count(*) FROM race_memberships all_m WHERE all_m.race_id = r.id)
@@ -912,6 +914,18 @@ export async function listRaces(
              ON jr.race_id = r.id AND jr.user_id = ${ctx.userId} AND jr.status = 'pending'
       LEFT JOIN channels ch
              ON ch.scope = 'race' AND ch.scope_id = r.id
+      /*
+        Whether this viewer has silenced the race's chat, so the long-press menu on the club hub
+        can say Mute or Unmute without a second read. Same expiry condition every other mute
+        join uses: a lapsed muted_until is not a mute.
+
+        No backticks in this comment - inside a sql template literal one of those ends the
+        string, which is the same trap listConversations records in reads.ts.
+      */
+      LEFT JOIN channel_mutes mute
+             ON mute.channel_id = ch.id
+            AND mute.user_id = ${ctx.userId}
+            AND (mute.muted_until IS NULL OR mute.muted_until > now())
      WHERE r.club_id = ${clubId}
        ${query.length > 0 ? sql`AND r.name ILIKE ${'%' + query + '%'}` : sql``}
      ORDER BY (rp.user_id IS NULL), r.race_date DESC, r.name
@@ -926,6 +940,9 @@ export async function listRaces(
       raceDate: row.race_date,
       image: row.image,
       pinned: row.pinned,
+      // False without access, like `channelId` below and for the same reason: there is no chat
+      // to have silenced, and the menu must not offer Unmute on a race you cannot open.
+      muted: row.has_access && row.muted,
       hasAccess: row.has_access,
       // Asked per row with the real race, rather than once with a fabricated ref. The answer
       // happens to be the same for every race in a club today, and a predicate that ignores a

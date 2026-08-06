@@ -388,11 +388,12 @@ export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
    * "Delete chat": hide everything said so far, for the caller only.
    *
    * A POST rather than a DELETE on the channel, deliberately - `DELETE /channels/:id` would say
-   * the channel is being destroyed, and nothing here destroys anything. The other participant
-   * keeps every message and is never told.
+   * the channel is being destroyed, and nothing here destroys anything. Everybody else keeps
+   * every message and is never told.
    *
-   * Refused outside a DM by `canClearChannel`, so the narrower product rule is enforced at the
-   * policy rather than by this route remembering it.
+   * Available in every scope since 2026-08-06, which `canClearChannel` decides rather than this
+   * route: who may clear what is a policy question, and a route that remembered the rule itself
+   * is how the two drift.
    */
   app.post<{ Params: { id: string } }>('/channels/:id/clear', async (request, reply) => {
     const guard = await authorizeChannel(deps, request, request.params.id);

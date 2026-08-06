@@ -96,6 +96,8 @@ export type RaceListItem = {
   /** The race's picture, as a media id. Null falls back to its initial. */
   image: string | null;
   pinned: boolean;
+  /** This viewer has silenced the race's chat. Always false without access - no chat, no mute. */
+  muted: boolean;
   /** A roster row. The ONLY proof of race access - never inferred from isManager. */
   hasAccess: boolean;
   /** Club-admin status: management authority, which is not access. */

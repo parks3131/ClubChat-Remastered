@@ -13,6 +13,95 @@ Newest first.
 
 ---
 
+## 2026-08-06 - The long-press menu, and a prop that went missing without failing
+
+Asked for from a phone in three parts, each one arriving after the last was built: the chat list
+does not buzz the way chat does; a race should be pinnable by long press; and then, with a
+screenshot of another app, *"do you see how the way it pops up? I wanted like that."*
+
+### The same gesture felt like two different controls
+
+Chat bubbles called `Haptics.impactAsync(Medium)` inline. The chat list called nothing. A long
+press has no visual progress, so with no buzz the only signal it worked is the menu arriving, and
+the only signal you have not held long enough is nothing happening - indistinguishable from a dead
+control on the one screen the app opens to.
+
+Rather than copy the line, `longPressFeedback` is now the single place the feel is decided.
+"The same vibration everywhere" is a claim about one constant, and it is only true if there is
+literally one.
+
+### Delete chat was DM-only because somebody decided it, not because it was hard
+
+`canClearChannel` read `channel.scope === 'dm' && isChannelMember(...)`, and the note above it
+said the restriction was a product decision and that "if clubs ever want it, this is one branch".
+They did. It is now `isChannelMember` alone.
+
+Widening it is safe because clearing is **personal**: one `channel_clears` row for one user, and
+everybody else's history is untouched and unaware. That is the whole distance between this and
+deleting a message, which is authority over a shared room.
+
+**A test changed meaning rather than being added.** `pin-and-clear.test.ts` had a case called
+"is refused outside a DM, where the product does not offer it". It now asserts that a club chat
+clears, and - the half that matters - that the other member still sees every message.
+
+### Two fields the menu needed, and where they came from
+
+- **`canLeave` on `ConversationSummary`**, answered by `canLeaveClub` server-side. The Owner
+  cannot leave their own club, and `PRD/04` says the action is not rendered for them at all. The
+  client could have worked that out from a role and that is exactly the point: it would have been
+  a second copy of the rule, and the copy that drifts is always the one drawing the button.
+- **`muted` on the race list row.** Without it the club hub's menu would guess, and a menu
+  offering "Mute" to somebody who already muted the race is a control that appears to do nothing.
+  False without access, like `channelId` beside it: no chat, no mute.
+
+### The founder could not find Leave club, and the menu was right
+
+Reported as missing. It was not: **he is the Owner of Binghamton Running Club**, so `canLeave` is
+false and the item is correctly absent. Confirmed against the dev database rather than argued
+about, and then demonstrated by long-pressing a club where the test account is a plain member,
+where it appears.
+
+Worth recording because it will read as a bug again. A rule that hides a control is invisible to
+the person it hides it from, and the one account that hits it every time is the founder's.
+
+### Bugs hit, with root causes
+
+**The lifted row landed a header's height below the row it was copying.** `measureInWindow`
+reports window coordinates; a `position: absolute` overlay is placed against its nearest
+ancestor. On the club hub the menu renders inside a ScrollView beneath a native header, so the
+two coordinate systems differed by exactly that header - and the header stayed unblurred above an
+overlay that could not reach it. The fix is a `Modal`, which renders at the root, and which
+`ConfirmDialog` had reached for first for the same reason. Only visible by looking: the numbers
+in the code were all correct.
+
+**Tapping a race stopped opening its chat, and nothing failed.** This is the one worth reading
+twice. The row had been `<Link asChild><Pressable/></Link>`; extracting `RaceRow` so the lifted
+preview could reuse it left `asChild` wrapping a **function component**. `asChild` clones its
+child and injects `onPress`; a `Pressable` accepts that, and a function component silently drops
+every prop it does not destructure. The row still rendered, still long-pressed, still looked
+perfect, and did nothing when tapped.
+
+> **Type checking, 753 tests and a clean production bundle all stayed green through it.** Dropping
+> a prop React never asked about is not an error in any of those senses. It was found by the
+> founder, on a phone.
+
+Now navigated by an explicit `onPress` and `router.push`, the way the Chats list had always done
+its own rows, with one `raceHref` for both lists. Every other `asChild` in the app was swept and
+they all wrap a real `Pressable`.
+
+### Scope, honestly
+
+**`apps/mobile` has no component tests** - its six test files are dates, mentions and calendar
+maths. A dropped press handler is invisible to every check that exists here, which is why the
+regression above reached a phone. Adding React Native Testing Library was offered and not done
+unilaterally, because it is a new test dependency and that is the founder's call.
+
+Verified by driving the real web build: both menus screenshotted, the lift measured against the
+row's own rectangle (168 against 168, 337 against 337), the locked race confirmed to offer Pin
+alone, and all four navigation paths clicked rather than reasoned about.
+
+---
+
 ## 2026-08-05 - The removal that nobody was told about
 
 The other half of the roster work below. That session taught race chat to narrate its own

@@ -10,10 +10,11 @@
  * built from `<Action>` cannot ship without a label because the prop is required.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ComponentProps, ComponentType, ReactNode } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -21,6 +22,7 @@ import {
   Switch,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
   type StyleProp,
   type SwitchProps,
@@ -28,6 +30,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import { Link } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RemoteImage } from './media-bubble.tsx';
@@ -907,6 +910,230 @@ export function SheetMenu({
 }
 
 /**
+ * The pressed row's rectangle in window coordinates.
+ *
+ * A rectangle rather than the touch point, because the menu lifts the row itself and has to draw
+ * it back exactly where it was. `measureRow` below is how a row produces one.
+ */
+export type PressAnchor = { x: number; y: number; width: number; height: number };
+
+export type ContextMenuItem = {
+  label: string;
+  icon: ComponentProps<typeof MaterialIcons>['name'];
+  onPress: () => void;
+  /** Red, for an action that ends something. At most one, and always last. */
+  destructive?: boolean;
+};
+
+/** The card's fixed width, and the height one row occupies. Used to keep it on screen. */
+const CONTEXT_MENU_WIDTH = 248;
+const CONTEXT_MENU_ROW = 48;
+/** How much the lifted row grows. Enough to read as picked up, not enough to reflow its text. */
+const LIFT_SCALE = 1.04;
+
+/**
+ * Measure a row for `ContextMenu`, from its own long-press handler.
+ *
+ * `measureInWindow` is asynchronous, so this resolves a frame later than the press. That is
+ * deliberate and invisible: the haptic has already fired, and the menu is not drawn until the
+ * rectangle is known - which is what stops it appearing at a wrong position and correcting
+ * itself on the next frame.
+ *
+ * Falls back to a zero-height rect at the touch point if the view has gone, so a menu still
+ * opens rather than the gesture doing nothing.
+ */
+export function measureRow(
+  view: { measureInWindow: (cb: (x: number, y: number, w: number, h: number) => void) => void } | null,
+  fallback: { x: number; y: number },
+  then: (anchor: PressAnchor) => void,
+): void {
+  if (!view) {
+    then({ x: fallback.x, y: fallback.y, width: 0, height: 0 });
+    return;
+  }
+  view.measureInWindow((x, y, width, height) => then({ x, y, width, height }));
+}
+
+/**
+ * The long-press menu: the row lifts, the screen blurs behind it, the menu springs in.
+ *
+ * **A popover rather than `SheetMenu` above, and the difference is not decoration.** A bottom
+ * sheet fills the bottom of the screen, which is where the tab bar is: on the club hub the sheet
+ * opened underneath it, so "Pin" was visible and Cancel was not. This cannot be clipped, and it
+ * keeps the row you pressed on screen - which is what makes the menu belong to that row.
+ *
+ * Three things happen together, and they are one gesture rather than three effects:
+ *
+ *  - **The row is drawn again, floating at the exact rectangle it occupies in the list**, and
+ *    grows by `LIFT_SCALE`. Redrawn rather than snapshotted, because React Native has no cheap
+ *    view snapshot - the caller passes the same row component it already renders, which is also
+ *    what keeps the lifted copy from drifting from the real one.
+ *  - **The background blurs** rather than dimming to grey. A dim says "something is in front";
+ *    a blur says "this is still your list, and it is waiting".
+ *  - **The menu springs from slightly small and slightly high**, so it reads as coming out of
+ *    the row rather than fading in over it.
+ *
+ * **No Cancel row.** Tapping anywhere else dismisses, and in a menu this short a Cancel would be
+ * a fifth of its height spent on "never mind". `SheetMenu` keeps its Cancel because a sheet has
+ * no obvious outside to tap.
+ *
+ * The card's height is COMPUTED from the item count rather than measured, for the same reason
+ * `measureRow` resolves before the menu opens: a second layout pass would be a visible jump.
+ * Placement is clamped inside the safe area, and the menu flips above the row when there is no
+ * room below it.
+ */
+export function ContextMenu({
+  items,
+  anchor,
+  preview,
+  onDismiss,
+}: {
+  items: ReadonlyArray<ContextMenuItem>;
+  anchor: PressAnchor;
+  /** The pressed row, redrawn to be lifted. Omit and the menu opens alone at the anchor. */
+  preview?: ReactNode;
+  onDismiss: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+  const progress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.spring(progress, {
+      toValue: 1,
+      useNativeDriver: true,
+      damping: 18,
+      stiffness: 260,
+      mass: 0.7,
+    }).start();
+  }, [progress]);
+
+  const clamp = (value: number, low: number, high: number) =>
+    Math.max(low, Math.min(value, Math.max(low, high)));
+
+  const menuHeight = items.length * CONTEXT_MENU_ROW + space.xs * 2;
+  const topLimit = insets.top + space.md;
+  const bottomLimit = height - insets.bottom - space.md;
+
+  // The lifted row stays where it is, only nudged back inside the safe area if the press caught
+  // a row half under the header or the tab bar.
+  const previewTop = clamp(anchor.y, topLimit, Math.max(topLimit, bottomLimit - anchor.height));
+  const previewBottom = previewTop + anchor.height;
+
+  // Below the row by preference, above it when the row sits low enough that below would not fit.
+  // Anything else would put the menu over the row it is about.
+  const fitsBelow = previewBottom + space.sm + menuHeight <= bottomLimit;
+  const menuTop = fitsBelow
+    ? previewBottom + space.sm
+    : clamp(previewTop - space.sm - menuHeight, topLimit, bottomLimit - menuHeight);
+
+  // Left-aligned to the row, the way a menu hangs off the thing it belongs to.
+  const menuLeft = clamp(
+    anchor.width > 0 ? anchor.x + space.md : anchor.x - CONTEXT_MENU_WIDTH / 2,
+    space.md,
+    width - CONTEXT_MENU_WIDTH - space.md,
+  );
+
+  const menuStyle = {
+    opacity: progress,
+    transform: [
+      { scale: progress.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1] }) },
+      {
+        translateY: progress.interpolate({
+          inputRange: [0, 1],
+          outputRange: [fitsBelow ? -10 : 10, 0],
+        }),
+      },
+    ],
+  };
+
+  /*
+   * A Modal, and not merely for layering.
+   *
+   * `measureRow` reports the row in WINDOW coordinates, so the overlay has to be positioned in
+   * window coordinates too - and a plain absolutely-positioned View is placed relative to its
+   * nearest ancestor instead. On the club hub the menu is rendered inside a ScrollView beneath a
+   * native header, and the lifted row landed a header's height below the row it was copying,
+   * with the header left unblurred above it. A Modal renders at the root, so the two coordinate
+   * systems are the same one. `ConfirmDialog` reaches for this for the same reason.
+   *
+   * `animationType="none"` because the spring below is the animation; letting the Modal fade as
+   * well would be two of them fighting over the same 300ms.
+   */
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={onDismiss}>
+      {/*
+        The blur and the dismiss target are the same layer. A separate transparent Pressable over
+        the blur would work equally well and is one more view in a tree that is already an
+        overlay over a list.
+      */}
+      <AnimatedPressable
+        style={[styles.contextScrim, { opacity: progress }]}
+        onPress={onDismiss}
+        accessibilityRole="button"
+        accessibilityLabel="Dismiss"
+      >
+        <BlurView intensity={22} tint="light" style={StyleSheet.absoluteFill} />
+        <View style={styles.contextDim} />
+      </AnimatedPressable>
+
+      {preview !== undefined && anchor.width > 0 && (
+        <Animated.View
+          // Not pressable. The lifted row is the subject of the menu, not a control - tapping it
+          // should dismiss like tapping anywhere else, which the scrim underneath already does.
+          pointerEvents="none"
+          style={[
+            styles.contextPreview,
+            {
+              left: anchor.x,
+              top: previewTop,
+              width: anchor.width,
+              transform: [
+                {
+                  scale: progress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [1, LIFT_SCALE],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          {preview}
+        </Animated.View>
+      )}
+
+      <Animated.View
+        style={[styles.contextCard, { left: menuLeft, top: menuTop, width: CONTEXT_MENU_WIDTH }, menuStyle]}
+      >
+        {items.map((item, index) => (
+          <Pressable
+            key={item.label}
+            style={[styles.contextRow, index > 0 && styles.contextRowDivided]}
+            onPress={item.onPress}
+            accessibilityRole="button"
+            accessibilityLabel={item.label}
+          >
+            <MaterialIcons
+              name={item.icon}
+              size={20}
+              color={item.destructive === true ? color.error : color.textPrimary}
+            />
+            <Text
+              style={[styles.contextLabel, item.destructive === true && styles.sheetDestructive]}
+            >
+              {item.label}
+            </Text>
+          </Pressable>
+        ))}
+      </Animated.View>
+    </Modal>
+  );
+}
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+/**
  * A screen's scrolling body, with the gutter applied.
  *
  * Exists so no screen invents its own padding. `PRD/16`'s pixel-perfection standard names
@@ -1310,6 +1537,61 @@ const styles = StyleSheet.create({
   sheetRow: { paddingVertical: space.md, paddingHorizontal: space.md },
   sheetLabel: { ...type.body, color: color.textPrimary, textAlign: 'center' },
   sheetDestructive: { color: color.error },
+
+  contextScrim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  /*
+    A light wash over the blur, not instead of it.
+    Blur alone leaves a busy list still legible enough to compete with the menu; this settles it
+    without the heavy grey a plain scrim uses, which would throw away the blur it sits on.
+  */
+  contextDim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+  contextPreview: {
+    position: 'absolute',
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.16,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  contextCard: {
+    position: 'absolute',
+    backgroundColor: color.card,
+    borderRadius: radius.lg,
+    paddingVertical: space.xs,
+    // A real shadow, because this floats over content rather than sitting against a screen edge.
+    // Without it the card reads as part of the row underneath on a light background.
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  contextRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.md,
+    // Matches CONTEXT_MENU_ROW, which the placement maths uses to keep the card on screen.
+    height: CONTEXT_MENU_ROW,
+  },
+  contextRowDivided: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.hairline },
+  contextLabel: { ...type.body, color: color.textPrimary },
 
   bodyScroll: { flex: 1, backgroundColor: color.appBackground },
   bodyContent: { padding: space.md, gap: space.sm, paddingBottom: space.xl },

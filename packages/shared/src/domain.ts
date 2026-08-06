@@ -486,6 +486,16 @@ export const ConversationSummary = z.object({
   pinned: z.boolean().default(false),
   /** The owning club, for a club row. Null in a DM, which belongs to no club. */
   clubId: Uuid.nullable().default(null),
+  /**
+   * Whether this viewer may leave the space behind this row, which the long-press menu asks
+   * before offering "Leave club".
+   *
+   * False in a DM - there is nothing to leave, and leaving is not what Delete chat does. False
+   * for a club's Owner, because `canLeaveClub` refuses them and `PRD/04` says the action is not
+   * even rendered: an Owner leaves by transferring ownership first. Answered by the server
+   * rather than inferred client-side from a role, so the menu and the endpoint cannot disagree.
+   */
+  canLeave: z.boolean().default(false),
   /** The other participant, for a DM row. Null in every other scope. */
   otherUserId: Uuid.nullable().default(null),
   /**

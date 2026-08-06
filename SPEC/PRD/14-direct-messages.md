@@ -79,6 +79,12 @@ should be refused on those grounds.
     whose copy goes and whose does not - "delete" reads as mutual, and somebody using it
     believing it reaches the other person would be badly misled.
 
+    12a. **No longer a DM-only action, since 2026-08-06.** Club chat and race chat offer it from
+    the same long-press menu, with the same personal meaning: everybody else keeps every message
+    and nobody is told. The DM restriction was always a product decision rather than a technical
+    one, and the confirmation wording is the only thing that differs by scope - naming the other
+    person is right in a DM and wrong in a room. See [Screen map](15-screen-map.md) rule 8a.
+
     Offered on direct messages only. The mechanism is scope-agnostic and clubs simply do not
     offer it.
 
