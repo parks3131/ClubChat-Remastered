@@ -22,6 +22,25 @@ export function allowAll(): KeyedRateLimiter {
  * For asserting that a route actually consults the limiter and returns 429 with `Retry-After` -
  * which is a different question from whether the bucket arithmetic is right.
  */
+/**
+ * A limiter that allows everything and remembers what it was asked about.
+ *
+ * For the questions `allowFirst` cannot answer: not "does this route consult a limiter" but
+ * "**which bucket** did it consult, and under what key". Password reset is limited twice - once
+ * per caller and once per email address - and the second is invisible to a counter, since both
+ * calls simply return true.
+ */
+export function recordingLimiter(): KeyedRateLimiter & { keys: string[] } {
+  const keys: string[] = [];
+  return {
+    keys,
+    async tryConsume(key: string) {
+      keys.push(key);
+      return true;
+    },
+  };
+}
+
 export function allowFirst(n: number): KeyedRateLimiter {
   let seen = 0;
   return {

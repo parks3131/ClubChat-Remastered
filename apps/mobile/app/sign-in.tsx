@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Redirect } from 'expo-router';
+import { Redirect, router } from 'expo-router';
 import { useSession } from '../src/chat-provider.tsx';
 import { config } from '../src/config.ts';
 import { ARRIVED_FORWARD } from '../src/nav.tsx';
@@ -113,6 +113,23 @@ export default function SignIn() {
           accessibilityLabel="Password"
         />
 
+        {/*
+          PRD/03 rule 13, and sign-in mode only: there is nothing to recover on a form that is
+          creating the account. It sits under the password field, which is where somebody looks
+          the moment the one they typed was refused.
+        */}
+        {mode === 'sign-in' && (
+          <Pressable
+            onPress={() => router.push('/forgot-password')}
+            accessibilityRole="button"
+            accessibilityLabel="Forgot your password"
+            hitSlop={space.sm}
+            style={styles.forgotWrap}
+          >
+            <Text style={styles.forgot}>Forgot password?</Text>
+          </Pressable>
+        )}
+
         {error !== null && (
           <Text style={styles.error} accessibilityLiveRegion="polite">
             {error}
@@ -205,6 +222,8 @@ const styles = StyleSheet.create({
     ...type.body,
     color: color.textPrimary,
   },
+  forgotWrap: { alignSelf: 'flex-end' },
+  forgot: { ...type.bodySmall, color: color.accent, paddingVertical: space.xs },
   error: { ...type.bodySmall, color: color.error, paddingHorizontal: space.xs },
   button: {
     backgroundColor: color.accent,

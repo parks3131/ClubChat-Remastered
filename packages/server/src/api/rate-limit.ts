@@ -19,6 +19,8 @@
  * cannot reach them and a script trivially can.
  */
 
+import { createHash } from 'node:crypto';
+
 /** A token bucket: `burst` tokens, refilled at `refillPerSec`, one token per request. */
 export type Bucket = { burst: number; refillPerSec: number };
 
@@ -42,6 +44,36 @@ export const DEFAULT_BUCKET: Bucket = { burst: 300, refillPerSec: 10 };
  * bucket, which is the reason it is not tighter.
  */
 export const AUTH_BUCKET: Bucket = { burst: 10, refillPerSec: 0.2 };
+
+/**
+ * Password reset, per **email address** rather than per IP.
+ *
+ * `AUTH_BUCKET` above already covers the caller, and it is the wrong control here: the person
+ * being harmed by a flood of reset mail is not the one making the requests. Ten attempts from one
+ * IP is a reasonable allowance for somebody who forgot their password and it is also ten emails
+ * into somebody else's inbox, sent by a stranger who only needs to know the address. The two
+ * limits stack, and this is the one that protects the third party.
+ *
+ * Three in reserve refilling at one every five minutes. Asking twice because the first mail was
+ * slow is normal; a stream of them is not, and the refusal costs an attacker nothing to discover
+ * because the response is identical either way (`PRD/03` rule 14).
+ */
+export const PASSWORD_RESET_BUCKET: Bucket = { burst: 3, refillPerSec: 1 / 300 };
+
+/**
+ * The key a reset request counts against: a hash of the address, never the address.
+ *
+ * Two reasons, and the second is the one that matters. Redis is not the system of record for
+ * identity and a `KEYS rate:http:reset:*` would otherwise enumerate every address that has ever
+ * asked for a reset - which is a list of real people, sitting in a cache that no part of this
+ * product treats as sensitive. And the case fold means `Ada@example.com` and `ada@example.com`
+ * share a bucket, because they share an inbox; without it the limit is one `Shift` away from
+ * doing nothing.
+ */
+export function passwordResetLimitKey(email: string): string {
+  const digest = createHash('sha256').update(email.trim().toLowerCase()).digest('hex');
+  return `rate:http:reset:${digest.slice(0, 32)}`;
+}
 
 /**
  * Routes that cost more than a read, keyed by `METHOD /route/pattern`.

@@ -3,6 +3,23 @@
 Described as screens and entry points, not routes. The remaster may reshape navigation, but
 every screen below has a job that must land somewhere.
 
+### Signed out
+
+Four screens, and what they have in common is that **none of them may sit behind the auth gate**.
+
+| Screen | Reached from | Job |
+|---|---|---|
+| **Sign in / Sign up** | The entry point, and every rejected session | One form in two modes. Carries the wordmark, because it is the one screen that has to say what the app is |
+| **Forgot password** | A link under sign-in, in sign-in mode only | Takes an email, then **replaces itself with its own confirmation** rather than pushing a screen - there is nothing to go back to, and the answer is one sentence |
+| **Set a new password** | The link in the reset email, **as a deep link from outside the app** | Takes the new password twice and lands on sign-in. Reachable with no session and, per PRD/03, with one |
+| **Privacy Policy / Terms** | The consent line on sign-up, and Profile when signed in | Readable in both states, which is why they sit outside every guard |
+
+> **The reset screen is the only screen in the product that is entered from outside it.** Every
+> other route is reached by a tap inside the app, so "am I signed in" is answered before the
+> screen is chosen. This one arrives cold, carrying a token, and any guard that redirects an
+> unauthenticated visitor to sign-in would swallow it. It is on the same footing as the legal
+> screens for exactly that reason.
+
 ### Top level
 
 Four primary destinations: **Chats**, **Calendar**, **Notifications**, **Profile**. The

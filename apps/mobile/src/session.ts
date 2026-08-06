@@ -131,6 +131,68 @@ export async function signIn(
 }
 
 /**
+ * Read a response that carries no session - the two halves of password reset.
+ *
+ * Separate from `readAuthResponse` because these deliberately do NOT return a token. Reset
+ * revokes every session including this device's (PRD/03 rule 15), so a function that insisted on
+ * finding one would fail on the exact path that is working correctly.
+ */
+async function readPlainResponse(response: Response): Promise<void> {
+  if (response.ok) return;
+  const text = await response.text();
+  let message = `request failed (${response.status})`;
+  try {
+    const parsed = JSON.parse(text) as { message?: string; error?: string };
+    message = parsed.message ?? parsed.error ?? message;
+  } catch {
+    if (text) message = text;
+  }
+  throw new Error(message);
+}
+
+/**
+ * Ask for a reset link.
+ *
+ * **Succeeds for an address with no account**, by design - the server answers identically either
+ * way, and PRD/03 rule 14 is that the screen must not reveal which case it was. So there is
+ * nothing here to branch on, and that absence is the feature.
+ *
+ * `redirectTo` is where the link lands after the server has checked the token. It has to be an
+ * origin the server trusts, or the request is refused with INVALID_REDIRECT_URL rather than
+ * silently redirecting somewhere it should not.
+ */
+export async function requestPasswordReset(
+  apiBase: string,
+  input: { email: string; redirectTo: string },
+): Promise<void> {
+  const response = await fetch(authUrl(apiBase, '/request-password-reset'), {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(input),
+  });
+  return readPlainResponse(response);
+}
+
+/**
+ * Set a new password with the token from the emailed link.
+ *
+ * Returns nothing on success: the token is spent, every session is gone, and the only thing left
+ * to do is sign in. A 400 here means the token was expired, already used, or never real - the
+ * server does not distinguish between them and neither does the screen.
+ */
+export async function resetPassword(
+  apiBase: string,
+  input: { token: string; newPassword: string },
+): Promise<void> {
+  const response = await fetch(authUrl(apiBase, '/reset-password'), {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(input),
+  });
+  return readPlainResponse(response);
+}
+
+/**
  * The three possible answers about a stored token.
  *
  * The distinction between `invalid` and `unreachable` is the whole point, and it took a

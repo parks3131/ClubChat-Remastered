@@ -12,13 +12,35 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { bearer } from 'better-auth/plugins/bearer';
 import type { Db } from './db/client.ts';
 import { accounts, sessions, users, verifications } from './db/schema.ts';
+import { passwordResetMessage, type Mailer } from './mail.ts';
 
 export type Auth = ReturnType<typeof createAuth>;
 
+/** PRD/03 rule 15. An hour is better-auth's default, restated because it is a product rule. */
+const RESET_TOKEN_TTL_SECONDS = 60 * 60;
+
 export function createAuth(
   db: Db,
-  config: { secret: string; baseURL: string; clientOrigin?: string; dev?: boolean },
+  config: {
+    secret: string;
+    baseURL: string;
+    clientOrigin?: string;
+    dev?: boolean;
+    /**
+     * Where password-reset mail goes, or absent.
+     *
+     * Optional so that the suites which have nothing to do with auth mail keep building an auth
+     * with one argument. Absent means `sendResetPassword` is not configured at all, and
+     * better-auth answers `/request-password-reset` with a 500 and a log line saying so - which
+     * is the correct outcome for a deployment that never wired a transport, and is caught long
+     * before that by `assertProductionMailer` at boot.
+     */
+    mailer?: Mailer;
+  },
 ) {
+  // Bound once, so the narrowing survives into the callback below.
+  const mailer = config.mailer;
+
   return betterAuth({
     secret: config.secret,
     baseURL: config.baseURL,
@@ -63,9 +85,62 @@ export function createAuth(
       database: {
         generateId: 'uuid',
       },
+      /**
+       * Keep the origin check on, including under test.
+       *
+       * **better-auth turns it off by itself whenever `NODE_ENV=test`** - `skipOriginCheck`
+       * defaults to `isTest()`. Left alone, that means the one protection standing between the
+       * reset flow and an open redirect is the one protection no test can ever see working:
+       * `trustedOrigins` above would be decoration in CI and load-bearing in production, and the
+       * day somebody broke it the suite would stay green.
+       *
+       * Setting it explicitly - even to the value the docs call the default - is what takes the
+       * decision away from an environment variable. Same argument `SENTRY_DSN` being optional
+       * already makes: a path that only ever runs in production is a path nobody has watched run.
+       *
+       * Safe for the existing suites because `auth.api.*` calls carry no request object, and the
+       * middleware returns early without one. Only real HTTP is checked, which is the only place
+       * an origin means anything.
+       */
+      disableOriginCheck: false,
     },
     emailAndPassword: {
       enabled: true,
+      /**
+       * PRD/03 rule 15: an hour, once, and every other device signed out.
+       *
+       * The revocation is the reason the feature exists rather than a hardening extra. Somebody
+       * resets a password *because* they believe someone else has it; leaving that someone's
+       * session alive would make the whole exercise decorative. The cost is that this device is
+       * signed out too, which is why rule 16 lands the flow on sign-in rather than in the app.
+       */
+      resetPasswordTokenExpiresIn: RESET_TOKEN_TTL_SECONDS,
+      revokeSessionsOnPasswordReset: true,
+      ...(mailer
+        ? {
+            sendResetPassword: async ({
+              user,
+              url,
+            }: {
+              user: { email: string; name: string };
+              url: string;
+            }) => {
+              /*
+               * better-auth calls this through `runInBackgroundOrAwait`, so a throw here never
+               * reaches the requester - they are told to check their inbox either way, which is
+               * PRD/03 rule 14 and is correct. The consequence is that a broken transport is
+               * invisible unless it says so itself, so the failure is logged here rather than
+               * left to a promise nobody is holding.
+               */
+              try {
+                await mailer.send(passwordResetMessage({ to: user.email, name: user.name, url }));
+              } catch (error) {
+                console.error('[auth] password reset mail failed to send', error);
+                throw error;
+              }
+            },
+          }
+        : {}),
     },
     user: {
       additionalFields: {

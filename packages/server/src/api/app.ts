@@ -27,7 +27,13 @@ import { fromNodeHeaders } from 'better-auth/node';
 import { loadAccessContext } from '../policy/context.ts';
 import { isSessionUsable } from '../policy/predicates.ts';
 import { isUuid, type AppDeps } from './plumbing.ts';
-import { AUTH_BUCKET, bucketFor, limitKey } from './rate-limit.ts';
+import {
+  AUTH_BUCKET,
+  PASSWORD_RESET_BUCKET,
+  bucketFor,
+  limitKey,
+  passwordResetLimitKey,
+} from './rate-limit.ts';
 import { readIdentity } from '../domain/account.ts';
 import { registerAccountRoutes } from './routes/account.ts';
 import { registerCalendarRoutes } from './routes/calendar.ts';
@@ -43,6 +49,18 @@ import { registerPollRoutes } from './routes/polls.ts';
 import { registerRaceRoutes } from './routes/races.ts';
 
 export type { AppDeps };
+
+/**
+ * Is this the request that sends password-reset mail?
+ *
+ * Matched on the path alone, ignoring any query string, and against the ONE endpoint better-auth
+ * registers for it - the `/forget-password` spelling belongs to the email-OTP plugin, which this
+ * app does not load. Getting this wrong fails open rather than closed, so it is written to be
+ * checked rather than trusted: the test asserts the limit actually engages on the real route.
+ */
+function isPasswordResetRequest(url: string): boolean {
+  return (url.split('?')[0] ?? '') === '/api/auth/request-password-reset';
+}
 
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify(
@@ -97,6 +115,28 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     async preHandler(request, reply) {
       if (!(await deps.limiter.tryConsume(`rate:http:auth:${request.ip}`, AUTH_BUCKET))) {
         return refuseTooMany(reply, AUTH_BUCKET);
+      }
+
+      /**
+       * Password reset is limited a **second** time, per address.
+       *
+       * The bucket above protects us from a caller. This one protects a third party from the
+       * caller: every reset request puts mail in somebody else's inbox, and the sender needs to
+       * know nothing but the address. Ten per IP is a fair allowance for a forgotten password and
+       * ten unwanted emails for whoever owns the address that was typed.
+       *
+       * Deliberately consumed BEFORE better-auth sees the request, and regardless of whether the
+       * address belongs to an account. Charging only for addresses that exist would make the
+       * limit itself the account-existence oracle that `PRD/03` rule 14 exists to close.
+       */
+      if (request.method === 'POST' && isPasswordResetRequest(request.url)) {
+        const email = (request.body as { email?: unknown } | undefined)?.email;
+        if (typeof email === 'string' && email.trim() !== '') {
+          const key = passwordResetLimitKey(email);
+          if (!(await deps.limiter.tryConsume(key, PASSWORD_RESET_BUCKET))) {
+            return refuseTooMany(reply, PASSWORD_RESET_BUCKET);
+          }
+        }
       }
     },
     async handler(request, reply) {

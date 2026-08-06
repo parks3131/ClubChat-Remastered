@@ -58,6 +58,18 @@ export default function RootLayout() {
             <Stack.Screen name="index" options={{ headerShown: false }} />
             <Stack.Screen name="sign-in" options={{ title: 'ClubChat', headerShown: false }} />
 
+            {/*
+              Password reset, and both are outside every guard for the same reason the legal
+              screens are: they have to work with no session.
+
+              `reset-password` is stronger than that - it is the one screen in the product entered
+              from OUTSIDE it, by tapping a link in an email, and it arrives carrying a token in
+              its query. A guard that redirected an unauthenticated visitor to sign-in would
+              swallow the token and the flow with it. See SPEC/PRD/15.
+            */}
+            <Stack.Screen name="forgot-password" options={{ headerShown: false }} />
+            <Stack.Screen name="reset-password" options={{ headerShown: false }} />
+
             {/* The four destinations, and everything that keeps the tab bar beneath them. */}
             <Stack.Screen
               name="(tabs)"

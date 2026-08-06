@@ -36,6 +36,21 @@ never shown to other members.
     recorded in [Roadmap](17-roadmap-and-open-questions.md).
 12. Deleting an account **does not delete the content they posted**. Their messages remain in
     their conversations, unattributed.
+13. **A forgotten password is self-service, from sign-in.** Email and password is the only way in
+    (TECH/15), so without this the only recovery is asking a human, and there is no human. Sign-in
+    offers "Forgot password?", which takes an email and sends a link.
+14. **The request always answers the same way, whether or not the address is registered.** "If
+    that email is registered, we have sent a link" and nothing more - a different answer for a
+    known address turns the form into a test for whether somebody has an account here, and clubs
+    include minors. The screen never reveals which case it was, and the user is told to check
+    their inbox rather than left on a silent success.
+15. **A reset link expires after an hour, works once, and signs every other device out.** The
+    first two are what stops a forwarded or leaked email being a standing key. The third is the
+    point of the whole feature: reset is the path somebody takes *because* they think their
+    account is compromised, and leaving the attacker's session alive would defeat it.
+16. **Setting a new password lands on sign-in, not in the app.** Rule 15 revoked the sessions,
+    so there is nothing to land in; signing in once with the new password is also the only
+    confirmation that it is really set.
 
 **Edge cases**
 
@@ -49,10 +64,19 @@ never shown to other members.
 | User belongs to no clubs | "Your clubs" empty state |
 | Deleted account's past messages | Remain in history, unattributed |
 | Deleted account tries to sign in | Permanently blocked |
+| Reset requested for an address with no account | The same confirmation as a registered one, and nothing is sent. Rule 14 |
+| Reset requested for a **deleted** account | Nothing is sent, and no rule is needed for it: deletion released the address (rule 11), so there is no account under it to find |
+| Reset link expired, already used, or tampered with | One message covering all three - "this link has expired or has already been used" - and a way back to request another. Distinguishing them would report whether a token was ever real |
+| Reset link opened while already signed in | The reset screen still opens and still works. Somebody resetting a password on a device that is signed in is the ordinary case of "I am changing it because I do not trust it", and bouncing them into the app would be the one moment the app refuses to help |
+| Same address asked to reset repeatedly | Refused per address, not only per IP, so one sender cannot use the form to flood somebody else's inbox |
 | **Auth check hangs on a slow network** | **Never hang on a spinner.** Race the session check against a timeout - a hung check previously presented as an app that never loaded. But the outcome is **three-way, not two-way**, and the distinction is load-bearing: a server that answered and rejected the token means sign out; being unable to *reach* a server means carry on with the stored session, read from the local cache, and re-verify when the network returns. *(Clarified 2026-07-30, when offline chat made the two-way version wrong: falling back to signed-out on a network failure makes "no signal" indistinguishable from "you have been logged out", and locks a member out of history already on their device.)* |
 | **Launched with no network at all** | The app opens signed in, reads chat from the local cache, and **says it is offline** rather than looking broken. Sends queue in the outbox and flush on reconnect. |
 
 **Rejected alternatives.** Hard-deleting a user and their content (tears holes in every
 conversation). Admin-mediated deletion (app-store requirement plus the right default).
-Public profiles (clubs are small and often include minors). Usernames separate from full
+Emailing a temporary password rather than a link (a live credential in cleartext, valid until
+somebody remembers to change it). Security questions (a second secret to forget, and one whose
+answers a clubmate often knows). Owner-mediated reset (hands a club officer a way into a
+member's account, which is a larger power than any role in this product has). Public profiles
+(clubs are small and often include minors). Usernames separate from full
 names (clubs use real names). Aggressive session expiry (this is a club chat, not a bank).
