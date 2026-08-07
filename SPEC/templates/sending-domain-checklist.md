@@ -55,6 +55,12 @@ survived a month.
       per-message ⋮ menu, *Show original*. `SPF: PASS` and `DKIM: PASS` are the goal, and DKIM's
       domain must match the `From:` domain or DMARC alignment fails later. **A provider reporting
       `delivered` proves only that the receiving server accepted the bytes.**
+- [ ] **Re-test after the negative cache expires, not immediately.** Resolvers cache *absences*
+      as well as answers, so a receiver that looked up a record before you published it keeps
+      answering from that cached nothing. The window is the SOA minimum - the last field of
+      `dig +short SOA <domain>`, 600 seconds here. A `FAIL` minutes after publishing a record
+      that `dig` can see is this, not a misconfiguration. DNS-level checks tell the truth
+      immediately; the receiver's verdict lags by a TTL, which is why both are on this list.
 
 ## DMARC
 
