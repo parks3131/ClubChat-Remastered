@@ -89,6 +89,33 @@ and DKIM but **not** DMARC, so it is the one record that will not appear on any 
 A stale-index bug was found in passing: `SPEC/README.md`'s ADR table stopped at 0018 and had
 never listed 0019. Both it and 0020 are in it now.
 
+### The domain was verified, and published nothing
+
+Written up as a checklist because it cost an hour and would have cost far more later:
+[`SPEC/templates/sending-domain-checklist.md`](SPEC/templates/sending-domain-checklist.md).
+
+Explaining DMARC meant looking at what the sending domain actually published, and the answer was
+**nothing**. `parkstechusa.com` had no SPF and no DKIM anywhere in DNS - confirmed against the
+authoritative nameserver, not a cache - while Resend's dashboard and API both reported it
+`verified`. It had been verified on 2026-06-30 and the verdict cached ever since; the domain was
+later moved to Vercel's nameservers and the mail records did not come with it.
+
+So every reset mail sent that day went out unauthenticated, and all of them were accepted. That
+is the trap: **delivery is not authentication.** Gmail took them because the volume was tiny, SES
+has its own reputation, and the recipient was the sender. None of that holds for real members,
+and unauthenticated sending accrues damage to a domain slowly and stickily.
+
+Restored the three records through Vercel's DNS, then re-checked at the authoritative
+nameserver, at `8.8.8.8`, and finally at the receiver. Gmail's *Show original* is the only one of
+those that is evidence rather than a claim, and it went from failing to `SPF: PASS` and
+`DKIM: PASS` with `d=parkstechusa.com`. `DMARC: FAIL` remained, which is what an absent policy
+record looks like rather than a misconfiguration - and since DKIM's domain already matched the
+`From:` exactly, publishing `v=DMARC1; p=none` was enough to satisfy alignment.
+
+Two things worth keeping. The provider's own status is the weakest evidence available and should
+be read as a claim; and DMARC appears on no provider setup screen, because verification requires
+SPF and DKIM and stops there.
+
 ---
 
 ## 2026-08-06 - Swiping the calendar, and three wrong answers before the right one

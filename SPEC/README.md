@@ -123,6 +123,7 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [Feature spec](templates/feature-spec-template.md) | Starting any new feature |
 | [Authorization checklist](templates/authorization-checklist.md) | Adding any resource, endpoint or scope. **Every item on it shipped as a bug once.** |
 | [Migration checklist](templates/migration-checklist.md) | Writing a new migration |
+| [Sending domain checklist](templates/sending-domain-checklist.md) | Pointing outbound mail at a domain. **A provider reading "verified" is a cached verdict, not a live check.** |
 | [ADR template](templates/adr-template.md) | Recording an architectural decision |
 
 ---
