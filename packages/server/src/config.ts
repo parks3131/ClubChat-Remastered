@@ -66,6 +66,35 @@ const Env = z.object({
    * store-signed URLs.
    */
   MEDIA_URL_MODE: z.enum(['cdn', 'presign']).default('cdn'),
+
+  // --- Outbound mail (ADR-0019 for the port, ADR-0020 for the provider) ---
+  /**
+   * Resend's API key, or absent.
+   *
+   * **Optional for exactly the reason `SENTRY_DSN` is.** Development and CI have to run the
+   * whole password-reset flow without one, and `LoggingMailer` is what makes that possible.
+   * Absent here does not mean mail is broken; it means the laptop transport. What stops that
+   * transport reaching production is `assertProductionMailer` at boot, not this field.
+   */
+  RESEND_API_KEY: z.string().optional(),
+  /**
+   * Who the mail comes from - `Name <address@domain>`, or a bare address.
+   *
+   * The domain must be one verified in the Resend dashboard, which refuses the send otherwise.
+   * Kept separate from the key because the sending identity moves and the secret does not: this
+   * points at whichever domain is verified today and changes to `clubchatapp.com` later without
+   * anybody touching a credential.
+   */
+  MAIL_FROM: z.string().optional(),
+}).refine((env) => !env.RESEND_API_KEY || Boolean(env.MAIL_FROM), {
+  /*
+   * A key with no From address is the one half-configuration worth catching at boot. Resend
+   * rejects such a send, better-auth throws that away in the background, and the member is told
+   * to check an inbox that will never receive anything - the exact failure ADR-0019 built
+   * `assertProductionMailer` to prevent, arriving through the door it does not watch.
+   */
+  message: 'MAIL_FROM is required when RESEND_API_KEY is set - Resend rejects a send with no From',
+  path: ['MAIL_FROM'],
 });
 
 export type Config = z.infer<typeof Env>;

@@ -1,10 +1,11 @@
 /**
  * Outbound mail.
  *
- * One method, and two implementations that are both in the tree on purpose. See ADR-0019:
- * choosing a provider means verifying a sending domain over DNS, which is a wait rather than a
- * decision, and blocking password reset on it would have blocked a feature that is otherwise
- * finished. So the transport is a port, and the provider slots in behind it later.
+ * One method, and three implementations that are all in the tree on purpose. ADR-0019 made the
+ * transport a port because choosing a provider means verifying a sending domain over DNS, which
+ * is a wait rather than a decision, and blocking password reset on it would have blocked a
+ * feature that was otherwise finished. ADR-0020 then filled the production slot with Resend, and
+ * the swap cost exactly one class - which was the point of the port.
  *
  * The shape deliberately matches `MediaStore`/`FakeMediaStore` and `Monitor`/`silentMonitor()` -
  * a real one for production, a fake the tests assert against, injected from the entrypoint. A
@@ -57,6 +58,81 @@ export class LoggingMailer implements Mailer {
       { to: message.to, subject: message.subject, text: message.text },
       '[mail] not sent - no transport configured. The message follows in full.',
     );
+  }
+}
+
+/** Where Resend accepts a message. Documented at https://resend.com/docs/api-reference/emails. */
+const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+
+/**
+ * How long a send may take before it is abandoned.
+ *
+ * There is a caller-shaped reason for this rather than a round number: better-auth runs
+ * `sendResetPassword` through `runInBackgroundOrAwait`, so nobody is holding the promise and a
+ * request that never settles is a socket and a task that never come back. Ten seconds is well
+ * past a healthy Resend response and well short of anything worth waiting for.
+ */
+const SEND_TIMEOUT_MS = 10_000;
+
+/**
+ * The production transport: Resend's HTTP API.
+ *
+ * **Plain `fetch`, not the `resend` SDK.** The SDK earns its place when you want React Email
+ * templates and typed responses; this product sends one plain-text message and reads nothing
+ * back but the status. A dependency wrapping a single POST is a dependency to keep current for
+ * no return - ADR-0020 records the reasoning.
+ *
+ * Nothing here logs the API key, including on the failure path. Resend does not echo it back,
+ * and the error below is built from the response rather than the request for that reason
+ * (non-negotiable 5).
+ */
+export class ResendMailer implements Mailer {
+  /* Assigned in the body, not as parameter properties - see the note on `LoggingMailer`. */
+  private readonly apiKey: string;
+  private readonly from: string;
+  private readonly fetch: typeof globalThis.fetch;
+
+  constructor(options: { apiKey: string; from: string; fetch?: typeof globalThis.fetch }) {
+    this.apiKey = options.apiKey;
+    this.from = options.from;
+    /*
+     * Injected rather than reached for, so the test can assert the exact request without a
+     * network or a global stub - the same argument that puts `Mailer` itself in the constructor
+     * of `createAuth`. Bound because a detached `fetch` is a footgun that only fires on some
+     * runtimes, and binding costs nothing.
+     */
+    this.fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  async send(message: Message): Promise<void> {
+    const response = await this.fetch(RESEND_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${this.apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: this.from,
+        to: message.to,
+        subject: message.subject,
+        text: message.text,
+      }),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    });
+
+    if (!response.ok) {
+      /*
+       * The body carries Resend's actual reason - a sending domain that is not verified, a
+       * `from` outside it, a spent quota - and each of those is a configuration mistake that is
+       * otherwise completely silent, because the throw dies in better-auth's background task.
+       * `auth.ts` logs what comes out of here, which is the only place it is ever seen.
+       */
+      const detail = await response.text().catch(() => '');
+      throw new Error(
+        `Resend refused the message: ${response.status} ${response.statusText}` +
+          (detail ? ` - ${detail}` : ''),
+      );
+    }
   }
 }
 

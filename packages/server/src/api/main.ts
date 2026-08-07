@@ -12,7 +12,7 @@ import { createAuth } from '../auth.ts';
 import { loadConfig } from '../config.ts';
 import { createDb, createPool } from '../db/client.ts';
 import { createKeyedRateLimiter, createRedis } from '../bus/redis.ts';
-import { assertProductionMailer, LoggingMailer } from '../mail.ts';
+import { assertProductionMailer, LoggingMailer, ResendMailer } from '../mail.ts';
 import { initMonitoring } from '../monitoring.ts';
 import { buildApp } from './app.ts';
 import { S3MediaStore } from '../media/store.ts';
@@ -33,15 +33,25 @@ const db = createDb(pool);
 const logger = pino({ level: config.LOG_LEVEL });
 
 /*
- * Outbound mail, which today has no production transport - ADR-0019.
+ * Outbound mail - ADR-0019 for the port, ADR-0020 for the provider behind it.
  *
- * The assert is the load-bearing half. `LoggingMailer` writes reset URLs to the log instead of
- * mailing them, which is exactly what makes the flow runnable on a laptop and exactly what must
- * never reach production: members would be told to check an inbox that never receives anything,
- * while the working link sat in a log stream. Failing at boot is the honest version of that, and
- * it happens before the process takes traffic.
+ * The key picks the transport, and its absence is the laptop default rather than a mistake:
+ * `LoggingMailer` writes the reset URL to the log, which is what makes the flow runnable with no
+ * provider account and no DNS.
+ *
+ * Testing `MAIL_FROM` as well is what TypeScript needs to narrow, not a second policy - a key
+ * without a From address was already rejected by `loadConfig` above, so this branch cannot be
+ * reached half-configured.
+ *
+ * The assert is still the load-bearing half. Development's transport reaching production would
+ * mean members told to check an inbox that never receives anything while the working link sat in
+ * a log stream. Failing at boot is the honest version of that, and it happens before the process
+ * takes traffic.
  */
-const mailer = new LoggingMailer(logger);
+const mailer =
+  config.RESEND_API_KEY && config.MAIL_FROM
+    ? new ResendMailer({ apiKey: config.RESEND_API_KEY, from: config.MAIL_FROM })
+    : new LoggingMailer(logger);
 assertProductionMailer(mailer, process.env['NODE_ENV']);
 
 const auth = createAuth(db, {

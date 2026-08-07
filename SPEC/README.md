@@ -113,6 +113,8 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0016](decisions/0016-thread-writability-is-evaluated-never-stored.md) | A thread's writability is evaluated, never stored |
 | [0017](decisions/0017-reactions-travel-on-the-message-envelope.md) | Reactions travel on the message envelope, and updates carry full sets |
 | [0018](decisions/0018-decode-uploads-at-the-boundary.md) | Uploads are decoded at the boundary, and undecodable bytes never park an event |
+| [0019](decisions/0019-outbound-mail-is-a-port-with-a-deferred-provider.md) | Outbound mail is a port, and the provider behind it is chosen later |
+| [0020](decisions/0020-resend-is-the-mail-provider.md) | Resend is the mail provider, called over `fetch` rather than its SDK |
 
 ## Templates
 

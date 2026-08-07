@@ -13,6 +13,84 @@ Newest first.
 
 ---
 
+## 2026-08-07 - The mail provider, chosen and wired
+
+`clubchatapp.com` was registered this morning, which unblocked the follow-up
+[ADR-0019](SPEC/decisions/0019-outbound-mail-is-a-port-with-a-deferred-provider.md) had left
+open: pick a provider. The port did what it was built to do - the whole change is one new class,
+two config fields, one branch in the entrypoint, and **nothing in `auth.ts` or in any of the
+fifteen suites that build `createAuth`**.
+
+### What decided it, which was not the code
+
+All three candidates are one authenticated POST, so the comparison came down to the tiers, and
+the interesting part is that both free tiers fail in ways their pricing pages do not advertise.
+
+Postmark's free tier is 100 emails per *month* with **no overage allowed**. For auth mail that is
+a cliff, not a budget: the 101st reset of the month is simply not sent, while the member is told
+to check their inbox. Resend's is 3,000/month but capped at **100 per day and one domain** - and
+the daily cap is the one that bites a club, since forty members signing up on the same evening is
+forty verification mails in an hour.
+
+Resend won on the free tier being survivable and on there being no human approval step before the
+first send. Postmark stays the better answer on pure deliverability, and the port keeps that
+reversible - though the IP reputation would not come along, only the domain's.
+
+There was also a constraint nobody anticipated: the Resend account **already held a verified
+domain**, and the free tier allows exactly one. Rather than delete it or upgrade immediately, the
+integration was pointed at the domain that was already verified. That is the reason `MAIL_FROM`
+is configuration and not a constant - the sending identity has to move to `clubchatapp.com` later
+without a code change, and that move is already scheduled.
+
+### The half-configuration that fails at boot
+
+`RESEND_API_KEY` alone would have been the worst possible state: Resend rejects a send with no
+`from`, better-auth throws that away in the background, and the member watches an empty inbox.
+That is the exact failure `assertProductionMailer` exists to prevent, arriving through a door it
+does not watch - it only asks whether the transport is `LoggingMailer`. So `config.ts` grew a
+cross-field refine: a key without `MAIL_FROM` is a startup failure with a message saying which
+one is missing.
+
+### No SDK, and what that bought
+
+`ResendMailer` is a `fetch` call. The `resend` package exists to give you React Email templates
+and typed responses; this product sends one plain-text message and reads back a status. What the
+absence of the SDK actually bought was testability - `fetch` is injected, so the request shape is
+asserted with no network and no global stub.
+
+That matters more here than the usual argument for it. better-auth calls `sendResetPassword`
+through `runInBackgroundOrAwait` and discards what it throws, so a wrong header or a `from` the
+account cannot send as would present identically to the member: a page saying "check your inbox",
+and an inbox that stays empty. There is no integration test that catches that and no user report
+that describes it. The request shape is the only place it can be pinned down.
+
+### Verification worth noting
+
+Type check clean, full suite green at **774 tests across 33 files**. The six new tests were then
+mutation-tested rather than trusted:
+
+- **Wrong endpoint** (`/email` for `/emails`) - the endpoint test failed, alone.
+- **Abort signal removed** - the timeout test failed. Worth having, because the signal is the
+  only thing that ends a request nobody is holding the promise for.
+- **Resend's failure reason dropped from the error** - the refusal test failed. That reason is
+  the sole surviving evidence of an unverified domain, which is the likeliest first failure in
+  production.
+
+One test asserts the API key never reaches the error string, since that error is logged and
+non-negotiable 5 forbids it appearing there.
+
+### Left undone, deliberately
+
+Bounce and complaint handling, exactly as ADR-0019 left it - Resend has webhooks for both and
+nothing consumes them, so a hard bounce still means a reset link went nowhere and nothing in the
+product knows. DMARC also has to be published by hand: Resend's domain verification requires SPF
+and DKIM but **not** DMARC, so it is the one record that will not appear on any setup checklist.
+
+A stale-index bug was found in passing: `SPEC/README.md`'s ADR table stopped at 0018 and had
+never listed 0019. Both it and 0020 are in it now.
+
+---
+
 ## 2026-08-06 - Swiping the calendar, and three wrong answers before the right one
 
 Asked for plainly: keep the arrows, add swiping, and put a year and month picker on top - the
