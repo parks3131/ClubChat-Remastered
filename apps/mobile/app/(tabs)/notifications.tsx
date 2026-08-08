@@ -38,72 +38,14 @@ import { useCallback, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Redirect, useFocusEffect } from 'expo-router';
-import type { NotificationTarget } from '@clubchat/shared';
 import { inboxApi } from '../../src/api.ts';
 import type { InboxRow } from '../../src/api-types.ts';
 import { useSession } from '../../src/chat-provider.tsx';
 import { timeAgo } from '../../src/dates.ts';
+import { hrefFor } from '../../src/notification-href.ts';
 import { color, radius, space, type } from '../../src/theme.ts';
 import { DataScreen, Row } from '../../src/ui.tsx';
 import { useLoad, usePullToRefresh } from '../../src/use-load.ts';
-
-/**
- * Where a row goes when tapped.
- *
- * Exhaustive over `NotificationTarget`, which is the reason that type is imported from
- * `@clubchat/shared` rather than restated here: the server derives the target exhaustively over the
- * notification types, and this switch is the client half of the same guarantee. A new target kind
- * becomes a compile error rather than a row that silently navigates nowhere.
- */
-function hrefFor(target: NotificationTarget): string | undefined {
-  switch (target.kind) {
-    case 'chat':
-      // `seq` rides along for a mention or a pin, so the chat opens ON the message rather than at
-      // the tail - which is what the jump-to-message window exists for.
-      return target.seq === undefined
-        ? `/chat/${target.channelId}`
-        : `/chat/${target.channelId}?around=${target.seq}`;
-    case 'club':
-      return `/clubs/${target.clubId}`;
-    case 'club_members':
-      return `/clubs/${target.clubId}/members`;
-    case 'race':
-      return `/races/${target.raceId}`;
-    case 'race_roster':
-      return `/races/${target.raceId}/roster`;
-    case 'race_car_groups':
-      return `/races/${target.raceId}/car-groups`;
-    case 'eboard':
-      return `/eboard/${target.eboardId}`;
-    case 'eboard_roster':
-      return `/eboard/${target.eboardId}/members`;
-    case 'poll':
-      return `/polls/${target.pollId}`;
-    case 'event':
-      return `/events/${target.eventId}`;
-    case 'meeting':
-      return `/meetings/${target.meetingId}`;
-    case 'news':
-      return `/clubs/${target.clubId}/news`;
-    // The Reports tab of that channel's Highlights, opened ON that tab rather than on Pinned -
-    // the reviewer was sent here by a report, so landing them anywhere else is a second tap.
-    case 'chat_reports':
-      return `/channels/${target.channelId}/highlights?tab=reports`;
-    /*
-     * The platform moderation queue.
-     *
-     * > **This returned `undefined` until 2026-08-08**, because there was no screen to send
-     * > anybody to - the row appeared, said a report was waiting, and went nowhere when tapped.
-     * > A moderator being told about a queue they could not open was the last part of the one
-     * > safety path in the product that dead-ended.
-     */
-    case 'platform_moderation':
-      return '/moderation';
-    case 'inbox':
-      // Already here.
-      return undefined;
-  }
-}
 
 /**
  * The glyph for a notification type, matching v1's.

@@ -16,7 +16,7 @@
 
 | Gap | Impact | Note for the remaster |
 |---|---|---|
-| ~~**Push notifications**~~ | | **Done in Phase 1.** Device registry, Expo Push, per-device fan-out, and suppression by read cursor rather than by connection liveness (ADR-0008). Phase 3.5 added the DM push (ADR-0015) |
+| ~~**Push notifications**~~ | | **Done in Phase 1** on the server; **the device half landed 2026-08-08** and the whole path is now proved on real hardware. Device registry, Expo Push, per-device fan-out, and suppression by read cursor rather than by connection liveness (ADR-0008). Phase 3.5 added the DM push (ADR-0015). Until 2026-08-08 the client had no `expo-notifications` at all - nothing ever asked permission, fetched a token or called `POST /devices` - so "done" described one end of a wire with nothing on the other |
 | **A user interface for most of the product** | Races, polls, calendar, routines, news and Eboard are unreachable from the **app**, though no longer from the API | **Half closed 2026-07-30.** Phase 3.75a built the HTTP surface: 45 routes became 111, with the ~20 missing queries and the six capabilities that had no function of any kind. What is left is Phase 3.75b, the screens - and it is now ordinary client work rather than a screen with nothing to call |
 | **Legal review** of Privacy Policy and Terms | The shipped documents are an in-house first draft, explicitly not legal advice | Must happen before any public release |
 | **iOS distribution** | Blocked on paid developer-program enrolment | Not a code problem |
@@ -103,7 +103,7 @@ Things that are built and not yet proved on every surface they claim to work on.
 | **Everything, on iOS and Android** | Web, via the browser; **iOS on real hardware** since 2026-08-01 | *(Corrected 2026-08-08 - this row said "the simulator has never been run" and was dated 2026-07-30, by which time it was already going stale.)* A development build has run on a real iPhone since 2026-08-01, and most work since - replies, the long-press menu, the calendar swipe, race notifications - was reported from that device. **Android has still never been run at all**, and no full pass of the acceptance checklist has been done on any native platform |
 | **The attachment upload path** | Web (`blob:` URI through `fetch`) | Native reads a `file:` URI through the same `fetch` call - one path rather than an unverified branch, and untested |
 | **The pickers** | Web file chooser | Native permission prompts for library and camera, which have no web equivalent |
-| **Push** | The Expo transport, with a fake token that was correctly rejected | A real device token reaching a real backgrounded phone |
+| ~~**Push**~~ | **Proved end to end on 2026-08-08.** A real `ExponentPushToken` issued to the physical iPhone, registered by the app, and a `mentioned` push that reached the locked device and deep-linked to the exact message on tap | *(Nothing on iOS.)* Android has no build and so no push |
 | **`MEDIA_URL_MODE=cdn`** | Not at all | Only `presign` runs today. The CDN branch is the production one and has never served a byte |
 
 ### Security audit

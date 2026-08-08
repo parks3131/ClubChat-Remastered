@@ -13,7 +13,172 @@ Newest first.
 
 ---
 
-## 2026-08-08 (last) - Giving the ban a surface, and a dead end it would have shipped with
+## 2026-08-08 (last) - Push, proved on a real phone, and the half of it that was never built
+
+The task was written down as a credentials errand: push is marked **done in Phase 1**, the only
+test ever run used *"the Expo transport, with a fake token that was correctly rejected"*, and what
+was owed was a real token reaching a real backgrounded phone. The note said to expect friction in
+Apple's credentials rather than in code, and to check that before blaming the pipeline.
+
+That was half right, and the wrong half cost the session.
+
+### Push was "done" with nothing on the other end of the wire
+
+`grep expo-notifications apps/mobile` returned nothing. Not a stale dependency - **absent**. No
+permission request, no token, no call to `POST /devices`, no tap handler, no `aps-environment`
+entitlement. The device registry, the per-device fan-out, the cursor suppression of ADR-0008 and
+the DM push of ADR-0015 were all real and all correct, and no phone had ever been able to hold up
+its end.
+
+> **Root cause: the Phase 1 gate proved the server against `RecordingPushSender`, and a recording
+> sender cannot notice that no device exists.** The test asserted the payload and its deep link,
+> which is exactly what it was written to do; "reaches a backgrounded phone" was the one clause it
+> restated as an assertion about a fake token instead. A fake token passes every server-side test
+> ever written, because the server's job ends at handing it to a transport.
+
+Built this session: `apps/mobile/src/push.ts` (permission, token, registration, the tap, and the
+cold-launch tap that a listener registered in an effect can never see), `push-gate.tsx` binding it
+to the session at the root, and `notification-href.ts`, which lifted `hrefFor` out of the inbox
+screen so the banner and the row it links to cannot disagree about where a notification goes.
+
+### The project id that was baked into the app hours before it existed
+
+The first real run failed with the warning the code was written to emit:
+
+```
+WARN  [push] no EAS project id in the manifest - run `eas init`; cannot get a token
+```
+
+`eas init` **had** been run. Metro was serving the id - verified by curling the manifest. Metro was
+restarted twice, once with a cleared cache. The app kept insisting it was not there.
+
+> **`Constants.expoConfig`, on a dev build with no `expo-dev-client`, is not the manifest Metro
+> serves.** It is read from `EXConstants.bundle/app.config`, which is generated **into the .app at
+> build time**.
+
+The build ran at 14:13 and `eas init` wrote the id at about 14:20, so the app carried
+`"extra": { "router": {} }` and would have carried it forever. No amount of restarting a dev server
+changes a file inside a compiled bundle. The fix was a rebuild, and it is checkable directly:
+
+```
+python3 -c "import json;print(json.load(open('.../ClubChat.app/EXConstants.bundle/app.config'))['extra'])"
+```
+
+**A red herring on the way**, recorded because it looked so much like the answer: the served
+manifest's `scopeKey` stays `@anonymous/clubchat-<uuid>` no matter what, even with `owner` set and
+the server restarted clean. It has nothing to do with push, which uses the explicitly-passed
+`projectId`. Two restarts were spent on that theory before the evidence killed it.
+
+### The APNs key that never existed, and would have failed silently
+
+Queried through Expo's GraphQL API with the CLI session already on the machine:
+
+```
+account parks3131 → applePushKeys: []
+```
+
+`eas credentials` had been *started* and the push-key step never completed. This is the failure the
+task note warned about, and it is worth naming precisely: **a missing APNs key does not stop a
+token being issued.** `getExpoPushTokenAsync` succeeds, `POST /devices` succeeds, the row looks
+perfect, and every send is dropped at Apple. Checking the credential is cheaper than debugging the
+pipeline it silently disables.
+
+Two adjacent traps in the same flow, both of which upload happily and fail at delivery: the Apple
+**team** and the **provider** must both be the individual account holding the App ID
+(`3QCWJ4MF4V`), and `Tapari, LLC` is offered first and pre-selected in both menus.
+
+### The mention that was silently dropped, on a name mismatch
+
+The first push through the real pipeline produced nothing at all - no notification row, no
+`push_deliveries`, no error. The message was sent, acked, and written to the log. Tracing it:
+`message_mentions` had no row for it.
+
+`resolveMentions` in `domain/send-message.ts`:
+
+```ts
+return named
+  .filter((row) => row.name !== null && body.includes(`@${row.name}`))
+  .map((row) => ({ userId: row.id, name: row.name as string }));
+```
+
+The test message named the recipient in the `mentions` array but the body did not contain the
+literal text `@Parks RPK`, so the claim was discarded.
+
+> **This is the server being right.** A client that could put a `userId` in `mentions` without
+> naming them in the text could notify anybody in the channel from a message that reads as
+> addressed to nobody - and mentions are one of the two things in this product that ring a phone.
+> Filtering a claimed mention down to one actually written is the check that stops it.
+
+**But it fails silently, and that is worth being uneasy about.** The sender gets `msg.ack` and a
+message in the log; nothing anywhere says a mention was dropped. Three ways that bites in
+production rather than in a test harness:
+
+- **A display name that changes.** `users.full_name` is editable. The match is against the name as
+  it is *now*, so a member who renames themselves between the composer resolving the mention and
+  the server checking it is silently not mentioned.
+- **A name that is not literally what the composer rendered.** Any divergence - trimming, a
+  nickname, a middle name, punctuation, `@everyone`-style sugar - drops the mention with no signal.
+- **A name containing another name.** `body.includes` is a substring test with no boundary, so
+  `@Parks RPK` also satisfies a member called `Parks`. That direction over-matches rather than
+  under-matches, which is the more dangerous one for something that buzzes a phone.
+
+Left as-is this session, because it is a real safeguard doing its job and changing it is a product
+decision rather than a bug fix. Recorded here so the next person who watches a mention vanish knows
+where to look, and so the boundary question gets asked deliberately.
+
+### Bugs hit in the harness, with root causes
+
+Not product defects - the throwaway sender script - but each cost a cycle:
+
+- **`ERR_MODULE_NOT_FOUND: ws`.** ESM resolves from the *script's* directory, not the working
+  directory, and the script lived in a scratchpad outside the repo. Fixed by deleting the
+  dependency: Node 25 has a global `WebSocket`.
+- **A frame name invented rather than read.** The script waited for `subscribe.ok`; the server
+  sends `subscribed` (`protocol.ts` line 190). It authed, subscribed, and then sat there having
+  never sent the message - failure mode 16, a hand-written type over a contract that already
+  exists, reproduced in a test client.
+- **`eas-cli` run from the repo root** wrote a stub `{"expo": {}}` `app.json` there and then treated
+  the monorepo root as an Expo project. Removed; it was untracked and four minutes old.
+- **`eas credentials` refuses to run without `eas.json`**, which this project had never needed
+  because it builds locally with `xcodebuild`. Added with the three conventional profiles; nothing
+  uses them except that command's profile lookup.
+
+### Verification worth noting
+
+The proof is the whole point, so what was actually observed rather than inferred:
+
+| Link | Evidence |
+|---|---|
+| A real token issued | `ExponentPushToken[RYtLF8E-EyLMoP7s1NZHFA]`, logged by the app and in `devices` |
+| Transport and credentials | a direct Expo send returned a receipt of `status: ok` |
+| The real pipeline | mention recorded → outbox 3601 → `dispatchPush` → a `push_deliveries` row |
+| The deferral | sent 18:52:07, delivered 18:52:16 - the 9s is `PUSH_DEFERRAL_MS` losing the race on purpose |
+| A genuinely backgrounded phone | the banner on the lock screen, photographed |
+| The deep link | tapping it opened that conversation **on that message**, not at the tail |
+
+The banner read *"Push Prover mentioned you: @Parks RPK ..."* under the title *"Binghamton Running
+Club"* - rendered by `renderNotification`, the same function the inbox uses, which is what stops a
+push and the row it links to telling two different stories.
+
+`[push] registered` also appeared three times across Metro reloads with the **same** token and left
+exactly one `devices` row, which is the upsert-on-token rule in `registerDevice` doing its job: one
+phone, one row, not one buzz per launch.
+
+### Scope, honestly
+
+`DELETE /devices` on sign-out **does not exist**, and was left alone. `POST /devices` upserts on the
+token, so the next sign-in re-points the row at whoever signed in - but between a sign-out and that
+next sign-in, a phone keeps receiving the previous account's notifications. Out of scope for proving
+push, in scope for anyone shipping it.
+
+Android has still never been run, so it has no push either. The `remote-notification`
+`UIBackgroundModes` entry that iOS warns about is genuinely not needed - alert pushes display
+without it, and only silent `content-available` pushes would require it - so a second full rebuild
+was not spent on it.
+
+---
+
+## 2026-08-08 (third) - Giving the ban a surface, and a dead end it would have shipped with
 
 The client half, asked for while the founder was testing on the phone: the ban control on a member,
 somewhere to lift one, and the DM report offering Block straight after.

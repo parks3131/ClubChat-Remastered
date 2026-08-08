@@ -27,6 +27,7 @@ import { SessionProvider } from '../src/chat-provider.tsx';
 import { CurrentSpaceProvider } from '../src/current-space.tsx';
 import { FontGate } from '../src/fonts.tsx';
 import { BackTo, STACK_MOTION, motionFor} from '../src/nav.tsx';
+import { PushGate } from '../src/push-gate.tsx';
 import { color, type } from '../src/theme.ts';
 
 export default function RootLayout() {
@@ -46,6 +47,12 @@ export default function RootLayout() {
             entirely and cannot see its params.
           */}
           <CurrentSpaceProvider>
+          {/*
+            Registers this device for push once signed in, and turns a tapped banner into a
+            navigation. Renders nothing; it sits here rather than on a screen so its listener
+            outlives every navigation. See `push-gate.tsx`.
+          */}
+          <PushGate />
           <Stack
             screenOptions={{
               headerStyle: { backgroundColor: color.chrome },

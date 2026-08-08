@@ -646,6 +646,20 @@ export const inboxApi = {
 };
 
 /**
+ * This device's push token.
+ *
+ * The server upserts on the token itself rather than on the device, which is what makes calling
+ * this on every launch the right thing rather than a leak: the same phone re-registering UPDATES,
+ * so it never accumulates rows and never receives N copies of one message. It also re-points the
+ * row at whoever is signed in now, which is how a shared phone stops delivering the previous
+ * account's notifications.
+ */
+export const devicesApi = {
+  register: (body: { pushToken: string; platform: 'ios' | 'android' | 'web' }) =>
+    apiFetch<{ id: string }>('/devices', { method: 'POST', body }),
+};
+
+/**
  * The platform moderation queue: reports raised in direct messages.
  *
  * A DM has no admins, so PRD/14 rule 7 routes its reports here instead - read by accounts
