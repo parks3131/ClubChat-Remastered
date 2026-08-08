@@ -94,6 +94,47 @@ designed in.
     re-run, which is a habit worth being uneasy about - see the 2026-08-03 history entry for two
     confident misdiagnoses of exactly this.
 
+### Known defect: another member's poll or event card does not appear in chat
+
+**Open, found on the phone 2026-08-08, not fixed.** A poll or event card created by somebody
+**else** never renders in the conversation. A card the viewer created themselves renders normally,
+and the object is reachable everywhere else - the poll shows up in the polls list and its
+notification deep-links correctly. So the loss is confined to the chat card, and only for a card
+somebody else made.
+
+**Everything below was verified live and is NOT the cause.** Recorded so the next attempt does not
+re-walk it:
+
+| Checked | Result |
+|---|---|
+| The card row is written | Yes - `type` `poll`/`event`, correct `linked_poll_id`/`linked_event_id`, correct `sender_name` |
+| `GET /channels/:id/messages` returns it | Yes, every card |
+| The poll is readable by a **non-creator** club member | Yes, `200` with full data |
+| The gateway relays it live | Yes - a subscribed socket received `msg.new seq=99 type=poll linkedPollId=…` |
+| The socket envelope vs the API envelope | **Byte-identical**, field by field |
+| An ordinary TEXT message from the same member, same channel, seconds later | **Renders fine** |
+
+That last row is what rules out general message loss, and it is the sharpest clue: text from
+another member arrives, a card from the same member does not.
+
+**The one structural difference left unexamined:** an ordinary message is published to Redis by
+the **gateway**, on the sender's own socket; a card is published by the **worker**, from its effect
+handler. Both call `publishToChannel`, and a subscribed test socket demonstrably receives the
+worker's. Whether a real client's `ChatClient` also stores it - rather than receiving and
+discarding it - was never established, because the device's local SQLite cannot be inspected from
+outside.
+
+Two client-side fixes were made while chasing this and **neither resolved it**, though both stand
+on their own: the three chat cards no longer return `null` on a pending or failed read (the chat
+screen suppresses the body sentence for any card-carrying message, so returning null rendered an
+invisible row), and `applyIncoming` no longer discards a frame at or below the local high-water
+mark (a hole beneath the mark was permanent, because sync pulls strictly above it).
+
+**Where to start next:** determine whether the card reaches the device's store at all. Signing out
+and back in rebuilds the cache from the API - if the card appears after that and not before, the
+defect is in live delivery to `ChatClient`; if it still does not appear with the row certainly
+present, it is in the render path.
+
 ### Verification owed
 
 Things that are built and not yet proved on every surface they claim to work on.
