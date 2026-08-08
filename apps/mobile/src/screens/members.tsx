@@ -27,14 +27,31 @@
  * because the whole point is finding somebody who is not on this list yet.
  */
 
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import type { MemberCandidate } from '../api.ts';
 import { timeAgo } from '../dates.ts';
+import { longPressFeedback } from '../haptics.ts';
 import { color, radius, space, type } from '../theme.ts';
-import { Action, Avatar, Card, EmptyState, SearchField, SheetMenu } from '../ui.tsx';
+import {
+  Action,
+  Avatar,
+  Card,
+  ContextMenu,
+  EmptyState,
+  SearchField,
+  measureRow,
+  type PressAnchor,
+} from '../ui.tsx';
 import { MemberPicker } from './member-picker.tsx';
 
 /** One person on a roster, already reduced to what this screen draws. */
@@ -54,6 +71,13 @@ export type MemberRow = {
 /** A per-row action, offered only when the caller may actually perform it. */
 export type MemberAction = {
   label: string;
+  /**
+   * The icon beside it in the lifted menu.
+   *
+   * Optional with a neutral fallback rather than required, so a caller that has not chosen one
+   * yet still renders a usable menu instead of a blank square.
+   */
+  icon?: ComponentProps<typeof MaterialIcons>['name'];
   destructive?: boolean;
   run: (userId: string) => Promise<unknown>;
 };
@@ -140,9 +164,18 @@ export function MembersScreen({
 }) {
   const router = useRouter();
   const [filter, setFilter] = useState('');
-  const [menuRow, setMenuRow] = useState<MemberRow | null>(null);
+  /**
+   * The row whose menu is open, plus the rectangle it occupies on screen.
+   *
+   * The rectangle is what lets the menu lift the row rather than slide a sheet up from the
+   * bottom, so it is captured at press time and held here beside the row itself - the two are
+   * one fact and storing them apart is how a menu ends up drawn against a stale position.
+   */
+  const [menuFor, setMenuFor] = useState<{ row: MemberRow; anchor: PressAnchor } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  /** Each row's host view, so the pressed one can be measured. Keyed by the person. */
+  const rowViews = useRef(new Map<string, View | null>());
 
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -154,7 +187,7 @@ export function MembersScreen({
   /** Runs a write, then re-reads. Refuses concurrent writes on the same person. */
   const act = async (key: string, run: () => Promise<unknown>) => {
     setBusy(key);
-    setMenuRow(null);
+    setMenuFor(null);
     try {
       await run();
     } catch {
@@ -168,7 +201,23 @@ export function MembersScreen({
 
   return (
     <View style={styles.flex}>
-      <View style={styles.body}>
+      {/*
+        A ScrollView, which this was not.
+
+        > **The roster never scrolled.** `body` was a plain `View` with `flex: 1`, so a list
+        > taller than the screen was simply clipped - invisible while every club under test had
+        > a handful of members, and reported the moment a Banned section pushed the content past
+        > the fold. The footer is in normal flow below this, so the scroller sizes itself against
+        > it and the last row clears the Add members button without a hand-tuned bottom padding.
+
+        `keyboardShouldPersistTaps` because the filter field is inside it: without it the first
+        tap after typing only dismisses the keyboard and the row underneath is not pressed.
+      */}
+      <ScrollView
+        style={styles.body}
+        contentContainerStyle={styles.bodyContent}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.searchWrap}>
           <SearchField value={filter} onChangeText={setFilter} placeholder="Search members" />
         </View>
@@ -248,58 +297,69 @@ export function MembersScreen({
                       same reason: the name area opens the profile, the menu button opens the menu,
                       and neither contains the other.
                     */
-                    <View key={row.userId} style={styles.row}>
-                      <Pressable
-                        style={styles.rowInfo}
-                        onPress={() => router.push(`/users/${row.userId}`)}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Open ${row.name}'s profile`}
-                      >
-                        <Avatar name={row.name} image={row.image} />
-                        <View style={styles.personText}>
-                          <Text style={styles.name}>{row.name}</Text>
-                          {row.tag !== null && <Text style={styles.tag}>{row.tag}</Text>}
-                        </View>
-                      </Pressable>
+                    /*
+                      ONE pressable for the whole row, which is both simpler and safer than the
+                      two siblings this used to be. Tap opens the profile; long press lifts the
+                      row and opens the menu, the same gesture the chat list and the club hub use.
+                      Nothing is nested inside it, so failure mode 17 - a pressable inside a
+                      pressable, invalid on web and gesture-swallowing on native - cannot recur.
+                    */
+                    <Pressable
+                      key={row.userId}
+                      ref={(view) => {
+                        rowViews.current.set(row.userId, view as unknown as View | null);
+                      }}
+                      style={styles.row}
+                      onPress={() => {
+                        const href = profileHref?.(row) ?? `/users/${row.userId}`;
+                        if (profileHref !== undefined && profileHref(row) === null) return;
+                        router.push(href);
+                      }}
+                      onLongPress={(event) => {
+                        if (actions.length === 0) return;
+                        // The same buzz every other long press in the app gives, from the one
+                        // place that decides how it feels.
+                        longPressFeedback();
+                        measureRow(
+                          rowViews.current.get(row.userId) ?? null,
+                          { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY },
+                          (anchor) => setMenuFor({ row, anchor }),
+                        );
+                      }}
+                      delayLongPress={280}
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        actions.length > 0
+                          ? `${row.name}. Open profile, or long press for options`
+                          : `Open ${row.name}'s profile`
+                      }
+                    >
+                      <Avatar name={row.name} image={row.image} />
+                      <View style={styles.personText}>
+                        <Text style={styles.name}>{row.name}</Text>
+                        {row.tag !== null && <Text style={styles.tag}>{row.tag}</Text>}
+                      </View>
                       {row.isSelf && <Text style={styles.you}>You</Text>}
-                      {busy === row.userId ? (
-                        <ActivityIndicator color={color.accent} />
-                      ) : actions.length > 0 ? (
-                        <Pressable
-                          onPress={() => setMenuRow(row)}
-                          hitSlop={space.sm}
-                          accessibilityRole="button"
-                          accessibilityLabel={
-                            row.isSelf ? 'Your options' : `Manage ${row.name}`
-                          }
-                        >
-                          <MaterialIcons
-                            name="more-vert"
-                            size={20}
-                            color={color.textSecondary}
-                          />
-                        </Pressable>
-                      ) : (
+                      {busy === row.userId && <ActivityIndicator color={color.accent} />}
+                      {!row.isSelf && busy !== row.userId && actions.length === 0 && (
                         // A row with nothing to do to it gets a lock rather than a blank gap,
                         // so "no menu here" reads as deliberate rather than as a missing control.
-                        !row.isSelf && (
-                          <MaterialIcons
-                            name="lock"
-                            size={16}
-                            color={color.divider}
-                            accessibilityElementsHidden
-                            importantForAccessibility="no"
-                          />
-                        )
+                        <MaterialIcons
+                          name="lock"
+                          size={16}
+                          color={color.divider}
+                          accessibilityElementsHidden
+                          importantForAccessibility="no"
+                        />
                       )}
-                    </View>
+                    </Pressable>
                   );
                 })}
               </View>
             );
           })
         )}
-      </View>
+      </ScrollView>
 
       {addPeople !== undefined && !adding && (
         <View style={styles.footer}>
@@ -329,29 +389,57 @@ export function MembersScreen({
         />
       )}
 
-      {menuRow !== null && (
-        <SheetMenu
-          title={menuRow.name}
-          onDismiss={() => setMenuRow(null)}
+      {/*
+        The lifted menu: the row rises, the screen blurs behind it, the menu springs in.
+
+        > **A popover rather than a bottom sheet, and the same one the chat list and the club hub
+        > already use.** One gesture should have one feel everywhere, and a roster that answered a
+        > long press with a sheet sliding up from the bottom while the identical press on the
+        > Chats tab lifted the row would be two controls wearing one gesture.
+
+        The preview is the row redrawn rather than described a second time, so the floating copy
+        cannot drift from the real one the next time a row grows a tag.
+      */}
+      {menuFor !== null && (
+        <ContextMenu
+          anchor={menuFor.anchor}
+          onDismiss={() => setMenuFor(null)}
+          preview={
+            <View style={styles.row}>
+              <Avatar name={menuFor.row.name} image={menuFor.row.image} />
+              <View style={styles.personText}>
+                <Text style={styles.name}>{menuFor.row.name}</Text>
+                {menuFor.row.tag !== null && (
+                  <Text style={styles.tag}>{menuFor.row.tag}</Text>
+                )}
+              </View>
+            </View>
+          }
           items={[
             // Omitted entirely when the caller says this row has no reachable profile, rather
             // than offered and landing on "Not found". See `profileHref`.
-            ...(profileHref !== undefined && profileHref(menuRow) === null
+            ...(profileHref !== undefined && profileHref(menuFor.row) === null
               ? []
               : [
                   {
                     label: 'View profile',
+                    icon: 'person' as const,
                     onPress: () => {
-                      const href = profileHref?.(menuRow) ?? `/users/${menuRow.userId}`;
-                      setMenuRow(null);
+                      const href =
+                        profileHref?.(menuFor.row) ?? `/users/${menuFor.row.userId}`;
+                      setMenuFor(null);
                       router.push(href);
                     },
                   },
                 ]),
-            ...actionsFor(menuRow).map((action) => ({
+            ...actionsFor(menuFor.row).map((action) => ({
               label: action.label,
+              // A neutral fallback, so a caller that has not chosen an icon still gets a menu
+              // that reads rather than a row of blanks.
+              icon: action.icon ?? ('chevron-right' as const),
               ...(action.destructive === true ? { destructive: true } : {}),
-              onPress: () => void act(menuRow.userId, () => action.run(menuRow.userId)),
+              onPress: () =>
+                void act(menuFor.row.userId, () => action.run(menuFor.row.userId)),
             })),
           ]}
         />
@@ -586,7 +674,8 @@ function PickMembers({
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
-  body: { flex: 1, padding: space.md, gap: space.sm },
+  body: { flex: 1 },
+  bodyContent: { padding: space.md, gap: space.sm, paddingBottom: space.lg },
   searchWrap: { paddingBottom: space.xs },
 
   section: {
@@ -609,7 +698,6 @@ const styles = StyleSheet.create({
     marginBottom: space.xs,
   },
   person: { flexDirection: 'row', alignItems: 'center', gap: space.md },
-  rowInfo: { flexDirection: 'row', alignItems: 'center', gap: space.sm + 2, flex: 1 },
   personText: { flex: 1, gap: 2 },
   name: { ...type.headline, color: color.textPrimary },
   tag: { ...type.label, color: color.accent, textTransform: 'none' },

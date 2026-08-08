@@ -73,11 +73,52 @@ The dismiss says **"No thanks" rather than "Cancel"**, which would imply it undi
 does not: the report stands either way, and wanting something looked at without cutting the person
 off is a reasonable answer.
 
+### The roster had never scrolled
+
+Reported from the phone with a screenshot: the Banned section was visible, its row was cut off
+behind the Add members button, and the list would not move.
+
+**`body` was a plain `View` with `flex: 1`.** Not a `ScrollView` - so a roster taller than the
+screen was simply clipped, and always had been. Invisible for as long as every club under test had
+a handful of members; a Banned section was just the first thing to push the content past the fold.
+It is a `ScrollView` now, with the padding moved to the content container. No hand-tuned bottom
+inset was needed: the footer is in normal flow below the scroller, so it sizes itself against it.
+
+Worth noting the shape, because it is the second time this week a new section has exposed an
+older bug rather than introduced one: the feature that reveals a defect is rarely the feature that
+caused it.
+
+### The three dots became a long press
+
+Asked for in the same message. The roster answered a tap on a small target with a bottom sheet,
+while the Chats list and the club hub answered a long press by lifting the row with the screen
+blurred behind it - one gesture wearing two different controls depending on which screen you were
+on.
+
+The roster now uses `ContextMenu`, the same component those two already use, with the row redrawn
+as its own preview so the floating copy cannot drift from the real one. All three rosters get it,
+since the screen is shared.
+
+It also **removed** a hazard rather than adding one. The row used to be two sibling pressables
+inside a `View` - a shape adopted deliberately, because a pressable wrapping another is failure
+mode 17 and shipped here once. One pressable with both a tap and a long press has nothing nested
+in it at all, so the trap is gone rather than avoided.
+
+`MemberAction` gained an optional `icon`, with a neutral fallback rather than a required field, so
+no caller could be caught half-updated while the phone was live-reloading against these files.
+
 ### Verification worth noting
 
 Type check clean, `check:runtime` 68 modules, no em dashes, full suite green at **805 server**, 27
 shared, 67 mobile. Three new server tests cover what the two surfaces are told they may do,
-including the case above.
+including the case above. Metro rebundled clean on every save.
+
+**One run of the suite failed at file level in `retention.test.ts`** - a file unrelated to any of
+this - and did not recur on two further full runs. It looks like the container-start flake recorded
+as open question 15, but **the error text was not captured before it stopped reproducing, so that
+is a guess rather than a diagnosis.** Recorded as unexplained rather than attributed, because that
+same flake has already been confidently misdiagnosed twice (2026-08-03) and a third wrong
+attribution is worse than an open question.
 
 Two prop names were guessed wrong on the way and caught by the compiler rather than by a phone -
 `Action` takes `variant="danger"`, not `destructive`, and `ConfirmDialog` takes `body`, not

@@ -73,6 +73,7 @@ export default function RaceRosterScreen() {
             return [
               {
                 label: 'Leave this race',
+                icon: 'logout',
                 destructive: true,
                 run: (id) => raceApi.removeMember(raceId, id),
               },
@@ -85,6 +86,7 @@ export default function RaceRosterScreen() {
             ? [
                 {
                   label: 'Remove from race',
+                  icon: 'person-remove',
                   destructive: true,
                   run: (id) => raceApi.removeMember(raceId, id),
                 },

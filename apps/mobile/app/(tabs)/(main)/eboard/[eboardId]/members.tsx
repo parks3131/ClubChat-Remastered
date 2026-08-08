@@ -69,6 +69,7 @@ export default function EboardMembersScreen() {
             return [
               {
                 label: 'Leave the space',
+                icon: 'logout',
                 destructive: true,
                 run: (id) => eboardApi.removeMember(eboardId, id),
               },
@@ -80,6 +81,7 @@ export default function EboardMembersScreen() {
             ? [
                 {
                   label: 'Remove from the space',
+                  icon: 'person-remove',
                   destructive: true,
                   run: (id) => eboardApi.removeMember(eboardId, id),
                 },

@@ -127,6 +127,7 @@ export default function ClubMembersScreen() {
                     // Any admin, including one who did not impose it. The asymmetry is deliberate
                     // and is what contains a rogue admin - ADR-0021.
                     label: 'Lift ban',
+                    icon: 'undo',
                     run: (id) => clubApi.liftBan(clubId, id),
                   },
                 ]
@@ -143,6 +144,7 @@ export default function ClubMembersScreen() {
           if (isAdmin && member.role !== 'owner') {
             actions.push({
               label: member.role === 'admin' ? 'Demote to member' : 'Promote to admin',
+              icon: member.role === 'admin' ? 'arrow-downward' : 'arrow-upward',
               run: (id) =>
                 clubApi.changeRole(clubId, id, member.role === 'admin' ? 'member' : 'admin'),
             });
@@ -152,6 +154,7 @@ export default function ClubMembersScreen() {
           if (isOwner === true && member.role !== 'owner') {
             actions.push({
               label: 'Transfer ownership',
+              icon: 'swap-horiz',
               destructive: true,
               run: (id) => clubApi.transferOwnership(clubId, id),
             });
@@ -163,6 +166,7 @@ export default function ClubMembersScreen() {
           if (member.canRemove) {
             actions.push({
               label: 'Remove from club',
+              icon: 'person-remove',
               destructive: true,
               run: (id) => clubApi.removeMember(clubId, id),
             });
@@ -171,6 +175,7 @@ export default function ClubMembersScreen() {
           if (member.canBan) {
             actions.push({
               label: 'Ban from club',
+              icon: 'block',
               destructive: true,
               run: (id) => clubApi.ban(clubId, id),
             });
