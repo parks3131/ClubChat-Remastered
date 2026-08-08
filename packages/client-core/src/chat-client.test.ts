@@ -264,6 +264,37 @@ describe('ChatClient applies the gap rule', () => {
 
     await vi.waitFor(async () => expect(await client.store.seqs(CHANNEL)).toEqual([1]));
   });
+
+  /**
+   * THE OTHER ONE THAT MATTERS, and it is the mirror of the ack test above.
+   *
+   * `localMaxSeq` is a high-water MARK, not proof that every seq beneath it is held. A frame
+   * arriving at or under the mark used to be discarded without anybody checking whether its row
+   * existed - and because `syncChannel` pulls strictly ABOVE the mark, nothing would ever fetch
+   * it again. Permanently missing, while still counted by the unread badge.
+   *
+   * Reported from the phone on 2026-08-08 as poll and event cards posted by ANOTHER member never
+   * appearing in chat: a member's own card is also pulled by the sync that follows creating it,
+   * so only a card that arrives purely as a live frame can be lost this way.
+   */
+  it('writes a frame at or below the high-water mark rather than assuming it is held', async () => {
+    const { client, socket } = await setup();
+
+    // Seq 2 arrives first and alone: nothing to backfill, so the mark is 2 with 1 absent.
+    socket.deliver({ t: 'msg.new', d: envelope(2) });
+    await vi.waitFor(async () => expect(await client.store.localMaxSeq(CHANNEL)).toBe(2));
+    expect(await client.store.seqs(CHANNEL)).toEqual([2]);
+
+    // Now seq 1 turns up. It is BELOW the mark and we do not have it.
+    socket.deliver({ t: 'msg.new', d: envelope(1) });
+
+    await vi.waitFor(async () =>
+      expect(
+        await client.store.seqs(CHANNEL),
+        'a message below the high-water mark was dropped and can never be re-fetched',
+      ).toEqual([1, 2]),
+    );
+  });
 });
 
 describe('the send outbox', () => {

@@ -11,6 +11,7 @@
  * > destination those two links were always implying.
  */
 
+import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -133,13 +134,20 @@ export function EventView({ eventId }: { eventId: string }) {
  * there is no button to nest inside a button - it navigates, and `accessibilityRole="button"` is
  * legal here precisely because the bubble around it declares `none`.
  */
-export function ChatEventCard({ eventId }: { eventId: string }) {
+export function ChatEventCard({
+  eventId,
+  fallback = null,
+}: {
+  eventId: string;
+  /** The message's own sentence, drawn when the event cannot be. See `ChatPollCard`. */
+  fallback?: ReactNode;
+}) {
   const router = useRouter();
   const load = useLoad(() => contentApi.event(eventId), [eventId]);
 
-  // No spinner and no error text: this is a bubble in a conversation, and a pending or failed
-  // read should leave the message reading as it did before cards existed.
-  if (load.data === null) return null;
+  // No spinner and no error text: a pending or failed read falls back to the message's own
+  // sentence, because the chat screen has already suppressed it for any card-carrying message.
+  if (load.data === null) return <>{fallback}</>;
   const event: EventDetail = load.data.event;
 
   return (

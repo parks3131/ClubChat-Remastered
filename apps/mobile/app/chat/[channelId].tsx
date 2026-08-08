@@ -725,6 +725,25 @@ const MessageRow = memo(function MessageRow({
   const cardId =
     message.linkedPollId ?? message.linkedEventId ?? message.linkedMeetingId;
 
+  /*
+   * What a card draws when its object will not load, and why it cannot be nothing.
+   *
+   * > **The body sentence is suppressed for every card-carrying message, whether or not the card
+   * > rendered.** Each card returned `null` on a pending or failed read, believing that left the
+   * > message "reading as it did before cards existed" - but with the sentence already suppressed
+   * > there was nothing left to read, so the whole message went invisible while still counting
+   * > towards the unread badge. That is the "notification says something is in the chat, but the
+   * > chat is empty" report.
+   *
+   * Built here rather than inside the cards because only this component knows whether the bubble
+   * is the reader's own, which is what picks the text style. `MentionedBody` is deliberately not
+   * used: a card's sentence is server-composed and carries no mentions.
+   */
+  const cardFallback =
+    message.body !== null && message.body.length > 0 ? (
+      <Text style={mine ? styles.sentText : styles.receivedText}>{message.body}</Text>
+    ) : null;
+
   if (message.deletedAt !== null) {
     /*
      * A deleted CARD leaves nothing at all; a deleted MESSAGE leaves a tombstone.
@@ -925,6 +944,7 @@ const MessageRow = memo(function MessageRow({
                 <ChatPollCard
                   pollId={message.linkedPollId}
                   authorName={message.senderName}
+                  fallback={cardFallback}
                 />
               ) : message.linkedEventId !== null ? (
                 /*
@@ -937,10 +957,13 @@ const MessageRow = memo(function MessageRow({
                   this bubble only because the bubble declares `accessibilityRole="none"`
                   above, which is what stops react-native-web rendering it as a <button>.
                 */
-                <ChatEventCard eventId={message.linkedEventId} />
+                <ChatEventCard
+                  eventId={message.linkedEventId}
+                  fallback={cardFallback}
+                />
               ) : (
                 /* A meeting card. The event card's twin, and navigates the same way. */
-                <ChatMeetingCard meetingId={cardId} />
+                <ChatMeetingCard meetingId={cardId} fallback={cardFallback} />
               )}
               {/*
                 The dots, ONLY where the long press is not available - which today means

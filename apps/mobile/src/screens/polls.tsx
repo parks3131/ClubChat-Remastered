@@ -22,6 +22,7 @@
  * weight, and a single full-width call to action whose wording changes with the state.
  */
 
+import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -719,7 +720,28 @@ function PollBody({
  * other half: a member who may not see this poll gets nothing back, and the card renders as its
  * sentence alone rather than leaking a question through chat.
  */
-export function ChatPollCard({ pollId, authorName }: { pollId: string; authorName: string | null }) {
+export function ChatPollCard({
+  pollId,
+  authorName,
+  fallback = null,
+}: {
+  pollId: string;
+  authorName: string | null;
+  /**
+   * What to draw when the poll cannot be drawn - the message's own sentence.
+   *
+   * > **Returning `null` here used to make the whole message vanish.** The comment below said a
+   * > pending or failed read should "leave the message reading as it did before cards existed",
+   * > and that was never true: the chat screen suppresses the body sentence for ANY message
+   * > carrying a linked id, whether or not the card actually rendered. So a card that could not
+   * > load left an empty bubble - invisible in the conversation, while the unread count still
+   * > counted it. Reported as "the notification says something is in the chat but nothing is".
+   *
+   * The caller passes the sentence because only it knows whether this is the reader's own bubble
+   * and which text style that implies.
+   */
+  fallback?: ReactNode;
+}) {
   const [busy, setBusy] = useState(false);
   const [votersFor, setVotersFor] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -735,9 +757,9 @@ export function ChatPollCard({ pollId, authorName }: { pollId: string; authorNam
     }
   };
 
-  // No spinner and no error text: this is a bubble in a conversation, and a failed or pending
-  // read should leave the message reading as it did before cards existed, not shout in the log.
-  if (load.data === null) return null;
+  // No spinner and no error text: this is a bubble in a conversation, so a failed or pending read
+  // falls back to the message's own sentence rather than shouting in the log - or vanishing.
+  if (load.data === null) return <>{fallback}</>;
   const poll = load.data.poll;
 
   /*

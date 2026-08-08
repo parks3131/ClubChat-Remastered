@@ -458,12 +458,29 @@ export class ChatClient {
       const localMax = await this.store.localMaxSeq(channelId);
       const decision = decideGap(envelope.seq, localMax);
 
-      if (decision.action === 'ignore') return null;
-
+      /*
+       * **Written unconditionally, including when the gap decision is `ignore`.**
+       *
+       * This used to `return null` before the upsert, on the reasoning that a seq at or below the
+       * local high-water mark is one we already hold. That reasoning has a hole in it, and the
+       * hole is permanent: `localMaxSeq` is a high-water MARK, not proof that every seq beneath it
+       * is present. A frame arriving at or under it was therefore discarded without anybody
+       * checking whether the row it carried actually existed - and `syncChannel` pulls strictly
+       * ABOVE the local max, so nothing would ever fetch it again. The message was gone for the
+       * life of that cache while still counting towards the unread badge, which is the
+       * "the chat says there is something here and there is nothing" report.
+       *
+       * Writing anyway costs one idempotent upsert - the store is keyed `(channel_id, seq)` with
+       * `ON CONFLICT DO UPDATE` - and it turns a duplicate frame into a no-op instead of turning a
+       * hole into a permanent one. The decision below still governs whether to BACKFILL, which is
+       * the expensive part and the only thing worth deciding.
+       */
       await this.store.upsert([envelope]);
+
       // On a gap the message is still appended - a send that succeeded must not vanish from the
-      // UI - and the backfill below fills the hole behind it.
-      return decision.syncAfter ? localMax : null;
+      // UI - and the backfill below fills the hole behind it. An `ignore` never backfills: it is
+      // at or below the mark, so there is nothing above it to fetch.
+      return decision.action !== 'ignore' && decision.syncAfter ? localMax : null;
     });
 
     if (gap === null) return;

@@ -12,6 +12,7 @@
  * nothing rather than leaking the board's schedule.
  */
 
+import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -20,13 +21,20 @@ import { formatInstant } from '../dates.ts';
 import { color, radius, space, type } from '../theme.ts';
 import { useLoad } from '../use-load.ts';
 
-export function ChatMeetingCard({ meetingId }: { meetingId: string }) {
+export function ChatMeetingCard({
+  meetingId,
+  fallback = null,
+}: {
+  meetingId: string;
+  /** The message's own sentence, drawn when the meeting cannot be. See `ChatPollCard`. */
+  fallback?: ReactNode;
+}) {
   const router = useRouter();
   const load = useLoad(() => contentApi.meeting(meetingId), [meetingId]);
 
-  // No spinner and no error text: a pending or failed read should leave the message reading as
-  // it did before cards existed, rather than shouting in the log.
-  if (load.data === null) return null;
+  // No spinner and no error text: a pending or failed read falls back to the message's own
+  // sentence, because the chat screen has already suppressed it for any card-carrying message.
+  if (load.data === null) return <>{fallback}</>;
   const meeting = load.data.meeting;
 
   return (
