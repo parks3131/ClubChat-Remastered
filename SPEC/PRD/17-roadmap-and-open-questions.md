@@ -94,13 +94,31 @@ designed in.
     re-run, which is a habit worth being uneasy about - see the 2026-08-03 history entry for two
     confident misdiagnoses of exactly this.
 
-### Known defect: another member's poll or event card does not appear in chat
+### Known defect: the gateway rejects a session the API accepts
 
-**Open, found on the phone 2026-08-08, not fixed.** A poll or event card created by somebody
-**else** never renders in the conversation. A card the viewer created themselves renders normally,
-and the object is reachable everywhere else - the poll shows up in the polls list and its
-notification deep-links correctly. So the loss is confined to the chat card, and only for a card
-somebody else made.
+**Open, found 2026-08-08.** The web client authenticated fine over HTTP - lists loaded, polls were
+created - while its socket answered `auth failed: invalid_token` against session rows that were
+present and unexpired. Signing out and back in clears it, which is a workaround rather than an
+explanation.
+
+Worth fixing because of how it presents: the app looks healthy. Screens load, content appears, and
+the only symptom is a thin `Offline. Showing saved messages.` banner - so a member can sit on a
+frozen conversation believing it is simply quiet. `resolveSessionFromToken` accepts a
+freshly-issued token every time in testing, so the divergence is between what the client has
+stored and what the gateway will resolve, not the gateway's logic in isolation.
+
+### ~~Known defect: another member's poll or event card does not appear in chat~~
+
+**Fixed 2026-08-08, hours after being recorded here.** It was never about cards, authorship or
+rendering: `openChannel` called `subscribe` before `syncChannel`, and `subscribe` throws when the
+socket is down - aborting the function before the HTTP sync it did not need a socket for. Messages
+missed during a flap then sat below the local high-water mark, which neither `since_seq` nor
+`since_rev` can reach. `syncChannel` now repairs gaps first, and a failed subscribe no longer
+cancels the sync. See HISTORY.md 2026-08-08 (last), which is worth reading for the four wrong
+diagnoses and why the test suite could not have caught either bug.
+
+The table below is kept because everything in it was verified live and remains true - it is the
+list of things that are **not** the cause, and it is what finally forced the search somewhere else.
 
 **Everything below was verified live and is NOT the cause.** Recorded so the next attempt does not
 re-walk it:

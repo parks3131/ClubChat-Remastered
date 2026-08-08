@@ -13,7 +13,116 @@ Newest first.
 
 ---
 
-## 2026-08-08 (last) - Push, proved on a real phone, and the half of it that was never built
+## 2026-08-08 (last) - The message that arrived on one device and not the other
+
+Reported straight after push was proved: a poll card created by somebody else never appeared in
+club chat on the phone. The founder's own cards did. It took **four wrong diagnoses** before the
+right one, and the wrong ones are the more useful half of this entry.
+
+### What it actually was
+
+`openChannel` subscribed before syncing:
+
+```ts
+if (!this.channels.some((entry) => entry.id === channelId)) {
+  this.subscribe([channelId]);   // throws `not connected` when the socket is down
+}
+await this.syncChannel(channelId, await this.store.localMaxSeq(channelId));
+```
+
+> **`subscribe` throws when the socket is down, and that aborted `openChannel` before it ever
+> reached the sync.** So the client least able to receive messages live was also the one denied
+> the plain HTTP fetch that would have caught it up. The realtime enhancement was taking the
+> durable path down with it - the exact inversion of `PRD/16` rule 4, which makes realtime an
+> enhancement and the fetch the requirement.
+
+A message missed during a socket flap then sat **below the local high-water mark**, and neither
+sync cursor can reach there: `since_seq` asks for `seq > mine`, and `since_rev` asks for
+`rev > mine` while an older message's revision is lower still. Every sync reported success. The
+message was counted by the unread badge, invisible in the conversation, and unrecoverable for the
+life of the cache. `findGaps` had been written and tested since the store existed and **had no
+caller**; `syncChannel` now repairs first, using the seq form because the rev form is structurally
+incapable of it.
+
+### The diagnostic that finally worked, after four that did not
+
+The founder opened the **web** client. It showed every card correctly - same code, same server,
+same account - while the phone showed only its own.
+
+> **That contradiction was worth more than everything read from the code.** Web cannot use SQLite,
+> so `openMessageStore` falls back to `InMemoryMessageStore`: an empty cache on every page load,
+> refetched whole from the API. **It is structurally incapable of holding a hole.** The phone keeps
+> SQLite across launches, so a hole persists forever. Two clients, one difference, and the
+> difference *was* the bug.
+
+Every earlier theory came from reading the code and was wrong:
+
+| Theory | Why it was wrong |
+|---|---|
+| The card renders `null` on a failed read | Real, fixed, not the cause - cards render fine on web |
+| A frame at or below the mark is discarded | Real, fixed, not the cause - the frame never arrived at all |
+| Non-creator cards fail | Disproved outright: web renders another member's cards perfectly |
+| The worker publishes differently from the gateway | Disproved: a subscribed socket receives the worker's card, and the envelope is byte-identical to the API's |
+
+**The lesson, and it cost hours: when a report contradicts what the code says, stop reading and get
+a second client you can inspect.** Two clients disagreeing localises a bug faster than any amount
+of reasoning about one.
+
+### The tests were green throughout, and could not have been otherwise
+
+Both bugs were **inexpressible** in the suite, for the same reason twice: a fake that did not
+behave like the thing it stood in for.
+
+- **The fake socket accepted a write at any `readyState`.** A real `WebSocket` throws
+  `InvalidStateError` once it is CONNECTING, CLOSING or CLOSED - which is precisely what made
+  `subscribe` throw inside `openChannel` on a real device. With a fake that never throws, the
+  failing condition could not be written down.
+- **The fake sync read its cursor from the LAST field of `{id}:{seq}:{rev}`** - the revision mark,
+  which is `0` in every test. So every sync asked for "everything above 0" and returned the whole
+  backlog. A client that could never reach a hole still looked perfectly correct.
+
+> **A fake that is more forgiving than production does not simplify a test, it deletes one.** Both
+> now model the real contract, and both new tests were verified to fail without their fix.
+
+### Bugs introduced while fixing it, and caught the hard way
+
+Recorded because two reached the founder's device rather than being caught here:
+
+- **The push client crashed web entirely.** `PushGate` renders on every platform and
+  `getLastNotificationResponseAsync` does not exist there - it throws rather than no-oping, taking
+  the app down to a red screen before first paint. Guarded once as `SUPPORTED`. Reaching for a
+  native module in a component that mounts on every platform needs the platform question asked in
+  one place, not at each call site.
+- **A `cancelled` cleanup discarded the deep link.** `PushGate` reads `useSession()`, whose context
+  bumps on every socket event, and both effects listed `useRouter()`'s object identity as a
+  dependency - so the tap subscription was rebuilt per message, and the cold-launch effect's
+  teardown could fire mid-`await` and throw the destination away. Navigation goes through
+  expo-router's stable `router` singleton now. **The diagnosis came from a log line that was
+  absent, not present:** no tap log meant the handler never ran, which eliminated the payload
+  theory immediately.
+- **`repairGaps` ran first in `syncChannel` and could throw**, which would have let a failed repair
+  take down ordinary reconciliation - a strictly worse failure than the one it fixes. Now wrapped.
+
+### Verification worth noting
+
+Proved on the founder's phone, after a forced cold start so the workspace package was actually
+reloaded: four cards in one conversation - one created by the viewer, one by `Push Prover`, two by
+`Sean O Donnell` - all present. Before the fix the phone showed only its own.
+
+### Scope, honestly
+
+**The gateway rejects a session the API accepts.** The web client authenticated over HTTP - lists
+loaded, polls were created - while the socket answered `auth failed: invalid_token` against
+unexpired session rows. Signing out and in clears it, and that is a workaround rather than an
+explanation. A token valid for HTTP and invalid for realtime presents as an app that looks healthy
+with a thin grey "Offline" banner as its only symptom. Open, and written up in `SPEC/PRD/17`.
+
+Old holes already in a device's cache are repaired on the next sync of that channel. Nothing
+sweeps every channel eagerly, so a conversation not opened keeps its gap until it is.
+
+---
+
+## 2026-08-08 (fourth) - Push, proved on a real phone, and the half of it that was never built
 
 The task was written down as a credentials errand: push is marked **done in Phase 1**, the only
 test ever run used *"the Expo transport, with a fake token that was correctly rejected"*, and what
