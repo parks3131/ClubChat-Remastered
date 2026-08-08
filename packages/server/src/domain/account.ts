@@ -16,7 +16,13 @@ import type { Db } from '../db/client.ts';
 import { isoUtc } from '../db/sql-helpers.ts';
 import { outbox, users } from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
-import { canViewProfile } from '../policy/predicates.ts';
+import type { ClubRole } from '@clubchat/shared';
+import {
+  canBanFromClub,
+  canLiftClubBan,
+  canRemoveMember,
+  canViewProfile,
+} from '../policy/predicates.ts';
 import { accessibleChannelPredicate } from './channel-access.ts';
 
 export type Refusal = {
@@ -39,6 +45,24 @@ export type Profile = {
 
 /** What another member may see. Deliberately a narrower type than the owner's own view. */
 export type PublicProfile = Omit<Profile, 'dob'>;
+
+/**
+ * What the viewer may do to this person **in a particular club**.
+ *
+ * Returned only when the caller names a club, because banning is a club-scoped authority and a
+ * profile card is not: the same person is bannable by you in one club and untouchable in another.
+ * Answered here rather than by the screen for the same reason the roster's flags are - the ban
+ * ladder is asymmetric with the removal ladder, and a client restating either would be a second
+ * definition of a rule that has exactly one.
+ */
+export type ProfileClubActions = {
+  clubId: string;
+  canRemove: boolean;
+  canBan: boolean;
+  /** Whether this person is currently barred, so the card can offer Unban instead. */
+  banned: boolean;
+  canLiftBan: boolean;
+};
 
 /**
  * Read a profile.
@@ -81,7 +105,8 @@ export async function readProfile(
   db: Db,
   ctx: AccessContext,
   userId: string,
-): Promise<Result<{ profile: Profile | PublicProfile }>> {
+  opts: { clubId?: string | undefined } = {},
+): Promise<Result<{ profile: Profile | PublicProfile; club?: ProfileClubActions }>> {
   const rows = await db.execute<{
     id: string;
     full_name: string;
@@ -137,9 +162,39 @@ export async function readProfile(
     createdAt: row.created_at,
   };
 
+  const profile = userId === ctx.userId ? { ...base, dob: row.dob } : base;
+  if (opts.clubId === undefined) return { ok: true, profile };
+
+  /*
+   * Club-scoped actions, when the caller says which club they are looking from.
+   *
+   * Absent rather than all-false when no club is named, so a screen that forgets to pass one
+   * renders no controls instead of the wrong ones.
+   */
+  const membership = await db.execute<{ role: string }>(sql`
+    SELECT role::text AS role FROM club_memberships
+     WHERE club_id = ${opts.clubId} AND user_id = ${userId}
+  `);
+  const banned = await db.execute<{ user_id: string }>(sql`
+    SELECT user_id::text AS user_id FROM club_bans
+     WHERE club_id = ${opts.clubId} AND user_id = ${userId}
+  `);
+
+  const role = membership.rows[0]?.role as ClubRole | undefined;
+
   return {
     ok: true,
-    profile: userId === ctx.userId ? { ...base, dob: row.dob } : base,
+    profile,
+    club: {
+      clubId: opts.clubId,
+      canRemove:
+        role === undefined
+          ? false
+          : canRemoveMember(ctx, opts.clubId, { role, userId: row.id }),
+      canBan: canBanFromClub(ctx, opts.clubId, { role, userId: row.id }),
+      banned: banned.rows.length > 0,
+      canLiftBan: canLiftClubBan(ctx, opts.clubId),
+    },
   };
 }
 

@@ -23,9 +23,11 @@ import {
   joinClub,
   liftClubBan,
   listClubBans,
+  readClubRoster,
   redeemInvite,
   removeMember,
 } from '../domain/membership.ts';
+import { readProfile } from '../domain/account.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { drainOnce } from '../worker/drain.ts';
 import { RecordingPushSender } from '../push/sender.ts';
@@ -370,6 +372,101 @@ describe('the safeguard', () => {
     // club changes, including the membership they already hold.
     expect(await isMember(second.clubId, member)).toBe(true);
     expect((await joinClub(h.db, member, second.clubId)).ok).toBe(false); // already a member
+  });
+});
+
+describe('what the client is told it may do', () => {
+  /*
+   * The roster and the profile both answer "may I ban this person", so no screen restates the
+   * ladder. The screens used to derive removal themselves from a role plus an isAdmin flag; a
+   * ban is asymmetric in the opposite direction, which is precisely when a second copy goes
+   * wrong. These assert the two surfaces agree with the predicate and with each other.
+   */
+  it('answers canRemove and canBan per roster row, from the viewer', async () => {
+    const { clubId, ownerId } = await setup();
+    const admin = await makeUser('Admin');
+    const member = await makeUser('Member');
+    for (const u of [admin, member]) await joinClub(h.db, u, clubId);
+    await changeRole(h.db, await ctxFor(ownerId), clubId, admin, 'admin');
+
+    const asAdmin = await readClubRoster(h.db, await ctxFor(admin), clubId);
+    expect(asAdmin.ok).toBe(true);
+    if (!asAdmin.ok) return;
+    const rowFor = (id: string) => asAdmin.members.find((m) => m.userId === id);
+
+    // An admin may ban a plain Member...
+    expect(rowFor(member)?.canBan).toBe(true);
+    expect(rowFor(member)?.canRemove).toBe(true);
+    // ...and neither the Owner nor themselves.
+    expect(rowFor(ownerId)?.canBan).toBe(false);
+    expect(rowFor(admin)?.canBan).toBe(false);
+
+    // A plain member is offered nothing at all, which is what hides the control.
+    const asMember = await readClubRoster(h.db, await ctxFor(member), clubId);
+    expect(asMember.ok && asMember.members.every((m) => !m.canBan && !m.canRemove)).toBe(true);
+  });
+
+  it('answers the same question on the profile, only when a club is named', async () => {
+    const { clubId, ownerId } = await setup();
+    const member = await makeUser('Member');
+    await joinClub(h.db, member, clubId);
+    const owner = await ctxFor(ownerId);
+
+    // No club named: no club actions at all. Absent rather than all-false, so a screen that
+    // forgets to pass one renders nothing instead of the wrong thing.
+    const bare = await readProfile(h.db, owner, member);
+    expect(bare.ok && bare.club).toBeUndefined();
+
+    const scoped = await readProfile(h.db, owner, member, { clubId });
+    expect(scoped.ok && scoped.club?.canBan).toBe(true);
+    expect(scoped.ok && scoped.club?.banned).toBe(false);
+
+    /*
+     * And once banned, the profile stops opening at all - a real consequence rather than a gap,
+     * and worth pinning because it decided a piece of the UI.
+     *
+     * A ban removes them, so the two no longer share a club, so `canViewProfile` refuses. The
+     * roster's Banned section therefore does NOT offer "View profile" on those rows: it would be
+     * a guaranteed "Not found". Lifting happens from the roster row instead, where the ban list
+     * already names who imposed it.
+     */
+    await banFromClub(h.db, owner, clubId, member);
+    expect(await readProfile(h.db, await ctxFor(ownerId), member, { clubId })).toEqual({
+      ok: false,
+      code: 'not_found',
+    });
+  });
+
+  it('offers the lift on a profile still visible through another club', async () => {
+    const { clubId, ownerId } = await setup();
+    const member = await makeUser('Member');
+    await joinClub(h.db, member, clubId);
+
+    // A second club the same two people share, so the card stays readable after the ban in the
+    // first. This is what keeps the profile's unban control from being dead code.
+    const second = await createClub(h.db, {
+      name: 'Second Club',
+      sport: 'running',
+      joinPolicy: 'open',
+      creatorId: ownerId,
+    });
+    await drainOnce(h.db, deps);
+    await joinClub(h.db, member, second.clubId);
+
+    await banFromClub(h.db, await ctxFor(ownerId), clubId, member);
+
+    const card = await readProfile(h.db, await ctxFor(ownerId), member, { clubId });
+    expect(card.ok).toBe(true);
+    if (!card.ok) return;
+    expect(card.club?.banned).toBe(true);
+    expect(card.club?.canLiftBan).toBe(true);
+    // No longer a member of the banned club, so there is nothing left to remove.
+    expect(card.club?.canRemove).toBe(false);
+    // The second club is untouched: a ban is a fact about one club, never a platform judgement.
+    const elsewhere = await readProfile(h.db, await ctxFor(ownerId), member, {
+      clubId: second.clubId,
+    });
+    expect(elsewhere.ok && elsewhere.club?.banned).toBe(false);
   });
 });
 

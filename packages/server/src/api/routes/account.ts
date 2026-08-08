@@ -24,8 +24,23 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AppDeps): void
    * point - clubs are small and often include minors, and nothing needs to show one member
    * another's birthday.
    */
+  const ProfileQuery = z.object({ clubId: z.string().uuid().optional() });
+
   app.get<{ Params: { id: string } }>('/users/:id', async (request, reply) => {
-    const result = await readProfile(deps.db, request.access!, request.params.id);
+    /*
+     * `?clubId=` asks the club-scoped question as well: what may I do to this person HERE.
+     *
+     * Optional, because a profile is not a club-scoped object - the same person is bannable by
+     * you in one club and untouchable in another. Answered on this read rather than by a second
+     * request, so the screen reached from a roster draws its controls from the server's answer
+     * instead of restating a ladder that has exactly one definition.
+     */
+    const query = ProfileQuery.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+
+    const result = await readProfile(deps.db, request.access!, request.params.id, {
+      clubId: query.data.clubId,
+    });
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return result;
   });

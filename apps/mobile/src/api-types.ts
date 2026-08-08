@@ -59,6 +59,26 @@ export type RosterEntry = {
   image: string | null;
   role: ClubRole;
   joinedAt: string;
+  /**
+   * What this viewer may do to this member, decided by the server.
+   *
+   * > **The screen used to work these out**, from the target's role plus the viewer's own
+   * > `isAdmin`/`isOwner` - a second copy of the removal ladder living in a component. Banning
+   * > adds a third ladder that is asymmetric in the opposite direction, which is exactly when a
+   * > restated rule starts drifting. Render these; do not re-derive them.
+   */
+  canRemove: boolean;
+  canBan: boolean;
+};
+
+/** Somebody barred from the club, and who barred them. Admin-only. */
+export type ClubBan = {
+  userId: string;
+  name: string;
+  image: string | null;
+  /** Null where that admin has since deleted their account - the ban outlives them on purpose. */
+  bannedByName: string | null;
+  createdAt: string;
 };
 
 export type JoinRequestEntry = {
@@ -389,6 +409,21 @@ export type Profile = {
   /** Present only on your own profile. Absent is the server withholding it, not an empty value. */
   dob?: string | null;
   createdAt: string;
+};
+
+/**
+ * What the viewer may do to this person in one club.
+ *
+ * Present only when the profile was asked for with a `clubId`, because banning is a club-scoped
+ * authority and a profile card is not: the same person is bannable by you in one club and
+ * untouchable in another. Absent means "no club context", never "not allowed".
+ */
+export type ProfileClubActions = {
+  clubId: string;
+  canRemove: boolean;
+  canBan: boolean;
+  banned: boolean;
+  canLiftBan: boolean;
 };
 
 // ---------------------------------------------------------------------------

@@ -158,9 +158,10 @@ Chats  (every club chat and DM, newest first; chips: Unread | DMs | Clubs)
    ├─ Races and Meets            (preview of ~5 + searchable "See all")
    ├─ Club profile               (identity, join-link actions)
    │  ├─ Edit club               (admin)
-   │  ├─ Members                 (roster, pending requests, add-member search)
+   │  ├─ Members                 (roster, pending requests, add-member search, Banned)
    │  └─ Gallery
-   ├─ Member profile card        (read-only, from chat or any roster)
+   ├─ Member profile card        (read-only, from chat or any roster; carries Ban when
+   │                               reached from a club roster - see below)
    ├─ Calendar (club-scoped) → Event detail → Create/edit event (admin)
    ├─ Events list (Upcoming | Past)
    ├─ Routines (week view) → Activity type → Workout create/detail

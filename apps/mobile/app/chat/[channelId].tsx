@@ -1101,6 +1101,18 @@ export default function ChatScreen() {
   const [replyingToSeq, setReplyingToSeq] = useState<number | null>(null);
   /** Set once Report is tapped, so the confirmation is a second deliberate step. */
   const [confirmingReport, setConfirmingReport] = useState<number | null>(null);
+  /**
+   * Offer to block, straight after a DM report lands.
+   *
+   * > **Reporting is reviewed; blocking is instant and self-service**, and the two used to live on
+   * > opposite sides of the screen - Report on the message menu, Block on the conversation header.
+   * > Somebody who has just been frightened enough to report should not then have to go and find
+   * > the control that actually stops it. This is the one moment we know they want it.
+   *
+   * DM only, because there is nobody to block in a club chat that removing the person would not
+   * handle better, and blocking a clubmate does not stop them posting in the room you share.
+   */
+  const [offerBlock, setOfferBlock] = useState<{ userId: string; name: string } | null>(null);
   /** The photo being looked at full screen, or null. The whole message - see `openPhoto`. */
   const [viewingPhoto, setViewingPhoto] = useState<MessageEnvelope | null>(null);
   /**
@@ -1961,6 +1973,18 @@ export default function ChatScreen() {
           ? "You already reported this message."
           : "Reported. The other person is not told.",
       );
+
+      /*
+       * Then offer the thing that actually stops it.
+       *
+       * Only in a DM, only for somebody else's message, and only if they are not already blocked -
+       * offering a control that would be a no-op is worse than not offering it. `meta.peer` is the
+       * other participant, which exists only in this scope.
+       */
+      const peer = meta?.peer;
+      if (meta?.scope === "dm" && peer && peer.blockedByMe !== true) {
+        setOfferBlock({ userId: peer.userId, name: peer.name });
+      }
     } catch {
       setNotice("Could not report that. Try again.");
     }
@@ -2758,6 +2782,63 @@ export default function ChatScreen() {
                 accessibilityLabel="Confirm report"
               >
                 <Text style={[styles.dialogButtonLabel, styles.destructive]}>Report</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/*
+        Straight after a DM report: the control that actually stops it.
+
+        Reporting is reviewed and blocking is instant, and until now the two lived on opposite
+        sides of the screen - Report on the message menu, Block on the conversation header. The
+        moment somebody has just reported is the one moment we know they want the other one, so it
+        is offered here rather than left to be found.
+
+        Dismissing is a real answer, not a failure: the report stands either way, and somebody may
+        well want it looked at without cutting the person off. So the dismiss reads "No thanks"
+        rather than "Cancel", which would imply it undid the report.
+      */}
+      {offerBlock !== null && (
+        <View style={styles.dialogBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setOfferBlock(null)}
+            accessibilityRole="button"
+            accessibilityLabel="Do not block"
+          />
+          <View style={styles.dialog}>
+            <Text style={styles.dialogTitle}>
+              Block {offerBlock.name.split(" ")[0] ?? "them"}?
+            </Text>
+            <Text style={styles.dialogBody}>
+              They will not be able to message you, and neither of you will appear in the other's
+              search. You keep this conversation and can unblock any time.
+            </Text>
+            <View style={styles.dialogActions}>
+              <Pressable
+                style={styles.dialogButton}
+                onPress={() => setOfferBlock(null)}
+                accessibilityRole="button"
+                accessibilityLabel="Do not block"
+              >
+                <Text style={styles.dialogButtonLabel}>No thanks</Text>
+              </Pressable>
+              <Pressable
+                style={styles.dialogButton}
+                onPress={() => {
+                  const target = offerBlock.userId;
+                  setOfferBlock(null);
+                  void dmApi
+                    .block(target)
+                    .then(() => setNotice("Blocked. They cannot message you."))
+                    .catch(() => setNotice("Could not block them. Try again."));
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`Block ${offerBlock.name}`}
+              >
+                <Text style={[styles.dialogButtonLabel, styles.destructive]}>Block</Text>
               </Pressable>
             </View>
           </View>

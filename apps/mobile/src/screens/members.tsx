@@ -74,6 +74,7 @@ export function MembersScreen({
   actionsFor,
   addPeople,
   emptyTitle,
+  profileHref,
   onChanged,
 }: {
   rows: readonly MemberRow[];
@@ -118,6 +119,22 @@ export function MembersScreen({
         addMany: (userIds: string[]) => Promise<unknown>;
       };
   emptyTitle: string;
+  /**
+   * Where "View profile" goes, or `null` to not offer it for this row.
+   *
+   * The club roster passes its own club, because a profile reached from there can offer actions
+   * that only make sense inside one - the same person is bannable by you in one club and
+   * untouchable in another.
+   *
+   * > **`null` is load-bearing, not a convenience.** A banned person shares no club with the
+   * > viewer any more, and since 2026-08-08 a profile is only readable by somebody you share a
+   * > club or a conversation with - so offering the card on a banned row would open a
+   * > guaranteed "Not found". The menu omits it instead of shipping a dead end.
+   *
+   * Optional: the race and Eboard rosters keep the plain card, since neither scope has authority
+   * of its own to hand a profile.
+   */
+  profileHref?: (row: MemberRow) => string | null;
   /** Called after any write, so the caller can re-read the roster it owns. */
   onChanged: () => void;
 }) {
@@ -317,14 +334,20 @@ export function MembersScreen({
           title={menuRow.name}
           onDismiss={() => setMenuRow(null)}
           items={[
-            {
-              label: 'View profile',
-              onPress: () => {
-                const target = menuRow.userId;
-                setMenuRow(null);
-                router.push(`/users/${target}`);
-              },
-            },
+            // Omitted entirely when the caller says this row has no reachable profile, rather
+            // than offered and landing on "Not found". See `profileHref`.
+            ...(profileHref !== undefined && profileHref(menuRow) === null
+              ? []
+              : [
+                  {
+                    label: 'View profile',
+                    onPress: () => {
+                      const href = profileHref?.(menuRow) ?? `/users/${menuRow.userId}`;
+                      setMenuRow(null);
+                      router.push(href);
+                    },
+                  },
+                ]),
             ...actionsFor(menuRow).map((action) => ({
               label: action.label,
               ...(action.destructive === true ? { destructive: true } : {}),

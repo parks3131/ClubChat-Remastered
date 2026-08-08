@@ -870,6 +870,20 @@ export type ClubRosterEntry = {
   image: string | null;
   role: ClubRole;
   joinedAt: string;
+  /**
+   * What this viewer may do to this member, answered by the server.
+   *
+   * > **The client used to work these out itself**, from the target's role plus its own
+   * > `isOwner`/`isAdmin` flags - a second copy of `canRemoveMember`'s ladder living in a screen.
+   * > It was correct, and it was one refactor away from not being: the copy that drifts is always
+   * > the one drawing the button. Adding a ban, with a *third* ladder that differs from removal
+   * > only in which direction it is asymmetric, is exactly the moment to stop restating it.
+   *
+   * Same pattern as `canLeave` on a conversation and `canReadReports` on channel meta: the screen
+   * renders the server's answer rather than re-deriving the rule.
+   */
+  canRemove: boolean;
+  canBan: boolean;
 };
 
 export type ClubJoinRequestEntry = {
@@ -918,13 +932,19 @@ export async function readClubRoster(
               u.full_name
   `);
 
-  const members: ClubRosterEntry[] = memberRows.rows.map((row) => ({
-    userId: row.user_id,
-    name: row.full_name,
-    image: row.image,
-    role: row.role as ClubRole,
-    joinedAt: row.joined_at,
-  }));
+  const members: ClubRosterEntry[] = memberRows.rows.map((row) => {
+    const target = { role: row.role as ClubRole, userId: row.user_id };
+    return {
+      userId: row.user_id,
+      name: row.full_name,
+      image: row.image,
+      role: row.role as ClubRole,
+      joinedAt: row.joined_at,
+      // Straight from the policy module, never re-derived here or in the client.
+      canRemove: canRemoveMember(ctx, clubId, target),
+      canBan: canBanFromClub(ctx, clubId, target),
+    };
+  });
 
   // Who is waiting is decision-making data, and only the admin tier decides.
   if (!canManageJoinRequests(ctx, clubId)) {

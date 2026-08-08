@@ -16,25 +16,38 @@
  *    PRD/03, which lists public profiles as an explicitly rejected alternative. v1 showed every
  *    member every other member's birthday.
  *  - **An empty row is absent, not "Not set".** PRD/03's edge-case table: "Profile with no
- *    bio/city/school - those rows are simply absent." v1 drew the label with a placeholder under it.
+ *    bio/city/school - those rows are simply absent."
+ *
+ * **A profile is not readable by everybody.** Since 2026-08-08 the server answers `not_found` unless
+ * the viewer shares a club with this person or already holds a conversation with them, so a card
+ * reached from a roster or a chat bubble opens and one reached any other way does not - which is
+ * what makes tapping somebody who has left the club say "Not found" rather than showing them.
  */
 
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { accountApi, dmApi } from '../../../../src/api.ts';
+import { accountApi, clubApi, dmApi } from '../../../../src/api.ts';
+import type { ProfileClubActions } from '../../../../src/api-types.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { color, space, type } from '../../../../src/theme.ts';
 import { ARRIVED_FORWARD } from '../../../../src/nav.tsx';
-import { Action, Avatar, Body, DataScreen, DetailLine } from '../../../../src/ui.tsx';
+import { Action, Avatar, Body, ConfirmDialog, DataScreen, DetailLine } from '../../../../src/ui.tsx';
 import { useLoad } from '../../../../src/use-load.ts';
 
 /** v1's, and the largest avatar any person gets. A club's own picture is bigger; a person's is not. */
 const AVATAR_SIZE = 96;
 
 export default function MemberProfileScreen() {
-  const { userId } = useLocalSearchParams<{ userId: string }>();
-  const load = useLoad(() => accountApi.profile(userId), [userId]);
+  /*
+   * `clubId` is optional and comes from wherever this card was opened.
+   *
+   * Present when the card was reached from a club roster, which is the only place club authority
+   * makes sense - the same person is bannable by you in one club and untouchable in another. The
+   * server answers what may be done with it; this screen never works the ladder out itself.
+   */
+  const { userId, clubId } = useLocalSearchParams<{ userId: string; clubId?: string }>();
+  const load = useLoad(() => accountApi.profile(userId, clubId), [userId, clubId]);
 
   return (
     <DataScreen load={load}>
@@ -57,9 +70,98 @@ export default function MemberProfileScreen() {
             <DetailLine label="City" value={data.profile.city} labelCase="title" />
             <DetailLine label="School" value={data.profile.school} labelCase="title" />
           </View>
+
+          {data.club !== undefined && (
+            <ClubActions
+              club={data.club}
+              name={data.profile.name}
+              userId={data.profile.userId}
+              onChanged={load.reload}
+            />
+          )}
         </Body>
       )}
     </DataScreen>
+  );
+}
+
+/**
+ * Banning, and lifting a ban, from the card an admin reached through the roster.
+ *
+ * > **Every flag here is the server's answer**, never a role this screen inspected. Banning follows
+ * > the removal ladder - any admin may ban a Member, only the Owner may ban an Admin, the Owner is
+ * > never bannable - while **lifting is open to any admin**. That asymmetry is the safeguard against
+ * > a wrongful ban (ADR-0021), and a screen re-deriving either half would be a second definition of
+ * > a rule that has exactly one.
+ *
+ * Behind a confirmation, because a ban is durable in a way a removal is not: it survives the person
+ * tapping Join again, which is the entire reason it exists. The dialog says so rather than asking
+ * "are you sure".
+ */
+function ClubActions({
+  club,
+  name,
+  userId,
+  onChanged,
+}: {
+  club: ProfileClubActions;
+  name: string;
+  userId: string;
+  onChanged: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const first = name.split(' ')[0] ?? 'this member';
+
+  const run = async (call: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await call();
+      onChanged();
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  };
+
+  // Already barred: the only thing on offer is undoing it, and only to somebody who may.
+  if (club.banned) {
+    if (!club.canLiftBan) return null;
+    return (
+      <View style={styles.action}>
+        <Text style={styles.note}>{first} is banned from this club.</Text>
+        <Action
+          label={busy ? 'Lifting…' : 'Lift ban'}
+          onPress={() => void run(() => clubApi.liftBan(club.clubId, userId))}
+          disabled={busy}
+          accessibilityLabel={`Lift the ban on ${name}`}
+        />
+      </View>
+    );
+  }
+
+  if (!club.canBan) return null;
+
+  return (
+    <View style={styles.action}>
+      <Action
+        label="Ban from club"
+        variant="danger"
+        onPress={() => setConfirming(true)}
+        disabled={busy}
+        accessibilityLabel={`Ban ${name} from this club`}
+      />
+      {confirming && (
+        <ConfirmDialog
+          title={`Ban ${first}?`}
+          // What a ban does that a removal does not, stated rather than left to be discovered.
+          body="They will be removed from the club and will not be able to rejoin - not by searching, and not with an invite link. Any admin can lift this later."
+          confirmLabel="Ban"
+          onConfirm={() => void run(() => clubApi.ban(club.clubId, userId))}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
+    </View>
   );
 }
 
@@ -129,4 +231,5 @@ const styles = StyleSheet.create({
     marginBottom: space.md,
   },
   error: { ...type.bodySmall, color: color.error, textAlign: 'center' },
+  note: { ...type.bodySmall, color: color.textSecondary, textAlign: 'center' },
 });

@@ -40,7 +40,9 @@ import type {
   NewsPost,
   PollSummary,
   PollView,
+  ClubBan,
   Profile,
+  ProfileClubActions,
   RaceDetail,
   RaceListItem,
   RaceRoster,
@@ -316,6 +318,22 @@ export const clubApi = {
 
   removeMember: (clubId: string, userId: string) =>
     apiFetch<unknown>(`/clubs/${clubId}/members/${userId}`, { method: 'DELETE' }),
+
+  /*
+   * Ban, lift, and the list.
+   *
+   * Imposing and lifting are separate calls that look symmetric and are not: the ladder for
+   * banning restricts an Admin target to the Owner, while ANY admin may lift. That asymmetry is
+   * the safeguard against a wrongful ban, and the client never decides it - `canBan` on the
+   * roster row and on the profile is the server's answer.
+   */
+  ban: (clubId: string, userId: string) =>
+    apiFetch<unknown>(`/clubs/${clubId}/bans`, { method: 'POST', body: { userId } }),
+
+  liftBan: (clubId: string, userId: string) =>
+    apiFetch<unknown>(`/clubs/${clubId}/bans/${userId}`, { method: 'DELETE' }),
+
+  bans: (clubId: string) => apiFetch<{ bans: ClubBan[] }>(`/clubs/${clubId}/bans`),
 
   leave: (clubId: string) =>
     apiFetch<unknown>(`/clubs/${clubId}/leave`, { method: 'POST', body: {} }),
@@ -638,7 +656,16 @@ export const accountApi = {
       '/me',
     ),
 
-  profile: (userId: string) => apiFetch<{ profile: Profile }>(`/users/${userId}`),
+  /*
+   * A profile, optionally asked "and what may I do to them in this club".
+   *
+   * The club is a query parameter rather than a second call, so a card reached from a roster
+   * draws its controls from the same response that drew the card.
+   */
+  profile: (userId: string, clubId?: string) =>
+    apiFetch<{ profile: Profile; club?: ProfileClubActions }>(
+      clubId === undefined ? `/users/${userId}` : `/users/${userId}?clubId=${clubId}`,
+    ),
 
   /** Self only. There is deliberately no route that takes somebody else's id. */
   saveProfile: (body: {

@@ -13,6 +13,82 @@ Newest first.
 
 ---
 
+## 2026-08-08 (last) - Giving the ban a surface, and a dead end it would have shipped with
+
+The client half, asked for while the founder was testing on the phone: the ban control on a member,
+somewhere to lift one, and the DM report offering Block straight after.
+
+### The screens stopped working out who may do what
+
+The roster derived removal itself - target role, plus the viewer's own `isAdmin`/`isOwner`. Correct,
+and a second copy of `canRemoveMember`'s ladder living in a component. Adding a ban meant adding a
+**third** ladder that is asymmetric in the opposite direction (imposing follows removal, lifting is
+open to any admin), which is exactly the moment a restated rule starts drifting.
+
+So the server now answers `canRemove` and `canBan` per roster row, and `GET /users/:id?clubId=` adds
+the same answers plus `banned` and `canLiftBan` to a profile card. The club is a **query parameter
+rather than a second request**, because a profile is not a club-scoped object - the same person is
+bannable by you in one club and untouchable in another - and the card reached from a roster should
+draw its controls from the response that drew the card.
+
+Same pattern as `canLeave` on a conversation and `canReadReports` on channel meta, and the same
+argument each time: the copy that drifts is always the one drawing the button.
+
+### The banned list is a section, not a screen
+
+`MembersScreen` already takes arbitrary sections and a per-row tag, so the banned appear as a
+**Banned section at the bottom of the roster** with no change to the shared component - tagged
+"banned by Rogue Admin". That tag is the feature rather than decoration: an open power is made safe
+by being visible, so a wrongful ban carries a name on the screen where undoing it is one tap away.
+
+### The dead end it would have shipped with
+
+A test written for something else refused to pass, and the reason was a genuine interaction between
+this feature and the morning's audit fix:
+
+**After a ban, the admin can no longer open the banned person's profile.** The ban removes them, so
+the two share no club, so `canViewProfile` correctly refuses. The roster's Banned rows would have
+offered "View profile" straight into a guaranteed "Not found".
+
+Fixed by letting `profileHref` return `null` for a row, which omits the menu item entirely rather
+than offering a link that cannot work. The profile's own unban control is not dead code, and a test
+pins why: it appears when the viewer can still see the person for another reason, such as a second
+shared club - which is asserted by building exactly that case.
+
+Worth noting how it was found. Nothing about the failing assertion mentioned profiles or menus; it
+said `banned` was false when it should have been true, and the reason was two features interacting
+in a way neither one's author had in view. The mobile app has no component tests
+([[clubchat-settled-ui-decisions]]), so a server test is the only place this could have surfaced at
+all.
+
+### The DM report now offers the thing that stops it
+
+Reporting is reviewed; blocking is instant and self-service. They lived on opposite sides of the
+screen - Report on the message menu, Block on the conversation header - so somebody frightened
+enough to report then had to go and find the control that actually helps. A DM report now offers
+Block immediately, only when there is a peer and only when they are not already blocked, because
+offering a control that would be a no-op is worse than not offering it.
+
+The dismiss says **"No thanks" rather than "Cancel"**, which would imply it undid the report. It
+does not: the report stands either way, and wanting something looked at without cutting the person
+off is a reasonable answer.
+
+### Verification worth noting
+
+Type check clean, `check:runtime` 68 modules, no em dashes, full suite green at **805 server**, 27
+shared, 67 mobile. Three new server tests cover what the two surfaces are told they may do,
+including the case above.
+
+Two prop names were guessed wrong on the way and caught by the compiler rather than by a phone -
+`Action` takes `variant="danger"`, not `destructive`, and `ConfirmDialog` takes `body`, not
+`message`. Failure mode 16 in miniature, on the client's own components rather than on an API
+response: the fix was reading the real signatures instead of the plausible ones.
+
+**Left undone:** the platform moderation queue still has no screen, and the dependency pass is still
+open. Both were on the list before this and neither moved.
+
+---
+
 ## 2026-08-08 (later) - Removing somebody did not remove them
 
 Asked for from the safety conversation the audit started, and the premise turned out to be exactly
