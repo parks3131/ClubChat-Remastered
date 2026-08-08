@@ -126,6 +126,66 @@ Left as-is this session, because it is a real safeguard doing its job and changi
 decision rather than a bug fix. Recorded here so the next person who watches a mention vanish knows
 where to look, and so the boundary question gets asked deliberately.
 
+### The tap that opened the app and left you where you were
+
+Reported straight after the first success: the notification no longer jumped to the conversation.
+The instinct was to suspect the payload - `data.target` not surviving APNs - so the tap path was
+made to log what it saw, both the resolved href and the raw `data` when it resolved to nothing.
+
+**The next screenshot contained neither line.** That absence was the whole diagnosis: the handler
+had never run, so the payload had never been the question.
+
+> **`PushGate` reads `useSession()`, whose context bumps `revision` on every socket event, and
+> both of its effects listed `useRouter()`'s object identity as a dependency.** A fresh object per
+> render meant the tap subscription was torn down and re-added on every incoming message, and the
+> cold-launch effect's `cancelled` cleanup could fire while its `await` was still in flight and
+> throw the destination away.
+
+The `cancelled` flag was the sharp end. It was written as ordinary hygiene - do not navigate after
+unmount - and because an unrelated re-render could land between the `await` and the navigate, its
+effect was to discard the deep link and leave the app sitting wherever it already was. Tidy-looking
+teardown, silent data loss.
+
+Both effects now key on `authState` alone and navigate through expo-router's stable imperative
+`router` singleton rather than the hook. The logging stayed rather than being pulled out
+afterwards: a tap that goes nowhere is indistinguishable from a tap that merely foregrounded the
+app, and that ambiguity is what cost the round trip.
+
+### What the live testing established, and what it did not
+
+Each of these was run twice where a negative alone would have proved nothing - the point being to
+change one variable and watch it flip, rather than observe a silence and assume a cause:
+
+| Condition | Notification row | Push |
+|---|---|---|
+| Ordinary mention | written | delivered, 8s after the send |
+| **Muted** | **written** | **suppressed** |
+| Unmuted again | written | delivered |
+| **Signed out** | **written** | **suppressed - device row deleted** |
+| Signed back in | written | delivered, same token, still one row |
+
+The two silences are silences for **different reasons**, which is worth keeping straight because
+they present identically on a lock screen. Mute suppresses in the **audience**, inside
+`dispatchPush` before any device is looked up, so it quiets one conversation for one member.
+Sign-out suppresses at the **device** layer, because there is no longer a row to send to, so it
+quiets the whole handset for everybody. Cursor suppression is the third and the only one that
+means "already seen".
+
+That mute keeps the row is the part worth having proved rather than assumed: PRD/14 words it as
+*"no push notifications, unread count still accrues"*, and a mute implemented by dropping the
+notification would look identical from the lock screen while quietly costing the member the
+record.
+
+**Also proved:** an `event_created` push, which is a different target shape - `{kind: 'event',
+eventId}` resolving to a flat `/events/:id` with no `seq` and no scroll position - landed on the
+event. So the deep link works for destination targets and not only for the chat-with-position case.
+It also went to the whole club rather than one mentioned member, so the audience fan-out is
+exercised too.
+
+**Not proved, and left honest:** `poll_created` was prepared and never fired. `hrefFor` is
+exhaustive over `NotificationTarget` and the event case demonstrates the shape, but no other kind
+has actually been tapped on a device.
+
 ### Bugs hit in the harness, with root causes
 
 Not product defects - the throwaway sender script - but each cost a cycle:

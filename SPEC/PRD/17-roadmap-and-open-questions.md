@@ -103,7 +103,7 @@ Things that are built and not yet proved on every surface they claim to work on.
 | **Everything, on iOS and Android** | Web, via the browser; **iOS on real hardware** since 2026-08-01 | *(Corrected 2026-08-08 - this row said "the simulator has never been run" and was dated 2026-07-30, by which time it was already going stale.)* A development build has run on a real iPhone since 2026-08-01, and most work since - replies, the long-press menu, the calendar swipe, race notifications - was reported from that device. **Android has still never been run at all**, and no full pass of the acceptance checklist has been done on any native platform |
 | **The attachment upload path** | Web (`blob:` URI through `fetch`) | Native reads a `file:` URI through the same `fetch` call - one path rather than an unverified branch, and untested |
 | **The pickers** | Web file chooser | Native permission prompts for library and camera, which have no web equivalent |
-| ~~**Push**~~ | **Proved end to end on 2026-08-08.** A real `ExponentPushToken` issued to the physical iPhone, registered by the app, and a `mentioned` push that reached the locked device and deep-linked to the exact message on tap | *(Nothing on iOS.)* Android has no build and so no push |
+| ~~**Push**~~ | **Proved end to end on 2026-08-08**, on the physical iPhone, for both target shapes: a `mentioned` push deep-linking to an exact message (`?around={seq}`) and an `event_created` push landing on the event. Every suppression rule exercised live - read cursor (the 8s deferral), mute on **and** off, sign-out deregistration, and token invalidation | `poll_created` and the other flat targets are **unverified** - `hrefFor` is exhaustive and the event case proves the shape, but no other kind has been tapped. Android has no build and so no push |
 | **`MEDIA_URL_MODE=cdn`** | Not at all | Only `presign` runs today. The CDN branch is the production one and has never served a byte |
 
 ### Security audit
@@ -218,6 +218,20 @@ on news posts. Recurring events. External calendar sync. RSVP or attendance, any
 
 ### Open product questions
 
+- **Should a routine notify anybody?** Noticed 2026-08-08 while proving push, when the founder
+  expected to tap through to a routine from a notification. The catalogue has 19 types and **none
+  of them fire on a routine being created or changed**, so publishing a week's training reaches
+  nobody who is not already looking. Every other piece of club-wide content - an event, a poll, a
+  news post, a meeting - announces itself. This is either a deliberate asymmetry nobody has
+  written down or an omission, and it is cheap to close if it is the latter: the audience function
+  and the render/target switch already handle exactly this shape.
+- **Should a mention require an exact name match?** `resolveMentions` filters a client's claimed
+  mentions to those whose `@name` literally appears in the body, which is the check that stops a
+  client ringing anybody it likes from a message addressed to nobody. But `body.includes` has **no
+  word boundary**, so `@Parks RPK` is also satisfied by a member called `Parks`, and any divergence
+  between the composer's rendered text and `users.full_name` - a rename mid-compose, trimming,
+  punctuation - drops the mention **silently**, with an ack and no signal to the sender. Over- and
+  under-matching in the same predicate, on a path that buzzes a phone.
 - **Hub placement:** Routines, Polls, and the Events list are fully reachable from club chat's
   header quick-nav, and work normally there. Whether they should *also* sit on the club hub is
   unresolved. A stopgap "More" menu on the hub was explicitly rejected.
