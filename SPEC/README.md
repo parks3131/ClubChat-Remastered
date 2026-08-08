@@ -115,6 +115,7 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0018](decisions/0018-decode-uploads-at-the-boundary.md) | Uploads are decoded at the boundary, and undecodable bytes never park an event |
 | [0019](decisions/0019-outbound-mail-is-a-port-with-a-deferred-provider.md) | Outbound mail is a port, and the provider behind it is chosen later |
 | [0020](decisions/0020-resend-is-the-mail-provider.md) | Resend is the mail provider, called over `fetch` rather than its SDK |
+| [0021](decisions/0021-club-bans-are-harder-to-impose-than-to-lift.md) | A club ban is harder to impose than to lift |
 
 ## Templates
 

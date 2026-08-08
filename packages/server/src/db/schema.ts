@@ -173,6 +173,45 @@ export const clubMemberships = pgTable(
 );
 
 /**
+ * Who may never come back.
+ *
+ * > **Removing somebody from an open club did not remove them.** `joinClub` admitted straight into
+ * > a club whose policy is `open` with no check against a prior removal, so an ejected member
+ * > tapped Join and returned. And since ADR-0010 made the share link the only invite mechanism, a
+ * > link already in their possession kept working, with token rotation - which invalidates every
+ * > outstanding link for everybody - as the sole remedy for excluding one person.
+ *
+ * A separate row from `club_memberships` rather than a flag on it, because the two facts are
+ * different and a banned person is usually not a member at all: membership says "in this club now",
+ * a ban says "may not be". Folding them together would also bar a member who left of their own
+ * accord, and leaving is a normal, blameless act.
+ *
+ * `banned_by` is `SET NULL` rather than cascade, deliberately. The attribution is the safeguard
+ * (ADR-0021), so the ban must outlive the account that imposed it - losing the row because an admin
+ * later deleted their account would quietly unban somebody.
+ */
+export const clubBans = pgTable(
+  'club_bans',
+  {
+    clubId: uuid('club_id')
+      .notNull()
+      .references(() => clubs.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Null only where the banning admin's account has since been deleted. */
+    bannedBy: uuid('banned_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // One ban per person per club. Banning twice is idempotent rather than an error, which
+    // matters because two admins can reach for it at the same moment.
+    primaryKey({ columns: [t.clubId, t.userId] }),
+    index('club_bans_by_user').on(t.userId),
+  ],
+);
+
+/**
  * Pending and decided join requests.
  *
  * The partial unique index is what makes decisions idempotent: two admins hitting Approve

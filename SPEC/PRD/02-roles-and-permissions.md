@@ -59,9 +59,21 @@ in both directions, by the permission-matrix test suite.
 | Promote Member → Admin, demote Admin → Member | ✅ | ✅ | ❌ | ❌ |
 | Remove a Member | ✅ | ✅ | ❌ | ❌ |
 | **Remove an Admin** | ✅ | ❌ | ❌ | ❌ |
+| Ban a Member | ✅ | ✅ | ❌ | ❌ |
+| **Ban an Admin** | ✅ | ❌ | ❌ | ❌ |
+| **Lift any ban** | ✅ | ✅ | ❌ | ❌ |
+| Read the ban list | ✅ | ✅ | ❌ | ❌ |
 | **Transfer ownership** | ✅ | ❌ | ❌ | ❌ |
 | Leave the club | ❌ | ✅ | ✅ | - |
 | **Delete the club** | ✅ | ❌ | ❌ | ❌ |
+
+> **The three ban rows are the one deliberate asymmetry in this document.** Everywhere else,
+> whoever may do a thing may undo it. Banning follows the removal ladder above and lifting does
+> not, because the two directions carry opposite risk: a wrongful ban is the failure worth
+> engineering against, so reversing one is cheaper than performing one. What contains a rogue
+> admin is that they can reach Members only, so every other admin survives to undo them - and
+> every ban is attributed on the list and narrated into club chat.
+> See [ADR-0021](../decisions/0021-club-bans-are-harder-to-impose-than-to-lift.md).
 
 #### Club content
 

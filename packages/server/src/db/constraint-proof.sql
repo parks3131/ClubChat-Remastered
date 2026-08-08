@@ -785,4 +785,67 @@ SELECT pg_temp.assert_rejected(
     VALUES ('44444444-4444-4444-8444-444444444444',
             'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1', -1)$$);
 
+-- ---------------------------------------------------------------------------
+-- Club bans (ADR-0021)
+-- ---------------------------------------------------------------------------
+
+SELECT pg_temp.assert_accepted(
+  'club bans - an admin bars somebody from a club',
+  $$INSERT INTO club_bans (club_id, user_id, banned_by)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            '33333333-3333-4333-8333-333333333333',
+            '11111111-1111-4111-8111-111111111111')$$);
+
+-- One ban per person per club. Two admins reaching for it at the same moment must not produce
+-- two rows, which is why the handler can treat a repeat as a no-op rather than an error.
+SELECT pg_temp.assert_rejected(
+  'club bans - the same person banned from the same club twice',
+  $$INSERT INTO club_bans (club_id, user_id, banned_by)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            '33333333-3333-4333-8333-333333333333',
+            '22222222-2222-4222-8222-222222222222')$$);
+
+-- A ban names a real person. A uuid belonging to nobody would otherwise sit in the table
+-- barring an account that does not exist.
+SELECT pg_temp.assert_rejected(
+  'club bans - a ban on a user who does not exist',
+  $$INSERT INTO club_bans (club_id, user_id, banned_by)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            '99999999-9999-4999-8999-999999999999',
+            '11111111-1111-4111-8111-111111111111')$$);
+
+-- The attribution is the safeguard, so the BAN must outlive the admin who imposed it. Deleting
+-- that account nulls `banned_by` and leaves the row standing; a cascade here would quietly unban
+-- somebody every time an admin closed their account, which is the one way this table could fail
+-- silently.
+--
+-- A throwaway pair, because the seeded members have written messages and cannot be deleted at
+-- all - which is itself the correct behaviour and not what this is testing.
+INSERT INTO users (id, full_name, email) VALUES
+  ('dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'Dana',  'dana@test.invalid'),
+  ('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', 'Erin',  'erin@test.invalid');
+
+INSERT INTO club_bans (club_id, user_id, banned_by) VALUES
+  ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+   'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+   'dddddddd-dddd-4ddd-8ddd-dddddddddddd');
+
+DELETE FROM users WHERE id = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+-- Written as a plain DO block rather than through assert_accepted, because the claim is about
+-- what SURVIVES a statement rather than about whether the statement is allowed.
+DO $ban$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM club_bans
+     WHERE club_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+       AND user_id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+       AND banned_by IS NULL
+  ) THEN
+    RAISE EXCEPTION 'FAIL: the ban did not survive the deletion of the admin who imposed it';
+  END IF;
+  RAISE NOTICE 'PASS  survived: club bans - a ban outlives the account that imposed it';
+END
+$ban$;
+
 ROLLBACK;

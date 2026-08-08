@@ -30,6 +30,23 @@ way in.
     read-only profile card.
 12. **Adding a member directly is a search over users**, not an invitation the recipient must
     accept.
+12a. **An admin can ban somebody from the club, and a ban is what makes removal stick.** Removing
+     a member from a club that is open to join does not keep them out - they simply join again,
+     and an invite link they already hold keeps working. A ban removes them and bars every way
+     back in: joining, the link, and asking. Adding a banned person is **refused** rather than
+     silently lifting the ban, so an admin who did not know finds out instead of overriding
+     another admin's decision by accident.
+12b. **Any admin can ban a Member; only the Owner can ban an Admin; the Owner can never be
+     banned. But *any* admin can lift *any* ban.** That asymmetry is deliberate and is the
+     safeguard: a wrongful ban must be cheaper to reverse than to impose. A rogue admin can
+     only reach Members, so every other admin survives to undo them. Every ban is attributed on
+     a list all admins can read, and **club chat says "X was banned by Y"** - the act is
+     accountable because it is visible, not because it is rare. See
+     [ADR-0021](../decisions/0021-club-bans-are-harder-to-impose-than-to-lift.md).
+12c. Lifting a ban says "you may return", not "you are back": the person rejoins by whatever
+     route the club's policy offers. A ban applies to **one club** and is never a platform-wide
+     judgement, and it does **not** block anybody in direct messages - that is a personal choice
+     an admin may not make on a member's behalf.
 13. **The club name is tappable from any club screen's header**, leading to the club profile:
     identity (avatar, name, description), join-link actions, and links onward to Members and
     Gallery.
@@ -50,6 +67,9 @@ way in.
 | Join link opened twice | The second attempt is a no-op, not an error |
 | Join link opened without the app installed | Falls back to a web page for that club, which both works in the browser and offers the app |
 | Owner tries to leave | The Leave action is not shown at all - transfer is the only path |
+| A banned person taps Join, or opens the invite link | Told plainly they cannot rejoin this club. There is deliberately no in-app appeal path: naming a contact would hand a determined harasser a specific person to pursue |
+| A banned person has a request still pending | The request is cleared by the ban, so no admin is asked to decide something already decided |
+| Somebody is banned who was never a member | Allowed, and the one thing removal cannot express. Nothing is narrated, because nothing happened in the club |
 | Deleted club still open on another device | Reads fail and the user is returned to the clubs list |
 
 **Search.** Club search is by name, returns a safe projection (name, sport, member count, and
@@ -73,3 +93,9 @@ read anything inside it.
 - [ ] Transferring ownership leaves exactly one Owner, with the previous Owner an Admin.
 - [ ] A non-Owner who leaves appears in no race roster, car group, or Eboard roster after.
 - [ ] Deleting a club removes it from every member's clubs list.
+- [ ] A removed member rejoins an open club immediately; a **banned** one is refused, by the
+      Join button, by the invite link, and by an admin trying to add them.
+- [ ] An admin cannot ban another admin, and the Owner can. **Attempted directly, not by
+      checking the button is hidden.**
+- [ ] An admin who did not impose a ban can lift it, and the person can then rejoin.
+- [ ] Club chat reads "X was banned by Y", and the ban list names who imposed each one.

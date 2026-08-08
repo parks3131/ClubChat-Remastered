@@ -12,11 +12,14 @@ import { JoinPolicy } from '@clubchat/shared';
 import { createClub } from '../../domain/create-club.ts';
 import {
   addMember,
+  banFromClub,
   changeRole,
   decideJoinRequest,
   deleteClub,
   joinClub,
   leaveClub,
+  liftClubBan,
+  listClubBans,
   readClub,
   readClubRoster,
   rotateInviteToken,
@@ -164,6 +167,57 @@ export function registerClubRoutes(app: FastifyInstance, deps: AppDeps): void {
       return result;
     },
   );
+
+  /*
+   * Bans: three routes, and the shape of them is the decision.
+   *
+   * `POST /clubs/:id/bans` imposes and `DELETE /clubs/:id/bans/:uid` lifts, which look symmetric
+   * and are not - any admin may call the second, while the first follows the removal ladder and
+   * restricts banning an admin to the Owner. That asymmetry is deliberate and is the whole
+   * safeguard against a rogue admin (ADR-0021): a wrongful ban must be cheaper to reverse than to
+   * impose.
+   *
+   * Separate from `DELETE /clubs/:id/members/:uid` rather than a flag on it. A ban is a removal
+   * that sticks, and folding the two into one route taking `{ ban: true }` would make the heavier
+   * act reachable by editing a payload - the same argument that keeps `setPinned` and
+   * `softDeleteMessage` two routes instead of one PATCH over a message.
+   */
+  const BanBody = z.object({ userId: z.string().uuid() });
+
+  app.post<{ Params: { id: string } }>('/clubs/:id/bans', async (request, reply) => {
+    const body = BanBody.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+
+    const result = await banFromClub(
+      deps.db,
+      request.access!,
+      request.params.id,
+      body.data.userId,
+    );
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return reply.code(201).send(result);
+  });
+
+  app.delete<{ Params: { id: string; uid: string } }>(
+    '/clubs/:id/bans/:uid',
+    async (request, reply) => {
+      const result = await liftClubBan(
+        deps.db,
+        request.access!,
+        request.params.id,
+        request.params.uid,
+      );
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return result;
+    },
+  );
+
+  /** The list every admin can read, which is what makes the attribution a check rather than a log. */
+  app.get<{ Params: { id: string } }>('/clubs/:id/bans', async (request, reply) => {
+    const result = await listClubBans(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
 
   app.post<{ Params: { id: string } }>('/clubs/:id/leave', async (request, reply) => {
     const result = await leaveClub(deps.db, request.access!, request.params.id);

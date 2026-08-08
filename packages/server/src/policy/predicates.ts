@@ -507,6 +507,50 @@ export const canRemoveMember = (
 export const canLeaveClub = (ctx: AccessContext, clubId: string): boolean =>
   isClubMember(ctx, clubId) && !isClubOwner(ctx, clubId);
 
+/**
+ * Ban somebody from the club: remove them, and bar every way back in.
+ *
+ * The same ladder as `canRemoveMember`, because a ban is a removal that sticks and it would be
+ * incoherent for it to be easier. `target.role` is undefined for somebody who is not currently a
+ * member, which is a real case - a ban can be imposed pre-emptively on a person who has already
+ * left, and that is the one thing removal cannot express at all.
+ *
+ * Deliberately NOT an alias of `canRemoveMember` even though the body matches it today
+ * (failure mode 10). The two will diverge the moment anybody wants a club where admins may eject
+ * but not bar, and an alias is a claim that they never will.
+ */
+export const canBanFromClub = (
+  ctx: AccessContext,
+  clubId: string,
+  target: { role?: ClubRole | undefined; userId: string },
+): boolean => {
+  if (target.role === 'owner') return false;
+  if (target.userId === ctx.userId) return false; // that is leaving, not banning
+  if (target.role === 'admin') return isClubOwner(ctx, clubId);
+  return isClubAdmin(ctx, clubId);
+};
+
+/**
+ * Lift a ban. **Any admin, including one who did not impose it.**
+ *
+ * > **This is the asymmetry, and it is the whole safeguard** (ADR-0021). Every other authority in
+ * > this product is symmetric - whoever may do a thing may undo it - and this one deliberately is
+ * > not, because the two directions carry opposite risk. A wrongful ban is the failure worth
+ * > engineering against, so reversing one has to be cheaper than performing one.
+ *
+ * What makes it hold: a rogue admin may ban Members only, since banning an Admin is the Owner's
+ * alone. So every other admin survives anything they can do, and any one of them can undo all of
+ * it. The worst reachable outcome is a set of wrongly excluded members, reversible by several
+ * people, with the rogue's name on each ban and on the line club chat posted about it.
+ *
+ * Its own name rather than `isClubAdmin`, because "may impose" and "may lift" are two capabilities
+ * that are deliberately different, and the difference is the point of the feature.
+ */
+export const canLiftClubBan = isClubAdmin;
+
+/** Reading the ban list. The admin tier, because attribution is only a check if it is legible. */
+export const canReadClubBans = isClubAdmin;
+
 // ---------------------------------------------------------------------------
 // Eboard
 // ---------------------------------------------------------------------------

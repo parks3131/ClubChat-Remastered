@@ -13,6 +13,113 @@ Newest first.
 
 ---
 
+## 2026-08-08 (later) - Removing somebody did not remove them
+
+Asked for from the safety conversation the audit started, and the premise turned out to be exactly
+right: *"let's say the admin kicks the person out. Then he is gonna join again if the club is open
+to join."*
+
+**It is worse than rejoining.** `joinClub` admitted straight into a club whose policy is `open`
+with no check of any kind against a prior removal, and there was no ban concept anywhere in the
+schema. So removal was a request to leave that the person could decline. On a request-policy club
+they could re-ask indefinitely and an admin had to keep noticing and denying. And since ADR-0010
+made the share link the only invite mechanism, a link already sitting in their messages kept
+working - with token rotation, which breaks every outstanding link for everybody, as the sole
+remedy for excluding one person.
+
+### The interesting half was the safeguard, not the ban
+
+The question that came with the request was the right one: *"let's say one admin is such a freak,
+block the person who is a credible guy."* A ban is the most durable power an admin would hold.
+
+The answer was already in the codebase twice, and it is worth naming because it decided the design:
+
+- **Asymmetric authority.** `canRemoveMember` lets any admin remove a Member, restricts removing an
+  Admin to the Owner, and forbids removing the Owner at all.
+- **Narration as the check on an open power.** `canCancelMeeting` is deliberately open to every
+  Eboard member rather than to the meeting's creator, and what makes that safe is that cancelling
+  posts "X cancelled Y" into board chat.
+
+So: **imposing follows the removal ladder, and lifting deliberately does not.** Any admin can ban a
+Member, only the Owner can ban an Admin, and *any* admin can lift *any* ban. That is the one
+asymmetric authority in the product, and it is the whole safeguard - a wrongful ban has to be
+cheaper to reverse than to perform.
+
+**Why it holds, which is the part worth checking rather than trusting:** a rogue admin cannot
+reach the people who would reverse them. They may ban Members only, so every other admin and the
+Owner survives any campaign they can mount, and each of them undoes it with one action. Maximum
+damage is a set of wrongly excluded members, reversible by several people, with the rogue's name on
+each ban *and* on the line club chat posted about it. At the Owner tier the question does not arise
+at all: an Owner can already delete the club, so a ban grants them nothing new.
+
+The narration was the founder's addition and it strengthened the design more than it looks. It is
+what made dropping the written reason field affordable - accountability comes from the club seeing
+who did it, not from the banning admin's own account of why. A reason field would have been a place
+to write something damaging about a member who can never read it or answer it.
+
+### One asymmetry accepted with its eyes open
+
+Club chat says "banned"; the person themselves gets the existing removal notification, unchanged.
+So the subject is the only party not told it was a ban until a Join button refuses them.
+
+**That is the same shape as the 2026-08-05 race-removal defect** - narrated to the whole roster
+except its subject - and it was raised before building rather than found afterwards. Kept anyway,
+deliberately: naming a ban in a push is confrontational and the door tells them soon enough. It is
+recorded in ADR-0021 and pinned by a test, so it changes on purpose or not at all.
+
+### A defect the tests found that the design had missed
+
+`banFromClub` reuses `cascadeOut` rather than repeating it, so race rosters, car groups, the Eboard
+row and the socket revocations all happen exactly as they do for a removal. But the cascade only
+runs when the person **was** a member - and it is also the only thing that clears a pending join
+request.
+
+So banning somebody who had asked to join barred them and left their request outstanding. Every
+admin kept being asked to decide something already decided, and denying it was the only way to
+clear it. The ban held; it just looked broken from the one screen an admin would be looking at.
+
+Found because a test asserting something else failed on `already_pending`, which is the useful kind
+of failure: the assertion was wrong *and* the code was wrong, in a way neither would have shown
+alone.
+
+### Verification worth noting
+
+Type check clean, `check:runtime` 68 modules, no em dashes, full suite green at **802 server**, 27
+shared, 67 mobile - 18 new tests, of which the ones that matter are the containment cases rather
+than the happy path. `db:prove` gained four assertions, including the one that proves a ban
+outlives the account that imposed it: deleting the banning admin nulls `banned_by` and leaves the
+row standing, because a cascade there would quietly unban somebody every time an admin closed their
+account.
+
+Then proved live against a running API and worker, as non-negotiable 6 requires, rather than
+inferred from the suite:
+
+```
+member removed              {"ok":true,"removed":true}
+...and walks straight back  {"ok":true,"status":"joined"}     <- the defect
+now banned                  {"ok":true,"banned":true}
+tries to rejoin             {"error":"banned"}
+tries the invite link       {"error":"invite_invalid"}
+an admin tries to re-add    {"error":"banned"}
+
+rogue tries to ban an admin {"error":"forbidden"}             <- containment
+the Owner can               {"ok":true,"banned":true}
+a plain member tries        {"error":"forbidden"}
+
+a third admin lifts a ban they did not impose  {"ok":true,"lifted":true}
+the wrongly banned member rejoins              {"ok":true,"status":"joined"}
+```
+
+And in club chat: `Credible Member was banned by Rogue Admin`, with the ban list naming the same
+admin beside it.
+
+**Not built:** any screen for it. The routes, the policy and the narration are done and the client
+has no ban UI, which is the honest state - this was server work by agreement, and a ban list with
+no screen is a smaller gap than a report queue with no reader because admins can still act through
+the roster. It goes on the same list as the moderation queue.
+
+---
+
 ## 2026-08-08 - The security audit, and two rules that were written down but never run
 
 The audit `PRD/17` planned on 2026-08-03 and never started. Six sections, worked through by

@@ -300,6 +300,32 @@ on a process that is directly reachable lets any caller forge the header and tak
 per request, which removes the limit rather than loosening it. `1` is the answer on Fly.io, where
 the edge proxy is the only ingress.
 
+### Club bans, and the one asymmetric authority
+
+```ts
+// Imposing follows the removal ladder. Lifting deliberately does not.
+const canBanFromClub = (ctx, clubId, target) =>
+  target.role !== 'owner' && target.userId !== ctx.userId &&
+  (target.role === 'admin' ? isClubOwner(ctx, clubId) : isClubAdmin(ctx, clubId))
+const canLiftClubBan  = isClubAdmin   // ANY admin, including one who did not impose it
+const canReadClubBans = isClubAdmin
+```
+
+Every other authority in the product is symmetric. This one is not, and the asymmetry is the
+safeguard rather than an oversight: a wrongful ban is the failure worth engineering against, so
+reversing one must be cheaper than performing one. What makes it hold is that a rogue admin may
+reach **Members only** - banning an Admin is the Owner's alone - so every other admin survives
+anything they can do and any one of them can undo all of it.
+
+`canLiftClubBan` and `canReadClubBans` are named rather than left as `isClubAdmin` at the call
+site, per failure mode 10: "may impose" and "may lift" are two capabilities that are deliberately
+different, and the difference is the entire point of the feature.
+
+The ban check itself lives in `admit`, the one function every way into a club passes through -
+open join, invite link, admin add, approved request - so it is one line rather than four places
+that must remember. The request branch of `joinClub` does not pass through `admit` and carries its
+own. See [ADR-0021](../decisions/0021-club-bans-are-harder-to-impose-than-to-lift.md).
+
 ### Security headers
 
 Set by one plugin on the whole instance rather than per route, for the structural reason the

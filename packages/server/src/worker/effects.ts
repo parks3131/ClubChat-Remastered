@@ -902,7 +902,21 @@ const onOwnershipTransferred: EffectHandler = async (event, deps) => {
  * without this they keep receiving messages from a club they are no longer in - silently,
  * with nothing reporting it (ADR-0007).
  */
-function makeDepartureHandler(reason: 'removed' | 'left'): EffectHandler {
+/**
+ * Leaving, being removed, and being banned: one handler, three reasons.
+ *
+ * The ban case narrates differently and notifies identically, which is a deliberate split rather
+ * than an oversight (ADR-0021). Club chat reads "X was banned by Y", because public attribution is
+ * what makes an open ban power safe - the same argument that lets any Eboard member cancel a
+ * meeting. The person themselves gets the ordinary removal notification, unchanged, because
+ * naming a ban in a push is confrontational and the refusal at the door tells them soon enough.
+ *
+ * > **The cost is recorded rather than hidden**: the subject is then the only party who is not
+ * > told it was a ban. That is the same asymmetry found on 2026-08-05, where a race removal was
+ * > narrated to the whole roster except the person it was about. Accepted here on purpose, and the
+ * > first thing to revisit if members report confusion about why they cannot rejoin.
+ */
+function makeDepartureHandler(reason: 'removed' | 'left' | 'banned'): EffectHandler {
   return async (event, deps) => {
     const clubId = String(event.payload['clubId']);
     const userId = String(event.payload['userId']);
@@ -916,13 +930,15 @@ function makeDepartureHandler(reason: 'removed' | 'left'): EffectHandler {
       await postSystemMessage(deps, {
         channelId: club.mainChannelId,
         body:
-          reason === 'removed' && actorName
-            ? `${name} was removed by ${actorName}`
-            : `${name} left the club`,
+          reason === 'banned' && actorName
+            ? `${name} was banned by ${actorName}`
+            : reason === 'removed' && actorName
+              ? `${name} was removed by ${actorName}`
+              : `${name} left the club`,
         eventId: event.id,
       });
 
-      if (reason === 'removed' && actorId) {
+      if (reason !== 'left' && actorId) {
         await writeNotifications(deps.db, {
           outboxEventId: notificationKey(event.id),
           type: 'member_removed',
@@ -1694,6 +1710,13 @@ export const handlers: Record<string, EffectHandler> = {
   'club.ownership_transferred': onOwnershipTransferred,
   'club.member_removed': makeDepartureHandler('removed'),
   'club.member_left': makeDepartureHandler('left'),
+  /**
+   * A ban. Narrated as a ban, notified as a removal - see `makeDepartureHandler`.
+   *
+   * Only emitted when the banned person was actually a member: banning somebody who already left
+   * bars them and narrates nothing, because nothing happened in the club to narrate.
+   */
+  'club.member_banned': makeDepartureHandler('banned'),
   'club.deleted': onClubDeleted,
 
   /**

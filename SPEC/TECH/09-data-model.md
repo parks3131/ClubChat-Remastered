@@ -61,7 +61,21 @@ club_memberships      club_id, user_id, role ∈ {owner,admin,member}, joined_at
                       UNIQUE (club_id) WHERE role='owner'      ← invariant 1, at the data layer
 club_join_requests    id, club_id, user_id, status, decided_by, decided_at
                       UNIQUE (club_id, user_id) WHERE status='pending'   ← idempotent decisions
+club_bans             club_id, user_id, banned_by, created_at
+                      PK (club_id, user_id)                    ← banning twice is a no-op
+                      FK banned_by → users ON DELETE SET NULL  ← NOT cascade. See below
 ```
+
+**`club_bans` is a separate row from `club_memberships`, not a flag on it.** The two facts are
+different and a banned person is usually not a member at all: membership says "in this club now",
+a ban says "may not be". Folding them together would also bar a member who left of their own
+accord, which is a blameless act.
+
+**`banned_by` is `SET NULL` and never `CASCADE`.** The attribution is the safeguard
+([ADR-0021](../decisions/0021-club-bans-are-harder-to-impose-than-to-lift.md)), so a ban has to
+outlive the account that imposed it - a cascade here would quietly unban somebody every time an
+admin closed their account, which is the one way this table could fail silently and the reason
+`constraint-proof.sql` deletes the banning admin and asserts the row survives with a null author.
 
 ### The channel abstraction - one concept, four scopes
 ```

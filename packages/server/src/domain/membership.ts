@@ -16,19 +16,24 @@ import type { Db } from '../db/client.ts';
 import { isUniqueViolation } from '../db/errors.ts';
 import { isoUtc } from '../db/sql-helpers.ts';
 import {
+  clubBans,
   clubJoinRequests,
   clubMemberships,
   clubs,
   eboardChannels,
   eboardMemberships,
   outbox,
+  users,
 } from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
+  canBanFromClub,
   canChangeRole,
   canDeleteClub,
   canLeaveClub,
+  canLiftClubBan,
   canManageJoinRequests,
+  canReadClubBans,
   canRemoveMember,
   canRotateInviteToken,
   canTransferOwnership,
@@ -39,7 +44,7 @@ import { mintInviteToken } from './create-club.ts';
 
 export type Refusal = {
   ok: false;
-  code: 'forbidden' | 'not_found' | 'already_member' | 'already_pending' | 'invalid';
+  code: 'forbidden' | 'not_found' | 'already_member' | 'already_pending' | 'invalid' | 'banned';
 };
 export type Ok<T> = { ok: true } & T;
 export type Result<T> = Ok<T> | Refusal;
@@ -92,6 +97,17 @@ export async function joinClub(
 
   if ((found.joinPolicy as JoinPolicy) === 'open') {
     return admit(db, { clubId, userId, actorId: null, via: 'open' });
+  }
+
+  /*
+   * Checked again on the request branch, which does NOT pass through `admit`.
+   *
+   * Without it a banned person can still file a request, and every admin in the club gets a
+   * notification asking them to decide something that is already decided. Worse, denying it is
+   * the only way to clear it, which teaches admins that a ban does not really hold.
+   */
+  if (await isBannedFrom(db, clubId, userId)) {
+    return { ok: false, code: 'banned' };
   }
 
   try {
@@ -166,6 +182,22 @@ async function admit(
     via: 'open' | 'link' | 'added' | 'approved';
   },
 ): Promise<Result<JoinOutcome>> {
+  /*
+   * The ban check lives HERE, at the one place every way in passes through.
+   *
+   * Open join, an invite link, an admin adding somebody, and an approved request are four
+   * different routes and one function, which is why this is a single line rather than four. Put
+   * it in the callers instead and the count of places that must remember is exactly the shape
+   * that let races go missing from four hand-written copies of the access join.
+   *
+   * `addMember` reaches this too, which is deliberate: an admin adding a banned person is
+   * refused rather than silently lifting the ban, so an admin who did not know about it finds
+   * out instead of overriding it by accident (ADR-0021).
+   */
+  if (await isBannedFrom(db, input.clubId, input.userId)) {
+    return { ok: false, code: 'banned' };
+  }
+
   await db.transaction(async (tx) => {
     await tx
       .insert(clubMemberships)
@@ -501,6 +533,158 @@ export async function removeMember(
   return { ok: true, removed: true };
 }
 
+/** Is this person barred from this club? One definition, asked by every way in. */
+async function isBannedFrom(db: Db, clubId: string, userId: string): Promise<boolean> {
+  const rows = await db
+    .select({ userId: clubBans.userId })
+    .from(clubBans)
+    .where(and(eq(clubBans.clubId, clubId), eq(clubBans.userId, userId)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/**
+ * Ban somebody from the club.
+ *
+ * > **Removal alone was never durable.** A club whose policy is `open` re-admits the person the
+ * > moment they tap Join, and the invite link they already hold keeps working, so ejecting a
+ * > member was a request they could decline. See ADR-0021.
+ *
+ * A ban is a removal plus a bar, and it reuses `cascadeOut` rather than repeating it - race
+ * rosters, car groups, the Eboard row, the pending requests and the socket revocations all happen
+ * exactly as they do for a removal, because they are the same act with a longer memory.
+ *
+ * **Banning somebody who is not currently a member is allowed**, and is the one thing removal
+ * cannot express: pre-emptively barring a person who has already left. Nothing is narrated in that
+ * case, because nothing happened in the club - the ban list still carries the attribution.
+ */
+export async function banFromClub(
+  db: Db,
+  ctx: AccessContext,
+  clubId: string,
+  userId: string,
+): Promise<Result<{ banned: true; removed: boolean }>> {
+  // Undefined rather than null for a non-member, so the predicate reads "no role" rather than
+  // being handed a value it would have to know to treat as absent.
+  const current = (await roleOf(db, clubId, userId)) ?? undefined;
+  if (!canBanFromClub(ctx, clubId, { role: current, userId })) {
+    return { ok: false, code: 'forbidden' };
+  }
+
+  // A uuid that belongs to nobody would otherwise fail on the foreign key as a 500.
+  const target = await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+  if (target.length === 0) return { ok: false, code: 'not_found' };
+
+  await db
+    .insert(clubBans)
+    .values({ clubId, userId, bannedBy: ctx.userId })
+    // Named target, never a bare `onConflictDoNothing`: an untargeted clause absorbs every
+    // current and future unique violation on the table rather than the one meant (failure mode
+    // 13). Banning twice is a no-op, which matters because two admins can reach for it at once.
+    .onConflictDoNothing({ target: [clubBans.clubId, clubBans.userId] });
+
+  if (current !== undefined) {
+    await cascadeOut(db, { clubId, userId, actorId: ctx.userId, reason: 'banned' });
+  } else {
+    /*
+     * Not a member, so there is no cascade to run - but a pending request may still be sitting
+     * there, and `cascadeOut` is the only other thing that clears one.
+     *
+     * > **Found by a test rather than by writing this.** Banning somebody who had asked to join
+     * > barred them and left their request outstanding, so every admin kept being asked to decide
+     * > something already decided, and denying it was the only way to clear it. The ban held; it
+     * > just looked broken from the one screen an admin would be looking at.
+     */
+    await db
+      .delete(clubJoinRequests)
+      .where(
+        and(
+          eq(clubJoinRequests.clubId, clubId),
+          eq(clubJoinRequests.userId, userId),
+          eq(clubJoinRequests.status, 'pending'),
+        ),
+      );
+  }
+
+  return { ok: true, banned: true, removed: current !== undefined };
+}
+
+/**
+ * Lift a ban. **Any admin, including one who did not impose it.**
+ *
+ * The asymmetry is the safeguard, not an oversight - see `canLiftClubBan` and ADR-0021. It does
+ * not re-admit anybody: the person has to join again by whatever route the club's policy offers,
+ * which is correct, because lifting a ban says "you may return" and not "you are back".
+ *
+ * Idempotent: lifting a ban nobody imposed is a no-op rather than an error, so two admins
+ * correcting the same wrongful ban both succeed.
+ */
+export async function liftClubBan(
+  db: Db,
+  ctx: AccessContext,
+  clubId: string,
+  userId: string,
+): Promise<Result<{ lifted: true }>> {
+  if (!canLiftClubBan(ctx, clubId)) return { ok: false, code: 'forbidden' };
+
+  await db.delete(clubBans).where(and(eq(clubBans.clubId, clubId), eq(clubBans.userId, userId)));
+  return { ok: true, lifted: true };
+}
+
+/**
+ * The ban list. **Attribution is only a check if somebody can read it.**
+ *
+ * Carries who imposed each ban, which is half the point of the feature: a rogue admin is contained
+ * by every other admin being able to see their name against each ban and undo it, rather than by
+ * the power being narrow enough that nobody can misuse it.
+ *
+ * `bannedByName` is null where that admin has since deleted their account, which the `SET NULL` on
+ * the column allows on purpose - the ban has to outlive the person who imposed it.
+ */
+export async function listClubBans(
+  db: Db,
+  ctx: AccessContext,
+  clubId: string,
+): Promise<Result<{ bans: Array<{
+  userId: string;
+  name: string;
+  image: string | null;
+  bannedByName: string | null;
+  createdAt: string;
+}> }>> {
+  if (!canReadClubBans(ctx, clubId)) return { ok: false, code: 'forbidden' };
+
+  const rows = await db.execute<{
+    user_id: string;
+    full_name: string;
+    image: string | null;
+    banned_by_name: string | null;
+    created_at: string;
+  }>(sql`
+    SELECT u.id::text AS user_id,
+           u.full_name,
+           u.image,
+           actor.full_name AS banned_by_name,
+           ${isoUtc('b.created_at')} AS created_at
+      FROM club_bans b
+      JOIN users u ON u.id = b.user_id
+      LEFT JOIN users actor ON actor.id = b.banned_by
+     WHERE b.club_id = ${clubId}
+     ORDER BY b.created_at DESC
+  `);
+
+  return {
+    ok: true,
+    bans: rows.rows.map((row) => ({
+      userId: row.user_id,
+      name: row.full_name,
+      image: row.image,
+      bannedByName: row.banned_by_name,
+      createdAt: row.created_at,
+    })),
+  };
+}
+
 /**
  * Leave a club.
  *
@@ -541,7 +725,7 @@ async function cascadeOut(
     clubId: string;
     userId: string;
     actorId: string | null;
-    reason: 'removed' | 'left';
+    reason: 'removed' | 'left' | 'banned';
   },
 ): Promise<void> {
   const eboardId = await eboardIdFor(db, input.clubId);
@@ -608,7 +792,12 @@ async function cascadeOut(
 
     await tx.insert(outbox).values({
       partitionKey: input.clubId,
-      eventType: input.reason === 'removed' ? 'club.member_removed' : 'club.member_left',
+      eventType:
+        input.reason === 'banned'
+          ? 'club.member_banned'
+          : input.reason === 'removed'
+            ? 'club.member_removed'
+            : 'club.member_left',
       payload: {
         clubId: input.clubId,
         userId: input.userId,
