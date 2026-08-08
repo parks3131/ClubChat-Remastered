@@ -22,6 +22,7 @@ import {
   type MessageReplyRef,
 } from '@clubchat/shared';
 import {
+  findGaps,
   InMemoryMessageStore,
   type MessagePatch,
   type MessageStore,
@@ -816,6 +817,7 @@ export class ChatClient {
    */
   async syncChannel(channelId: string, sinceSeq: number): Promise<void> {
     this.syncCount += 1;
+    await this.repairGaps(channelId);
     let since = sinceSeq;
     let mark = await this.store.syncMark(channelId);
 
@@ -873,6 +875,59 @@ export class ChatClient {
        * left to fetch.
        */
       if (result.maxRev === undefined && since === sinceSeq) return;
+    }
+  }
+
+  /**
+   * Refetch anything missing BELOW the high-water mark.
+   *
+   * > **Neither cursor can reach a hole, and that is why one could last forever.** `since_seq`
+   * > asks for `seq > mine`, and a missing message is below that. `since_rev` asks for
+   * > `rev > mine`, and a message that arrived before the mark moved has a lower revision - so
+   * > the reconciling form cannot see it either. Every sync reported success while the gap sat
+   * > there, counted by the unread badge and invisible in the conversation.
+   *
+   * This is how a poll card posted by another member stayed missing from one device for an
+   * afternoon while rendering correctly on another: three cards were missed while the socket was
+   * down, a later message pulled the mark past them, and nothing would ever ask for them again.
+   *
+   * **Deliberately the seq form, with no revision.** The rev cursor is the right one for ordinary
+   * reconciliation and the wrong one for a repair, for the reason above. `findGaps` has existed
+   * and been tested since the store was written; it had no caller until now.
+   */
+  private async repairGaps(channelId: string): Promise<void> {
+    const gaps = findGaps(await this.store.seqs(channelId));
+    if (gaps.length === 0) return;
+
+    // From just below the lowest hole. Re-pulling what we already hold is an idempotent upsert,
+    // and paying that once is the price of never leaving a message unrecoverable.
+    let since = Math.max(0, gaps[0]! - 1);
+    this.log('repairing a gap below the high-water mark', {
+      channelId,
+      missing: gaps.length,
+      from: since,
+    });
+
+    for (;;) {
+      const entry = encodeURIComponent(`${channelId}:${since}`);
+      const response = await this.fetch(`${this.opts.apiUrl}/sync?channels[]=${entry}`, {
+        headers: { authorization: `Bearer ${this.opts.token}` },
+      });
+      if (!response.ok) throw new Error(`gap repair failed: ${response.status}`);
+
+      const body = (await response.json()) as {
+        channels: Array<{ channelId: string; messages: MessageEnvelope[]; hasMore: boolean }>;
+      };
+      const result = body.channels.find((channel) => channel.channelId === channelId);
+      if (!result || result.messages.length === 0) return;
+
+      await this.serialize(channelId, () => this.store.upsert(result.messages));
+
+      const highest = Math.max(...result.messages.map((message) => message.seq));
+      // Guard against a server that returns a page without advancing the cursor, which would
+      // otherwise spin here forever.
+      if (!result.hasMore || highest <= since) return;
+      since = highest;
     }
   }
 

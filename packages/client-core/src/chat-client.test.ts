@@ -95,7 +95,6 @@ async function setup(): Promise<Fixture> {
   const fetchImpl = vi.fn(async (input: unknown) => {
     const url = String(input);
     syncCalls.push(url);
-    const since = Number(url.split('%3A').pop() ?? url.split(':').pop());
     /*
      * Answers for the channel that was ASKED for, rather than always for `CHANNEL`.
      *
@@ -103,7 +102,22 @@ async function setup(): Promise<Fixture> {
      * wrong channel from a sync of the right one - which is exactly the distinction the
      * backfill-on-open test below turns on.
      */
-    const asked = decodeURIComponent(url.split('channels[]=')[1] ?? '').split(':')[0] ?? CHANNEL;
+    const entry = decodeURIComponent(url.split('channels[]=')[1] ?? '');
+    const parts = entry.split(':');
+    const asked = parts[0] ?? CHANNEL;
+    /*
+     * The SEQ, which is `{id}:{seq}[:{rev}]`'s second field.
+     *
+     * > **This used to read the LAST field, and that quietly disabled a whole class of test.**
+     * > For a reconciling URL the last field is the revision mark, which is 0 throughout these
+     * > tests - so every sync asked for "everything above 0" and returned the entire backlog. A
+     * > client that could never reach a message below its own high-water mark still looked
+     * > perfectly correct here, because the fake handed it back regardless of what it asked for.
+     *
+     * Modelling `seq > since` matches the server's pre-revision form exactly, and is the half of
+     * the contract a gap turns on.
+     */
+    const since = Number(parts[1] ?? 0);
     const toSend = backlog.filter((message) => message.seq > since);
     return new Response(
       JSON.stringify({
@@ -277,6 +291,39 @@ describe('ChatClient applies the gap rule', () => {
    * appearing in chat: a member's own card is also pulled by the sync that follows creating it,
    * so only a card that arrives purely as a live frame can be lost this way.
    */
+  /**
+   * THE ONE THAT WAS FOUND ON A PHONE.
+   *
+   * Three poll cards were missed while the socket was down. A later message pulled the local max
+   * past them, and after that **neither cursor could reach them**: `since_seq` asks for
+   * `seq > mine` and they are below it; `since_rev` asks for `rev > mine` and their revisions are
+   * below the mark too. Every sync reported success. The messages were counted by the unread
+   * badge, invisible in the conversation, and unrecoverable for the life of the cache - they
+   * rendered perfectly on a second device whose cache had been built from the API.
+   */
+  it('refetches a hole below the high-water mark that neither cursor can reach', async () => {
+    const { client, socket, backlog } = await setup();
+
+    // Live: 1 arrives, then 3. 2 is missed entirely - it is not even in the backlog yet, so the
+    // gap sync triggered by 3 cannot find it.
+    socket.deliver({ t: 'msg.new', d: envelope(1) });
+    socket.deliver({ t: 'msg.new', d: envelope(3) });
+    await vi.waitFor(async () =>
+      expect(await client.store.seqs(CHANNEL)).toEqual([1, 3]),
+    );
+
+    // The server does have it. Only a repair that looks BELOW the mark can ask for it.
+    backlog.push(envelope(2));
+
+    await client.syncChannel(CHANNEL, await client.store.localMaxSeq(CHANNEL));
+
+    expect(
+      await client.store.seqs(CHANNEL),
+      'a hole below the high-water mark survived a full sync',
+    ).toEqual([1, 2, 3]);
+    expect(findGaps(await client.store.seqs(CHANNEL))).toEqual([]);
+  });
+
   it('writes a frame at or below the high-water mark rather than assuming it is held', async () => {
     const { client, socket } = await setup();
 
