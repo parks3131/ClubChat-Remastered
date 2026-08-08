@@ -182,6 +182,24 @@ export default function ProfileScreen() {
               <DetailRow label="School" value={data.profile.school || 'Not set'} last />
             </View>
 
+            {/*
+              The moderation queue, for the accounts that carry the flag and nobody else.
+              
+              Hidden rather than disabled for everybody else, because it is not a feature they
+              lack permission for - it is not part of their product at all. The server refuses it
+              regardless: this row is what makes it reachable, never what makes it allowed.
+            */}
+            {identity.data?.isPlatformModerator === true && (
+              <View style={styles.card}>
+                <LinkRow
+                  icon="gavel"
+                  label="Reported messages"
+                  href="/moderation"
+                  last
+                />
+              </View>
+            )}
+
             <View style={styles.card}>
               <LinkRow icon="manage-accounts" label="Edit Profile" href="/profile/edit" />
               <View style={styles.linkDivider} />

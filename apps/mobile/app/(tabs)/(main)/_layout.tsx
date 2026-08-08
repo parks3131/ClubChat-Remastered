@@ -170,6 +170,30 @@ export default function MainStackLayout() {
       />
 
       {/*
+        The platform moderation queue, reached from Profile and from a notification.
+
+        Back goes to Profile because that is where the entry point lives, and because a moderator
+        arriving by deep link has no history to pop - PRD/15 rule 3, which has shipped as a bug
+        here three times. The queue is refused server-side for anybody without the flag, so
+        registering the route costs nothing: a member who types the URL gets the retryable
+        not-found state rather than a screen.
+      */}
+      <Stack.Screen
+        name="moderation/index"
+        options={{
+          title: 'Reported messages',
+          headerLeft: () => <BackTo href="/profile" label="Profile" variant="icon" />,
+        }}
+      />
+      <Stack.Screen
+        name="moderation/[messageId]"
+        options={{
+          title: 'Reported conversation',
+          headerLeft: () => <BackTo href="/moderation" label="Reports" variant="icon" />,
+        }}
+      />
+
+      {/*
         There is no standalone Messages list. A DM belongs to no club - two people who share three
         clubs have one conversation - and it used to get its own flat list beside Clubs for that
         reason. The Chats list now holds every conversation with a DMs filter over it, which is the

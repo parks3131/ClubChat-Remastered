@@ -89,7 +89,22 @@ export type ProfileClubActions = {
 export async function readIdentity(
   db: Db,
   ctx: AccessContext,
-): Promise<{ userId: string; email: string; clubs: Array<{ clubId: string; role: string }> }> {
+): Promise<{
+  userId: string;
+  email: string;
+  clubs: Array<{ clubId: string; role: string }>;
+  /**
+   * Whether this account may read the DM report queue.
+   *
+   * Reported here so the client can offer the entry point at all - it is the one capability the
+   * flag grants, and a queue nobody can navigate to is what it had instead. Read from the access
+   * context rather than the user row, because the context already loaded it and there is one
+   * definition of what the flag means.
+   *
+   * Not a role and not a tier above Owner: it buys exactly this and nothing anywhere else.
+   */
+  isPlatformModerator: boolean;
+}> {
   const rows = await db.execute<{ email: string }>(sql`
     SELECT email FROM users WHERE id = ${ctx.userId}
   `);
@@ -98,6 +113,7 @@ export async function readIdentity(
     userId: ctx.userId,
     email: rows.rows[0]?.email ?? '',
     clubs: [...ctx.clubRole.entries()].map(([clubId, role]) => ({ clubId, role })),
+    isPlatformModerator: ctx.isPlatformModerator,
   };
 }
 

@@ -90,16 +90,15 @@ function hrefFor(target: NotificationTarget): string | undefined {
     case 'chat_reports':
       return `/channels/${target.channelId}/highlights?tab=reports`;
     /*
-     * The platform moderation queue, which the app does not have a screen for yet - only the
-     * dismiss call exists in `api.ts`.
+     * The platform moderation queue.
      *
-     * Deliberately `undefined` rather than a route: expo-router answers an unknown path with its
-     * "Unmatched Route" screen, and sending a moderator there would be worse than not moving at
-     * all. The row still appears and still says a report is waiting, which is the part that
-     * matters; the queue itself is the outstanding work.
+     * > **This returned `undefined` until 2026-08-08**, because there was no screen to send
+     * > anybody to - the row appeared, said a report was waiting, and went nowhere when tapped.
+     * > A moderator being told about a queue they could not open was the last part of the one
+     * > safety path in the product that dead-ended.
      */
     case 'platform_moderation':
-      return undefined;
+      return '/moderation';
     case 'inbox':
       // Already here.
       return undefined;

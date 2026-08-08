@@ -452,6 +452,52 @@ export type AroundWindow = {
  * Grouped by message is the server's shape and the right one: three people reporting the same
  * message is one decision for an admin, not three.
  */
+/**
+ * One reported direct message, as the platform queue lists it.
+ *
+ * **Carries no message body, deliberately.** If the list showed content, either every refresh
+ * would write an audit row per report or private messages would be read with no log at all - the
+ * second silently defeats the rule the log exists for. So the list is metadata and the context
+ * read is the single logged door to what was actually said.
+ */
+export type DmReportRow = {
+  /** What dismiss and context both take. The routes call it `:id`; it is a message id. */
+  messageId: string;
+  channelId: string;
+  conversationId: string;
+  seq: number;
+  senderId: string;
+  senderName: string;
+  /** Ordered oldest first, and never empty: a row exists because somebody reported it. */
+  reporters: Array<{ userId: string; name: string; createdAt: string }>;
+  dismissedAt: string | null;
+  createdAt: string;
+};
+
+/**
+ * The reported message and the few either side of it.
+ *
+ * The window is fixed server-side and there is no parameter to widen it. **Opening this writes an
+ * audit row** naming the moderator, the report and the window actually served - so this type is
+ * not something to fetch speculatively or prefetch. Ask for it when somebody has chosen to look.
+ */
+export type ModerationContext = {
+  messageId: string;
+  channelId: string;
+  reportedSeq: number;
+  fromSeq: number;
+  toSeq: number;
+  messages: Array<{
+    seq: number;
+    body: string | null;
+    senderId: string;
+    senderName?: string | null;
+    createdAt: string;
+    deletedAt?: string | null;
+    type?: string;
+  }>;
+};
+
 export type ReportRow = {
   /** What `dismissReport` takes. The route calls it `:id`; it is a message id. */
   messageId: string;

@@ -41,6 +41,8 @@ import type {
   PollSummary,
   PollView,
   ClubBan,
+  DmReportRow,
+  ModerationContext,
   Profile,
   ProfileClubActions,
   RaceDetail,
@@ -643,6 +645,40 @@ export const inboxApi = {
     }),
 };
 
+/**
+ * The platform moderation queue: reports raised in direct messages.
+ *
+ * A DM has no admins, so PRD/14 rule 7 routes its reports here instead - read by accounts
+ * carrying the platform-moderator flag, and by **no club admin ever**. Every call refuses with a
+ * 404 for anybody else, the same answer they would get for a queue that did not exist.
+ */
+export const moderationApi = {
+  /** Metadata only. See `DmReportRow` for why there are no message bodies in it. */
+  queue: (includeDismissed = false) =>
+    apiFetch<{ reports: DmReportRow[] }>(
+      `/moderation/dm-reports${includeDismissed ? '?all=true' : ''}`,
+    ),
+
+  /**
+   * The audit-logged read.
+   *
+   * **Calling this writes a row** recording who looked, at what, and how much was served. So it
+   * is called when a moderator opens a report, never on a list render and never speculatively -
+   * a prefetch here would fill the log with reads nobody performed.
+   */
+  context: (messageId: string) =>
+    apiFetch<ModerationContext>(`/moderation/reports/${messageId}/context`),
+
+  /** A moderator's own trail, so the logging is visible to the person being logged. */
+  reads: () =>
+    apiFetch<{ reads: Array<{ messageId: string; channelId: string; fromSeq: number; toSeq: number; readAt: string }> }>(
+      '/moderation/reads',
+    ),
+
+  dismiss: (messageId: string) =>
+    apiFetch<unknown>(`/moderation/reports/${messageId}/dismiss`, { method: 'POST', body: {} }),
+};
+
 export const accountApi = {
   /**
    * The signed-in identity.
@@ -652,9 +688,13 @@ export const accountApi = {
    * here rather than reaching into a profile for it.
    */
   me: () =>
-    apiFetch<{ userId: string; email: string; clubs: Array<{ clubId: string; role: ClubRole }> }>(
-      '/me',
-    ),
+    apiFetch<{
+      userId: string;
+      email: string;
+      clubs: Array<{ clubId: string; role: ClubRole }>;
+      /** The one capability the flag grants: reading the DM report queue. */
+      isPlatformModerator: boolean;
+    }>('/me'),
 
   /*
    * A profile, optionally asked "and what may I do to them in this club".
