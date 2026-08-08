@@ -31,6 +31,21 @@ import { devicesApi } from './api.ts';
 import { hrefFor, INBOX_HREF } from './notification-href.ts';
 
 /**
+ * Whether this platform has the native notifications module at all.
+ *
+ * > **Web does not, and it fails loudly rather than quietly.** `expo-notifications` throws
+ * > "The method or property ExpoNotifications.getLastNotificationResponse is not available on
+ * > web" - an uncaught error, not a no-op. `PushGate` renders on every platform, so the launch
+ * > path called straight into it and took the entire web client down with a red screen.
+ *
+ * Declared once here rather than checked at each call site: the platform question belongs to this
+ * module, and the next function added would otherwise have to remember to ask it. Web push is a
+ * real thing and could be wired later, but it needs VAPID keys and a service worker - a different
+ * transport, not this one with a guard removed.
+ */
+const SUPPORTED = Platform.OS !== 'web';
+
+/*
  * What to do with a notification that arrives while the app is open.
  *
  * **Shown, not suppressed**, and that is a deliberate reversal of the usual default. The server
@@ -41,14 +56,16 @@ import { hrefFor, INBOX_HREF } from './notification-href.ts';
  * ADR-0008 exists to forbid - a member reading one chat would silently lose the banner for
  * another.
  */
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+if (SUPPORTED) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
 
 /** Why registration did not happen, for the log. `registered` is the success case. */
 export type PushOutcome =
@@ -79,10 +96,11 @@ function projectId(): string | undefined {
  * reinstall.
  */
 export async function registerForPush(): Promise<PushOutcome> {
-  // The simulator cannot hold an APNs token. Worth naming rather than letting it surface as a
-  // cryptic throw, because it is the single most common reason this appears broken in dev.
-  if (!Device.isDevice) {
-    console.log('[push] skipped: not a physical device');
+  // Web has no native module at all - see SUPPORTED. The simulator has the module but no APNs
+  // connection, so it cannot hold a token; worth naming rather than letting it surface as a
+  // cryptic throw, because it is the most common reason this looks broken in dev.
+  if (!SUPPORTED || !Device.isDevice) {
+    console.log('[push] skipped: no notifications module or not a physical device');
     return 'not-a-device';
   }
 
@@ -142,7 +160,7 @@ export async function registerForPush(): Promise<PushOutcome> {
  * is a stale row that the next sign-in re-points at whoever signs in then.
  */
 export async function unregisterForPush(): Promise<void> {
-  if (!Device.isDevice) return;
+  if (!SUPPORTED || !Device.isDevice) return;
 
   try {
     const id = projectId();
@@ -191,6 +209,8 @@ export function hrefForResponse(response: Notifications.NotificationResponse): s
  * bug.
  */
 export async function pendingLaunchHref(): Promise<string | undefined> {
+  // The call that crashed the web client. See SUPPORTED.
+  if (!SUPPORTED) return undefined;
   const response = await Notifications.getLastNotificationResponseAsync();
   if (response === null) return undefined;
   const href = hrefForResponse(response);
@@ -212,6 +232,8 @@ export async function pendingLaunchHref(): Promise<string | undefined> {
  * that lost its target, a route that did not take, and nothing being wrong at all.
  */
 export function onNotificationTap(handler: (href: string) => void): () => void {
+  // Nothing to subscribe to, and a no-op unsubscribe so the caller's cleanup stays uniform.
+  if (!SUPPORTED) return () => {};
   const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
     const href = hrefForResponse(response);
     if (href === undefined) {
