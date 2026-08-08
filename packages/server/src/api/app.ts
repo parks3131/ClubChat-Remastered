@@ -23,7 +23,9 @@ import Fastify, {
   type FastifyRequest,
 } from 'fastify';
 import fastifyCors from '@fastify/cors';
+import fastifyHelmet from '@fastify/helmet';
 import { fromNodeHeaders } from 'better-auth/node';
+import { trustProxyOption } from '../config.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { isSessionUsable } from '../policy/predicates.ts';
 import { isUuid, type AppDeps } from './plumbing.ts';
@@ -74,10 +76,81 @@ export function buildApp(deps: AppDeps): FastifyInstance {
      * error is not obvious and every test builds down the other branch, so the suite stays green
      * while the server refuses to start.
      */
-    deps.logger === undefined
-      ? { logger: { level: deps.config.LOG_LEVEL } }
-      : { loggerInstance: deps.logger },
+    {
+      ...(deps.logger === undefined
+        ? { logger: { level: deps.config.LOG_LEVEL } }
+        : { loggerInstance: deps.logger }),
+      /*
+       * Whether `X-Forwarded-For` may be believed.
+       *
+       * This decides what `request.ip` is, and `request.ip` is what keys the per-IP sign-in
+       * bucket - the only limit in this API that is a security control rather than an abuse
+       * ceiling. Unset behind a proxy, every caller shares the proxy's address and one bucket
+       * covers the whole internet. See `TRUST_PROXY` in config.ts for why it is not simply
+       * `true`.
+       */
+      trustProxy: trustProxyOption(deps.config.TRUST_PROXY),
+    },
   );
+
+  /*
+   * Security headers, on every response, from one plugin.
+   *
+   * > **There were none at all until 2026-08-08** - no HSTS, no frame options, no
+   * > content-type-options, no CSP, zero occurrences anywhere in the codebase. Registered here
+   * > rather than per route for the same structural reason the session hook and the rate limiter
+   * > are on the scope: a header set route by route is a header the next route forgets.
+   *
+   * Three defaults are overridden, and each would otherwise break something real:
+   *
+   *  1. **CSP is `default-src 'none'`** rather than helmet's `'self'`. This process serves JSON
+   *     and one 302, never a document, so nothing legitimate needs a source - and the tightest
+   *     possible policy costs nothing while covering the case where a response is coaxed into
+   *     being rendered as one. `frame-ancestors 'none'` is the half that does real work, beside
+   *     the frame-options header.
+   *  2. **`crossOriginResourcePolicy` is `cross-origin`.** The default is `same-origin`, and this
+   *     API is deliberately consumed from another origin - the Expo web client on a different
+   *     port in development, and a different host in production. Leaving the default would refuse
+   *     the browser client while native carried on working, which is the failure shape this
+   *     project has hit twice.
+   *  3. **COEP stays off.** It governs what a *document* may embed and this serves none, so
+   *     enabling it buys nothing and would complicate the media redirect for no benefit.
+   */
+  app.register(fastifyHelmet, {
+    contentSecurityPolicy: {
+      /*
+       * `useDefaults: false`, so the policy says exactly what is meant.
+       *
+       * Left on, helmet merges its document-shaped defaults underneath - `script-src 'self'`,
+       * `style-src ... 'unsafe-inline'`, `font-src`, `img-src`. None of them is wrong, and all of
+       * them are noise on a process that serves no documents: a reader of the response would
+       * reasonably conclude scripts and styles are expected here. `default-src 'none'` already
+       * covers every fetch directive, and the three below are the ones it does not.
+       */
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'none'"],
+        // Not covered by default-src, and the one that does real work here.
+        frameAncestors: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+      },
+    },
+    // DENY, not helmet's SAMEORIGIN default, so this agrees with `frame-ancestors 'none'` above.
+    // Two headers answering the same question differently is the kind of thing that gets
+    // resolved later by whichever one somebody reads first.
+    frameguard: { action: 'deny' },
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginEmbedderPolicy: false,
+    /*
+     * Two years, with subdomains, and preload-eligible.
+     *
+     * Ignored by browsers over plain HTTP, so development is unaffected and this is inert until
+     * there is a certificate in front of it - which is the point of setting it now rather than
+     * remembering to at deploy time.
+     */
+    hsts: { maxAge: 63_072_000, includeSubDomains: true, preload: true },
+  });
 
   app.register(fastifyCors, {
     origin: deps.config.CLIENT_ORIGIN,

@@ -287,6 +287,36 @@ someone who has never replied is throttled far harder than continuing an existin
 > be opened with somebody the sender already shares a club with, so the reachable set is club
 > membership rather than the user table, and blocking is instant and self-service.
 
+**The per-IP bucket depends on `TRUST_PROXY`, and that is the only rate limit here which is a
+security control rather than an abuse ceiling.** Sign-in and sign-up are keyed on `request.ip`
+because there is no session yet to key on, so unlimited attempts is unlimited credential guessing.
+`request.ip` is the socket's peer unless Fastify is told how many proxies sit in front - and behind
+one without that, every caller on the internet shares the proxy's address and one bucket. It fails
+closed rather than open, which is why nothing looked broken; it is also useless as protection,
+which is why it was a finding.
+
+Set to `false` by default, deliberately. The opposite mistake is worse: trusting `X-Forwarded-For`
+on a process that is directly reachable lets any caller forge the header and take a fresh bucket
+per request, which removes the limit rather than loosening it. `1` is the answer on Fly.io, where
+the edge proxy is the only ingress.
+
+### Security headers
+
+Set by one plugin on the whole instance rather than per route, for the structural reason the
+session hook and the rate limiter are: a header applied route by route is a header the next route
+forgets. **There were none at all until 2026-08-08** - no HSTS, no frame options, no
+content-type-options, no CSP.
+
+Three defaults are overridden, and each would otherwise be wrong here rather than merely strict:
+
+| Setting | Why not the default |
+|---|---|
+| `Content-Security-Policy: default-src 'none'`, with `useDefaults: false` | This process serves JSON and one 302, never a document. Helmet's defaults merge in `script-src`, `style-src ... 'unsafe-inline'` and friends, which are not dangerous but describe a thing that does not exist. `frame-ancestors 'none'` is the directive doing real work |
+| `X-Frame-Options: DENY` | Helmet defaults to `SAMEORIGIN`, which disagrees with `frame-ancestors 'none'` above. Two headers answering one question differently get resolved later by whichever a reader looks at first |
+| `Cross-Origin-Resource-Policy: cross-origin` | The default is `same-origin`, and this API is deliberately read from another origin - the Expo web client on a different port in development and a different host in production. The default would refuse the browser while native kept working, which is a failure shape this project has shipped twice |
+
+COEP stays off: it governs what a document may embed, and this serves none.
+
 ---
 
 ## Authorization requirements

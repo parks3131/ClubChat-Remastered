@@ -125,8 +125,36 @@ Things that are built and not yet proved on every surface they claim to work on.
 > across twenty read surfaces; the media pipeline's three hops each authorized; and the DM report
 > queue carries no message bodies, so the logged context read really is the only door to content.
 >
-> **Still open from the list below:** the three operational findings (security headers, `trustProxy`,
-> `.env.bak`), the dependency advisories, and the platform moderation queue having no screen.
+> **The three operational findings were closed the same day**, in a second pass:
+>
+> - **Security headers**, from one plugin on the whole instance. See
+>   [Authorization](../TECH/05-authorization.md) for the three defaults that had to be overridden.
+> - **`TRUST_PROXY`**, defaulting to `false`, so the per-IP sign-in bucket keys on a real address
+>   once there is a proxy in front. Both directions are wrong in different ways and the config
+>   docstring says which.
+> - **`.env.bak` untracked**, and `.gitignore` changed from a list of guessed suffixes to `.env*`
+>   with `!.env.example`. The pattern was the finding; the file only ever held a placeholder.
+>
+> **Still open:** the dependency advisories (triaged below, not fixed) and the platform moderation
+> queue having no screen.
+>
+> **Dependency advisories, triaged 2026-08-08.** The entry below said "15 moderate, mostly
+> `@expo/config-plugins` transitives". The real number today is **30 - 12 moderate and 18 high** -
+> and the useful part is not the count. Exactly **one** of them reaches the deployed server's
+> request path: `fast-uri` (GHSA-7p8r-x3mc-p8w7, host confusion via a backslash authority
+> introducer), which arrives through `fastify` → `@fastify/ajv-compiler` → `ajv`. Everything else
+> - `image-size`, `js-yaml`, `brace-expansion`, `uuid`, `esbuild`, `nanoid` - arrives through Expo,
+> `drizzle-kit`, `vitest` or an optional `expo-sqlite` peer, and runs on a developer's machine
+> rather than in production.
+>
+> `fast-uri@3.1.5` patches it and is inside the `^3` range `ajv` already accepts, so this is a
+> patch bump rather than a forced upgrade. **An `overrides` entry was attempted and npm 11.12.1
+> did not apply it** - the key is read back by `npm pkg get` and does not reach the lockfile, even
+> with the lockfile deleted and regenerated. Left unfixed rather than worked around, because the
+> next step is either an npm-version question or a real dependency pass, and `npm audit fix
+> --force` would move Expo 57 and TypeScript 6, both of which are pinned deliberately
+> (`AGENTS.md` 5.1). Note also there are two `fast-uri` copies at different majors, so any
+> override has to name both.
 
 The plan, as written on 2026-08-03, follows. It is deliberately a **reading** exercise before it is
 a fixing one, and three of the findings were turned up while writing it rather than by running it -
@@ -141,11 +169,11 @@ before a public release rather than after one.
 
 | Finding | Severity | Note |
 |---|---|---|
-| **`.env.bak` is tracked in git and not covered by `.gitignore`** | Low today, structural | It holds one placeholder (`dev-only-not-a-secret-regenerate-me`) so nothing real has leaked. The finding is the *pattern*: `.gitignore` covers `.env`, `.env.local` and `.env.*.local`, and a file named `.env.bak` matches none of them. The next backup taken next to a production value would be committed the same way |
+| ~~**`.env.bak` is tracked in git and not covered by `.gitignore`**~~ | **Fixed 2026-08-08** | It held one placeholder (`dev-only-not-a-secret-regenerate-me`) so nothing real leaked. The finding was the *pattern*: `.gitignore` listed `.env`, `.env.local` and `.env.*.local`, and `.env.bak` matched none of them. Now `.env*` with `!.env.example` - deny everything and allow back the one template, rather than listing the spellings somebody thought of |
 | **Every secret in `.env` is still its development placeholder** | Blocking for production | `BETTER_AUTH_SECRET`, `MEDIA_SIGNING_SECRET` and the S3 credentials are all dev values. They must be generated fresh and held by the platform, never in a file, before anything is deployed |
-| **No security headers on the API** | Medium | No HSTS, frame options, content-type-options or CSP. Zero occurrences in the codebase. Cheap to add and it should be one plugin, not per-route |
-| **`trustProxy` is not configured** | Medium, and it interacts with the new rate limits | Behind a proxy without it, `request.ip` is the proxy's, so the per-IP sign-in bucket becomes one shared bucket for the whole internet. Fails safe (too strict) rather than open, but it makes credential-stuffing protection useless |
-| **15 moderate dependency advisories** (production tree) | Medium | Mostly `@expo/config-plugins` transitives. Needs triage rather than a blind `npm audit fix --force` |
+| ~~**No security headers on the API**~~ | **Fixed 2026-08-08** | There were none: no HSTS, frame options, content-type-options or CSP, zero occurrences anywhere. One plugin on the whole instance, as this entry asked for. Three of its defaults had to be overridden - see [Authorization](../TECH/05-authorization.md) |
+| ~~**`trustProxy` is not configured**~~ | **Fixed 2026-08-08** | Behind a proxy without it, `request.ip` was the proxy's, so the per-IP sign-in bucket was one shared bucket for the whole internet - failing closed rather than open, and useless as credential-stuffing protection either way. Now `TRUST_PROXY`, defaulting to `false`, because the opposite mistake is worse: trusting the header on a directly reachable process removes the limit rather than loosening it |
+| **30 dependency advisories** (12 moderate, 18 high, production tree) | Medium, and **triaged 2026-08-08** | Exactly one reaches the deployed server's request path - `fast-uri`, through `fastify` to `ajv`. The rest arrive through Expo and build tooling. See the triage note above for why the one-line fix was attempted and left in place unapplied |
 | **`MEDIA_URL_MODE=cdn` has never served a byte** | Unverified, not a finding | The production media path is the one nobody has run. Listed under "verification owed" above |
 
 #### What the audit itself has to cover

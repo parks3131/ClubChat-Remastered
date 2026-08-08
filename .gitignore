@@ -4,9 +4,14 @@ learnings/
 node_modules/
 
 # secrets - AGENTS.md non-negotiable 5
-.env
-.env.local
-.env.*.local
+#
+# Deny every .env and allow back the one template, rather than listing the spellings we
+# happened to think of. The list here was `.env`, `.env.local` and `.env.*.local` until
+# 2026-08-08, and `.env.bak` matched none of them - so a backup taken beside a real value was
+# committed and stayed committed. The leak that mattered was the pattern, not that file: it
+# held a placeholder. A denylist of guessed suffixes is the wrong shape for secrets.
+.env*
+!.env.example
 
 # build output
 dist/

@@ -22,6 +22,31 @@ const Env = z.object({
   SEND_RATE_REFILL_PER_SEC: z.coerce.number().positive().default(1),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
+  /**
+   * How many proxies sit in front of this process, or which ones to believe.
+   *
+   * > **Defaults to `false`, and the default is the safe one rather than the convenient one.**
+   * > Without this, `request.ip` is the socket's peer - which behind a proxy is the *proxy*, so
+   * > every caller in the world shares one bucket and the per-IP sign-in limit becomes a single
+   * > global limit. That fails closed (everybody is throttled together) rather than open, but it
+   * > makes the one rate limit that is a security control rather than an abuse ceiling useless as
+   * > credential-stuffing protection.
+   * >
+   * > The opposite mistake is worse and is why this is not simply `true` in production: trusting
+   * > `X-Forwarded-For` unconditionally on a process that is directly reachable lets any caller
+   * > forge a header and get a fresh bucket per request, which removes the limit entirely. Trust
+   * > has to be stated, not assumed, which is the whole reason it is configuration.
+   *
+   * Accepted forms, matching what Fastify hands to `proxy-addr`:
+   *
+   * - `false` (the default) - no proxy. Development, and any direct exposure.
+   * - a **number** - hop count. `1` is right on Fly.io, where the edge proxy is the only ingress
+   *   and appends the client address to `X-Forwarded-For`.
+   * - `true` - trust every hop. Correct only when nothing can reach the process directly.
+   * - a comma-separated list of addresses or CIDR ranges to believe.
+   */
+  TRUST_PROXY: z.string().default('false'),
+
   // --- Error monitoring ---
   /**
    * Where captured errors are sent, or absent.
@@ -98,6 +123,29 @@ const Env = z.object({
 });
 
 export type Config = z.infer<typeof Env>;
+
+/**
+ * `TRUST_PROXY` as Fastify wants it.
+ *
+ * A string in the environment, three different types at the call site. Parsed here rather than
+ * inline so there is one answer to "what does this value mean", and so `'false'` cannot be read
+ * as the truthy string it technically is - which would silently trust every hop and is the exact
+ * inversion of the setting's purpose.
+ */
+export function trustProxyOption(value: string | undefined): boolean | number | string {
+  // Absent means the same as `'false'`, which is what the schema default already supplies in
+  // production. Accepting it here is for the partial `as unknown as Config` objects the test
+  // suites build - and it fails in the safe direction anyway: no proxy trusted.
+  const trimmed = (value ?? '').trim();
+  if (trimmed === '' || trimmed.toLowerCase() === 'false') return false;
+  if (trimmed.toLowerCase() === 'true') return true;
+  // A bare integer is a hop count. `Number()` rather than `parseInt`, so "1abc" is not silently
+  // read as 1 and quietly trusted.
+  const hops = Number(trimmed);
+  if (Number.isInteger(hops) && hops >= 0) return hops;
+  // Otherwise it is an address or CIDR list, which proxy-addr parses itself.
+  return trimmed;
+}
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   const parsed = Env.safeParse(source);

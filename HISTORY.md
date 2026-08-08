@@ -154,11 +154,73 @@ simulator has never been run", dated 2026-07-30. A development build has run on 
 2026-08-01 and most work since was reported from it. Android is the row that is still true, and now
 says so on its own.
 
-**Left undone, deliberately:** the three operational findings this audit re-confirmed but did not
-fix - no security headers on any response, `trustProxy` unconfigured (which makes the per-IP
-sign-in bucket one shared bucket behind a proxy), and `.env.bak` tracked with a `.gitignore` that
-does not match it. Also the 15 dependency advisories, and the platform moderation queue still
-having no screen. They are one scoped block of work rather than five loose ends.
+### The three operational findings, closed in a second pass the same day
+
+Not defects in behaviour, which is why they had survived: nothing in the product works worse
+without any of them, so no screen and no test ever complained.
+
+**Security headers.** There were none - not a partial set, zero occurrences of any of them
+anywhere in the codebase. One plugin on the whole instance rather than per route, for the same
+structural reason the session hook and the rate limiter live on the scope. Three of helmet's
+defaults had to be overridden and each would have been wrong here rather than merely strict:
+
+- **`useDefaults: false` on the CSP.** Left on, helmet merges its document-shaped defaults
+  underneath - `script-src 'self'`, `style-src ... 'unsafe-inline'`, `font-src`, `img-src`. None is
+  dangerous and all of them describe a thing that does not exist: this process serves JSON and one
+  302 and never a document. `default-src 'none'` already covers every fetch directive.
+- **`X-Frame-Options: DENY`**, not helmet's `SAMEORIGIN`, which disagreed with the
+  `frame-ancestors 'none'` I had just set. Two headers answering one question differently get
+  resolved later by whichever one somebody reads first.
+- **`Cross-Origin-Resource-Policy: cross-origin`**, because the default is `same-origin` and this
+  API is deliberately read from another origin. Left at the default it would have refused the Expo
+  web client while native carried on working - the exact failure shape this project has already
+  shipped twice, and the reason the header set was checked against a live cross-origin request
+  rather than just eyeballed.
+
+**`trustProxy`.** Configuration rather than a constant, because both directions are wrong in
+different ways and neither is a safe default to assume. Unset behind a proxy, `request.ip` is the
+proxy's and the per-IP sign-in bucket becomes one bucket for the internet - which fails closed and
+is still useless as credential-stuffing protection. Set to `true` on a directly reachable process,
+any caller forges `X-Forwarded-For` and takes a fresh bucket per request, which *removes* the limit
+rather than loosening it. Default `false`; `1` is the Fly.io answer.
+
+The trap worth recording is in the parsing. **`'false'` is a non-empty string and therefore
+truthy**, so handing the raw environment value to Fastify trusts every hop precisely when it was
+told not to - an inverted setting, not a loosened one. `trustProxyOption` exists for that one line
+and the test pins it.
+
+**`.env.bak`.** Untracked, and `.gitignore` changed from `.env`, `.env.local`, `.env.*.local` to
+`.env*` with `!.env.example`. The file only ever held a placeholder; the finding was always the
+*pattern*, since a denylist of remembered suffixes is the wrong shape for secrets. Verified by
+asking `git check-ignore` about five spellings rather than by reading the glob.
+
+Six tests, in a new file, because both findings share a failure mode rather than a subject:
+neither is reachable from any screen, so nothing gets worse when they silently stop working. All
+six were mutation-tested - unregistering helmet failed four, wiring `trustProxy` with the raw
+string failed the parsing one, and dropping `frameguard` failed exactly the header-agreement one.
+One of them was rewritten first: the closed case read `socket.remoteAddress` while the open case
+read `request.ip`, which is two different measurements and so not a comparison at all - it would
+have passed whatever `trustProxy` did.
+
+**The dependency advisories: triaged, not fixed, and the triage is the useful part.** `PRD/17` said
+"15 moderate, mostly `@expo/config-plugins` transitives". It is now 30 - 12 moderate, 18 high - and
+the count is the least interesting fact about them. **Exactly one reaches the deployed server's
+request path**: `fast-uri`, through `fastify` to `@fastify/ajv-compiler` to `ajv`. Every other one -
+`image-size`, `js-yaml`, `brace-expansion`, `uuid`, `esbuild`, `nanoid` - arrives through Expo,
+`drizzle-kit`, `vitest`, or an optional `expo-sqlite` peer of `drizzle-orm`, and runs on a
+developer's machine rather than in production.
+
+`fast-uri@3.1.5` patches it and sits inside the `^3` range `ajv` already accepts, so it is a patch
+bump rather than an upgrade. **The `overrides` entry did not work**, and it is worth saying plainly
+rather than quietly reverting: npm 11.12.1 reads the key back through `npm pkg get` and never
+writes it to the lockfile, with the lockfile deleted and regenerated. Two `fast-uri` copies exist
+at different majors, so any override has to name both - that was found and corrected and changed
+nothing. Backed out rather than left half-applied. `npm audit fix --force` is not the next step
+either: it moves Expo 57 and TypeScript 6, both pinned deliberately per `AGENTS.md` 5.1. This needs
+a real dependency pass, which is its own piece of work.
+
+**Still open after both passes:** the dependency advisories above, and the platform moderation
+queue having no screen.
 
 ---
 

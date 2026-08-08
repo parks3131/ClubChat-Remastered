@@ -19,6 +19,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1098.0",
     "@clubchat/shared": "*",
     "@fastify/cors": "^11.2.0",
+    "@fastify/helmet": "^13.1.0",
     "@sentry/node": "^10.69.0",
     "better-auth": "^1.6.25",
     "drizzle-orm": "^0.45.2",
