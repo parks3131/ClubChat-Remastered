@@ -29,6 +29,30 @@ import {
   type PendingSend,
 } from './store.ts';
 
+/**
+ * The gateway answered and refused us, with the reason it gave.
+ *
+ * > **A distinct type because "the server said no" and "I could not reach the server" are
+ * > different facts, and only the first is grounds to sign somebody out.** `session.ts` has drawn
+ * > that line since Phase 3 for the HTTP check; the socket path had no way to express it, so a
+ * > gateway explicitly reporting `invalid_token` was caught as a generic connect failure and the
+ * > app settled into "Offline. Showing saved messages." **permanently**. Nothing ever re-checked,
+ * > and the member's only clue that their session was dead rather than the network being quiet was
+ * > a thin grey banner. Observed on the web client on 2026-08-08.
+ *
+ * `code` is the gateway's own `auth.err` code, so a caller can act on `invalid_token` and
+ * `signin_blocked` without string-matching a message.
+ */
+export class AuthRejectedError extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(`auth failed: ${code}`);
+    this.name = 'AuthRejectedError';
+    this.code = code;
+  }
+}
+
 /** Minimal socket surface, so Node's `ws` and the RN/browser global both fit. */
 export interface SocketLike {
   send(data: string): void;
@@ -296,7 +320,7 @@ export class ChatClient {
         break;
       }
       case 'auth.err': {
-        this.authRejected?.(new Error(`auth failed: ${frame.d.code}`));
+        this.authRejected?.(new AuthRejectedError(frame.d.code));
         break;
       }
       case 'msg.ack': {

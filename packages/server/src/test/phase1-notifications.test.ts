@@ -788,6 +788,75 @@ describe('mentions', () => {
    * does not contain your name is confusing in a way no wording fixes, so the body is the
    * authority and the client's claim is only a hint.
    */
+  /**
+   * A name that is the PREFIX of another name must not be dragged in with it.
+   *
+   * Reported 2026-08-08. `body.includes('@' + name)` cannot tell a name from the start of a
+   * longer one, so "@Parks RPK" contained "@Parks" and notified a member who was never mentioned.
+   * Word boundaries do not help - the next character is a space - so the rule is that a longer
+   * candidate matching at the same index wins.
+   */
+  it('does not mention a member whose name is a prefix of the person actually named', async () => {
+    const f = await setupClub();
+    const ctx = await loadAccessContext(h.db, f.adminId);
+    const channel = await getChannelRef(h.db, f.channelId);
+
+    // Two members, one name a prefix of the other.
+    await h.db.update(users).set({ name: 'Parks RPK' }).where(eq(users.id, f.memberId));
+    const shortId = await makeUser('Parks');
+    await h.db
+      .insert(clubMemberships)
+      .values({ clubId: f.clubId, userId: shortId, role: 'member' });
+
+    const sent = await sendMessage(h.db, ctx, channel!, {
+      channelId: f.channelId,
+      clientMsgId: crypto.randomUUID(),
+      body: '@Parks RPK are you running tomorrow?',
+      // The client claims both, as an over-eager composer would.
+      mentions: [f.memberId, shortId],
+    });
+    expect(sent.ok).toBe(true);
+    const messageId = sent.ok ? sent.message.id : '';
+
+    const stored = await h.db
+      .select()
+      .from(messageMentions)
+      .where(eq(messageMentions.messageId, messageId));
+
+    expect(stored.map((row) => row.name)).toEqual(['Parks RPK']);
+    expect(
+      stored.some((row) => row.userId === shortId),
+      'a member whose name is merely a prefix was notified',
+    ).toBe(false);
+  });
+
+  it('still mentions the short name when it is the one actually written', async () => {
+    const f = await setupClub();
+    const ctx = await loadAccessContext(h.db, f.adminId);
+    const channel = await getChannelRef(h.db, f.channelId);
+
+    await h.db.update(users).set({ name: 'Parks RPK' }).where(eq(users.id, f.memberId));
+    const shortId = await makeUser('Parks');
+    await h.db
+      .insert(clubMemberships)
+      .values({ clubId: f.clubId, userId: shortId, role: 'member' });
+
+    const sent = await sendMessage(h.db, ctx, channel!, {
+      channelId: f.channelId,
+      clientMsgId: crypto.randomUUID(),
+      // Only the short name appears, so the longer one must not steal it.
+      body: '@Parks how did it go?',
+      mentions: [f.memberId, shortId],
+    });
+    const messageId = sent.ok ? sent.message.id : '';
+
+    const stored = await h.db
+      .select()
+      .from(messageMentions)
+      .where(eq(messageMentions.messageId, messageId));
+    expect(stored.map((row) => row.name)).toEqual(['Parks']);
+  });
+
   it('stores no mention when the body does not name the person', async () => {
     const f = await setupClub();
     const ctx = await loadAccessContext(h.db, f.adminId);

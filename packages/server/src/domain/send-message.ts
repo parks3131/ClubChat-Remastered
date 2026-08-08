@@ -205,9 +205,48 @@ async function resolveMentions(
     .from(users)
     .where(inArray(users.id, unique));
 
-  return named
-    .filter((row) => row.name !== null && body.includes(`@${row.name}`))
-    .map((row) => ({ userId: row.id, name: row.name as string }));
+  /*
+   * **The longest name wins at each position, because `includes` alone notifies the wrong person.**
+   *
+   * A plain substring test cannot tell a name from the prefix of a longer one. With members called
+   * `Parks` and `Parks RPK`, the message "@Parks RPK are you running?" contains `@Parks RPK` - and
+   * therefore also contains `@Parks` - so BOTH were notified and one of them was never mentioned.
+   * A phone buzzing about a message that is not addressed to you is the loudest possible way to
+   * get this wrong, and it gets commoner as a club grows: any member whose name is a prefix of
+   * another's is permanently mis-notified.
+   *
+   * Word boundaries do not fix it - the character after `@Parks` is a space, which is a perfectly
+   * good boundary. What distinguishes the two is that a LONGER candidate also matches at that
+   * exact index, so the short one is not a mention there; it is the start of somebody else's name.
+   * A candidate survives only where it is the longest match at some position, which leaves
+   * "@Parks how are you" still mentioning `Parks` as it should.
+   */
+  const byLongestName = named
+    .filter((row): row is { id: string; name: string } => row.name !== null)
+    // Longest first, so the first candidate to claim an index is the most specific one.
+    .sort((a, b) => b.name.length - a.name.length);
+
+  /** Indexes already spoken for by a longer name. */
+  const claimed = new Set<number>();
+  const mentioned: Array<{ userId: string; name: string }> = [];
+
+  for (const row of byLongestName) {
+    const needle = `@${row.name}`;
+    let index = body.indexOf(needle);
+    let isMentioned = false;
+
+    while (index !== -1) {
+      if (!claimed.has(index)) {
+        claimed.add(index);
+        isMentioned = true;
+      }
+      index = body.indexOf(needle, index + 1);
+    }
+
+    if (isMentioned) mentioned.push({ userId: row.id, name: row.name });
+  }
+
+  return mentioned;
 }
 
 // ---------------------------------------------------------------------------

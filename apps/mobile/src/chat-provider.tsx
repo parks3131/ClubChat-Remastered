@@ -27,7 +27,7 @@ import { AppState, Platform, type AppStateStatus } from 'react-native';
  * and only ever on the primary platform: web has the global, so every browser check passed.
  */
 import { randomUUID } from 'expo-crypto';
-import { ChatClient, type SocketLike } from '@clubchat/client-core';
+import { AuthRejectedError, ChatClient, type SocketLike } from '@clubchat/client-core';
 import type { ChannelState } from '@clubchat/shared';
 import { config } from './config.ts';
 import { unregisterForPush } from './push.ts';
@@ -120,6 +120,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setChannels(client.channels);
         setOffline(false);
       } catch (error) {
+        /*
+         * **A refusal is not an outage, and treating it as one strands the member.**
+         *
+         * The gateway answering `invalid_token` is proof the session is dead - the same proof a
+         * 401 gives on the HTTP path, where `verifySession` has always acted on it. Falling
+         * through to `setOffline(true)` here meant a stale token presented as an app that looked
+         * signed in, loaded every screen, and sat on a frozen conversation behind a thin
+         * "Offline. Showing saved messages." banner. Nothing re-checked, so it never recovered:
+         * the founder hit exactly this on web and the only cure anybody could find was guessing
+         * to sign out and back in.
+         *
+         * `signin_blocked` is the same category - the server has refused this account, not
+         * failed to answer - so both end the session rather than degrading.
+         */
+        if (
+          error instanceof AuthRejectedError &&
+          (error.code === 'invalid_token' || error.code === 'signin_blocked')
+        ) {
+          console.warn('[chat] the gateway rejected this session, signing out', error.code);
+          await sessionStore.clear();
+          setUserId(null);
+          setChannels([]);
+          setAuthState('signed-out');
+          bump();
+          return;
+        }
+
         // Realtime is an enhancement, not a requirement. A failed socket must leave the app
         // usable rather than blocking sign-in - and with a local cache behind it, "usable"
         // now means chat history actually renders rather than showing an empty screen.

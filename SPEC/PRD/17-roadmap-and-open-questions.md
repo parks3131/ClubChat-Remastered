@@ -277,13 +277,11 @@ on news posts. Recurring events. External calendar sync. RSVP or attendance, any
 
 ### Open product questions
 
-- **Should a routine notify anybody?** Noticed 2026-08-08 while proving push, when the founder
-  expected to tap through to a routine from a notification. The catalogue has 19 types and **none
-  of them fire on a routine being created or changed**, so publishing a week's training reaches
-  nobody who is not already looking. Every other piece of club-wide content - an event, a poll, a
-  news post, a meeting - announces itself. This is either a deliberate asymmetry nobody has
-  written down or an omission, and it is cheap to close if it is the latter: the audience function
-  and the render/target switch already handle exactly this shape.
+- ~~**Should a routine notify anybody?**~~ **Settled 2026-08-08: no.** Raised when the founder
+  expected to tap through to a routine from a notification and found the catalogue has no type for
+  it. He confirmed the silence is intended - a routine is reference material somebody consults,
+  not an announcement - so the asymmetry with events, polls, news and meetings stands on purpose.
+  Recorded so it is not re-raised as an omission.
 - **Should a mention require an exact name match?** `resolveMentions` filters a client's claimed
   mentions to those whose `@name` literally appears in the body, which is the check that stops a
   client ringing anybody it likes from a message addressed to nobody. But `body.includes` has **no
