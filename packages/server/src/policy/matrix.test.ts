@@ -30,6 +30,7 @@ import {
   canLeaveClub,
   canMuteChannel,
   canOpenDm,
+  canViewProfile,
   canReadReports,
   canReportMessage,
   dmThreadWith,
@@ -855,6 +856,55 @@ describe('PRD/14 matrix: Direct messages', () => {
     expect(canOpenDm(dmActors.blocked, inClub)).toBe(false);
     expect(sharesAClub(dmActors.participant, inClub)).toBe(true);
     expect(sharesAClub(dmActors.outsider, inClub)).toBe(false);
+  });
+
+  /*
+   * Profile visibility, which had no predicate at all until 2026-08-08.
+   *
+   * The rule was stated in ADR-0009, in PRD/03's rejected alternatives and in `sharesAClub`'s
+   * own docstring, and enforced nowhere: `readProfile` took a context and never read it. Note
+   * that this is the inverse of the alias trap in AGENTS.md failure mode 10 - an alias hides a
+   * capability behind another name, whereas this capability had no name to count.
+   */
+  it('opens a profile to a clubmate, a conversation partner and nobody else', () => {
+    const inClub = { userId: PEER, clubIds: [CLUB] };
+    const elsewhere = { userId: 'u-far', clubIds: ['other-club'] };
+
+    // A shared club is the ADR's rule.
+    expect(canViewProfile(dmActors.participant, inClub)).toBe(true);
+    // Sharing nothing is the same as not existing, exactly as it is for DM eligibility.
+    expect(canViewProfile(dmActors.participant, elsewhere)).toBe(false);
+    // Always your own.
+    expect(
+      canViewProfile(dmActors.participant, {
+        userId: dmActors.participant.userId,
+        clubIds: [],
+      }),
+    ).toBe(true);
+
+    /*
+     * And a conversation partner after the last shared club has gone. This is the branch that
+     * is easy to leave out and would be wrong: PRD/14 rule 3 keeps the thread read-only rather
+     * than deleting it, so its history stays readable - and a name in readable history has to
+     * stay tappable. `sharesClub: false` is exactly that state.
+     */
+    const strandedPeer = accessContextOf({
+      userId: 'u-stranded',
+      dmThreads: [{ conversationId: 'dm-1', otherUserId: PEER, sharesClub: false }],
+    });
+    expect(sharesAClub(strandedPeer, inClub)).toBe(false);
+    expect(canViewProfile(strandedPeer, inClub)).toBe(true);
+
+    /*
+     * A block does NOT withhold the card, deliberately.
+     *
+     * Blocking stops messages and hides the pair from each other's search. It does not erase
+     * somebody from a club they are both still in, where their name and face are on the roster
+     * already - so hiding the card alone would conceal nothing and break a roster the blocker
+     * can see. `canOpenDm` is the predicate that answers the other way, on the same pair.
+     */
+    expect(canViewProfile(dmActors.blocked, inClub)).toBe(true);
+    expect(canOpenDm(dmActors.blocked, inClub)).toBe(false);
   });
 
   it('a thread in one conversation grants nothing in another', () => {

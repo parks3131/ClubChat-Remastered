@@ -14,8 +14,10 @@
 import { eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { isoUtc } from '../db/sql-helpers.ts';
-import { users } from '../db/schema.ts';
+import { outbox, users } from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
+import { canViewProfile } from '../policy/predicates.ts';
+import { accessibleChannelPredicate } from './channel-access.ts';
 
 export type Refusal = {
   ok: false;
@@ -89,6 +91,7 @@ export async function readProfile(
     school: string | null;
     dob: string | null;
     created_at: string;
+    club_ids: string[] | null;
   }>(sql`
     SELECT id::text AS id,
            full_name,
@@ -97,7 +100,14 @@ export async function readProfile(
            city,
            school,
            dob::text AS dob,
-           ${isoUtc('created_at')} AS created_at
+           ${isoUtc('created_at')} AS created_at,
+           -- Loaded so the visibility predicate stays a pure function: "do we share a club" is
+           -- a join, and a predicate may not run one. Same reason, and the same shape, as
+           -- loadCandidate in the DM module. (No backtick in this comment: it would end the
+           -- template string, which is a trap channel-access.ts records having fallen into.)
+           ARRAY(
+             SELECT cm.club_id::text FROM club_memberships cm WHERE cm.user_id = users.id
+           ) AS club_ids
       FROM users
      WHERE id = ${userId}
        AND anonymized_at IS NULL
@@ -105,6 +115,17 @@ export async function readProfile(
 
   const row = rows.rows[0];
   if (!row) return { ok: false, code: 'not_found' };
+
+  /*
+   * Who may see this card.
+   *
+   * `not_found` rather than `forbidden`, matching every other refusal in the API: somebody with
+   * no standing must not learn that an account exists, and a 403 would tell them. It also means
+   * a caller cannot use this route to test whether a given uuid is a real member.
+   */
+  if (!canViewProfile(ctx, { userId: row.id, clubIds: row.club_ids ?? [] })) {
+    return { ok: false, code: 'not_found' };
+  }
 
   const base = {
     userId: row.id,
@@ -218,7 +239,48 @@ export async function deleteOwnAccount(
     return { ok: false, code: 'owns_clubs' };
   }
 
+  /*
+   * Every channel this account can currently reach, captured BEFORE the memberships go.
+   *
+   * > **Deleting the rows is not enough, and this was missing entirely until 2026-08-08.** A
+   * > channel subscription is authorized once, at subscribe time, and never rechecked per
+   * > message - so a live socket outlives the membership that justified it. Every other removal
+   * > path in the product already knows this and publishes a revocation: club departure, club
+   * > deletion, race removal, Eboard demotion and Eboard departure. Account deletion wrote no
+   * > outbox event at all, so it published nothing, and a member who deleted their account kept
+   * > receiving their old club's conversation in real time for as long as they left the app
+   * > open. Proved by watching a message posted after `DELETE /me` arrive on the deleted
+   * > account's socket.
+   *
+   * Read through `accessibleChannelPredicate` rather than a hand-written join, because "which
+   * channels can this person reach" has exactly one definition and this is the sixth caller of
+   * it. Writing a seventh copy here is the mistake that hid race chat for a whole phase.
+   */
+  const reachable = await db.execute<{ id: string }>(sql`
+    SELECT c.id::text AS id FROM channels c WHERE ${accessibleChannelPredicate(ctx.userId)}
+  `);
+  const channelIds = reachable.rows.map((row) => row.id);
+
   await db.transaction(async (tx) => {
+    /*
+     * The revocation goes through the outbox, not straight to Redis, and that is ADR-0006's
+     * argument rather than a preference: the event commits in the same transaction as the
+     * deletion, so a process that dies between the two cannot leave an account deleted with its
+     * sockets still attached. An immediate publish has exactly that window. It also puts account
+     * lifecycle on the same mechanism as the five removal paths above rather than inventing a
+     * sixth.
+     *
+     * Written BEFORE the deletes for the same reason `club.deleted` is: `outbox.partition_key`
+     * carries no foreign key, deliberately, so an effect can outlive what it describes.
+     */
+    if (channelIds.length > 0) {
+      await tx.insert(outbox).values({
+        partitionKey: ctx.userId,
+        eventType: 'account.deleted',
+        payload: { userId: ctx.userId, channelIds },
+      });
+    }
+
     await tx.execute(sql`
       UPDATE users
          SET anonymized_at = now(),

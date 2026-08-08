@@ -467,3 +467,33 @@ that records how to recognise the class._
     gateway - so "creating a poll is broken" was really "one publisher is old". And **a reload fixed
     it**, because the same message then arrived through `/sync`, which builds its envelopes
     somewhere else entirely - which makes it read as a realtime bug rather than a missing field.
+
+19. **A rule asserted in three documents and implemented in none is invisible to an audit that
+    counts predicates.** Symptom: none, for the life of the project. `GET /users/:id` returned any
+    account's name, bio, city, school and avatar to **any** signed-in caller holding a uuid -
+    including one who had just been blocked by its owner. Root cause: `readProfile` took an
+    `AccessContext` and never read it. ADR-0009 rejected global DMs partly *because* "profiles are
+    visible only to people who share a club"; `sharesAClub`'s own docstring restated it; PRD/03
+    listed public profiles as a rejected alternative. All three described a rule with no predicate
+    behind it. **Rule: audit the spec's *claims* against the code, not the code's predicates against
+    its routes.** Note this is the exact inverse of entry 10 and the pair is worth holding together:
+    an alias hides a capability behind another one's name, so counting predicates finds too few
+    definitions; this had no name at all, so counting finds nothing wrong. The tell is a rule stated
+    in prose in more than one document, which is what people do when something feels settled - and a
+    rule nobody doubts is a rule nobody greps for. Two existing tests had quietly encoded the hole
+    by asserting a stranger *could* read a card.
+
+20. **A per-request check is not a per-connection check, and a socket is neither.** Symptom: an
+    account shut off by an operator kept posting into club chat, and an account that deleted itself
+    kept receiving club chat in real time - both indefinitely, while the same accounts' HTTP
+    requests were correctly refused with 401. Root cause: `isSessionUsable` was asked on every HTTP
+    request and exactly **once** per socket, at the `auth` frame; a client holds a socket open for
+    hours with heartbeat pings. The receiving half had a second cause - `deleteOwnAccount` dropped
+    every membership in one transaction and wrote **no outbox event**, so unlike all five other
+    removal paths it published no revocation. **Rules: ask a revocation on every frame that already
+    reloads the context, and make account lifecycle publish a revocation like every other way of
+    losing access.** How to recognise the class: a guarantee that holds on one transport and is
+    merely *assumed* on the other, because the two were written months apart and only one of them
+    has a natural place to re-ask. Compare entry 12 - there the revocation check never fired at all;
+    here it fires correctly and not often enough, which is harder to see because every test of it
+    passes.

@@ -305,6 +305,29 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
     );
   };
 
+  /**
+   * The session was revoked while this socket was open. Drop it.
+   *
+   * > **Asked on every frame that reloads the context, not only at `auth`.** The HTTP hook
+   * > re-asks `isSessionUsable` on every single request; this side asked it once, at connect,
+   * > and a socket outlives that answer indefinitely because a client holds it open with
+   * > heartbeat pings. Proved on 2026-08-08: with `signin_blocked_at` set, HTTP correctly
+   * > answered 401 while the same account's socket kept acking sends into club chat, and the
+   * > rows are in the channel log.
+   *
+   * Note this is the same shape as AGENTS.md failure mode 12 one layer up. There the check read
+   * a field better-auth does not return, so it never fired; here the check is correct and simply
+   * was not run at the point that mattered. A revocation is only as good as its least frequent
+   * question.
+   *
+   * The socket is closed rather than the frame refused, because there is nothing this connection
+   * may still do - and closing is what makes the client sign out rather than retry.
+   */
+  const dropRevoked = (state: SocketState, correlationId?: string) => {
+    send(state.socket, { t: 'auth.err', d: { code: 'signin_blocked' } }, correlationId);
+    state.socket.close();
+  };
+
   const handleSubscribe = async (
     state: SocketState,
     channelIds: readonly string[],
@@ -317,6 +340,9 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
     // point at which access is checked for the lifetime of the subscription, so it
     // should read the current state of the world.
     const access = await loadAccessContext(deps.db, state.userId!);
+    // Including whether the account may still act at all. Granting a subscription to a revoked
+    // session would hand it a live feed of every channel it used to be able to read.
+    if (!isSessionUsable(access)) return dropRevoked(state, correlationId);
 
     for (const channelId of channelIds) {
       const channel = await getChannelRef(deps.db, channelId);
@@ -362,6 +388,27 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
     // subscription. A subscription proves what was true when it was granted; a write
     // must be checked when it happens.
     const access = await loadAccessContext(deps.db, state.userId!);
+    /*
+     * And the session itself, which is a different question from "may this user post here".
+     *
+     * A revoked account normally still holds every membership row it had - an operator shutting
+     * somebody off does not remove them from their clubs - so `canPostInChannel` below answers
+     * yes and the send commits. Membership is not the check that fails; the session is, and it
+     * was never asked.
+     *
+     * The pending send is settled BEFORE the socket closes, so the client's outbox resolves this
+     * attempt rather than holding a promise nobody answers. It stays in the outbox and is retried
+     * on reconnect, where `auth` refuses it - which is the correct end state, and safe because
+     * `client_msg_id` makes the retry idempotent either way.
+     */
+    if (!isSessionUsable(access)) {
+      send(
+        state.socket,
+        { t: 'msg.err', d: { clientMsgId: payload.clientMsgId, code: 'forbidden' } },
+        correlationId,
+      );
+      return dropRevoked(state);
+    }
 
     try {
       // Through the authorized command, not straight to appendMessage. That is where the

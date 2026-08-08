@@ -13,6 +13,155 @@ Newest first.
 
 ---
 
+## 2026-08-08 - The security audit, and two rules that were written down but never run
+
+The audit `PRD/17` planned on 2026-08-03 and never started. Six sections, worked through by
+reading, then proved by attempting the forbidden thing as the unprivileged actor - which is the
+only reason either finding is in this entry rather than in the "looks fine" column.
+
+**Two defects, both fixed. The rest of the surface came back clean**, and the clean half took
+most of the time.
+
+### The one that had been asserted three times and implemented never
+
+`GET /users/:id` returned any account's name, bio, city, school and avatar to **any signed-in
+caller** holding a uuid. `readProfile` took an `AccessContext` and never looked at it.
+
+What makes this worth a long note is not the hole, it is why nothing found it. The rule was not
+undocumented. ADR-0009 rejected global DMs partly *because* "profiles are visible only to people
+who share a club". `sharesAClub`'s own docstring says "it is the same rule that makes profiles
+visible". `PRD/03` lists public profiles as an explicitly rejected alternative, with the reason:
+clubs are small and often include minors. Three documents, one rule, no predicate.
+
+**That is the exact inverse of failure mode 10 and the pair belongs together.** An alias hides a
+capability behind another capability's name, so an audit that counts predicates finds too few
+definitions and knows something is wrong. This had no name at all - so counting predicates finds
+nothing missing, because what is missing was never spelled. The method that found it was reading
+the spec's *claims* against the code, which is the same method that found the Phase 3.75a gaps and
+for the same reason: the code cannot list what it never had.
+
+Proved twice, because the second version is the one that matters:
+
+```
+A clubs: []   B clubs: []          # no relationship of any kind
+A -> /users/<B>   {"bio":"Sensitive: I am 15 and I go to Northside High", ...}
+
+B blocks A        -> {"blocked":true}
+A's DM candidates -> []            # correct: B has vanished from search
+A -> /users/<B>   -> full card     # not correct
+```
+
+The block guarantee was enforced on the surface it was written for and nowhere else.
+
+**Two existing tests had quietly encoded the hole**, asserting that a stranger could read a card -
+they had been written when `signUp` produced two unrelated accounts and nobody thought about it.
+Both changed meaning rather than being deleted, the same way `pin-and-clear` did in August.
+
+The fix is `canViewProfile`, and two of its three branches needed an argument:
+
+- **A conversation partner counts, not only a clubmate.** `PRD/14` rule 3 keeps a thread's history
+  readable after the pair's last shared club goes. A name in readable history has to stay
+  tappable, so gating on the shared club alone would 404 a card the product is still showing -
+  which reads as a bug, not as privacy. It ends up the same two-part shape as `canBlock`, which is
+  the tell that it is the right shape: both answer "can these two reach each other at all".
+- **A block does *not* hide the card**, deliberately. Blocking stops messages and hides the pair
+  from each other's search; it does not erase somebody from a club they are both still in, where
+  their name and face are on every roster and beside every message they ever sent. Withholding the
+  card alone conceals nothing and breaks a roster the blocker can already see. Recorded as a test,
+  because it is the branch somebody will later "fix".
+
+One behaviour change falls out and is correct: tapping the name of somebody who **left** your club,
+in old history, now says "Not found" instead of opening their card. That is the same answer a
+deleted account's profile has given since Phase 3.75a, and it goes through `DataScreen`'s retryable
+state rather than a blank.
+
+### The one where the check was right and simply was not asked often enough
+
+`isSessionUsable` is asked on every HTTP request and was asked **once** per WebSocket, at the
+`auth` frame. A client holds a socket open for hours with heartbeat pings.
+
+```
+                                   before                              after
+shut-off account sends             msg.ack seq=2, row in the log       msg.err forbidden, socket closed
+self-deleted account receives      still delivered, in real time       revoked before the next message
+                (HTTP was correctly 401 in both cases, throughout)
+```
+
+The receiving half is the worse one and it needs no operator at all - just the shipped,
+self-service `DELETE /me`. It also had a second, separate cause: `deleteOwnAccount` drops every
+membership row in one transaction and **wrote no outbox event**, so it published no revocation.
+Every other way of losing access already published one - club departure, club deletion, race
+removal, Eboard demotion, Eboard departure. Account lifecycle was the only path that did not, and
+it is the one path where *all* of somebody's access ends at once.
+
+Both halves now fixed: `isSessionUsable` on every frame that already reloads the context
+(`subscribe` and `msg.send`), plus an `account.deleted` event carrying the channel ids captured
+before the delete, exactly as `club.deleted` does.
+
+**Through the outbox rather than an immediate Redis publish**, and that is ADR-0006's argument
+rather than a style preference: the event commits in the same transaction as the deletion, so no
+crash can leave an account deleted with its sockets still attached. Publishing from the API is one
+worker tick faster and gives up precisely the guarantee the outbox exists for. `effect-coverage`
+paired the new event with its handler automatically, which is the test that exists because three
+Eboard events once had no consumer at all.
+
+Compare failure mode 12, which this sits beside: there the revocation check read a field
+better-auth does not return and **never fired**. Here it fires, correctly, and not often enough -
+which is harder to see, because every test of it passes.
+
+### What came back clean, and why that took longer than the findings
+
+A negative result is only worth anything if it was actually looked for, so:
+
+- **All 124 routes** reach a channel guard, a predicate-bearing domain function, or an inline
+  predicate. Checked by script rather than sampled - it flagged 17, of which 15 are reads scoped by
+  `user_id` in SQL and two were the script failing to follow a closure and an inline
+  `isClubAdmin`. `readProfile` was the one real hit.
+- **No SQL injection.** The codebase contains exactly one `sql.raw` - `isoUtc` - and all 17 call
+  sites pass a hardcoded column name. The three `ILIKE` concatenations build a *bound parameter*,
+  not SQL.
+- **Email is confined to `/me`**, checked against twenty read surfaces rather than argued from the
+  code. That structural claim holds exactly as written.
+- **Media**: presign scoped per channel, complete is uploader-only, download re-authorized on every
+  request. **DM report queue** carries no message bodies, so the logged context read really is the
+  only door to content.
+
+One hygiene note that is **not** a defect, recorded so nobody re-derives it: twelve raw reads cast
+a `timestamptz` with bare `::text` where seventeen others use `isoUtc()`. Every one of the twelve
+is normalized through `new Date(...).toISOString()` before it leaves, so nothing is broken - but
+they work only because V8 happens to parse Postgres's `2026-08-08 06:17:24.116823+00`, which is not
+ISO 8601 and which a strict parser may refuse. `listDmThreads` and `listAccessibleChannels` return
+the same `last_at` field with the same meaning and only one uses the helper. Failure mode 14 is the
+half of this that already bit.
+
+### Verification worth noting
+
+Type check clean, `check:runtime` 68 modules, no em dashes, full suite green at **778 server, 27
+shared, 67 mobile**. The four new tests were mutation-tested rather than trusted:
+
+- **Visibility check removed** - the stranger-refusal test failed, alone.
+- **The DM branch dropped from `canViewProfile`** - the two tests that cover a partner after the
+  last shared club failed, and nothing else did.
+- **The `account.deleted` event suppressed** - the deletion test failed on the missing outbox row.
+
+Then both original proofs were re-run against the fixed code, live, rather than being assumed from
+the tests: the stranger's profile read answers `not_found` and starts working the moment a club is
+shared; the shut-off account's send comes back `forbidden` with the socket closed and the channel's
+message count unchanged; and the deleted account's socket stops receiving.
+
+**A spec correction found on the way**: `PRD/17`'s "Verification owed" table still said "the
+simulator has never been run", dated 2026-07-30. A development build has run on a real iPhone since
+2026-08-01 and most work since was reported from it. Android is the row that is still true, and now
+says so on its own.
+
+**Left undone, deliberately:** the three operational findings this audit re-confirmed but did not
+fix - no security headers on any response, `trustProxy` unconfigured (which makes the per-IP
+sign-in bucket one shared bucket behind a proxy), and `.env.bak` tracked with a `.gitignore` that
+does not match it. Also the 15 dependency advisories, and the platform moderation queue still
+having no screen. They are one scoped block of work rather than five loose ends.
+
+---
+
 ## 2026-08-07 - The mail provider, chosen and wired
 
 `clubchatapp.com` was registered this morning, which unblocked the follow-up

@@ -49,6 +49,10 @@ const isBlocked       = (ctx, other) => ctx.blockedEither.has(other)
 const sharesAClub     = (ctx, other) => other.clubIds.some(c => ctx.clubRole.has(c))
 const canOpenDm       = (ctx, other) => other.userId !== ctx.userId
                                      && sharesAClub(ctx, other) && !isBlocked(ctx, other.userId)
+// Who may READ a profile card. Self, a clubmate, or somebody you already hold a thread with.
+const canViewProfile  = (ctx, other) => other.userId === ctx.userId
+                                     || sharesAClub(ctx, other)
+                                     || dmThreadWith(ctx, other.userId) !== undefined
 const canPostInDm     = (ctx, dm) => { const t = ctx.dmThreads.get(dm)
                                        return !!t && t.sharesClub && !isBlocked(ctx, t.otherUserId) }
 const isChannelAdmin  = (ctx, ch) => ch.scope === 'dm' ? false : …existing…
@@ -61,6 +65,33 @@ const canPinInChannel  = (ctx, ch) => ch.scope === 'dm'
 const canReadReports   = (ctx, ch) => ch.scope === 'dm'
                                     ? ctx.isPlatformModerator : isChannelAdmin(ctx, ch)
 ```
+
+**`canViewProfile` is the rule three documents asserted and no code enforced.** Added 2026-08-08,
+by the security audit. `readProfile` took an access context and never consulted it, so **any
+signed-in account could read any other account's name, bio, city, school and avatar** given only a
+uuid - including an account that had just blocked them. ADR-0009 rejected global DMs partly because
+they would "contradict the existing privacy rule that profiles are visible only to people who share
+a club"; `sharesAClub` above says the same in its own comment; and
+[Accounts and profile](../PRD/03-accounts-and-profile.md) lists public profiles as an explicitly
+rejected alternative, because clubs are small and often include minors.
+
+Two things about its shape are load-bearing:
+
+- **The DM branch is not optional.** [Direct messages](../PRD/14-direct-messages.md) rule 3 keeps a
+  thread's history readable after the pair's last shared club goes, and a name in readable history
+  has to stay tappable. Gating on the shared club alone would 404 a card the product is still
+  showing, which reads as a bug rather than as privacy. It is deliberately the same two-part shape
+  as `canBlock`, because both answer "can these two reach each other at all" and the answer must not
+  depend on which one is asking.
+- **A block is deliberately NOT consulted.** Blocking stops messages and hides the pair from each
+  other's search (rule 6); it does not erase somebody from a club they are both still in, where
+  their name and face sit on every roster and beside every message they have sent. Withholding the
+  card alone would conceal nothing and would break a roster the blocker can already see.
+
+Note the shape of the gap, because it is the **inverse** of the alias trap in AGENTS.md failure
+mode 10 rather than an instance of it. An alias hides a capability behind another one's name; here
+the capability had **no predicate of any kind**, so an audit that counts predicates finds nothing
+missing - the thing that was missing had never been spelled.
 
 **`blockedEither` is deliberately symmetric.** A block is stored one-directionally
 (`blocker → blocked`), but it is *evaluated* in both directions: neither party can message the
@@ -142,15 +173,41 @@ make.
 
 ### Revocation is a per-request question
 
-**Blocking an account does not invalidate a token it already holds.** So both entry points - the
-HTTP hook and the gateway's `auth` frame - ask `isSessionUsable` on every request and every
-connection, and the answer is loaded from our own `users` row into the access context.
+**Blocking an account does not invalidate a token it already holds.** So every entry point asks
+`isSessionUsable`, and the answer is loaded from our own `users` row into the access context.
 
 > That is a correction, not a description. Both sites previously read `signinBlockedAt` off
 > better-auth's session user, which returns only the columns declared in its `additionalFields`
 > and does not carry that one. The check therefore read `undefined` on every request and **never
 > fired at all**, in both places, from Phase 0 until 2026-07-30. Never authorize against a field
 > on a third-party object you did not put there; see AGENTS.md failure mode 12.
+
+**"Every connection" was not enough, and this section said it was until 2026-08-08.** The HTTP hook
+re-asks on every request; the gateway asked once, at the `auth` frame, and **a socket outlives that
+answer indefinitely** because a client holds it open with heartbeat pings. The audit proved both
+halves against a running server:
+
+| | Before | Now |
+|---|---|---|
+| A shut-off account **sending** over its existing socket | `msg.ack`, and the row is in the channel log | `msg.err forbidden`, then the socket is closed |
+| A self-deleted account **receiving** on its existing socket | Still delivered, in real time, indefinitely | Revoked before the next message |
+
+So `isSessionUsable` is now asked on **every frame that reloads the access context** - `subscribe`
+and `msg.send`, both of which already did the load - and not only at `auth`. The general rule: *a
+revocation is only as good as its least frequent question.*
+
+The receiving half needed something different, because a passive socket sends no frames and so
+re-asks nothing. Its cause was a missing revocation: `deleteOwnAccount` dropped every membership row
+in one transaction and **wrote no outbox event**, so nothing published. Every other removal path -
+club departure, club deletion, race removal, Eboard demotion and Eboard departure - already
+published one. Account lifecycle now emits `account.deleted` carrying the channel ids captured
+before the delete, exactly as `club.deleted` does.
+
+**Through the outbox rather than an immediate publish**, which is ADR-0006's argument rather than a
+preference: the event commits in the same transaction as the deletion, so no crash can leave an
+account deleted with its sockets still attached. An immediate Redis call has exactly that window.
+The rejected alternative was publishing from the API, which is faster by one worker tick and loses
+the guarantee that made the outbox worth having.
 
 ### Defense in depth
 

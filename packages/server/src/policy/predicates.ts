@@ -228,6 +228,45 @@ export const canBlock = (
 export const canUnblock = (ctx: AccessContext, otherUserId: string): boolean =>
   otherUserId !== ctx.userId;
 
+/**
+ * May this user read that person's profile card?
+ *
+ * > **This predicate did not exist until 2026-08-08, and the rule it carries had been asserted
+ * > in three places while being enforced in none.** `GET /users/:id` took an access context and
+ * > never consulted it, so any signed-in account could read any other account's name, bio, city,
+ * > school and avatar given only a uuid - including an account that had just blocked them.
+ * > ADR-0009 rejected global DMs on the grounds that they would "contradict the existing privacy
+ * > rule that profiles are visible only to people who share a club"; `sharesAClub` below says the
+ * > same thing in its own docstring; and PRD/03 lists public profiles as an explicitly rejected
+ * > alternative, because clubs are small and often include minors. All three described a rule
+ * > that no code implemented.
+ *
+ * Note the shape, because it is the inverse of failure mode 10 rather than an instance of it. An
+ * alias hides a capability behind another one's name; this was a capability the spec names
+ * repeatedly with **no predicate of any kind** - so an audit that counts predicates finds nothing
+ * missing, because what was missing had never been spelled at all.
+ *
+ * **Three ways in, and the third is not optional.** Self, obviously. A shared club, which is the
+ * ADR's rule. And an existing conversation - because PRD/14 rule 3 keeps a thread's history
+ * readable after the pair's last shared club goes, and a name in readable history has to stay
+ * tappable. Gating on the shared club alone would 404 the profile card behind a conversation the
+ * product still shows, which reads as a bug rather than as privacy.
+ *
+ * That is deliberately the same two-part shape as `canBlock`, and for the same reason: both
+ * answer "can this person reach that one at all", and the answer must not change depending on
+ * which of the two is asking.
+ *
+ * A block is **not** consulted here, and that is a decision rather than an omission. Blocking
+ * stops messages and hides the pair from each other's search (PRD/14 rule 6); it does not erase
+ * a person from a club they are both still in, where their name and face appear on every roster
+ * and beside every message they have ever sent. Withholding the card alone would conceal nothing
+ * and would break the roster the blocker can already see.
+ */
+export const canViewProfile = (ctx: AccessContext, subject: DmCandidate): boolean =>
+  subject.userId === ctx.userId ||
+  sharesAClub(ctx, subject) ||
+  dmThreadWith(ctx, subject.userId) !== undefined;
+
 /** Muting is per member and applies to every scope. Reading the chat is the whole check. */
 export const canMuteChannel = isChannelMember;
 

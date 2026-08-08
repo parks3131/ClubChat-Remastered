@@ -24,6 +24,16 @@ never shown to other members.
    "+N more" popup when there are many; each entry opens that club.
 8. Another member's profile is **read-only**, reached by tapping their avatar in chat or
    their row on any roster.
+8a. **A profile is visible only to people who share a club with its owner, or who already hold a
+    conversation with them.** Anybody else gets nothing back, including no confirmation that the
+    account exists. This is the same eligibility rule that governs direct messages
+    ([Direct messages](14-direct-messages.md) rule 1) and the reason there is no global member
+    search; the conversation clause exists because rule 3 there keeps a thread's history readable
+    after the last shared club goes, so a name in that history must stay tappable. **A block does
+    not hide a profile** - it stops messages and hides the pair from each other's search, but two
+    people still in the same club see each other on every roster anyway, so withholding the card
+    alone would conceal nothing. *(Stated 2026-08-08. It had been asserted in three places and
+    enforced in none: every profile was readable by every signed-in account.)*
 9. Privacy Policy and Terms are readable **both signed out and signed in**.
 10. Signing out returns to sign-in and clears the session.
 11. **Account deletion is permanent, self-service, and confirmation-gated on every

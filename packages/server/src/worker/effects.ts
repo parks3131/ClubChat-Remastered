@@ -988,6 +988,30 @@ const onClubDeleted: EffectHandler = async (event, deps) => {
 };
 
 /**
+ * An account was deleted.
+ *
+ * The rows are already gone - `deleteOwnAccount` anonymises the user and drops every membership
+ * in one transaction - so all that remains is telling the gateways to drop the sockets, and the
+ * channel ids had to be captured before the delete, which is why they ride on the event. Exactly
+ * the shape of `onClubDeleted` above, for exactly the same reason.
+ *
+ * There is no notification and no system message, deliberately. A departure that was already
+ * narrated by the membership cascade does not need saying twice, and an account deletion is not
+ * an announcement its former clubs are owed.
+ */
+const onAccountDeleted: EffectHandler = async (event, deps) => {
+  const userId = event.payload['userId'] as string | undefined;
+  const channelIds = (event.payload['channelIds'] as string[] | undefined) ?? [];
+  if (!userId || channelIds.length === 0) return;
+
+  await publishRevocation(deps.redis, { userId, channelIds });
+  deps.log('info', 'account deleted, subscriptions revoked', {
+    userId,
+    channels: channelIds.length,
+  });
+};
+
+/**
  * A generic "content was created" effect.
  *
  * Races, events, meetings, news posts and polls all resolve to the same three steps: work out
@@ -1671,6 +1695,14 @@ export const handlers: Record<string, EffectHandler> = {
   'club.member_removed': makeDepartureHandler('removed'),
   'club.member_left': makeDepartureHandler('left'),
   'club.deleted': onClubDeleted,
+
+  /**
+   * Account lifecycle. One event, and it exists only to revoke.
+   *
+   * Emitted since 2026-08-08; before that, deleting an account published nothing and a live
+   * socket kept delivering. See `onAccountDeleted`.
+   */
+  'account.deleted': onAccountDeleted,
 
   // The Eboard space. Emitted since the space was built, handled since none of it worked.
   'eboard.join_requested': onEboardJoinRequested,

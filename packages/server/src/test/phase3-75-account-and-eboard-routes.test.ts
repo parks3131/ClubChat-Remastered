@@ -207,6 +207,11 @@ describe('profile', () => {
   it('edits your own and has no route to edit anybody else', async () => {
     const me = await signUp('ProfileMe');
     const other = await signUp('ProfileOther');
+    // A shared club, because since 2026-08-08 that is what makes a profile readable at all.
+    // The two used to be strangers here and the final assertion still passed, which is how this
+    // test quietly documented the hole it now guards.
+    const { clubId } = await createClubAs(me);
+    await join(clubId, other);
 
     const saved = await as(me, 'PATCH', '/me/profile', {
       name: 'Renamed Me',
@@ -236,6 +241,8 @@ describe('profile', () => {
   it('withholds the date of birth from everybody but its owner', async () => {
     const me = await signUp('DobMe');
     const other = await signUp('DobOther');
+    const { clubId } = await createClubAs(me);
+    await join(clubId, other);
     await as(me, 'PATCH', '/me/profile', { dob: '2001-02-03' });
 
     const own = await as(me, 'GET', `/users/${me.userId}`);
@@ -275,6 +282,84 @@ describe('profile', () => {
     expect((await as(me, 'PATCH', '/me/profile', { dob: '2001-02-03T00:00:00Z' })).status).toBe(
       400,
     );
+  });
+
+  /*
+   * Who may open a profile card at all.
+   *
+   * > **Every one of these passed as a 200 until 2026-08-08.** `readProfile` took an access
+   * > context and never consulted it, so any signed-in account could read any other account's
+   * > name, bio, city, school and avatar given only a uuid. ADR-0009, PRD/03's rejected
+   * > alternatives and `sharesAClub`'s own docstring all state the rule; nothing enforced it.
+   */
+  it('refuses a profile to somebody who shares no club and holds no conversation', async () => {
+    const stranger = await signUp('ProfileStranger');
+    const subject = await signUp('ProfileSubject');
+    await as(subject, 'PATCH', '/me/profile', {
+      bio: 'Sixteen, and at Northside High',
+      city: 'Binghamton',
+      school: 'Northside High',
+    });
+
+    // Neither of them belongs to anything, so there is no relationship to justify the read.
+    const attempt = await as(stranger, 'GET', `/users/${subject.userId}`);
+    // 404 rather than 403: a stranger must not learn that the account exists either, which also
+    // stops this route being used to test whether a uuid is a real member.
+    expect(attempt.status).toBe(404);
+    expect(JSON.stringify(attempt.body)).not.toContain('Northside');
+
+    // A shared club is what grants it, and nothing else changed.
+    const { clubId } = await createClubAs(subject);
+    await join(clubId, stranger);
+    const now = await as(stranger, 'GET', `/users/${subject.userId}`);
+    expect(now.status).toBe(200);
+    expect(now.body.profile.school).toBe('Northside High');
+  });
+
+  it('keeps a conversation partner readable after the last shared club goes', async () => {
+    const me = await signUp('DmProfileMe');
+    const peer = await signUp('DmProfilePeer');
+    const { clubId } = await createClubAs(me);
+    await join(clubId, peer);
+
+    const thread = await as(me, 'POST', '/dm/threads', { userId: peer.userId });
+    expect(thread.status).toBe(201);
+
+    // The club that made them eligible goes away. PRD/14 rule 3 keeps the thread's history
+    // readable, so the name in that history has to stay tappable - gating on the shared club
+    // alone would 404 a card the product is still showing, which reads as a bug, not privacy.
+    await h.db
+      .delete(clubMemberships)
+      .where(sql`club_id = ${clubId} AND user_id IN (${me.userId}, ${peer.userId})`);
+
+    const card = await as(me, 'GET', `/users/${peer.userId}`);
+    expect(card.status).toBe(200);
+    expect(card.body.profile.name).toBe('DmProfilePeer');
+  });
+
+  it('still shows the card to somebody who has been blocked, deliberately', async () => {
+    const blocker = await signUp('BlockProfileA');
+    const blocked = await signUp('BlockProfileB');
+    const { clubId } = await createClubAs(blocker);
+    await join(clubId, blocked);
+
+    expect((await as(blocker, 'POST', '/blocks', { userId: blocked.userId })).status).toBe(201);
+
+    /*
+     * A block is not consulted by `canViewProfile`, and that is a decision rather than an
+     * oversight. Blocking stops messages and hides the pair from each other's DM search; it does
+     * not erase somebody from a club they are both still in, where their name and face sit on
+     * the roster and beside every message they have ever sent. Withholding the card alone would
+     * conceal nothing and would break the roster the blocker can already see.
+     */
+    expect((await as(blocked, 'GET', `/users/${blocker.userId}`)).status).toBe(200);
+    expect((await as(blocker, 'GET', `/users/${blocked.userId}`)).status).toBe(200);
+
+    // The search filter, which IS block-aware, still refuses - so the two rules coexist.
+    const candidates = await as(blocked, 'GET', '/dm/candidates');
+    expect(
+      candidates.body.candidates.map((c: { userId: string }) => c.userId),
+    ).not.toContain(blocker.userId);
   });
 });
 
@@ -322,6 +407,29 @@ describe('account deletion', () => {
 
     // And their profile no longer opens.
     expect((await as(owner, 'GET', `/users/${leaver.userId}`)).status).toBe(404);
+
+    /*
+     * The sockets are told, and this is the half that was missing entirely until 2026-08-08.
+     *
+     * A subscription is authorized once, at subscribe time, and never rechecked per message - so
+     * deleting the membership rows does not stop delivery to a socket that is already attached.
+     * Every other removal path publishes a revocation; account deletion wrote no outbox event at
+     * all, so a member who deleted their account kept receiving their old club's conversation in
+     * real time for as long as they left the app open. Proved by watching a message posted after
+     * DELETE /me arrive on the deleted account's socket.
+     *
+     * Asserted on the event rather than on Redis because that is where the guarantee lives: the
+     * row commits in the same transaction as the deletion, so there is no window in which the
+     * account is gone and the instruction was never durable.
+     */
+    const revocation = await h.db.execute<{ payload: { userId: string; channelIds: string[] } }>(
+      sql`SELECT payload FROM outbox
+           WHERE event_type = 'account.deleted' AND partition_key = ${leaver.userId}`,
+    );
+    expect(revocation.rows).toHaveLength(1);
+    expect(revocation.rows[0]?.payload.userId).toBe(leaver.userId);
+    // The club's own channel is in it, captured before the membership went.
+    expect(revocation.rows[0]?.payload.channelIds.length).toBeGreaterThan(0);
   });
 
   it('refuses while the caller still owns a club, and names nothing it should not', async () => {

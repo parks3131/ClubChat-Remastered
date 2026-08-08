@@ -100,19 +100,37 @@ Things that are built and not yet proved on every surface they claim to work on.
 
 | What | Verified on | Still to verify |
 |---|---|---|
-| **Everything, on iOS and Android** | Web only, via the browser | **The simulator has never been run.** Every smoke test in this project so far has been react-native-web in Chrome. Deferred by agreement, not by oversight, but it means "works" currently means "works on web" |
+| **Everything, on iOS and Android** | Web, via the browser; **iOS on real hardware** since 2026-08-01 | *(Corrected 2026-08-08 - this row said "the simulator has never been run" and was dated 2026-07-30, by which time it was already going stale.)* A development build has run on a real iPhone since 2026-08-01, and most work since - replies, the long-press menu, the calendar swipe, race notifications - was reported from that device. **Android has still never been run at all**, and no full pass of the acceptance checklist has been done on any native platform |
 | **The attachment upload path** | Web (`blob:` URI through `fetch`) | Native reads a `file:` URI through the same `fetch` call - one path rather than an unverified branch, and untested |
 | **The pickers** | Web file chooser | Native permission prompts for library and camera, which have no web equivalent |
 | **Push** | The Expo transport, with a fake token that was correctly rejected | A real device token reaching a real backgrounded phone |
 | **`MEDIA_URL_MODE=cdn`** | Not at all | Only `presign` runs today. The CDN branch is the production one and has never served a byte |
 
-### Security audit: the planned scope
+### Security audit
 
-**Planned 2026-08-03, not started.** The four operational gaps are closed; this is the next block
-of work and it is deliberately a **reading** exercise before it is a fixing one. Nothing below has
-been remediated, and three of the findings were turned up while writing the plan rather than by
-running it - they are recorded here because a plan that hides what it already knows is worse than
-no plan.
+> **Run 2026-08-08.** All six sections below were worked through. **Two defects were found, both
+> proved against a running server and both now fixed**; the rest of the surface came back clean.
+> The full narrative is in [`HISTORY.md`](../../HISTORY.md); the recognition rules are AGENTS.md
+> failure modes 19 and 20.
+>
+> | Found | Was | Now |
+> |---|---|---|
+> | **Every profile readable by every account.** `GET /users/:id` took an access context and never consulted it, so any signed-in caller holding a uuid got any account's name, bio, city, school and avatar - including a caller its owner had just blocked | A rule asserted in ADR-0009, in this document's own rejected alternatives and in `sharesAClub`'s docstring, and enforced nowhere | `canViewProfile`: self, a shared club, or an existing conversation. See [Accounts and profile](03-accounts-and-profile.md) rule 8a |
+> | **Revocation stopped at the socket.** `isSessionUsable` was asked on every HTTP request and once per connection, so a shut-off account kept **sending** and a self-deleted account kept **receiving**, indefinitely, while their HTTP requests were correctly 401'd | Two causes: the gateway never re-asked, and `deleteOwnAccount` wrote no outbox event so published no revocation | Asked on every frame that reloads the context, plus an `account.deleted` event carrying the channel ids. See [Authorization](../TECH/05-authorization.md) |
+>
+> **What came back clean**, which is worth recording because a negative result is only useful if it
+> was actually looked for: all 124 routes reach a channel guard, a predicate-bearing domain function
+> or an inline predicate (checked mechanically, not sampled); no SQL injection anywhere - the single
+> `sql.raw` is `isoUtc` and every call site passes a hardcoded column name; email confined to `/me`
+> across twenty read surfaces; the media pipeline's three hops each authorized; and the DM report
+> queue carries no message bodies, so the logged context read really is the only door to content.
+>
+> **Still open from the list below:** the three operational findings (security headers, `trustProxy`,
+> `.env.bak`), the dependency advisories, and the platform moderation queue having no screen.
+
+The plan, as written on 2026-08-03, follows. It is deliberately a **reading** exercise before it is
+a fixing one, and three of the findings were turned up while writing it rather than by running it -
+they are recorded because a plan that hides what it already knows is worse than no plan.
 
 **The scope is bounded by one thing worth stating up front:** this product will include minors, and
 it has private one-to-one conversations in it. That raises the stakes on the authorization and
