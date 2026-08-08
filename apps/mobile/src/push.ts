@@ -192,14 +192,37 @@ export function hrefForResponse(response: Notifications.NotificationResponse): s
  */
 export async function pendingLaunchHref(): Promise<string | undefined> {
   const response = await Notifications.getLastNotificationResponseAsync();
-  return response === null ? undefined : hrefForResponse(response);
+  if (response === null) return undefined;
+  const href = hrefForResponse(response);
+  if (href === undefined) {
+    console.warn(
+      '[push] launch tap resolved to no destination; payload data was',
+      JSON.stringify(response.notification.request.content.data),
+    );
+  }
+  return href;
 }
 
-/** Subscribe to taps that arrive while the app is already running. Returns the unsubscribe. */
+/**
+ * Subscribe to taps that arrive while the app is already running. Returns the unsubscribe.
+ *
+ * Logs both outcomes, and the raw `data` when it resolves to nothing. A tap that navigates
+ * nowhere is indistinguishable from a tap that merely foregrounded the app, so without this the
+ * only symptom is "it opened but stayed where I was" - which is equally consistent with a payload
+ * that lost its target, a route that did not take, and nothing being wrong at all.
+ */
 export function onNotificationTap(handler: (href: string) => void): () => void {
   const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
     const href = hrefForResponse(response);
-    if (href !== undefined) handler(href);
+    if (href === undefined) {
+      console.warn(
+        '[push] tap resolved to no destination; payload data was',
+        JSON.stringify(response.notification.request.content.data),
+      );
+      return;
+    }
+    console.log('[push] tap →', href);
+    handler(href);
   });
   return () => subscription.remove();
 }
