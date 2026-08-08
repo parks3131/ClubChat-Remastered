@@ -23,7 +23,7 @@ import { loadAccessContext } from '../policy/context.ts';
 import { drainOnce } from '../worker/drain.ts';
 import { resolveAudience } from '../worker/audience.ts';
 import { RecordingPushSender } from '../push/sender.ts';
-import { registerDevice } from '../push/dispatch.ts';
+import { registerDevice, unregisterDevice } from '../push/dispatch.ts';
 import {
   channelMutes,
   clubMemberships,
@@ -378,6 +378,76 @@ describe('push suppression is by read cursor, never by liveness', () => {
       .from(devices)
       .where(eq(devices.pushToken, 'ExponentPushToken[will-die]'));
     expect(rows[0]?.invalidatedAt).not.toBeNull();
+  });
+});
+
+describe('signing out deregisters the phone', () => {
+  it('stops pushing to a device that signed out', async () => {
+    const f = await setupClub();
+    await registerDevice(h.db, {
+      userId: f.memberId,
+      pushToken: 'ExponentPushToken[handed-on]',
+      platform: 'ios',
+    });
+
+    const gone = await unregisterDevice(h.db, {
+      userId: f.memberId,
+      pushToken: 'ExponentPushToken[handed-on]',
+    });
+    expect(gone.removed).toBe(1);
+
+    await announce(f, f.adminId, 'Meet at the track');
+    await drainAndDeliver();
+
+    // The point of the whole change: whoever holds this phone now hears nothing addressed to
+    // the member who signed out of it.
+    expect(push.sent).toHaveLength(0);
+  });
+
+  it('refuses to deregister a token belonging to somebody else', async () => {
+    const f = await setupClub();
+    await registerDevice(h.db, {
+      userId: f.memberId,
+      pushToken: 'ExponentPushToken[not-yours]',
+      platform: 'ios',
+    });
+
+    // The admin supplies a token that is not theirs. Deleting on the token alone would let
+    // anybody who learned one silence another member's phone.
+    const attempt = await unregisterDevice(h.db, {
+      userId: f.adminId,
+      pushToken: 'ExponentPushToken[not-yours]',
+    });
+    expect(attempt.removed).toBe(0);
+
+    await announce(f, f.adminId, 'Still listening');
+    await drainAndDeliver();
+    expect(push.sent).toHaveLength(1);
+  });
+
+  it('is silent about a token that was never registered', async () => {
+    const f = await setupClub();
+    const missing = await unregisterDevice(h.db, {
+      userId: f.memberId,
+      pushToken: 'ExponentPushToken[never-existed]',
+    });
+    // No throw, no distinction. The route answers 204 either way rather than telling a caller
+    // whether a token they named exists.
+    expect(missing.removed).toBe(0);
+  });
+
+  it('lets the same phone come back, bound to whoever signs in next', async () => {
+    const f = await setupClub();
+    const token = 'ExponentPushToken[shared-phone]';
+
+    await registerDevice(h.db, { userId: f.memberId, pushToken: token, platform: 'ios' });
+    await unregisterDevice(h.db, { userId: f.memberId, pushToken: token });
+    // The next person signs in on the same handset.
+    await registerDevice(h.db, { userId: f.adminId, pushToken: token, platform: 'ios' });
+
+    const rows = await h.db.select().from(devices).where(eq(devices.pushToken, token));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.userId).toBe(f.adminId);
   });
 });
 

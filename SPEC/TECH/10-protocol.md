@@ -179,6 +179,7 @@ GET    /media/:id[?variant=thumb|display]   ← authorized redirect, hour-aligne
 GET    /channels/:id/gallery?before={seq}   ← paginated; inherits the chat's access rules
 GET    /notifications?cursor=                · POST /notifications/read
 POST   /devices                              ← register push token
+DELETE /devices                              ← forget it on sign-out; scoped to the caller
 ```
 
 > **`PATCH /races/:id` and `PATCH /races/:id/meet-information` obey opposite rules about an

@@ -30,6 +30,7 @@ import { randomUUID } from 'expo-crypto';
 import { ChatClient, type SocketLike } from '@clubchat/client-core';
 import type { ChannelState } from '@clubchat/shared';
 import { config } from './config.ts';
+import { unregisterForPush } from './push.ts';
 import { openMessageStore } from './sqlite-store.ts';
 import { sessionStore, verifySession } from './session.ts';
 
@@ -211,6 +212,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     await clientRef.current?.close();
     clientRef.current = null;
+    /*
+     * Deregister the phone BEFORE the session is cleared, because that call needs the token.
+     *
+     * Getting this order wrong is silent: the request 401s, sign-out still completes, and the
+     * device stays bound to the account that left - so the next person to pick the phone up
+     * keeps receiving their mentions and DMs, sender name and message preview included.
+     * Awaited rather than fired off, so a slow network cannot let the clear below win the race.
+     */
+    await unregisterForPush();
     await sessionStore.clear();
     setUserId(null);
     setChannels([]);

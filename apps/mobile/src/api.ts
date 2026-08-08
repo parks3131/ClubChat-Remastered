@@ -657,6 +657,14 @@ export const inboxApi = {
 export const devicesApi = {
   register: (body: { pushToken: string; platform: 'ios' | 'android' | 'web' }) =>
     apiFetch<{ id: string }>('/devices', { method: 'POST', body }),
+
+  /**
+   * Signing out. **Must be called while the session token is still stored**, because this is an
+   * authenticated request - clearing the session first turns it into a 401 and leaves the phone
+   * registered to the account that just left.
+   */
+  unregister: (body: { pushToken: string }) =>
+    apiFetch<void>('/devices', { method: 'DELETE', body }),
 };
 
 /**

@@ -164,12 +164,29 @@ push and the row it links to telling two different stories.
 exactly one `devices` row, which is the upsert-on-token rule in `registerDevice` doing its job: one
 phone, one row, not one buzz per launch.
 
-### Scope, honestly
+### The sign-out gap, found while proving push and closed straight after
 
-`DELETE /devices` on sign-out **does not exist**, and was left alone. `POST /devices` upserts on the
-token, so the next sign-in re-points the row at whoever signed in - but between a sign-out and that
-next sign-in, a phone keeps receiving the previous account's notifications. Out of scope for proving
-push, in scope for anyone shipping it.
+`POST /devices` binds a token to whoever is signed in, and nothing undid it. The upsert means the
+next sign-in re-points the row - but **between a sign-out and that next sign-in the row stays
+live**, so a shared or handed-on phone keeps receiving the previous member's mentions and direct
+messages, with the sender's name and a preview of what they said on the lock screen.
+
+Reported as out of scope for proving push, then asked for and closed in the same session:
+`DELETE /devices` with `unregisterDevice`, called from `signOut` **before** the session is cleared.
+
+> **The ordering is the entire correctness of it, and it fails silently in the wrong order.**
+> Deregistering is an authenticated request, so clearing the session first turns it into a 401 that
+> nothing surfaces - sign-out still completes, and the phone stays bound to the account that left.
+
+Two decisions worth recording. It **deletes rather than setting `invalidated_at`**, because that
+column means "the provider says this token is dead" - a different fact, and one that re-registering
+deliberately clears; the cascading `push_deliveries` rows are not missed because a token that comes
+back gets a fresh device id no future dedupe could have consulted. And it matches on **`user_id`
+as well as the token**, because the token is client-supplied: deleting on the token alone would let
+anybody who learned one silence somebody else's phone. Both are covered by tests, along with the
+handed-on-phone case where the same token comes back bound to a different member.
+
+### Scope, honestly
 
 Android has still never been run, so it has no push either. The `remote-notification`
 `UIBackgroundModes` entry that iOS warns about is genuinely not needed - alert pushes display

@@ -16,7 +16,7 @@
  * therefore never touches Redis. See ADR-0008.
  */
 
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { notificationTarget, renderNotification, type NotificationType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { devices, pushDeliveries } from '../db/schema.ts';
@@ -243,4 +243,36 @@ export async function registerDevice(
   const row = rows[0];
   if (!row) throw new Error('device upsert returned no row');
   return row;
+}
+
+/**
+ * Forget a device's push token. The sign-out half of `registerDevice`.
+ *
+ * > **A signed-out phone must stop ringing for the account that left it.** Registration binds a
+ * > token to whoever was signed in, and nothing used to undo that: between a sign-out and the
+ * > next sign-in the row stayed live, so a shared or handed-on phone kept buzzing with the
+ * > previous member's mentions and direct messages - and the notification body carries the
+ * > sender's name and a preview of what they said.
+ *
+ * **Scoped to the caller**, which is the whole security of it: the token is supplied by the
+ * client and a delete keyed on the token alone would let anybody who learned one silence
+ * somebody else's phone. Matching on `user_id` too means the worst a forged token achieves is
+ * deleting a row that was already yours.
+ *
+ * Deletes rather than setting `invalidated_at`. That column means "the provider says this token
+ * is dead", which is a different fact and one that re-registering deliberately clears; reusing it
+ * here would leave the row asserting something untrue about the token. Deleting also ends the
+ * device-to-member association outright, which is the honest answer when somebody signs out.
+ * The `push_deliveries` rows cascade with it and are not missed: a token that comes back gets a
+ * fresh device id, so no future dedupe could ever have consulted them.
+ */
+export async function unregisterDevice(
+  db: Db,
+  input: { userId: string; pushToken: string },
+): Promise<{ removed: number }> {
+  const rows = await db
+    .delete(devices)
+    .where(and(eq(devices.userId, input.userId), eq(devices.pushToken, input.pushToken)))
+    .returning({ id: devices.id });
+  return { removed: rows.length };
 }

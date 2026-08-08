@@ -131,6 +131,37 @@ export async function registerForPush(): Promise<PushOutcome> {
 }
 
 /**
+ * Signing out: tell the server to forget this device.
+ *
+ * **Called before the session is cleared**, because it is an authenticated request - the ordering
+ * is the whole correctness of it and is enforced at the call site in `chat-provider.tsx`.
+ *
+ * Reads the token back from the OS rather than caching what was registered, so a token that was
+ * refreshed mid-session still names the row that actually exists. Failure is swallowed and
+ * logged: a phone that cannot reach the server must still be able to sign out, and the worst case
+ * is a stale row that the next sign-in re-points at whoever signs in then.
+ */
+export async function unregisterForPush(): Promise<void> {
+  if (!Device.isDevice) return;
+
+  try {
+    const id = projectId();
+    if (id === undefined) return;
+
+    // Only if permission still stands. Asking for a token without it prompts or throws, and a
+    // sign-out is the wrong moment to put a permission dialog in somebody's way.
+    const permission = await Notifications.getPermissionsAsync();
+    if (!permission.granted) return;
+
+    const token = (await Notifications.getExpoPushTokenAsync({ projectId: id })).data;
+    await devicesApi.unregister({ pushToken: token });
+    console.log('[push] unregistered on sign-out');
+  } catch (error) {
+    console.warn('[push] unregister failed; the row will be re-pointed on next sign-in', error);
+  }
+}
+
+/**
  * The href a tapped notification should open, or undefined if it carries no usable target.
  *
  * The payload is **untrusted input** in the ordinary sense - it has been through APNs and back -

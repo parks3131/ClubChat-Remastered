@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { Platform } from '@clubchat/shared';
 import { badgeCount, markInboxRead, readInbox } from '../../domain/inbox.ts';
 import { syncSince } from '../../domain/reads.ts';
-import { registerDevice } from '../../push/dispatch.ts';
+import { registerDevice, unregisterDevice } from '../../push/dispatch.ts';
 import { authorizeChannel, type AppDeps } from '../plumbing.ts';
 
 export function registerInboxRoutes(app: FastifyInstance, deps: AppDeps): void {
@@ -54,6 +54,25 @@ export function registerInboxRoutes(app: FastifyInstance, deps: AppDeps): void {
       ...body.data,
     });
     return reply.code(201).send(device);
+  });
+
+  /**
+   * Signing out: stop this phone ringing for the account that just left it.
+   *
+   * **204 whether or not a row was there.** The client calls this on the way out and cannot
+   * usefully do anything with "no such device" - the token may never have registered, or another
+   * sign-out may have won the race. Answering identically also declines to tell a caller whether
+   * a token they supplied exists, which is the same non-disclosure the block and report paths
+   * keep.
+   */
+  app.delete('/devices', async (request, reply) => {
+    const body = z.object({ pushToken: z.string().min(1).max(400) }).safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+    await unregisterDevice(deps.db, {
+      userId: request.userId!,
+      pushToken: body.data.pushToken,
+    });
+    return reply.code(204).send();
   });
 
   /**
