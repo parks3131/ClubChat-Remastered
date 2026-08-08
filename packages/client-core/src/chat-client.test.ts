@@ -33,6 +33,17 @@ class FakeSocket implements SocketLike {
   readonly sent: Array<Record<string, unknown>> = [];
 
   send(data: string): void {
+    /*
+     * **Throws when the socket is not OPEN, because a real one does.**
+     *
+     * The browser raises `InvalidStateError: Failed to execute 'send' on 'WebSocket'` for a
+     * socket that is CONNECTING, CLOSING or CLOSED. This fake used to accept the write silently
+     * at any readyState, so every caller looked safe here and `subscribe` throwing mid-`openChannel`
+     * - which took the HTTP sync down with it on a real device - was invisible to the suite.
+     */
+    if (this.readyState !== 1) {
+      throw new Error("Failed to execute 'send' on 'WebSocket': socket is not open");
+    }
     this.sent.push(JSON.parse(data) as Record<string, unknown>);
   }
 
@@ -301,6 +312,33 @@ describe('ChatClient applies the gap rule', () => {
    * badge, invisible in the conversation, and unrecoverable for the life of the cache - they
    * rendered perfectly on a second device whose cache had been built from the API.
    */
+  /**
+   * Opening a chat with the socket down must still reconcile.
+   *
+   * `subscribe` throws `not connected`, and that used to abort `openChannel` before the sync -
+   * so the client least able to receive messages live was also the one denied the HTTP fetch
+   * that would have caught it up. Realtime is an enhancement; the fetch is the requirement.
+   */
+  it('syncs on open even when the socket is down and subscribe throws', async () => {
+    const { client, socket, backlog } = await setup();
+    // A channel not in `auth.ok`, so `openChannel` genuinely tries to subscribe.
+    const FRESH = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+
+    backlog.push(
+      envelope(1, { channelId: FRESH }),
+      envelope(2, { channelId: FRESH }),
+    );
+    // The socket is gone, so `subscribe` throws from inside `openChannel`.
+    socket.close();
+
+    await client.openChannel(FRESH);
+
+    expect(
+      await client.store.seqs(FRESH),
+      'a dead socket cancelled the HTTP sync that needs no socket',
+    ).toEqual([1, 2]);
+  });
+
   it('refetches a hole below the high-water mark that neither cursor can reach', async () => {
     const { client, socket, backlog } = await setup();
 

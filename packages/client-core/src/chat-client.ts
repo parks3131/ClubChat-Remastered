@@ -534,9 +534,30 @@ export class ChatClient {
    */
   async openChannel(channelId: string): Promise<void> {
     if (!this.channels.some((entry) => entry.id === channelId)) {
-      // Subscribe before syncing, so anything posted during the fetch arrives rather than
-      // falling into the gap between the two.
-      this.subscribe([channelId]);
+      /*
+       * Subscribe before syncing, so anything posted during the fetch arrives rather than
+       * falling into the gap between the two.
+       *
+       * > **A failure here must not cancel the sync below, and for a long time it did.** `send`
+       * > throws `not connected` when the socket is down, which aborted `openChannel` before it
+       * > ever reached `syncChannel` - so opening a conversation on a client whose socket was
+       * > flapping did **no reconciliation at all**, despite the sync being plain HTTP that needs
+       * > no socket. The realtime enhancement was taking the durable path down with it, which is
+       * > backwards: PRD/16 rule 4 makes realtime an enhancement and the fetch the requirement.
+       *
+       * The visible cost was a device that stayed permanently behind - it could not receive
+       * messages live, and the one thing that could have caught it up was skipped every time it
+       * tried. Missed messages then sat below the local high-water mark, where until `repairGaps`
+       * nothing would ever ask for them again.
+       */
+      try {
+        this.subscribe([channelId]);
+      } catch (error) {
+        this.log('subscribe on open failed, syncing anyway', {
+          channelId,
+          error: String(error),
+        });
+      }
     }
     await this.syncChannel(channelId, await this.store.localMaxSeq(channelId));
   }
@@ -817,7 +838,22 @@ export class ChatClient {
    */
   async syncChannel(channelId: string, sinceSeq: number): Promise<void> {
     this.syncCount += 1;
-    await this.repairGaps(channelId);
+    /*
+     * **Never allowed to fail the sync it runs in front of.**
+     *
+     * Repairing a hole is a repair, not a precondition. Letting it throw here would mean a
+     * failing repair - an expired token, a 500, one bad page - took ordinary reconciliation down
+     * with it, turning "some old messages are missing" into "no new messages arrive at all".
+     * That is a strictly worse failure than the one this exists to fix.
+     */
+    try {
+      await this.repairGaps(channelId);
+    } catch (error) {
+      this.log('gap repair failed, continuing with the ordinary sync', {
+        channelId,
+        error: String(error),
+      });
+    }
     let since = sinceSeq;
     let mark = await this.store.syncMark(channelId);
 
