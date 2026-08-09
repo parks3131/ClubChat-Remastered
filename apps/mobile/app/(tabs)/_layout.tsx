@@ -13,13 +13,24 @@
  */
 
 import { MaterialIcons } from '@expo/vector-icons';
-import { Tabs, usePathname, useRouter } from 'expo-router';
-import { useRef } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Tabs, useSegments, usePathname, useRouter } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
+import { Animated, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSession } from '../../src/chat-provider.tsx';
 import { useCurrentSpace } from '../../src/current-space.tsx';
-import { color, radius, space, type } from '../../src/theme.ts';
+import { color, radius, space, tabBar, type } from '../../src/theme.ts';
 import { useBadge } from '../../src/use-badge.ts';
+
+/**
+ * The bar's own height, before the home-indicator inset is added to it.
+ *
+ * Enough for a 24pt icon, a 10pt label and the pill's padding around both. The inset is added at
+ * the call site rather than baked in here, because this number is about the design and that one is
+ * about the hardware.
+ */
+// Shared, because screens need it to keep their last row clear of a bar that floats over them.
+const TAB_BAR_CONTENT_HEIGHT = tabBar.height;
 
 /**
  * The tab bar label.
@@ -74,6 +85,123 @@ function TabIcon({ name, focused }: { name: keyof typeof TAB_ICON; focused: bool
 }
 
 /**
+ * One destination: the icon, its label, and the pill behind both when it is the active one.
+ *
+ * > **Drawn here rather than with `tabBarActiveBackgroundColor`, after that was tried and did not
+ * > fit.** The navigator paints that colour on a box of its own choosing, and the box turned out to
+ * > be the icon's - so the pill sat behind the icon with the label stranded underneath it, which is
+ * > not what the design shows and is not something a style prop can move. Owning the container is
+ * > the only way the pill can wrap both.
+ *
+ * It goes in the `tabBarIcon` slot with the navigator's own label switched off, so there is exactly
+ * one thing being positioned per destination instead of two that have to agree.
+ *
+ * The pill is a second channel for the selected state, which `PRD/16` wants: orange-versus-grey
+ * alone is invisible to a red-green colourblind reader and marginal on a phone in sunlight.
+ */
+/**
+ * The four destinations in bar order, by the route segment that identifies each.
+ *
+ * The segment rather than the pathname, because the first destination is a whole STACK - a club,
+ * a race, a chat and every roster live inside `(main)` - so matching on the path would need a rule
+ * per screen and would miss the next one somebody adds. The group name cannot drift.
+ */
+const TAB_ORDER = ['(main)', 'calendar', 'notifications', '(profile)'] as const;
+
+/**
+ * The active pill, as ONE element that slides between slots.
+ *
+ * > **A pill per tab cannot slide, however it is animated.** Four separate backgrounds can only
+ * > fade one out and the next in, which is the "click and jump" the founder kept reporting: the
+ * > indicator teleports because there is no single thing to move. There is exactly one pill here
+ * > and it changes position, which is the only arrangement that can travel.
+ *
+ * It lives in `tabBarBackground`, which fills the bar behind the items, so the pill is behind the
+ * icons and labels without any of them knowing it exists.
+ *
+ * `useNativeDriver` because this is a transform: the animation runs on the UI thread and keeps
+ * moving even while JS is busy mounting the screen being navigated to - which is precisely when a
+ * tab indicator is asked to move.
+ */
+function ActivePill() {
+  // Read as a plain array: the hook's type is a one-element tuple, which cannot express "the
+  // segment after `(tabs)`" even though that is exactly what it contains here.
+  const segments = useSegments() as readonly string[];
+  const [barWidth, setBarWidth] = useState(0);
+
+  // `indexOf` returns -1 for a route outside the four, which `Math.max` pins to the first rather
+  // than translating the pill off the left edge.
+  const index = Math.max(0, TAB_ORDER.indexOf(segments[1] as (typeof TAB_ORDER)[number]));
+  const slot = barWidth / TAB_ORDER.length;
+
+  const travel = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (slot === 0) return;
+    Animated.spring(travel, {
+      toValue: index * slot,
+      useNativeDriver: true,
+      /*
+       * Tuned to be SEEN, which is the whole requirement.
+       *
+       * A stiffer spring settles in around 250ms, and over a quarter of a phone's width that is
+       * fast enough to read as the indicator simply appearing somewhere else - which is the
+       * "click and jump" this exists to remove. Slower and softer, so the eye can follow the
+       * pill from the tab it left to the tab it arrived at.
+       *
+       * Damped rather than bouncy: it should arrive and stop, not wobble past the tab somebody
+       * just chose.
+       */
+      damping: 18,
+      stiffness: 130,
+      mass: 0.9,
+    }).start();
+  }, [index, slot, travel]);
+
+  return (
+    <View style={styles.pillLayer} onLayout={(event) => setBarWidth(event.nativeEvent.layout.width)}>
+      {slot > 0 && (
+        <Animated.View
+          style={[
+            styles.pill,
+            // Inset by the same margin `tabItem` uses, so the pill lands exactly where the icon
+            // and label sit rather than a couple of points off.
+            { width: slot - PILL_INSET * 2, left: PILL_INSET, transform: [{ translateX: travel }] },
+          ]}
+        />
+      )}
+    </View>
+  );
+}
+
+/** Matches `tabItem`'s horizontal margin, so the sliding pill lines up with its contents. */
+const PILL_INSET = 2;
+
+function TabItem({
+  name,
+  label,
+  focused,
+  badge = false,
+}: {
+  name: keyof typeof TAB_ICON;
+  label: string;
+  focused: boolean;
+  /** Notifications carries the unread count on its icon; nothing else does. */
+  badge?: boolean;
+}) {
+  /*
+    No background here any more. `ActivePill` draws the one pill for the whole bar and moves it,
+    which is what a static per-item background could never do - see its note.
+  */
+  return (
+    <View style={styles.tabItem}>
+      {badge ? <BadgedIcon focused={focused} /> : <TabIcon name={name} focused={focused} />}
+      <TabLabel label={label} focused={focused} />
+    </View>
+  );
+}
+
+
+/**
  * The notification count, as a badge on the tab's ICON.
  *
  * **A count of things, not of messages.** Each unread notification counts one, and each chat with
@@ -101,6 +229,15 @@ function BadgedIcon({ focused }: { focused: boolean }) {
 export default function TabsLayout() {
   const { authState } = useSession();
   const { currentClub } = useCurrentSpace();
+  /*
+   * The bar's height is computed from the real inset, never guessed.
+   *
+   * The pills need more room than the navigator's default bar gives, and padding alone overflows
+   * it - the icons sat on the bottom edge with the labels clipped off the screen. So the height is
+   * stated, and it has to carry `insets.bottom` with it or it is right on the phone it was
+   * measured on and wrong on every other one. 34pt on a notched iPhone, 0 in a browser.
+   */
+  const insets = useSafeAreaInsets();
   const pathname = usePathname();
   const router = useRouter();
 
@@ -131,15 +268,61 @@ export default function TabsLayout() {
         headerTitleStyle: { ...type.headerTitle, color: color.accent },
         headerTintColor: color.accent,
         sceneStyle: { backgroundColor: color.appBackground },
+        /*
+          A floating bar: inset from the edges, fully rounded, lifted off the bottom.
+
+          > **In normal flow, NOT `position: absolute`.** Floating a tab bar absolutely is the usual
+          > recipe and it makes the bar overlap the screen behind it, so every list in every tab has
+          > to grow a bottom padding equal to the bar's height - and the one nobody remembers is the
+          > one whose last row sits permanently under it. Keeping it in flow means the screens end
+          > where the bar begins, which is the same look with none of that.
+
+          `marginBottom` carries the home-indicator inset, so the bar floats above it rather than
+          being tucked under it. Zero in a browser, 34pt on this phone.
+        */
         tabBarStyle: {
           backgroundColor: color.chrome,
-          borderTopColor: color.divider,
+          // No hairline: a rule across the full width under a rounded floating bar is two designs.
+          borderTopWidth: 0,
+          height: TAB_BAR_CONTENT_HEIGHT,
+          marginHorizontal: space.sm,
+          marginBottom: insets.bottom > 0 ? insets.bottom : space.md,
+          marginTop: tabBar.gap,
+          // Fully round. A 24pt radius on a 60pt bar reads as a rounded rectangle; half the
+          // height reads as one continuous shape, which is what the reference design does.
+          borderRadius: radius.pill,
+          // The bar is a surface sitting ON the page now, so it needs the hairline every other
+          // raised surface in this product carries. See the note on `hairline` in theme.ts.
+          borderWidth: 1,
+          borderColor: color.divider,
+          /*
+           * Zero, and it has to be stated.
+           *
+           * The navigator pads the bar's BOTTOM by the home-indicator inset so a normal
+           * full-width bar clears it. This bar floats above the indicator on `marginBottom`
+           * instead, so leaving that padding in place counts the inset twice: 34pt of empty
+           * band inside the bar, with the icons pushed into its top half. That band read as
+           * "the bar is too tall" and survived being made taller AND shorter, because it was
+           * never the height that was wrong.
+           */
+          paddingBottom: 0,
           // Hidden entirely while the session is unresolved, so the shell does not flash
           // chrome over the sign-in redirect.
           display: authState === 'signed-in' ? 'flex' : 'none',
         },
         tabBarActiveTintColor: color.accent,
         tabBarInactiveTintColor: color.textSecondary,
+        // `TabItem` draws the label inside its own pill, so the navigator must not draw a second
+        // one underneath it.
+        tabBarShowLabel: false,
+        /*
+          The item is only a press target now - `TabItem` fills it and draws its own pill. No
+          margins here, so the pill gets the full quarter-width to sit in and the longest label
+          ("NOTIFICATIONS") has room rather than truncating to "NOTIFICATI...".
+        */
+        tabBarBackground: () => <ActivePill />,
+        tabBarItemStyle: { paddingHorizontal: 0, paddingVertical: 0 },
+        tabBarIconStyle: { flex: 1, width: '100%' },
         /*
           No motion between destinations, declared rather than left to a default.
 
@@ -168,8 +351,7 @@ export default function TabsLayout() {
             The other three destinations are single screens and keep the tab navigator's header.
           */
           headerShown: false,
-          tabBarIcon: ({ focused }) => <TabIcon name="clubs" focused={focused} />,
-          tabBarLabel: ({ focused }) => <TabLabel label="Chats" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabItem name="clubs" label="Chats" focused={focused} />,
         }}
         /*
           The two-stage escape hatch. `PRD/15`:
@@ -247,16 +429,18 @@ export default function TabsLayout() {
         name="calendar"
         options={{
           title: 'Calendar',
-          tabBarIcon: ({ focused }) => <TabIcon name="calendar" focused={focused} />,
-          tabBarLabel: ({ focused }) => <TabLabel label="Calendar" focused={focused} />,
+          tabBarIcon: ({ focused }) => (
+            <TabItem name="calendar" label="Calendar" focused={focused} />
+          ),
         }}
       />
       <Tabs.Screen
         name="notifications"
         options={{
           title: 'Notifications',
-          tabBarIcon: ({ focused }) => <BadgedIcon focused={focused} />,
-          tabBarLabel: ({ focused }) => <TabLabel label="Notifications" focused={focused} />,
+          tabBarIcon: ({ focused }) => (
+            <TabItem name="notifications" label="Notifications" focused={focused} badge />
+          ),
         }}
       />
       <Tabs.Screen
@@ -265,8 +449,7 @@ export default function TabsLayout() {
           title: 'Profile',
           // Supplies its own headers from the stack inside it, like (main).
           headerShown: false,
-          tabBarIcon: ({ focused }) => <TabIcon name="profile" focused={focused} />,
-          tabBarLabel: ({ focused }) => <TabLabel label="Profile" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabItem name="profile" label="Profile" focused={focused} />,
         }}
       />
     </Tabs>
@@ -274,12 +457,62 @@ export default function TabsLayout() {
 }
 
 const styles = StyleSheet.create({
+  /*
+   * The whole destination, icon and label together, filling the press target.
+   *
+   * `justifyContent: 'center'` rather than a top padding, so the pair sits centred in the bar
+   * whatever the label's line height turns out to be on a given platform.
+   */
+  tabItem: {
+    flex: 1,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    /*
+     * A stadium, not a rounded rectangle.
+     *
+     * This was `radius.lg`, and side by side with the app it is modelled on the difference is the
+     * whole character of the control: 16pt on a ~40pt pill leaves four visible straight edges and
+     * reads as a box, where half the height reads as a lozenge. The founder's note was about the
+     * SHAPE rather than the colour, and this is the shape.
+     */
+    borderRadius: radius.pill,
+    /*
+     * Symmetric margins, and the bar is sized to fit rather than the pill nudged to compensate.
+     *
+     * A `marginTop` nudge was tried first, to centre the pill against the band the navigator
+     * reserves under the icon slot for the label it has been told not to draw. It moved the pill
+     * into a box too short to hold it and **clipped the top off every icon** on a real phone.
+     * Giving the bar the height its contents actually need is the fix; moving content around
+     * inside a box that is too small is not.
+     */
+    marginVertical: space.xs,
+    marginHorizontal: 2,
+    paddingHorizontal: 0,
+    paddingVertical: space.xs,
+  },
+  /*
+   * The layer the sliding pill lives on: the whole bar, behind every item.
+   *
+   * Vertical margins match `tabItem`'s so the pill is the same height as the content it sits
+   * behind, and it is not interactive - the items above it own every touch.
+   */
+  pillLayer: { flex: 1, justifyContent: 'center' },
+  pill: {
+    position: 'absolute',
+    top: space.sm,
+    bottom: space.sm,
+    borderRadius: radius.pill,
+    backgroundColor: color.accentSoft,
+  },
+
   tabLabel: {
     ...type.label,
     // Below the label token's 12/0.6, which is tuned for a badge rather than for a quarter of a
     // phone's width. The longest destination name is what sets this.
-    fontSize: 10,
-    letterSpacing: 0.2,
+    fontSize: 9.5,
+    letterSpacing: 0.1,
     color: color.textSecondary,
     textTransform: 'uppercase',
   },

@@ -106,6 +106,14 @@ export const color = {
   /** Text on `errorContainer`. A destructive label that is readable rather than shouted. */
   onErrorContainer: '#93000a',
 
+  /**
+   * The ring around an avatar that has no photo.
+   *
+   * A hairline rather than a fill, so a letter or a glyph reads as sitting in a circle rather
+   * than on a grey disc. `cardSunken` remains the fill behind a photo while it loads.
+   */
+  avatarRing: '#e6e8ea',
+
   onAccent: '#ffffff',
   /** Text on `accentPressed`. Not quite `onAccent`, and v1 ships both. */
   onAccentPressed: '#fffbff',
@@ -113,6 +121,38 @@ export const color = {
   inverseSurface: '#2d3133',
   onInverseSurface: '#eff1f3',
 } as const;
+
+/**
+ * Identity colours for a group avatar with no photo.
+ *
+ * > **This is not a second accent, and the distinction is what keeps "one accent app-wide" true.**
+ * > Every one of these is a *placeholder for a photograph* - the colour a club would not have if
+ * > it had uploaded an image. None of them is ever an interactive colour, a state, or a surface:
+ * > nothing is tappable because it is amber, and nothing means anything because it is blue. They
+ * > are doing the job the photo does, which is to make one row distinguishable from the next at a
+ * > glance down a list.
+ *
+ * Sampled from the founder's mockup on 2026-08-09, which shipped as HTML without its stylesheet -
+ * so these are read from the rendered design rather than from its CSS, and are worth replacing
+ * with the exact values if that file turns up.
+ *
+ * Chosen by `avatarTint`, which hashes the club's id: a club keeps the same colour forever, on
+ * every device and every reinstall, because the id never changes. Picking by list position would
+ * make a club change colour whenever somebody else sent a message.
+ */
+export const avatarPalette = ['#f5a623', '#2f6fed', '#e0175b', '#12a594', '#8b5cf6'] as const;
+
+/**
+ * A stable colour for a group avatar, from the id that never changes.
+ *
+ * A sum of char codes rather than anything cryptographic: the requirement is determinism and an
+ * even-ish spread over five buckets, not resistance to anybody. A uuid's own hex digits give both.
+ */
+export function avatarTint(id: string): string {
+  let total = 0;
+  for (let index = 0; index < id.length; index += 1) total += id.charCodeAt(index);
+  return avatarPalette[total % avatarPalette.length]!;
+}
 
 /** rem values from DESIGN.md converted to px at a 16px base. */
 export const radius = {
@@ -137,6 +177,35 @@ export const space = {
   /** Empty-state top offset. */
   xl: 48,
 } as const;
+
+/**
+ * The floating tab bar's footprint.
+ *
+ * > **A shared token because two files have to agree about it and cannot see each other.** The bar
+ * > floats, inset and rounded, which means it is drawn OVER the screen behind it - so any list that
+ * > scrolls to its own end needs to stop above the bar rather than under it. The tab layout owns
+ * > the bar; the screens own their lists; and when only one of them knew this number, the last row
+ * > of the chat list was sliced in half by the bar's top edge.
+ *
+ * `@react-navigation/bottom-tabs` normally answers this with `useBottomTabBarHeight`, which this
+ * project's expo-router build does not re-export. Hence a token rather than a hook.
+ */
+export const tabBar = {
+  /** The bar itself, excluding anything below it. */
+  height: 60,
+  /** Between the bar and the content above it. */
+  gap: 8,
+} as const;
+
+/**
+ * How much room a scrolling screen must leave at its bottom for the floating bar.
+ *
+ * Takes the safe-area inset rather than assuming one: the bar sits on `insets.bottom` where there
+ * is a home indicator and on a plain margin where there is not.
+ */
+export function tabBarSpace(bottomInset: number): number {
+  return tabBar.height + tabBar.gap + (bottomInset > 0 ? bottomInset : space.md);
+}
 
 /**
  * Typography roles.

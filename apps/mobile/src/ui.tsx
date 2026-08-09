@@ -34,7 +34,7 @@ import { BlurView } from 'expo-blur';
 import { Link } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RemoteImage } from './media-bubble.tsx';
-import { color, radius, space, type } from './theme.ts';
+import { avatarTint, color, radius, space, type } from './theme.ts';
 import type { Loaded } from './use-load.ts';
 
 // ---------------------------------------------------------------------------
@@ -663,12 +663,39 @@ export function Avatar({
   size = 40,
   image = null,
   shape = 'circle',
+  kind = 'person',
+  tintId = null,
+  ring = false,
 }: {
   name: string;
   size?: number;
   /** A media id. Null - the common case - draws the initial instead. */
   image?: string | null;
   shape?: 'circle' | 'square';
+  /**
+   * What the fallback should draw when there is no picture.
+   *
+   * `person` is an initial, which is meaningless for a group: "B" tells you nothing about
+   * Binghamton Running Club that the name beside it does not already say, and a list of clubs
+   * becomes a column of unrelated letters. `group` draws a two-person glyph instead, so the
+   * shape alone separates a club from a person before any word is read.
+   */
+  kind?: 'person' | 'group';
+  /**
+   * The id a `group` tint is derived from. Falls back to the name.
+   *
+   * An id rather than the name because a club can be renamed and should not change colour when
+   * it is. See `avatarTint`.
+   */
+  tintId?: string | null;
+  /**
+   * Draw a hairline ring instead of a filled disc.
+   *
+   * Opt-in rather than the default: this is the 2026-08-09 Chats treatment, and turning it on
+   * everywhere at once would restyle every roster, profile and chat bubble in the product in a
+   * change that was scoped to one screen. The follow-up pass is where the default flips.
+   */
+  ring?: boolean;
 }) {
   const borderRadius = shape === 'circle' ? size / 2 : Math.round(size / 4);
 
@@ -680,6 +707,26 @@ export function Avatar({
         style={{ width: size, height: size, borderRadius }}
         resizeMode="cover"
       />
+    );
+  }
+
+  if (kind === 'group') {
+    return (
+      <View
+        style={[
+          styles.avatar,
+          ring && styles.avatarRing,
+          { width: size, height: size, borderRadius },
+        ]}
+        accessibilityElementsHidden
+        importantForAccessibility="no"
+      >
+        <MaterialIcons
+          name="group"
+          size={Math.round(size * 0.5)}
+          color={avatarTint(tintId ?? name)}
+        />
+      </View>
     );
   }
 
@@ -695,6 +742,7 @@ export function Avatar({
     <View
       style={[
         styles.avatar,
+        ring && styles.avatarRing,
         // An explicit radius computed from the size, per the design system, rather than a
         // radius token - a token would not scale with a 28px stack avatar and a 140px profile.
         { width: size, height: size, borderRadius },
@@ -728,7 +776,19 @@ export function Tabs<T extends string>({
   onChange,
   variant = 'segmented',
 }: {
-  tabs: ReadonlyArray<{ key: T; label: string }>;
+  tabs: ReadonlyArray<{
+    key: T;
+    label: string;
+    /**
+     * A number shown beside the label, or absent.
+     *
+     * **Absent at zero rather than showing "0"**, which is the rule the notification badge
+     * already follows: a chip reading "Unread 0" is a count of nothing dressed as information,
+     * and it is exactly the state where the word alone is the whole answer. Tapping it then
+     * lands on "You're all caught up", which says the same thing in the place with room to.
+     */
+    count?: number;
+  }>;
   /**
    * The selected tab, or **null for none**.
    *
@@ -739,9 +799,41 @@ export function Tabs<T extends string>({
    */
   active: T | null;
   onChange: (key: T) => void;
-  variant?: 'segmented' | 'pill';
+  variant?: 'segmented' | 'pill' | 'chip';
 }) {
   const pill = variant === 'pill';
+  const chip = variant === 'chip';
+
+  if (chip) {
+    return (
+      <View style={styles.chipRow}>
+        {tabs.map((tab) => {
+          const selected = tab.key === active;
+          const count = tab.count ?? 0;
+          return (
+            <Pressable
+              key={tab.key}
+              onPress={() => onChange(tab.key)}
+              style={[styles.chip, selected && styles.chipActive]}
+              accessibilityRole="tab"
+              accessibilityLabel={count > 0 ? `${tab.label}, ${count}` : tab.label}
+              accessibilityState={{ selected }}
+            >
+              <Text style={[styles.chipLabel, selected && styles.chipLabelActive]}>
+                {tab.label}
+              </Text>
+              {count > 0 && (
+                <Text style={[styles.chipCount, selected && styles.chipCountActive]}>
+                  {count > 99 ? '99+' : count}
+                </Text>
+              )}
+            </Pressable>
+          );
+        })}
+      </View>
+    );
+  }
+
   return (
     <View style={pill ? styles.tabsPill : styles.tabs}>
       {tabs.map((tab) => {
@@ -1442,6 +1534,9 @@ const styles = StyleSheet.create({
   // v1 tints the initial with the accent on a sunken well, rather than greying it out. It is the
   // one place a person's absence of a photo still reads as a person.
   avatar: { backgroundColor: color.cardSunken, alignItems: 'center', justifyContent: 'center' },
+  // The ring treatment: a hairline circle on the card rather than a filled disc, so the letter or
+  // the glyph is the thing you see. Overrides the fill above rather than sitting beside it.
+  avatarRing: { backgroundColor: color.card, borderWidth: 1, borderColor: color.avatarRing },
   avatarLabel: { ...type.headline, color: color.accent },
 
   tabs: {
@@ -1455,6 +1550,36 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: color.card },
   tabLabel: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
   tabLabelActive: { color: color.accent },
+
+  /*
+   * The filter chips: outlined, content-width, accent-filled when selected.
+   *
+   * Content-width rather than `flex: 1` like the other two variants, because these are FILTERS
+   * rather than a segmented control - the set can grow, and four equal columns would make "All"
+   * as wide as "Notifications" for no reason. It also means a count can widen its own chip
+   * without stealing width from the others.
+   */
+  chipRow: { flexDirection: 'row', gap: space.sm, flexWrap: 'wrap' },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs + 2,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: color.avatarRing,
+    backgroundColor: color.card,
+  },
+  chipActive: { backgroundColor: color.accent, borderColor: color.accent },
+  chipLabel: { ...type.label, fontSize: 13, letterSpacing: 0.2, color: color.textPrimary, textTransform: 'none' },
+  chipLabelActive: { color: color.onAccent },
+  // The count is a plain numeral beside the word, not a filled badge. A badge here would compete
+  // with the unread badges in the list itself, which are the ones that mean "act on this".
+  // The numeral is text, in the text colour: it is telling you how many, not asking to be tapped.
+  // Accent here would make the count look like the selected state on an unselected chip.
+  chipCount: { ...type.label, fontSize: 13, letterSpacing: 0.2, color: color.textPrimary, textTransform: 'none' },
+  chipCountActive: { color: color.onAccent },
 
   tabsPill: { flexDirection: 'row', gap: space.sm },
   pillTab: {

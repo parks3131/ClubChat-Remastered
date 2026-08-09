@@ -32,7 +32,8 @@ The **"Kinetic Performance System"**, extracted verbatim from the Stitch export'
 | Radii | 4 / 8 (default) / 12 / 16 / 24 / pill. Avatars use an explicit half-width radius |
 | Spacing | 4 micro / 16 gutter and screen padding / 8 tight stack / 24 section / 48 empty-state top |
 | Type | Anton for display and **every header title** (48 / 32 / 28 / 20); Archivo Narrow for body (16/26) and numeric emphasis (24 bold); Inter SemiBold 12, letterspaced 0.6, for labels/badges/buttons |
-| Icons | MaterialIcons from `@expo/vector-icons`. The four destinations are `groups`, `calendar-month`, `notifications`, `person` |
+| Icons | MaterialIcons from `@expo/vector-icons`. The four destinations are `forum`, `calendar-month`, `notifications`, `person` - the first was v1's `groups` until that destination stopped being a roster of clubs and became the conversation list |
+| Avatar identity | Five placeholder colours for a **group** avatar with no photo, picked by hashing its channel id so a club keeps one forever. Not a second accent: they stand in for a photograph and are never interactive, a state, or a surface |
 
 > **`primary` is `#ff4d00`, not DESIGN.md's `#aa3000`** - an explicit founder preference applied
 > app-wide. Every other token is untouched. Worth knowing before somebody "fixes" it back.
@@ -57,6 +58,13 @@ The **"Kinetic Performance System"**, extracted verbatim from the Stitch export'
 - **Gradient fill on sent message bubbles**, isolated in a container component so the list's
   row renderer never switches element types between sent and received.
 - **Chat hides the bottom tab bar** while open.
+- **A floating tab bar**, inset from the edges and rounded, with the active destination carrying an
+  `accentSoft` pill behind its icon **and** its label. The pill is a second channel for the selected
+  state, because orange-versus-grey alone fails `PRD/16`'s accessibility bar. It is drawn by the
+  app rather than by `tabBarActiveBackgroundColor`, which paints a box that excludes the label.
+- **The Chats list is flat**, not carded: rows sit directly on the app background, and unread is an
+  accent timestamp plus an accent count badge rather than a tinted row. Every other list still uses
+  cards; unifying them is a deliberate follow-up rather than an oversight.
 
 **Light mode only** today; there is no dark palette. The token module is a flat named export
 specifically so a dark variant can be swapped in without touching call sites.

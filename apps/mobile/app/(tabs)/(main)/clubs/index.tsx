@@ -9,10 +9,14 @@
  *
  * Three rules this screen exists to hold:
  *
- *  1. **No filter is the resting state.** The chips narrow the list; none of them is selected on
- *     arrival. Landing on Unread would mean opening the app to an empty screen on every day you
+ *  1. **Everything is the resting state.** `All` is selected on arrival and the other chips narrow
+ *     from there. Landing on Unread would mean opening the app to an empty screen on every day you
  *     are caught up, which is most days, and an empty list reads as a broken app rather than as
  *     good news.
+ *
+ *     Until 2026-08-09 that state was "no chip selected", cleared by tapping the active chip a
+ *     second time. Same behaviour, invisible affordance: a filter with nothing on screen saying
+ *     how to leave it is worse than one more chip.
  *  2. **Club main chats and DMs only.** A race and an Eboard space each have a real channel, and
  *     both are deliberately absent - see `CONVERSATION_SCOPES` on the server. Their unread still
  *     reaches the member through the Notifications inbox and the badge.
@@ -45,7 +49,7 @@ import { useSession } from '../../../../src/chat-provider.tsx';
 import { useClearClub } from '../../../../src/current-space.tsx';
 import { formatConversationTimestamp } from '../../../../src/dates.ts';
 import { longPressFeedback } from '../../../../src/haptics.ts';
-import { color, radius, space, type } from '../../../../src/theme.ts';
+import { color, radius, space, tabBarSpace, type } from '../../../../src/theme.ts';
 import {
   Avatar,
   ConfirmDialog,
@@ -59,10 +63,19 @@ import {
 } from '../../../../src/ui.tsx';
 import { useLoad, usePullToRefresh } from '../../../../src/use-load.ts';
 
-/** The three chips, in the order the design shows them. */
+/**
+ * The four chips, in the order the design shows them.
+ *
+ * > **`all` is a real chip, and it replaced "no chip is selected" on 2026-08-09.** The resting
+ * > state is unchanged - everything is shown, and the app never opens on a filtered list - but it
+ * > is now *stated* rather than implied by an empty row of pills. The old version cleared a filter
+ * > by tapping the active chip again, which is a gesture with nothing on screen to suggest it; a
+ * > filter you cannot see how to leave is worse than a fourth chip.
+ */
 const FILTERS = [
-  { key: 'unread', label: 'Unread' },
+  { key: 'all', label: 'All' },
   { key: 'dms', label: 'DMs' },
+  { key: 'unread', label: 'Unread' },
   { key: 'clubs', label: 'Clubs' },
 ] as const;
 
@@ -92,9 +105,24 @@ export function matchesFilter(
       // Every non-DM scope, so this stays correct if races are ever added to the list rather
       // than silently excluding them from the only chip they could belong to.
       return row.scope !== 'dm';
+    // `all` and null are the same answer. Null is still accepted because it is the honest type
+    // for "nothing selected", and a state the screen can no longer reach is not a state worth
+    // making this function lie about.
     default:
       return true;
   }
+}
+
+/**
+ * The number beside the Unread chip: conversations with anything unread, not messages.
+ *
+ * **The same rule the tab badge follows**, and it has to be, because they are two drawings of one
+ * fact: a chat with 48 unread contributes 1 here and says 48 on its own row. Counting messages
+ * would put "63" on a chip that filters to two rows, which reads as a broken number rather than
+ * as a lot of messages.
+ */
+export function unreadChipCount(rows: readonly ConversationSummary[]): number {
+  return rows.filter((row) => row.unread > 0).length;
 }
 
 /**
@@ -152,7 +180,7 @@ export default function ChatsScreen() {
    */
   const insets = useSafeAreaInsets();
 
-  const [filter, setFilter] = useState<Filter | null>(null);
+  const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   /** The row a long press opened the menu for, or null. */
   /** The row whose long-press menu is open, with the rectangle it occupies so it can be lifted. */
@@ -258,14 +286,27 @@ export default function ChatsScreen() {
       </View>
 
       <View style={styles.controls}>
-        <SearchField value={query} onChangeText={setQuery} placeholder="Search chats" />
+        <SearchField value={query} onChangeText={setQuery} placeholder="Search" />
+        {/*
+          Outside `DataScreen` deliberately, so the search field and the chips do not blink out
+          of existence on a reload and back in. They describe the screen rather than the data,
+          and a control that disappears while its list refreshes is a control you cannot use at
+          the moment you most want to.
+
+          The count reads `load.data` rather than the filtered rows: it must say how much is
+          unread in the WHOLE list, not how much is unread in what the current filter has already
+          narrowed to. Standing on Clubs and being told there are two unread would otherwise mean
+          two unread clubs, silently dropping the DMs.
+        */}
         <Tabs
-          tabs={FILTERS}
+          tabs={FILTERS.map((entry) =>
+            entry.key === 'unread'
+              ? { ...entry, count: unreadChipCount(load.data?.conversations ?? []) }
+              : entry,
+          )}
           active={filter}
-          variant="pill"
-          // Tapping the active chip clears it, so getting back to "everything" needs no fourth
-          // chip and no second gesture to learn.
-          onChange={(key) => setFilter((current) => (current === key ? null : key))}
+          variant="chip"
+          onChange={setFilter}
         />
       </View>
 
@@ -277,7 +318,21 @@ export default function ChatsScreen() {
               ref={listRef}
               data={rows}
               keyExtractor={(row) => row.channelId}
-              contentContainerStyle={styles.list}
+              /*
+                The bottom padding is the floating bar's footprint, not a constant.
+
+                > **The bar is drawn OVER this list, so without it the last row is sliced in half
+                > by the bar's top edge** - the avatar cut down the middle by a rounded corner,
+                > which is what "it cuts the image" was. A list that cannot scroll its final row
+                > clear of the chrome has a row you can see and cannot read.
+
+                From the same token the bar is built from, so the two cannot drift apart, and
+                carrying the safe-area inset because the bar sits on it.
+              */
+              contentContainerStyle={[
+                styles.list,
+                { paddingBottom: tabBarSpace(insets.bottom) },
+              ]}
               refreshControl={<RefreshControl {...pull} tintColor={color.accent} />}
               ListEmptyComponent={
                 <EmptyState
@@ -449,7 +504,11 @@ function emptyTitle(filter: Filter | null, query: string, total: number): string
   if (total === 0) return 'No chats yet';
   if (filter === 'unread') return "You're all caught up";
   if (filter === 'dms') return 'No direct messages yet';
-  return 'No club chats yet';
+  if (filter === 'clubs') return 'No club chats yet';
+  // `all` with conversations in hand cannot be empty, so this is the unreachable branch rather
+  // than the catch-all it used to be - naming `clubs` above stops it quietly answering for a
+  // fifth chip somebody adds later.
+  return 'No chats yet';
 }
 
 function emptyBody(filter: Filter | null, query: string, total: number): string | undefined {
@@ -483,7 +542,16 @@ function ConversationRow({
   return (
     <Pressable
       ref={self}
-      style={[styles.row, unread && styles.rowUnread]}
+      /*
+        A grey wash while the finger is down.
+
+        Flat rows removed every other cue that a row is a control - there is no card edge, no
+        chevron and no ripple - so without this a tap is answered only by the next screen
+        arriving, and on a slow open the row looks dead for as long as that takes. The
+        highlight is the acknowledgement, and it costs nothing to be instant because it never
+        waits on the navigation.
+      */
+      style={({ pressed }) => [styles.row, unread && styles.rowUnread, pressed && styles.rowPressed]}
       onPress={onPress}
       onLongPress={(event) =>
         measureRow(
@@ -499,7 +567,19 @@ function ConversationRow({
           : row.name
       }
     >
-      <Avatar name={row.name} image={row.image} size={52} />
+      {/*
+        A club draws the group glyph, a DM draws an initial. Tinted from the CHANNEL id, which is
+        stable for the life of the conversation - the club id would be equally stable but is null
+        for a DM, and one source that always exists beats two that each work half the time.
+      */}
+      <Avatar
+        name={row.name}
+        image={row.image}
+        size={56}
+        kind={row.scope === 'dm' ? 'person' : 'group'}
+        tintId={row.channelId}
+        ring
+      />
 
       <View style={styles.rowText}>
         <View style={styles.rowTopLine}>
@@ -515,7 +595,6 @@ function ConversationRow({
               accessibilityLabel="Pinned"
             />
           )}
-          <Text style={[styles.timestamp, unread && styles.timestampUnread]}>{timestamp}</Text>
         </View>
 
         <View style={styles.rowBottomLine}>
@@ -533,16 +612,43 @@ function ConversationRow({
             />
           )}
           {/*
-            A DM that went read-only stays in the list and says so. Blocking and losing the last
-            shared club both leave history readable, so the row is not removed.
+            **A read-only DM says nothing here, and that is deliberate as of 2026-08-09.**
+
+            The row used to carry a READ ONLY chip. `canPost` is a single boolean covering two very
+            different causes - the pair blocked each other, or they no longer share a club - so the
+            chip could not say which, and it did not have to: `PRD/14` rule 6 makes a block silent
+            to the blocked party, and the resolution note under it puts the explanation on the
+            **composer**, where the chat screen already draws one of two exact sentences.
+
+            So the chip was redundant where it was right and disclosing where it was wrong. It
+            announced a state on the landing screen, visible to anybody glancing at the phone,
+            about a person who is meant not to be told. The conversation still opens, the history
+            is still readable, and the reason is still given - one screen further in, which is
+            where the spec puts it.
           */}
-          {!row.canPost && row.scope === 'dm' && <Text style={styles.readOnly}>READ ONLY</Text>}
-          {unread && (
-            <View style={styles.unreadBadge}>
-              <Text style={styles.unreadLabel}>{row.unread > 99 ? '99+' : row.unread}</Text>
-            </View>
-          )}
         </View>
+      </View>
+
+      {/*
+        The right-hand column: when it happened, and how much of it you have not read.
+
+        > **Unread is these two marks and nothing else as of 2026-08-09.** The row used to be
+        > tinted `accentSoft` end to end, which was the most glanceable version and lost to the
+        > redesign on purpose: a list where a third of the rows are filled blocks of peach is
+        > loud, and it fights the flat white the rest of the screen is built on. The timestamp
+        > turning accent is the cue that survives - it is the one element that changes colour
+        > rather than appearing, so the eye catches it without the row shouting.
+
+        Every unread row carries its number. The badge is not a "there is something here" dot;
+        it is the count, which is the thing worth knowing before deciding what to open first.
+      */}
+      <View style={styles.rowMeta}>
+        <Text style={[styles.timestamp, unread && styles.timestampUnread]}>{timestamp}</Text>
+        {unread && (
+          <View style={styles.unreadBadge}>
+            <Text style={styles.unreadLabel}>{row.unread > 99 ? '99+' : row.unread}</Text>
+          </View>
+        )}
       </View>
     </Pressable>
   );
@@ -560,53 +666,81 @@ const styles = StyleSheet.create({
     // notch is 59pt on one phone and 20 on another, and a hardcoded guess is wrong on both.
   },
   title: { ...type.title, color: color.textPrimary },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  // Outlined rather than filled: both are additive actions, and a filled disc apiece reads as two
+  // primary buttons on a screen whose primary action is opening a conversation.
   headerButton: {
     width: 40,
     height: 40,
     borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: color.cardSunken,
+    borderWidth: 1.5,
+    borderColor: color.accent,
   },
 
-  controls: { paddingHorizontal: space.md, paddingTop: space.sm, gap: space.sm },
+  controls: { paddingHorizontal: space.md, paddingTop: space.md, gap: space.md },
 
-  list: { padding: space.md, gap: space.xs, paddingBottom: space.lg },
+  /*
+   * Flat rows on the app background, not cards.
+   *
+   * The gap between rows is vertical padding inside each row rather than a `gap` between them, so
+   * the press target covers the whitespace it appears to own - a card list can afford a dead
+   * gutter between rows because the card draws where the target ends, and a flat list cannot.
+   */
+  /*
+   * No horizontal padding here: it belongs to the ROW.
+   *
+   * The press highlight is the row's own background, so padding the list instead would inset that
+   * highlight by the gutter and leave a stripe of untinted background down each edge - a
+   * half-highlighted row reads as a rendering fault rather than as a press. Padding the row makes
+   * the wash run edge to edge, which is what every native list does.
+   */
+  list: { paddingBottom: space.lg },
 
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.md,
-    backgroundColor: color.card,
-    borderRadius: radius.lg,
-    paddingVertical: space.sm + 2,
+    paddingVertical: space.sm + 4,
     paddingHorizontal: space.md,
   },
-  // Tinted rather than badged-in-the-corner, so unread is legible at a glance down a long list.
-  rowUnread: { backgroundColor: color.accentSoft },
+  /** The finger is down. Light enough to be a wash rather than a selection. */
+  rowPressed: { backgroundColor: color.cardRaised },
+  /*
+   * Deliberately empty, and deliberately still here.
+   *
+   * Unread is carried entirely by the timestamp and the badge as of 2026-08-09. The hook is kept
+   * so the decision has somewhere to live: the next person wanting to mark an unread row will
+   * find this and the note on `rowMeta` rather than reaching for a background tint again.
+   */
+  rowUnread: {},
 
   rowText: { flex: 1, gap: 2 },
-  rowTopLine: { flexDirection: 'row', alignItems: 'baseline', gap: space.sm },
-  name: { ...type.headline, fontSize: 17, color: color.textPrimary, flex: 1 },
+  rowTopLine: { flexDirection: 'row', alignItems: 'center', gap: space.xs + 2 },
+  name: { ...type.headline, fontSize: 17, color: color.textPrimary, flexShrink: 1 },
   nameUnread: { color: color.textPrimary },
-  timestamp: { ...type.label, fontSize: 11, color: color.textSecondary, textTransform: 'none' },
-  timestampUnread: { color: color.onAccentSoft },
+
+  // Top-aligned, so the timestamp sits on the name's line and the badge hangs beneath it.
+  rowMeta: { alignItems: 'flex-end', gap: space.xs, paddingTop: 2 },
+  timestamp: { ...type.label, fontSize: 12, color: color.textSecondary, textTransform: 'none' },
+  timestampUnread: { color: color.accent },
 
   rowBottomLine: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
-  preview: { ...type.bodySmall, color: color.textSecondary, flex: 1 },
+  preview: { ...type.bodySmall, color: color.textSecondary, flexShrink: 1 },
   // Full strength when unread, secondary when read - the same contrast the inbox uses.
   previewUnread: { color: color.textPrimary },
 
-  readOnly: { ...type.label, fontSize: 10, color: color.secondary },
+  // Accent, not `error`: an unread message is not a fault. Red is what this product uses for
+  // something that went wrong, and a count of things your friends said is not that.
   unreadBadge: {
-    minWidth: 20,
-    height: 20,
+    minWidth: 22,
+    height: 22,
     borderRadius: radius.pill,
-    backgroundColor: color.error,
+    backgroundColor: color.accent,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: space.xs,
   },
-  unreadLabel: { ...type.label, fontSize: 10, color: color.onAccent },
+  unreadLabel: { ...type.label, fontSize: 11, color: color.onAccent, textTransform: 'none' },
 });

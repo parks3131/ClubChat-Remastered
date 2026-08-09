@@ -13,6 +13,79 @@ Newest first.
 
 ---
 
+## 2026-08-09 (later) - The Chats redesign, and a marker that told on people
+
+A founder mockup for the landing screen, taken as a **design** change: nothing about what a row
+does, only what it looks like. The list itself has been clubs and DMs together since 2026-08-02.
+
+What changed: an explicit `All` chip selected on arrival, replacing "no chip is selected, tap the
+active one again to clear" - same behaviour, and now with something on screen saying how to get
+back. A count on `Unread`, absent at zero, counting **conversations** rather than messages so it
+agrees with the tab badge. Flat rows instead of white cards. Unread as an accent timestamp and an
+accent badge instead of a peach-tinted row. Group glyphs for clubs, in one of five placeholder
+colours hashed from the channel id so a club keeps its colour forever.
+
+### The marker that had to go, and the better reason for going
+
+The founder asked for the `READ ONLY` chip to come off a DM row. Looking at why it was there turned
+up a better argument than the aesthetic one: **`canPost` is a single boolean over two different
+causes** - the pair blocked each other, or they no longer share a club - so the chip could not say
+which, and the founder's own guess moved between the two while we discussed it.
+
+`PRD/14` rule 6 makes a block **silent to the blocked party**, and the resolution note under it puts
+the explanation on the **composer**, which already draws one of two exact sentences. So the chip was
+redundant where it was right and disclosing where it was wrong: it announced the state on the
+landing screen, in a list anybody can see over your shoulder, about a person meant not to be told.
+
+### Four attempts at one pill
+
+The active destination needed a filled pill behind its icon and label. Recorded because each failure
+looked like the previous one and had a different cause:
+
+1. `tabBarActiveBackgroundColor` with a rounded item style - **a full-height rectangle** edge to
+   edge, because the background paints the item's own box and nothing had inset it.
+2. Insetting it with margins - the pill hugged, and **every label vanished**: at 64pt the navigator
+   decided there was no room and dropped all four, which is the icon-only bar `PRD/16` forbids.
+3. Drawing the pill in the `tabBarIcon` slot with the navigator's label off - correct at last, but
+   `NOTIFICATIONS` truncated to `NOTIFICATIO...`, because the pill's own margins had eaten the 6pt
+   the longest word needed.
+4. A `marginTop` nudge to centre it - **clipped the top off every icon on the real phone**, which
+   is where it was caught. Moving content inside a box that is too small is not a fix.
+
+**And the dead band under the icons was never the height.** It survived the bar being made taller
+and shorter, which should have been the tell much earlier. The navigator pads the bar's bottom by
+the home-indicator inset so an ordinary full-width bar clears it; this bar floats above the
+indicator on `marginBottom`, so the inset was **counted twice** - 34pt of nothing inside the bar,
+with the icons pushed into its top half. `paddingBottom: 0` was the whole fix.
+
+> **The lesson is the shape, not the number: a symptom that does not respond to the knob you are
+> turning is telling you the knob is wrong.** Two of these four were only visible on a device, and
+> the clipped icons arrived as a screenshot from the founder's phone rather than from the simulator
+> a foot away - the same "get a second client you can inspect" that closed the gap bug.
+
+### Two things the flat rows cost, both reported from the device
+
+Neither was visible in a static mockup, and both are the same shape: a card was doing a job nobody
+had written down.
+
+- **The last row was sliced in half by the tab bar.** The bar floats, so it draws over the list,
+  and the list reserved 24pt where the bar needs its whole footprint. The height now comes from a
+  shared `tabBar` token because the layout owns the bar and the screens own their lists, and
+  neither could see the other's number.
+- **A row no longer looked tappable.** No card edge, no chevron, no ripple - so a tap was answered
+  only by the next screen arriving, and on a slow open the row read as dead. It takes a grey wash
+  under the finger now. The row also took over the horizontal padding from the list, because a
+  highlight inset by the gutter leaves an untinted stripe down each edge and a half-tinted row
+  reads as a rendering fault rather than a press.
+
+### Scope
+
+Flat rows are the Chats screen only; every other list still uses cards, deliberately, as a
+follow-up rather than a silent inconsistency. The scan control in the mockup was left out - it is a
+feature rather than a visual, and no spec has a QR concept in it.
+
+---
+
 ## 2026-08-09 - The session the gateway never rejected
 
 `SPEC/PRD/17` had carried this since 2026-08-08: the web client authenticated fine over HTTP while
