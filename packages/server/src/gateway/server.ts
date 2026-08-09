@@ -508,75 +508,121 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
       }
     }, AUTH_TIMEOUT_MS);
 
+    const handleFrame = async (raw: Buffer): Promise<void> => {
+      let frame: ClientFrame;
+      try {
+        frame = ClientFrame.parse(JSON.parse(raw.toString()));
+      } catch {
+        send(socket, { t: 'auth.err', d: { code: 'malformed' } });
+        return;
+      }
+
+      /*
+       * Everything except `auth` requires an authenticated socket.
+       *
+       * > **This is `not_authenticated`, not `invalid_token`, and the distinction is the whole
+       * > defect.** They are different facts - "you have not authenticated yet" and "the
+       * > credential you presented is no good" - and a client acts on them very differently:
+       * > the second is grounds to end the session and sign somebody out, which is exactly what
+       * > `chat-provider.tsx` now does. Reporting the first as the second meant a member with a
+       * > perfectly good token, whose session the API was answering 200 for, was told their
+       * > session was dead.
+       *
+       * Reachable now only from a client that genuinely sends a frame before its `auth` - the
+       * queue below means it can no longer be reached by losing a race.
+       */
+      if (frame.t !== 'auth' && state.userId === null) {
+        send(socket, { t: 'auth.err', d: { code: 'not_authenticated' } });
+        socket.close();
+        return;
+      }
+
+      try {
+        switch (frame.t) {
+          case 'auth':
+            clearTimeout(authTimer);
+            await handleAuth(state, frame.d, frame.id);
+            break;
+          case 'subscribe':
+            await handleSubscribe(state, frame.d.channelIds, frame.id);
+            break;
+          case 'unsubscribe':
+            for (const channelId of frame.d.channelIds) {
+              detach(socket, channelId);
+              state.subscribed.delete(channelId);
+            }
+            break;
+          case 'msg.send':
+            await handleSend(state, frame.d, frame.id);
+            break;
+          case 'msg.read':
+            /*
+             * `openChat`, not a bare cursor advance.
+             *
+             * Both move the cursor, and only this one also writes the "Caught up on N messages"
+             * history row - which is the record that replaces a chat-unread row in the inbox
+             * once the chat has actually been opened. `PRD/12` rule 7 requires it, and until
+             * 2026-07-30 not a single one had ever been written: `openChat` was complete,
+             * tested, and reached from nowhere but its own tests, because this handler called
+             * the lower-level function underneath it. Failure mode 11.
+             *
+             * It is idempotent on `(outbox_event_id, recipient_id)`, so the repeated reads a
+             * chat screen sends while somebody scrolls cannot produce a row per frame.
+             */
+            await openChat(deps.db, state.userId!, frame.d.channelId);
+            break;
+          case 'ping':
+            if (state.userId) void registry.heartbeat(state.userId);
+            send(socket, { t: 'pong', d: {} }, frame.id);
+            break;
+        }
+      } catch (error) {
+        deps.log('error', 'frame handling failed', {
+          frameType: frame.t,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // The socket stays open and the client is told nothing, which is deliberate - one bad
+        // frame must not drop a conversation. It does mean the failure is invisible from both
+        // ends unless it is reported from here.
+        deps.monitor?.capture(error, 'gateway.frame', { frameType: frame.t });
+      }
+    };
+
+    /**
+     * Frames from one socket are handled ONE AT A TIME, in the order they arrived.
+     *
+     * > **Without this, the ordering a client sends in is not the ordering the server observes.**
+     * > `handleAuth` awaits two database round trips, and the old handler started the next frame
+     * > immediately rather than behind it - so a client that correctly sent `auth` and then
+     * > `subscribe` had its `subscribe` evaluated against `state.userId === null` and refused.
+     * > The socket was then closed, on a session the API was answering 200 for, and the member
+     * > was signed out. Nothing about the token was ever wrong; the second frame simply overtook
+     * > the first.
+     *
+     * The same rule the client already applies per channel, and for the same reason: a check
+     * that reads state written by an earlier frame is only meaningful if that frame has finished.
+     * See AGENTS.md failure mode 3.
+     *
+     * Per socket, so one member's frames never wait behind another's.
+     */
+    let queue: Promise<void> = Promise.resolve();
+
     socket.on('message', (raw: Buffer) => {
-      void (async () => {
-        state.lastSeenAt = Date.now();
+      /*
+       * Liveness is a fact about arrival, not about handling. Told to the reaper here rather
+       * than inside the queued work, so a frame waiting its turn is never mistaken for silence.
+       */
+      state.lastSeenAt = Date.now();
 
-        let frame: ClientFrame;
-        try {
-          frame = ClientFrame.parse(JSON.parse(raw.toString()));
-        } catch {
-          send(socket, { t: 'auth.err', d: { code: 'malformed' } });
-          return;
-        }
-
-        // Everything except `auth` requires an authenticated socket.
-        if (frame.t !== 'auth' && state.userId === null) {
-          send(socket, { t: 'auth.err', d: { code: 'invalid_token' } });
-          socket.close();
-          return;
-        }
-
-        try {
-          switch (frame.t) {
-            case 'auth':
-              clearTimeout(authTimer);
-              await handleAuth(state, frame.d, frame.id);
-              break;
-            case 'subscribe':
-              await handleSubscribe(state, frame.d.channelIds, frame.id);
-              break;
-            case 'unsubscribe':
-              for (const channelId of frame.d.channelIds) {
-                detach(socket, channelId);
-                state.subscribed.delete(channelId);
-              }
-              break;
-            case 'msg.send':
-              await handleSend(state, frame.d, frame.id);
-              break;
-            case 'msg.read':
-              /*
-               * `openChat`, not a bare cursor advance.
-               *
-               * Both move the cursor, and only this one also writes the "Caught up on N messages"
-               * history row - which is the record that replaces a chat-unread row in the inbox
-               * once the chat has actually been opened. `PRD/12` rule 7 requires it, and until
-               * 2026-07-30 not a single one had ever been written: `openChat` was complete,
-               * tested, and reached from nowhere but its own tests, because this handler called
-               * the lower-level function underneath it. Failure mode 11.
-               *
-               * It is idempotent on `(outbox_event_id, recipient_id)`, so the repeated reads a
-               * chat screen sends while somebody scrolls cannot produce a row per frame.
-               */
-              await openChat(deps.db, state.userId!, frame.d.channelId);
-              break;
-            case 'ping':
-              if (state.userId) void registry.heartbeat(state.userId);
-              send(socket, { t: 'pong', d: {} }, frame.id);
-              break;
-          }
-        } catch (error) {
-          deps.log('error', 'frame handling failed', {
-            frameType: frame.t,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          // The socket stays open and the client is told nothing, which is deliberate - one bad
-          // frame must not drop a conversation. It does mean the failure is invisible from both
-          // ends unless it is reported from here.
-          deps.monitor?.capture(error, 'gateway.frame', { frameType: frame.t });
-        }
-      })();
+      queue = queue.then(() => handleFrame(raw)).catch((error: unknown) => {
+        // The per-frame `catch` above covers handler failures. This is the backstop that keeps
+        // the CHAIN alive: a rejection left unhandled here would skip every later frame on this
+        // socket, turning one bad frame into a mute conversation.
+        deps.log('error', 'frame dispatch failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        deps.monitor?.capture(error, 'gateway.frame');
+      });
     });
 
     socket.on('close', () => {

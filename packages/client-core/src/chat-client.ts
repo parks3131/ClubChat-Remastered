@@ -127,8 +127,30 @@ export class ChatClient {
   displayImage: string | null = null;
 
   private socket: SocketLike | null = null;
+  /**
+   * Whether the server has accepted this socket's `auth`.
+   *
+   * > **A socket that exists is not a socket that may be used, and treating the two as the same
+   * > thing signed members out.** `connect` assigns `this.socket` and only then waits for
+   * > `auth.ok`, so between the socket opening and the server answering there is a window where
+   * > sending throws nothing and the gateway refuses the frame - which it reported as
+   * > `invalid_token`, which the provider reads as a dead session. A chat screen mounting on a
+   * > cold open (deep link, notification tap, web refresh) lands in that window reliably.
+   *
+   * So "can I send" is asked about the handshake, not about the object. The window is small and
+   * it is exactly the window a cold open occupies, which is the worst possible place for it.
+   */
+  private authenticated = false;
   /** Read cursors this client wants advanced, waiting on a socket. Channel -> highest seq. */
   private readonly pendingReads = new Map<string, number>();
+  /**
+   * Channels this client wants subscribed, waiting on the handshake.
+   *
+   * The same shape as `pendingReads` and for the same reason: a subscription is a durable thing
+   * the client wants, not a frame it happens to be able to deliver this instant. Held rather than
+   * dropped, so a chat opened during connect is still subscribed once the socket is usable.
+   */
+  private readonly pendingSubscribes = new Set<string>();
   private readonly waiters = new Map<string, AckWaiter>();
   private authResolved: ((value: void) => void) | null = null;
   private authRejected: ((error: Error) => void) | null = null;
@@ -182,6 +204,7 @@ export class ChatClient {
 
   async connect(): Promise<void> {
     this.closedByUs = false;
+    this.authenticated = false;
     const socket = this.opts.createSocket(this.opts.wsUrl);
     this.socket = socket;
 
@@ -215,6 +238,7 @@ export class ChatClient {
       }
       this.waiters.clear();
       this.socket = null;
+      this.authenticated = false;
       if (!this.closedByUs) this.authRejected?.(new Error('socket closed before auth'));
     };
 
@@ -227,12 +251,23 @@ export class ChatClient {
 
   async close(): Promise<void> {
     this.closedByUs = true;
+    this.authenticated = false;
     this.socket?.close();
     this.socket = null;
   }
 
+  /**
+   * Put a frame on the wire, or refuse.
+   *
+   * Refusing before `auth.ok` is the point rather than caution: the gateway discards a frame it
+   * receives from an unauthenticated socket and closes the connection, so sending early does not
+   * merely fail, it takes the conversation down. Every caller already treats a throw here as
+   * "not now" - the outbox retries, `flushReads` holds, `openChannel` carries on to the HTTP
+   * sync it never needed a socket for.
+   */
   private send(frame: unknown) {
     if (!this.socket) throw new Error('not connected');
+    if (!this.authenticated) throw new Error('not authenticated');
     this.socket.send(JSON.stringify(frame));
   }
 
@@ -312,10 +347,13 @@ export class ChatClient {
         this.displayName = frame.d.displayName;
         this.displayImage = frame.d.displayImage;
         this.channels = frame.d.channels;
-        this.authResolved?.();
-        // The socket is only usable once the server has accepted the token, so this is the
-        // earliest honest moment to flush anything held while it was down.
+        // The socket is only usable once the server has accepted the token. This is the line
+        // that makes `send` work, so it comes before anything that flushes.
+        this.authenticated = true;
+        // Held while the handshake was in flight, in the order a caller asked for them.
+        this.flushSubscribes();
         this.flushReads();
+        this.authResolved?.();
         this.opts.onChange?.();
         break;
       }
@@ -533,8 +571,27 @@ export class ChatClient {
   // Subscriptions and sending
   // -------------------------------------------------------------------------
 
+  /**
+   * Ask for these channels to be subscribed, now or as soon as the socket can carry it.
+   *
+   * Recorded before it is sent, so a caller during the handshake - which is every chat screen
+   * on a cold open - keeps its subscription instead of losing it to a throw.
+   */
   subscribe(channelIds: readonly string[]) {
-    this.send({ t: 'subscribe', d: { channelIds } });
+    for (const channelId of channelIds) this.pendingSubscribes.add(channelId);
+    this.flushSubscribes();
+  }
+
+  /** Send whatever subscriptions are outstanding, if the socket can carry them. */
+  private flushSubscribes() {
+    if (this.pendingSubscribes.size === 0) return;
+    const channelIds = [...this.pendingSubscribes];
+    try {
+      this.send({ t: 'subscribe', d: { channelIds } });
+      this.pendingSubscribes.clear();
+    } catch {
+      // Not usable yet. Left pending; `auth.ok` flushes them.
+    }
   }
 
   /**
@@ -573,15 +630,11 @@ export class ChatClient {
        * messages live, and the one thing that could have caught it up was skipped every time it
        * tried. Missed messages then sat below the local high-water mark, where until `repairGaps`
        * nothing would ever ask for them again.
+       *
+       * `subscribe` now holds rather than throws, so this cannot abort the sync at all - and the
+       * subscription survives the wait instead of being dropped by a caller that carried on.
        */
-      try {
-        this.subscribe([channelId]);
-      } catch (error) {
-        this.log('subscribe on open failed, syncing anyway', {
-          channelId,
-          error: String(error),
-        });
-      }
+      this.subscribe([channelId]);
     }
     await this.syncChannel(channelId, await this.store.localMaxSeq(channelId));
   }

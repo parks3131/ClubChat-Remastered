@@ -94,18 +94,29 @@ designed in.
     re-run, which is a habit worth being uneasy about - see the 2026-08-03 history entry for two
     confident misdiagnoses of exactly this.
 
-### Known defect: the gateway rejects a session the API accepts
+### ~~Known defect: the gateway rejects a session the API accepts~~
 
-**Open, found 2026-08-08.** The web client authenticated fine over HTTP - lists loaded, polls were
-created - while its socket answered `auth failed: invalid_token` against session rows that were
-present and unexpired. Signing out and back in clears it, which is a workaround rather than an
-explanation.
+**Fixed 2026-08-09.** It never rejected a session. Every one of the 101 unexpired session rows in
+the development database was replayed against both surfaces and all 101 agreed, which is what
+forced the search somewhere other than the token.
 
-Worth fixing because of how it presents: the app looks healthy. Screens load, content appears, and
-the only symptom is a thin `Offline. Showing saved messages.` banner - so a member can sit on a
-frozen conversation believing it is simply quiet. `resolveSessionFromToken` accepts a
-freshly-issued token every time in testing, so the divergence is between what the client has
-stored and what the gateway will resolve, not the gateway's logic in isolation.
+The gateway started handling each frame immediately rather than behind the previous one, and
+`auth` is answered only after two database round trips. So a `subscribe` or `msg.read` sent in that
+window - which is exactly where a chat screen's mount effect lands on a cold open, whether from a
+deep link, a notification tap or a page refresh - was evaluated while `state.userId` was still
+null, refused, and the socket closed. The refusal was reported as `invalid_token`, and since
+2026-08-08 the client acts on that code by ending the session: a member holding a token the API was
+answering `200` for was signed out.
+
+That also explains the two things the original entry could not. **"Signing out and back in clears
+it"** - because sign-in lands on the club list, where nothing opens a channel while connecting.
+And **`resolveSessionFromToken` accepts a freshly-issued token every time in testing** - because
+the token was never the problem.
+
+Fixed at both ends, since each is the other's blast radius: the gateway now handles one socket's
+frames at a time and answers `not_authenticated` for a genuinely early frame, and the client holds
+subscriptions and read cursors until `auth.ok` rather than treating a non-null socket as a usable
+one. See [Connection layer](../TECH/01-connection-layer.md) and [Protocol](../TECH/10-protocol.md).
 
 ### ~~Known defect: another member's poll or event card does not appear in chat~~
 

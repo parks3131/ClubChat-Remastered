@@ -13,6 +13,118 @@ Newest first.
 
 ---
 
+## 2026-08-09 - The session the gateway never rejected
+
+`SPEC/PRD/17` had carried this since 2026-08-08: the web client authenticated fine over HTTP while
+its socket answered `auth failed: invalid_token`, against session rows that were present and
+unexpired. Signing out and back in cleared it. Nobody could explain why.
+
+**The gateway never rejected a session.** It refused a frame that arrived while the handshake was
+still running, and reported it with the code that means "your credential is no good".
+
+### Finding it by refusing to theorise about it
+
+The previous entry's lesson was to stop reading code and get a second thing to compare, so this
+started by trying to make the token be wrong and failing:
+
+| Asked | Answer |
+|---|---|
+| Do the two token shapes better-auth hands back behave differently? | No. Raw `body.token` and the signed `set-auth-token` both give `200` and `auth.ok` |
+| Does any REAL session diverge? | No. All **101 unexpired sessions** in the development database replayed against both surfaces, and all 101 agreed |
+
+Which killed the entire premise. The token was never the variable, so the variable had to be
+something else about the connection, and the only other thing a socket has is *when* frames arrive.
+Three cells, one valid token throughout:
+
+```
+auth alone:                              auth.ok
+auth, then subscribe AFTER auth.ok:      auth.ok , subscribed
+auth, then subscribe in the same tick:   auth.err(invalid_token) , CLOSED
+```
+
+### What it was
+
+`handleAuth` awaits two database round trips - resolve the session, load the access context - and
+the message handler started the next frame immediately rather than behind it. So the second frame
+was evaluated against `state.userId === null`, refused, and the socket closed. **The client sent
+its frames in the correct order and lost anyway**, because the server did not observe the order it
+was sent in.
+
+The client half is the mirror image. `connect` assigns `this.socket` and only then awaits `auth.ok`,
+and `send` asked only whether the socket existed:
+
+```ts
+private send(frame: unknown) {
+  if (!this.socket) throw new Error('not connected');   // true, and not the question
+  this.socket.send(JSON.stringify(frame));
+}
+```
+
+Once the socket is OPEN, `send` throws nothing - so a frame goes out and the gateway kills the
+connection. **The window is small and it is precisely the window a cold open occupies**: a chat
+screen's mount effect calls `openChannel` and `markRead`, and `chat-client.ts` already said so in a
+comment written for a different bug, that this fires "reliably *before* the socket has finished
+connecting" on a deep link, a notification tap or a refresh.
+
+Then 2026-08-08 made it much worse. Ending the session on `invalid_token` was right - it fixed an
+app that sat offline forever behind a grey banner - but it pointed a destructive action at a code
+that did not mean what it says. **A member with a perfectly good token got signed out.**
+
+### The two answers the old entry could not produce
+
+Both fall straight out, and both had been recorded as mysteries:
+
+- **"Signing out and back in clears it."** Sign-in lands on the club list, and nothing there opens a
+  channel while the socket is connecting. The race needs a chat screen to be the first thing mounted.
+- **"`resolveSessionFromToken` accepts a freshly-issued token every time in testing."** Of course it
+  does. So does an old one.
+
+### Fixed at both ends, because each is the other's blast radius
+
+- **The gateway queues each socket's frames**, one at a time, in arrival order. The same rule the
+  client already applies per channel and for the same reason: a check that reads state an earlier
+  frame writes is meaningless until that frame has finished. Liveness is still recorded on arrival,
+  so a queued frame is never mistaken for a silent socket.
+- **`not_authenticated` is now its own code**, distinct from `invalid_token`. Only the second is
+  grounds to end a session.
+- **The client sends nothing before `auth.ok`**, and *holds* subscriptions the way it already held
+  read cursors, so a chat opened mid-handshake is still subscribed once the socket is usable rather
+  than silently unsubscribed.
+
+A client on somebody's phone cannot be fixed retroactively, so the server must not refuse
+correctly-ordered frames; and a refused frame closes the connection, so the client must not send an
+early one. Either fix alone leaves the other end broken for somebody.
+
+### A test that passed with the bug still in it
+
+Worth recording, because it nearly shipped as the regression test. The first version drove the real
+`ChatClient` through the real gateway in the cold-open ordering, and it did fail before the fix.
+Then the client fix landed, and **it kept passing with the gateway's queue removed** - because the
+fixed client no longer sends the offending frame, so nothing exercises the server's half at all.
+
+The mutation test is what caught it. The gateway's contract needed a **raw socket** putting both
+frames on the wire in one tick, which is the same reason the envelope-repair test above it uses
+one, noted there in 2026-08-08's entry and true again here for a different subsystem. Both tests
+were then verified to fail without their own fix.
+
+### Verified
+
+- **Reproduced first**, per standing instruction 4: over raw TCP, then through the shipped
+  `client-core` against a running API, gateway and Postgres.
+- **Full gate green**: 940 tests, typecheck, `check:runtime`, `lint:emdash`.
+- **Live in the browser**: a cold open straight to `/chat/:channelId` with no history renders the
+  conversation, keeps its back control, shows no offline banner, and sends a message that acks and
+  lands in Postgres at `seq 2`. Console clean.
+
+### Scope, honestly
+
+**Android is still unbuilt and unrun**, so this is proved on web and in Node, not on a device. The
+window is timing-dependent, and a slower device widens it rather than narrowing it, which is an
+argument that the phone was always the more exposed surface rather than a reason to think it is
+fine there.
+
+---
+
 ## 2026-08-08 (last) - The message that arrived on one device and not the other
 
 Reported straight after push was proved: a poll card created by somebody else never appeared in

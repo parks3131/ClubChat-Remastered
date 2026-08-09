@@ -497,3 +497,23 @@ that records how to recognise the class._
     has a natural place to re-ask. Compare entry 12 - there the revocation check never fired at all;
     here it fires correctly and not often enough, which is harder to see because every test of it
     passes.
+
+21. **A handler that awaits does not hold the next message back, so the order a client sends in is
+    not the order the server observes.** Symptom: a socket answering `auth failed: invalid_token`
+    against a session the API was answering `200` for, intermittently, cured by signing out and in.
+    Root cause: `handleAuth` awaits two queries and the gateway started the next frame immediately,
+    so a `subscribe` sent *after* `auth` was evaluated while the socket was still unauthenticated,
+    refused, and closed. **Rule: frames from one connection are handled one at a time, in arrival
+    order.** This is entry 3 one layer out - there it was frames per channel on the client, here it
+    is frames per socket on the server - and the recognition rule is the same: *any check that reads
+    state an earlier message writes is meaningless until that message has finished.* Grep for a
+    handler that both `await`s and reads mutable per-connection state.
+
+    **Two riders, each of which cost as much as the race itself.** First: **the refusal reported
+    `invalid_token`, which is a different fact from "you were early"** - and a client had just been
+    taught to end the session on that code, so a member with a good token was signed out. A refusal
+    code is an API; giving two causes one name means a caller cannot act correctly on either. Second:
+    **the regression test passed with the server bug still present.** It drove the real client, and
+    the client fix stopped it sending the offending frame at all, so nothing reached the server's
+    half. A test for a server contract has to put the bytes on the wire itself. Both halves were
+    verified to fail without their own fix, which is the only reason this was noticed.

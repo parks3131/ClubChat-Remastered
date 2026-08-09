@@ -325,6 +325,132 @@ describe('the read frame the app actually sends', () => {
   }, 30_000);
 });
 
+/**
+ * The cold open: a chat screen mounting while the handshake is still in flight.
+ *
+ * > **This is what "the gateway rejects a session the API accepts" actually was.** The token was
+ * > never the problem - `GET /me` answered 200 for it throughout. `handleAuth` awaits two database
+ * > round trips, and the gateway used to start the NEXT frame rather than queue it behind the
+ * > first, so a `subscribe` or `msg.read` sent in that window was evaluated against
+ * > `state.userId === null`, refused as `invalid_token`, and the socket closed. The client reads
+ * > that code as proof the session is dead and signs the member out.
+ *
+ * A chat screen's mount effect calls `openChannel` and `markRead`, and on a cold open - deep link,
+ * notification tap, web refresh - it lands in that window reliably. Which is why the symptom was
+ * "it happens sometimes, and signing out and back in fixes it": signing in lands on the club list,
+ * where nothing opens a channel while connecting.
+ *
+ * Driven through the real client and the real gateway, because neither half is wrong on its own.
+ */
+describe('a frame sent while the handshake is in flight', () => {
+  it('does not refuse the session, and the subscription still lands', async () => {
+    const founder = await signUp('ColdOpen');
+    const club = await createClub(db, {
+      name: 'Cold Open Club',
+      sport: 'running',
+      creatorId: founder.userId,
+    });
+
+    // Proof the session is good, so a refusal below cannot be blamed on the token.
+    const me = await fetch(`${apiUrl}/me`, {
+      headers: { authorization: `Bearer ${founder.token}` },
+    });
+    expect(me.status, 'the API refused the token, so this proves nothing').toBe(200);
+
+    const frames: string[] = [];
+    const client = new ChatClient({
+      wsUrl: `ws://127.0.0.1:${gatewayPort}`,
+      apiUrl,
+      token: founder.token,
+      deviceId: crypto.randomUUID(),
+      platform: 'web',
+      createSocket: (url) => {
+        const socket = new WebSocket(url);
+        socket.addEventListener('message', (event) => {
+          frames.push(JSON.parse(String(event.data)).t as string);
+        });
+        /*
+         * The screen effect, fired at the one moment that used to break it: the socket is OPEN,
+         * so sending throws nothing, and `auth.ok` cannot have come back yet because the server
+         * has two queries to run first. A tick after `open` is that window.
+         */
+        socket.addEventListener('open', () => {
+          setTimeout(() => void client.openChannel(club.mainChannelId).catch(() => undefined), 0);
+        });
+        return socket as unknown as SocketLike;
+      },
+      randomUuid: () => crypto.randomUUID(),
+      log: silent,
+    });
+
+    // Before the fix this rejected with AuthRejectedError('invalid_token').
+    await expect(client.connect()).resolves.toBeUndefined();
+
+    // And the subscription asked for mid-handshake is not merely un-refused, it lands - a fix
+    // that only stopped the sign-out while dropping the subscribe would be a quieter bug.
+    for (let attempt = 0; attempt < 40 && !frames.includes('subscribed'); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(frames, 'the subscription asked for during the handshake never landed').toContain(
+      'subscribed',
+    );
+
+    await client.close();
+  }, 30_000);
+
+  /*
+   * A RAW socket, deliberately, rather than `ChatClient` - for the same reason the envelope
+   * repair test above uses one.
+   *
+   * The client now holds its frames until `auth.ok`, so driving this through it passes whether
+   * or not the GATEWAY queues anything. A mutation test confirmed exactly that: with the
+   * per-socket queue removed, the client-driven test above still passed. Only bytes put on the
+   * wire in the offending order can assert the server's half.
+   *
+   * And the server's half matters on its own: a client already installed on somebody's phone
+   * cannot be fixed retroactively, so a gateway that refuses correctly-ordered frames keeps
+   * signing out every build in the field.
+   */
+  it('handles frames in arrival order, so a subscribe cannot overtake the auth before it', async () => {
+    const founder = await signUp('ColdOpenRaw');
+    const club = await createClub(db, {
+      name: 'Cold Open Raw Club',
+      sport: 'running',
+      creatorId: founder.userId,
+    });
+
+    const socket = new WebSocket(`ws://127.0.0.1:${gatewayPort}`);
+    const frames: Array<{ t: string; d: Record<string, unknown> }> = [];
+    socket.on('message', (data: unknown) =>
+      frames.push(JSON.parse(String(data)) as { t: string; d: Record<string, unknown> }),
+    );
+    await new Promise((resolve) => socket.once('open', resolve));
+
+    // Both frames in one tick, in the correct order. `handleAuth` runs two queries, so without
+    // a queue the second frame is evaluated while `state.userId` is still null.
+    socket.send(
+      JSON.stringify({
+        t: 'auth',
+        d: { token: founder.token, deviceId: crypto.randomUUID(), platform: 'ios' },
+      }),
+    );
+    socket.send(JSON.stringify({ t: 'subscribe', d: { channelIds: [club.mainChannelId] } }));
+
+    for (let attempt = 0; attempt < 60 && !frames.some((f) => f.t === 'subscribed'); attempt += 1) {
+      if (frames.some((frame) => frame.t === 'auth.err')) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    expect(
+      frames.find((frame) => frame.t === 'auth.err')?.d['code'],
+      'the gateway refused a correctly-ordered subscribe, which signs the member out',
+    ).toBeUndefined();
+    expect(frames.map((frame) => frame.t)).toEqual(['auth.ok', 'subscribed']);
+
+    socket.close();
+  }, 30_000);
+});
+
 describe('Phase 0 exit drill', () => {
   it('loses nothing, duplicates nothing, and orders identically when the gateway is killed mid-send', async () => {
     // ---------------------------------------------------------------- arrange

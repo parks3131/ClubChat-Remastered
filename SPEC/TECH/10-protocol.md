@@ -27,13 +27,39 @@ Envelope: `{ "t": <type>, "id": <correlation id>, "d": <payload> }`
 | Type | Payload | Notes |
 |---|---|---|
 | `auth.ok` | `{ sessionId, userId, displayName, displayImage, serverTime, channels: [{id, scope, scopeId, clubId, lastSeq, lastReadSeq}] }` | The client immediately knows every channel with a gap. `displayName` and `displayImage` ride here rather than on every ack, because neither can change for the life of the connection and the client needs both to draw its own optimistic bubble. |
-| `auth.err` | `{ code }` | Socket closed. `invalid_token`, `expired_token`, `signin_blocked`, `timeout`, `malformed`. |
+| `auth.err` | `{ code }` | Socket closed. `invalid_token`, `expired_token`, `signin_blocked`, `not_authenticated`, `timeout`, `malformed`. **`not_authenticated` means the frame was early, not that the credential is bad** - see below. |
 | `msg.ack` | `{ clientMsgId, messageId, channelId, seq, createdAt }` | **Gap-checked exactly like `msg.new`** - a skipped `seq` here leaves a permanent hole. See [Client architecture](08-client-architecture.md). |
 | `msg.err` | `{ clientMsgId, code }` | `rate_limited`, `forbidden`, `channel_gone`, `malformed`, `media_not_ready` |
 | `msg.new` | full message envelope incl. `seq`, `reactions` and a resolved `reply_to` | Append if `seq == local_max + 1`, else sync. Reactions ride on the envelope so they survive offline with the message ([ADR-0017](../decisions/0017-reactions-travel-on-the-message-envelope.md)). `reply_to` is resolved here rather than left as a seq, for the same reason: the cache has to be able to draw the quote with no network. |
 | `msg.update` | `{ channelId, seq, pinned?, deletedAt?, reactions? }` | **Reactions are the FULL set, never a delta.** Only the fields that changed are present, and an absent field is distinct from an explicit `null`. Declared from Phase 0 and had no producer at all until reactions arrived in Phase 3.5 - pins and tombstones now travel on it too. Deliberately **not** gap-checked: an update names an existing `seq` rather than extending the log, so it can neither create nor reveal a hole. See [ADR-0017](../decisions/0017-reactions-travel-on-the-message-envelope.md). **An update missed while disconnected is missed permanently** - sync pulls strictly above the local max and never re-reads a cached row. Item 14 of [the roadmap](../PRD/17-roadmap-and-open-questions.md). |
 | `notif.new` | `{ notification }` | Drives the badge live. |
 | `pong` | `{}` | |
+
+### One socket's frames are handled one at a time, in arrival order
+
+The gateway queues each socket's frames behind the previous one. Different sockets still proceed
+in parallel; a single socket's do not.
+
+> **The guarantee is load-bearing, and it was missing until 2026-08-09.** `auth` is answered after
+> two database round trips, and the handler used to start the next frame immediately rather than
+> behind it - so a client that correctly sent `auth` and then `subscribe` had its `subscribe`
+> evaluated while the socket was still unauthenticated, refused, and the connection closed. Any
+> check that reads state an earlier frame writes is meaningless without this.
+
+Two consequences worth stating, because they are what a client may rely on:
+
+1. **A frame sent after `auth` is evaluated after `auth` has been applied.** A client does not have
+   to wait for `auth.ok` to avoid being refused - though `@clubchat/client-core` waits anyway, so
+   that a server without this guarantee cannot take the conversation down.
+2. **`not_authenticated` is not `invalid_token`.** The first says the frame was early; the second
+   says the credential is no good. Only the second is grounds for a client to end the session, and
+   conflating them signed members out whose token the API was answering `200` for. See
+   [Authorization](05-authorization.md) and the 2026-08-09 entry in [`HISTORY.md`](../../HISTORY.md).
+
+The rejected alternative is handling frames concurrently for throughput, which is what it did.
+There is nothing to win: a socket's frames are already ordered by the client that sent them, sends
+serialize on the channel's `last_seq` row lock regardless, and liveness is recorded on arrival
+rather than on handling, so a queued frame never reads as a silent socket.
 
 ### Frames are parsed at both ends, never cast
 

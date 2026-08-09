@@ -118,10 +118,20 @@ export const AuthOk = z.object({
   channels: z.array(ChannelState),
 });
 
+/**
+ * Why a socket was refused.
+ *
+ * > **`not_authenticated` is deliberately not `invalid_token`.** One says the frame was early,
+ * > the other says the credential is no good, and a client must be able to tell them apart:
+ * > only the second is grounds to end the session and sign somebody out. They were the same
+ * > code until 2026-08-09, which is how a member holding a token the API answered `200` for
+ * > got told their session was dead.
+ */
 export const authErrCodes = [
   'invalid_token',
   'expired_token',
   'signin_blocked',
+  'not_authenticated',
   'timeout',
   'malformed',
 ] as const;

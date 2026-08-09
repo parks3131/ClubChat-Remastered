@@ -680,3 +680,108 @@ describe('opening a conversation gained mid-session', () => {
     expect(syncCalls.some((url) => url.includes(encodeURIComponent(CHANNEL)))).toBe(true);
   });
 });
+
+/**
+ * Nothing goes on the wire before the server has accepted the handshake.
+ *
+ * > **A socket that exists is not a socket that may be used.** `connect` assigns `this.socket`
+ * > and only then waits for `auth.ok`, and the gateway discards a frame from an unauthenticated
+ * > socket and CLOSES the connection - it used to say `invalid_token` doing it, which the app
+ * > reads as a dead session and signs the member out. So an early frame did not merely fail, it
+ * > ended the session of somebody whose token was fine.
+ *
+ * The window is exactly where a chat screen's mount effect lands on a cold open, which is why
+ * this is asserted about `sent` rather than about a return value: the bug is a frame existing at
+ * all, not a call failing.
+ */
+describe('ChatClient waits for auth before sending', () => {
+  function connecting() {
+    const socket = new FakeSocket();
+    const client = new ChatClient({
+      wsUrl: 'ws://test',
+      apiUrl: 'http://test',
+      token: 'token',
+      deviceId: '22222222-2222-4222-8222-222222222222',
+      platform: 'ios',
+      createSocket: () => socket,
+      randomUuid: () => crypto.randomUUID(),
+      fetchImpl: vi.fn(async () => new Response(JSON.stringify({ channels: [] }))),
+    });
+    const connected = client.connect();
+    // OPEN, so `send` throws nothing - the auth frame is away and the answer is still coming.
+    socket.open();
+    return { client, socket, connected };
+  }
+
+  function authOk(socket: FakeSocket) {
+    socket.deliver({
+      t: 'auth.ok',
+      d: {
+        sessionId: 'sess',
+        userId: USER,
+        displayName: 'Test Sender',
+        displayImage: null,
+        serverTime: new Date(2026, 0, 1).toISOString(),
+        channels: [
+          { id: CHANNEL, scope: 'club', scopeId: CLUB, clubId: CLUB, lastSeq: 0, lastReadSeq: 0 },
+        ],
+      },
+    });
+  }
+
+  it('holds a subscribe asked for mid-handshake, then sends it at auth.ok', async () => {
+    const { client, socket, connected } = connecting();
+
+    client.subscribe([CHANNEL]);
+    expect(
+      socket.sent.filter((frame) => frame.t === 'subscribe'),
+      'a subscribe reached the wire before auth.ok, which closes the socket',
+    ).toHaveLength(0);
+
+    authOk(socket);
+    await connected;
+
+    // Held, not dropped: the subscription still happens once the socket is usable.
+    expect(
+      socket.sent.filter((frame) => frame.t === 'subscribe'),
+      'the held subscribe was never flushed',
+    ).toHaveLength(1);
+
+    await client.close();
+  });
+
+  it('holds a read cursor asked for mid-handshake', async () => {
+    const { client, socket, connected } = connecting();
+
+    client.markRead(CHANNEL, 3);
+    expect(socket.sent.filter((frame) => frame.t === 'msg.read')).toHaveLength(0);
+
+    authOk(socket);
+    await connected;
+
+    expect(
+      socket.sent.filter((frame) => frame.t === 'msg.read'),
+      'the held read cursor was never flushed',
+    ).toHaveLength(1);
+
+    await client.close();
+  });
+
+  it('does not let a chat opened mid-handshake put a frame on the wire', async () => {
+    const { client, socket, connected } = connecting();
+
+    // What a chat screen's mount effect does on a deep link, a notification tap or a refresh.
+    const opening = client.openChannel(CHANNEL).catch(() => undefined);
+    // `auth` itself is on the wire and belongs there. Anything ELSE is the defect.
+    expect(
+      socket.sent.filter((frame) => frame.t !== 'auth'),
+      'openChannel sent a frame during the handshake, which is the cold-open sign-out',
+    ).toHaveLength(0);
+
+    authOk(socket);
+    await connected;
+    await opening;
+
+    await client.close();
+  });
+});
