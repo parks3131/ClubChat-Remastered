@@ -116,12 +116,27 @@ were then verified to fail without their own fix.
   conversation, keeps its back control, shows no offline banner, and sends a message that acks and
   lands in Postgres at `seq 2`. Console clean.
 
+### Then proved on the iPhone
+
+Cold-started on the physical device against the LAN stack, which matters because `client-core` is a
+workspace package and a warm reload does not necessarily replace it. The phone bundled the new
+code, authenticated, registered its push token, and logged **no auth failure and no offline state**.
+
+It also repaired three real holes left by the previous bug, which is the clearest thing in the log:
+
+```
+[chat] repairing a gap below the high-water mark {channelId: f758ee8b…, from: 7,  missing: 2}
+[chat] repairing a gap below the high-water mark {channelId: 1f43f56c…, from: 92, missing: 16}
+[chat] repairing a gap below the high-water mark {channelId: 64fd258c…, from: 4,  missing: 1}
+```
+
+Nineteen messages that had been permanently invisible on that device, recovered on first launch.
+
 ### Scope, honestly
 
-**Android is still unbuilt and unrun**, so this is proved on web and in Node, not on a device. The
-window is timing-dependent, and a slower device widens it rather than narrowing it, which is an
-argument that the phone was always the more exposed surface rather than a reason to think it is
-fine there.
+**Android is still unbuilt and unrun.** The window is timing-dependent and a slower device widens
+it rather than narrowing it, which is an argument that a phone was always the more exposed surface
+rather than a reason to assume it is fine there.
 
 ---
 
