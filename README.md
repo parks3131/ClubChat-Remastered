@@ -13,18 +13,18 @@ is the remaster: a full rebuild driven by a written postmortem of v1's architect
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/screenshots/01-my-clubs.jpg" alt="My Clubs" /></td>
-    <td width="33%"><img src="docs/screenshots/02-club-hub.jpg" alt="Club hub" /></td>
-    <td width="33%"><img src="docs/screenshots/03-club-chat.jpg" alt="Club chat" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-club-hub.jpg" alt="Club hub" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-club-chat.jpg" alt="Club chat" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-race-overflow.jpg" alt="A race space" /></td>
   </tr>
   <tr>
-    <td valign="top"><sub><b>My Clubs.</b> Four clubs, one account, each with its own identity, its
-      sport, and the role held in it. Avatars are the only media served from a public bucket, and a
-      club without one falls back to its initial.</sub></td>
-    <td valign="top"><sub><b>The club hub.</b> The three spaces a club owns, and its races nested one
-      level down. This one screen is the whole product bet.</sub></td>
-    <td valign="top"><sub><b>Club chat.</b> System messages and mentions in the durable log, with a tray
-      that turns a poll or an event into a first-class object.</sub></td>
+    <td valign="top"><sub><b>The club hub.</b> The three spaces a club owns - News &amp; Highlights, the
+      main chat, and a private Eboard &amp; Council - with its races nested one level down. This one
+      screen is the whole product bet.</sub></td>
+    <td valign="top"><sub><b>Club chat.</b> A durable per-channel log of messages, system events and
+      mentions, with a tray that turns a poll or an event into a first-class object.</sub></td>
+    <td valign="top"><sub><b>A race is a club, nested down.</b> Open a race and it behaves like a small
+      club: its own roster, chat, polls, and car groups, all reached from the overflow menu.</sub></td>
   </tr>
 </table>
 
@@ -86,22 +86,27 @@ should all fit with zero customisation work.
 
 ## What it does
 
-**Clubs** with an owner, admins and members, joined by share link or by request, each with a
-main chat, news and highlights, a calendar, polls, and weekly routines.
+**Clubs** with an owner, admins and members. Join an open club instantly, request one that is
+closed, or follow an invite link straight in. Each club has a main chat, news and highlights, a
+calendar, polls, and weekly training routines.
 
-**Races and meets**, each a nested space with its own roster, its own chat, its own polls, and
-car groups for who is driving whom.
+**Races and meets**, each a nested space with its own roster, its own chat, its own polls, meet
+information (location, hotel, results), and car groups for who is driving whom.
 
 **A private Eboard and Council space** per club, membership granted by promotion, with its own
-chat, meetings and polls. Demotion takes it away, and the app says so.
+chat, scheduled meetings and polls. Demotion takes it away, and the app says so.
 
 **Chat** as the centre of gravity: a durable per-channel log, media and document attachments,
 reactions, mentions, pinning, announcements, and cards that post themselves back into chat when
 a poll or event or meeting is created elsewhere.
 
-**Direct messages** between members who share a club, with blocking and a report queue shipped
-in the same release, because adding a private surface without safety tooling is not shipping the
-feature.
+**Direct messages** with anyone you share a club with, surfaced in one inbox alongside your clubs
+and filtered by All, DMs, Unread or Clubs. Blocking and a report queue shipped in the same
+release, because adding a private surface without safety tooling is not shipping the feature.
+
+**Roles that gate everything.** Owner, admin or member is the input to every authorization
+question: a member sees a race as locked until they are on its roster, and only admins ever see
+the Eboard space at all.
 
 **Push notifications** to iOS and Android, suppressed by what you have actually read rather than
 by whether a socket happened to be open.
@@ -112,80 +117,137 @@ iOS, Android and web from one Expo codebase, phone-first and portrait only.
 
 ## Inside the app
 
-Six more screens, and the thing each one is really showing. All screenshots are the app running
-on a physical Android device.
+A guided tour of the app, grouped by the job each screen does. Every screenshot is the app
+running on a physical device.
+
+### Getting in
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/04-race-poll.jpg" alt="Race chat with a poll card" /></td>
-    <td width="50%"><img src="docs/screenshots/05-announcement.jpg" alt="An announcement in chat" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-add-club.jpg" alt="Add a club" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-chats.jpg" alt="Chats inbox" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-new-message.jpg" alt="New direct message" /></td>
   </tr>
   <tr>
-    <td valign="top">
-      <b>A race, with its poll card</b><br />
-      <sub>A poll created anywhere posts itself back into chat as a live card carrying its tally.
-      <b>The card is a real row in the channel log</b>, written by the worker off the outbox rather
-      than synthesised by the client, so it has a sequence number, survives a reinstall, and
-      deleting the poll finds and removes the card instead of leaving a dead link. The overflow
-      menu is what a nested space owns: its own roster, its own polls, and car groups for who is
-      driving whom.</sub>
-    </td>
-    <td valign="top">
-      <b>Announcements</b><br />
-      <sub>Rendered differently because it <i>is</i> different. <b>A pin is reference and notifies
-      nobody; an announcement is interruption and notifies everyone</b>, so they are two predicates
-      rather than one flag. <code>canAnnounceInChannel</code> is admin-only and constant-false in a
-      DM, where nobody holds that authority over anybody. Keeping them separate is what lets pin
-      stay available to both participants in a DM without handing either one a megaphone.</sub>
-    </td>
+    <td valign="top"><sub><b>Join or create.</b> Search an open club and you are in instantly; a
+      closed one sends a request an admin approves; an invite link takes you straight in either way.
+      Create a club and you are its owner, with its chat and Eboard made alongside it.</sub></td>
+    <td valign="top"><sub><b>One inbox.</b> Clubs and direct messages live in the same list, filtered
+      by All, DMs, Unread or Clubs, and each row can be pinned, muted or deleted. There is no separate
+      "messages" app bolted on.</sub></td>
+    <td valign="top"><sub><b>DM by shared club.</b> You can start a direct message with anyone who is in
+      a club with you - no phone number, no friend request. Read access and post access are separate
+      predicates, so a blocked person still reads the history they were part of.</sub></td>
+  </tr>
+</table>
+
+### Chat, and everything that posts into it
+
+<table>
+  <tr>
+    <td width="25%"><img src="docs/screenshots/ios-club-chat.jpg" alt="Club chat" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-message-actions.jpg" alt="Message actions" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-race-poll.jpg" alt="Poll card" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-poll-voters.jpg" alt="Poll voters" /></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/06-message-actions.jpg" alt="Message actions" /></td>
-    <td width="50%"><img src="docs/screenshots/07-calendar.jpg" alt="Calendar" /></td>
+    <td valign="top"><sub><b>The durable log.</b> Media, documents, reactions, mentions and pinning,
+      with a tray to attach a photo, document, poll or event. An <b>announcement</b> is rendered
+      differently because it <i>is</i> different: a pin is reference and notifies nobody, an
+      announcement is interruption and notifies everyone.</sub></td>
+    <td valign="top"><sub><b>Message actions are policy, not UI.</b> Delete is the sender or a space
+      admin; pin is admin in a club but either participant in a DM; report is gated on membership, so
+      a member who just blocked someone can still report what was said to them.</sub></td>
+    <td valign="top"><sub><b>A live poll card.</b> A poll created anywhere posts itself back into chat
+      as a real row in the channel log - it has a sequence number, survives a reinstall, and deleting
+      the poll removes the card instead of leaving a dead link.</sub></td>
+    <td valign="top"><sub><b>See the voters.</b> Tap the eye and the tally opens up into exactly who
+      chose what, per option. Nothing about the vote is anonymous guesswork.</sub></td>
+  </tr>
+</table>
+
+### A race is its own space
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/screenshots/ios-race-overflow.jpg" alt="Race overflow menu" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-meet-info.jpg" alt="Meet information" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-car-groups.jpg" alt="Car groups" /></td>
   </tr>
   <tr>
-    <td valign="top">
-      <b>Message actions</b><br />
-      <sub><b>Which entries this sheet offers is a policy question, not a UI one.</b> Delete is
-      the sender or a space admin; pin is admin in a club but <i>either participant</i> in a DM,
-      because a pin is reference and an announcement is interruption; report is gated on
-      membership rather than on the ability to post, so a member who has just blocked someone can
-      still report what was said to them. <code>canDeleteOthersMessages</code> exists as its own
-      named predicate precisely so this screen can decide whether to draw "Delete" without
-      shipping raw admin-ness to the client.</sub>
-    </td>
-    <td valign="top">
-      <b>Calendar</b><br />
-      <sub>Every scope a member can see, merged into one month and tagged with both the club it
-      came from and the kind of thing it is. <b>There is deliberately no calendar table</b>: a
-      second copy would drift, whereas a merged read cannot go stale. The merge is
-      permission-shaped, so an Eboard meeting appears only for Eboard members and two people in
-      the same club see different months. Races are the deliberate exception, visible to every
-      member, because you cannot ask to join a race you cannot see.</sub>
-    </td>
+    <td valign="top"><sub><b>Its own everything.</b> The overflow menu is what a nested space owns:
+      members, meet information, polls, and car assignments - the same shape as a club, one level
+      down.</sub></td>
+    <td valign="top"><sub><b>Meet information.</b> Location, hotel, photos and results kept in one
+      structured place, instead of scattered across a hundred messages and lost by the next race.</sub></td>
+    <td valign="top"><sub><b>Car groups.</b> Who is driving whom, split into cars with an
+      "Incharge" driver marked for each - the "who is driving" thread, made into a real object.</sub></td>
+  </tr>
+</table>
+
+### Roles, and the private Eboard
+
+<table>
+  <tr>
+    <td width="25%"><img src="docs/screenshots/ios-members.jpg" alt="Members and roles" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-club-hub-locked.jpg" alt="A member's locked view" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-eboard-chat.jpg" alt="Eboard chat" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-new-meeting.jpg" alt="New meeting" /></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/08-notifications.jpg" alt="Notifications" /></td>
-    <td width="50%"><img src="docs/screenshots/09-profile.jpg" alt="Profile" /></td>
+    <td valign="top"><sub><b>Owner, admin, member.</b> Role is the input to every authorization
+      question in the system, and every member is grouped under the role they actually hold in this
+      club.</sub></td>
+    <td valign="top"><sub><b>A member's locked view.</b> The same club, opened by a member: no Eboard
+      space at all, and races they are not on the roster of appear <b>locked</b>. Access is earned per
+      space, not inherited from being in the club.</sub></td>
+    <td valign="top"><sub><b>The Eboard &amp; Council.</b> A private admin room with its own chat and
+      membership granted by promotion - the side-group clubs used to fake, made real, with the app
+      announcing when it is taken away.</sub></td>
+    <td valign="top"><sub><b>Scheduling a meeting.</b> Give it a title, link and agenda; it posts a
+      card into board chat and appears on the calendar of Eboard members only.</sub></td>
+  </tr>
+</table>
+
+### Calendar, events, notifications and routines
+
+<table>
+  <tr>
+    <td width="25%"><img src="docs/screenshots/ios-calendar.jpg" alt="Calendar" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-events.jpg" alt="Upcoming events and polls" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-notifications.jpg" alt="Notifications" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-weekly-routine.jpg" alt="Weekly routine" /></td>
   </tr>
   <tr>
-    <td valign="top">
-      <b>Notifications</b><br />
-      <sub>Every row is stored as a <b>type plus structured params</b> and rendered on the client,
-      never as a pre-rendered string and a saved route
-      (<a href="SPEC/decisions/0013-notifications-store-type-and-params.md">ADR-0013</a>): renaming
-      a club fixes the history instead of leaving it stale. "Caught up on 2 messages" is the read
-      cursor talking, and it is the same cursor that decides whether a push was ever sent.</sub>
-    </td>
-    <td valign="top">
-      <b>Profile</b><br />
-      <sub>Club memberships carry their role, because role is the input to every authorization
-      question in the system. It is also a privacy surface: <b>date of birth is withheld when
-      another member views this profile</b>, and the surface gate asserts that explicitly rather
-      than trusting the serializer. Deleting an account anonymises it and blocks future sign-in
-      <i>without</i> removing content, so club history stays readable with the person redacted
-      out of it.</sub>
-    </td>
+    <td valign="top"><sub><b>One merged month.</b> Every scope you can see, merged by permission.
+      <b>There is deliberately no calendar table</b> - a second copy would drift, a merged read cannot
+      go stale, so two people in the same club see different months.</sub></td>
+    <td valign="top"><sub><b>Upcoming and past.</b> Events and polls from every space you belong to,
+      sorted into what is coming and what has been, so nothing sneaks up on the club.</sub></td>
+    <td valign="top"><sub><b>Read-cursor notifications.</b> Every row is a <b>type plus params</b>
+      rendered on the client, so renaming a club fixes history. "Caught up on 5 messages" is the read
+      cursor talking - the same cursor that decides whether a push was ever sent.</sub></td>
+    <td valign="top"><sub><b>Weekly routines.</b> The training plan clubs used to screenshot into chat
+      every week, now a real dated object you page through week by week, rest days included.</sub></td>
+  </tr>
+</table>
+
+### You
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/screenshots/ios-profile.jpg" alt="Profile" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-account.jpg" alt="Account and ownership" /></td>
+    <td width="33%"></td>
+  </tr>
+  <tr>
+    <td valign="top"><sub><b>Profile.</b> Memberships carry their role, because role drives every
+      authorization answer. It is also a privacy surface: <b>date of birth is withheld</b> when another
+      member views the profile, asserted by a surface gate rather than trusted to the serializer.</sub></td>
+    <td valign="top"><sub><b>An honest exit.</b> You cannot delete your account while you still own
+      clubs - a club without an owner cannot be recovered - so the app points you at transferring or
+      deleting them first. Deletion then anonymises without erasing history.</sub></td>
+    <td valign="top"></td>
   </tr>
 </table>
 
