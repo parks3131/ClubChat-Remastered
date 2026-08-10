@@ -13,6 +13,62 @@ Newest first.
 
 ---
 
+## 2026-08-10 (later) - The screen that answered a question nobody asked
+
+Reported from the phone: a plain member opens a race, taps **Meet Information** from the header
+quick-nav, and is told that only a club admin can edit it and that they can read it on the race
+screen. The founder's own summary was the whole diagnosis - *yes, only an admin edits it, but a
+member should be able to see it.*
+
+### Reproduced before it was diagnosed
+
+Standing instruction 4, and it paid immediately by ruling out half the codebase. A real non-admin
+member with a live session, against the running API:
+
+```
+GET /races/87cf6e14…   as Parks RPK (club role: member)   ->  200
+viewer          : {"hasAccess":false,"isManager":false,…}
+meetDescription : "Leaving at 6am"
+```
+
+**The server was already right.** It hands all five fields to any club member, including one with
+no roster row at all, exactly as `PRD/09` rule 13 requires. So there was nothing to fix behind the
+wire, and the whole defect was one ternary on the screen throwing away content it had been given.
+
+### Two rules that had been collapsed into one
+
+`PRD/09` rule 13 makes Meet Information readable by any club member, *because it is precisely what
+somebody uses to decide whether to go*. `PRD/05` rule 11a says the header quick-nav is deliberately
+not role-gated, because reaching a screen is not acting on it and every destination applies its own
+rules on arrival.
+
+Together those produce one rule: **content shown, controls absent.** What shipped was content
+withheld - and worse than a blank, because it directed somebody who had just asked to see the
+information to go and see it somewhere else.
+
+### The fix that mattered was not the fix
+
+The race hub was **already** rendering these five fields read-only, with a deliberately non-uniform
+empty-state rule (rule 12: Details, Location and Hotel hide when empty; Photos and Results show
+"Stay tuned"). The cheap repair was to paste that block into the second screen.
+
+That is failure mode 9 exactly - a hand-copied block does not diverge loudly, it diverges silently,
+and each copy stays individually correct while the rule drifts between them. Nothing would have
+caught a later change to one and not the other. So it moved into `src/screens/meet-information.tsx`,
+the directory that exists for this ("two renderings of one read, kept side by side so they cannot
+drift"), and both screens call it.
+
+### Swept for siblings
+
+Every role-gated branch in the client was checked for the same conflation. The other four are
+benign - an empty-state hint that varies by role, an owner-only action, a roster badge, and a line
+of explanatory copy inside the Eboard edit form. `meet.tsx` was the only one.
+
+940 tests, typecheck, `check:runtime`, `lint:emdash`. **Not seen on a device by the author**: the
+reproduction proved the server and the ternary, and the render was confirmed by the founder.
+
+---
+
 ## 2026-08-10 - A place for design to live, and a header that scrolls
 
 Two things, and the first exists because of the second's whole family: design work is arriving

@@ -29,10 +29,10 @@ import {
   Body,
   Card,
   DataScreen,
-  DetailLine,
   Row,
   SectionHeader,
 } from '../../../../../src/ui.tsx';
+import { MeetInformationCard } from '../../../../../src/screens/meet-information.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
 export default function RaceHubScreen() {
@@ -77,18 +77,12 @@ export default function RaceHubScreen() {
             </View>
 
             <SectionHeader title="Meet Information" />
-            <Card>
-              {/*
-                Empty-state behaviour differs per field, deliberately. Description, location and
-                hotel are hidden entirely when empty; photos and results always show a placeholder,
-                because those are expected later and a missing hotel usually means there is no hotel.
-              */}
-              <DetailLine label="Details" value={race.meetDescription} />
-              <DetailLine label="Location" value={race.meetLocationUrl} />
-              <DetailLine label="Hotel" value={race.meetHotelUrl} />
-              <DetailLine label="Photos" value={race.meetPhotosUrl} placeholder="Stay tuned" />
-              <DetailLine label="Results" value={race.meetResultsUrl} placeholder="Stay tuned" />
-            </Card>
+            {/*
+              Shared with the Meet Information screen, which a member reaches from quick-nav. The
+              per-field empty-state rule lives in that module rather than being written out here
+              and again there - see its note.
+            */}
+            <MeetInformationCard race={race} />
 
             {/* Any member can pin any race they can see. Personal: nobody else's hub changes. */}
             <Action

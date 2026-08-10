@@ -16,6 +16,7 @@ import { useDeclareRace } from '../../../../../src/current-space.tsx';
 import { raceApi } from '../../../../../src/api.ts';
 import { color, space, type } from '../../../../../src/theme.ts';
 import { Action, Body, DataScreen, Field, SectionHeader } from '../../../../../src/ui.tsx';
+import { MeetInformationCard } from '../../../../../src/screens/meet-information.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
 export default function MeetInformationScreen() {
@@ -42,11 +43,24 @@ export default function MeetInformationScreen() {
         data.race.viewer.isManager ? (
           <MeetForm raceId={raceId} initial={data.race} />
         ) : (
-          // A guarded screen renders something in its denied branch rather than a blank.
+          /*
+            A member READS it here. Only editing is admin-gated.
+
+            > **This branch used to render a sentence saying a club admin edits it and that the
+            > information could be read on the race screen** - which sent somebody who had just
+            > asked to see it somewhere else to see it, and threw away content the server had
+            > already sent. `GET /races/:id` returns all five fields to any club member, including
+            > one with no roster row at all.
+
+            [`PRD/09`](../../../SPEC/PRD/09-races-and-meets.md) rule 13 makes Meet Information
+            readable by any club member precisely because it is what somebody uses to decide
+            whether to go, and rule 5 of `PRD/05` on the header quick-nav says the same thing from
+            the other side: reaching a screen is not acting on it, and every destination applies
+            its own rules on arrival. The rule those two produce together is content shown,
+            controls absent - never the content withheld.
+          */
           <Body>
-            <Text style={styles.meta}>
-              Only a club admin can edit Meet Information. You can read it on the race screen.
-            </Text>
+            <MeetInformationCard race={data.race} />
           </Body>
         )
       }
