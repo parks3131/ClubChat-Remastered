@@ -285,31 +285,6 @@ export default function ChatsScreen() {
         </View>
       </View>
 
-      <View style={styles.controls}>
-        <SearchField value={query} onChangeText={setQuery} placeholder="Search" />
-        {/*
-          Outside `DataScreen` deliberately, so the search field and the chips do not blink out
-          of existence on a reload and back in. They describe the screen rather than the data,
-          and a control that disappears while its list refreshes is a control you cannot use at
-          the moment you most want to.
-
-          The count reads `load.data` rather than the filtered rows: it must say how much is
-          unread in the WHOLE list, not how much is unread in what the current filter has already
-          narrowed to. Standing on Clubs and being told there are two unread would otherwise mean
-          two unread clubs, silently dropping the DMs.
-        */}
-        <Tabs
-          tabs={FILTERS.map((entry) =>
-            entry.key === 'unread'
-              ? { ...entry, count: unreadChipCount(load.data?.conversations ?? []) }
-              : entry,
-          )}
-          active={filter}
-          variant="chip"
-          onChange={setFilter}
-        />
-      </View>
-
       <DataScreen load={load}>
         {(data) => {
           const rows = data.conversations.filter((row) => matchesFilter(row, filter, query));
@@ -334,6 +309,47 @@ export default function ChatsScreen() {
                 { paddingBottom: tabBarSpace(insets.bottom) },
               ]}
               refreshControl={<RefreshControl {...pull} tintColor={color.accent} />}
+              /*
+                The search field and the chips SCROLL AWAY with the list, and only the title row
+                stays.
+
+                > **They are content, not chrome.** Pinned above the list they cost a fixed band of
+                > every screenful forever, to hold two controls somebody touches once and then
+                > scrolls past. Carried by the list, they are there when you arrive and when you
+                > return to the top, which is exactly when you want them, and gone while you are
+                > reading - which is the behaviour read off GroupMe.
+
+                Passed as an ELEMENT rather than as a component, deliberately: a function here is
+                a new component type on every render, so the search field would remount and drop
+                its keyboard focus on each keystroke.
+
+                This sits inside `DataScreen` now, where a note used to say it must not - the
+                worry being that a reload would blink the controls out of existence. That cannot
+                happen: `DataScreen` only replaces its children while `load.data` is null, so a
+                refresh with data already on screen keeps them mounted. What it does mean is that
+                the very first load and a hard error show no controls, and in both of those there
+                is no list to search or narrow anyway.
+
+                The unread count reads `load.data` rather than the filtered rows: it must say how
+                much is unread in the WHOLE list, not in what the current filter has already
+                narrowed to. Standing on Clubs and being told there are two unread would otherwise
+                mean two unread CLUBS, silently dropping the DMs.
+              */
+              ListHeaderComponent={
+                <View style={styles.controls}>
+                  <SearchField value={query} onChangeText={setQuery} placeholder="Search" />
+                  <Tabs
+                    tabs={FILTERS.map((entry) =>
+                      entry.key === 'unread'
+                        ? { ...entry, count: unreadChipCount(load.data?.conversations ?? []) }
+                        : entry,
+                    )}
+                    active={filter}
+                    variant="chip"
+                    onChange={setFilter}
+                  />
+                </View>
+              }
               ListEmptyComponent={
                 <EmptyState
                   title={emptyTitle(filter, query, data.conversations.length)}

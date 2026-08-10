@@ -54,13 +54,27 @@ the other behind a button at the bottom of a list.
    every race in the preview - so the total on the list always resolves to somewhere to go. A
    number that cannot be found is worse than no number, which is what it was for the Eboard and
    then again for races.
-3. **Three filter chips - Unread, DMs, Clubs - and none of them is selected on arrival.**
-   Landing on a filter would mean opening the app to an empty screen on every day the reader is
-   caught up, which is most days, and an empty list reads as a broken app rather than as good
-   news. Tapping the active chip clears it.
+3. **Four filter chips - All, DMs, Unread, Clubs - with `All` selected on arrival.** Landing on a
+   narrowing filter would mean opening the app to an empty screen on every day the reader is caught
+   up, which is most days, and an empty list reads as a broken app rather than as good news. `All`
+   is that resting state drawn as a real selection, so there is something on screen saying how to
+   get back to it. The Unread chip carries a count of **conversations**, absent at zero, so it
+   agrees with the tab badge rather than counting messages.
+
+   *(Until 2026-08-09 this read "three chips and none of them is selected on arrival", cleared by
+   tapping the active one again. Same behaviour, with nothing on screen to explain it. The rule
+   went stale when the chip shipped and is corrected here.)*
 4. **The search field filters by conversation name.** Message content is **not** searched -
    message search remains deferred ([Roadmap](17-roadmap-and-open-questions.md)) and is a
    different and much larger feature than filtering a list already on screen.
+
+   4a. **The search field and the chips scroll away with the list. Only the title row is pinned.**
+   They are content rather than chrome: pinned, they would spend a fixed band of every screenful
+   forever on two controls somebody touches once and then scrolls past. Carried by the list they
+   are there on arrival and on every return to the top, which is exactly when they are wanted, and
+   gone while reading. They remain present when the list is empty, because the empty state can say
+   "nothing matching this search" and the control to clear that search has to outlive its own
+   result.
 5. **A club row opens that club's hub; a DM row opens the conversation.** The asymmetry follows
    from what the two things are: a DM *is* a conversation and has nowhere else to go, while a
    club is a place with a chat in it, alongside News, races, the Eboard space and the calendar.

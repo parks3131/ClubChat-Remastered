@@ -153,9 +153,16 @@ Order matters. Each step catches a class the previous one cannot.
 |---|---|---|
 | [`SPEC/PRD/`](SPEC/PRD/) | What the product does and why | File paths, schema, component names |
 | [`SPEC/TECH/`](SPEC/TECH/) | How it is built, and what must not break | Product justification (link to the PRD instead) |
+| [`SPEC/DESIGN/`](SPEC/DESIGN/) | What a surface looks like, and why | Any measurement the code owns - record the **relationship**, not the value |
 | [`SPEC/decisions/`](SPEC/decisions/) | Why we chose this over the alternative | Implementation detail that will drift |
 | [`HISTORY.md`](HISTORY.md) | How we got here, bug by bug | Anything needed to work today |
 | `AGENTS.md` (this file) | How to work | Anything specific to one feature |
+
+**A design spec is per *surface*, not per screen** - a reusable piece of interface with its own
+identity, wherever it appears. Its rules are numbered so they can be cited. And an obligation it
+creates for unrelated code (a floating bar obliging every scrolling screen to reserve clearance) is
+**promoted into the relevant `TECH/` doc or an ADR**, because a per-surface file is exactly where
+somebody building an unrelated screen will never look. See [`SPEC/DESIGN/README.md`](SPEC/DESIGN/README.md).
 
 Start at [`SPEC/README.md`](SPEC/README.md), which indexes all of it.
 
@@ -250,8 +257,9 @@ move a version bump rather than a migration. Do not "upgrade" this without check
 | `SPEC/README.md` | Index of everything below. Start here. |
 | `SPEC/PRD/` | Product requirements, one file per feature area |
 | `SPEC/TECH/` | Technical spec, one file per subsystem |
+| `SPEC/DESIGN/` | Design spec, one file per **surface** (tab bar, message bubble, chat row) |
 | `SPEC/decisions/` | Accepted ADRs. Immutable; supersede rather than edit |
-| `SPEC/templates/` | Feature spec, authorization checklist, migration checklist, ADR |
+| `SPEC/templates/` | Feature spec, design spec, authorization / migration / design-review checklists, ADR |
 | `SPEC/TECH/assets/` | Generated diagram exports. Do not hand-edit; see `scripts/` |
 | `packages/shared/` | Wire contract and domain vocabulary. Imported by client AND server, so neither can drift from the other |
 | `packages/client-core/` | Local store, send outbox, sync engine. Shared by the Expo app and the exit drill, so the drill tests what ships |

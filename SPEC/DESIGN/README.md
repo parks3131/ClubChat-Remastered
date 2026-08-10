@@ -1,0 +1,76 @@
+# DESIGN - what a surface looks like, and why
+
+One file per **surface**: a reusable piece of interface with its own identity, wherever it appears.
+The tab bar is a surface. So are the message bubble, the chat row, the context menu and the card.
+A *screen* is not - a screen is a composition of surfaces, and describing the tab bar inside four
+screen files is the same drift [Design system](../TECH/13-design-system.md) rule 5 exists to
+prevent.
+
+Added 2026-08-09, when [Design system](../TECH/13-design-system.md) started turning into a
+catalogue. That file is the **system**: tokens, the type scale, the structural rules, and where
+design authority comes from. It changes rarely. What was accumulating inside it was per-surface
+detail that changes constantly, and one bullet about the tab bar had grown to five paragraphs.
+
+---
+
+## The one rule
+
+**Record the relationship, not the value.**
+
+| | |
+|---|---|
+| Wrong | "the bar is inset 24pt" |
+| Right | "the bar is inset **further than the content gutter**, so it reads as a separate object rather than another block of the page" |
+
+The first is dead the moment somebody asks for "a bit more", and it duplicates `theme.ts` - which
+the repo's own rule says wins anyway, so the spec is guaranteed to lose that argument. The second
+survives 24 becoming 28, and it is the thing that would otherwise have to be re-derived by whoever
+next wonders why the bar does not line up with the text above it.
+
+Name the token. State the relationship it has to hold. Leave the number in the code.
+
+## What must not be in here
+
+| Not this | Where it goes |
+|---|---|
+| Token values, the type scale, structural rules | [`TECH/13`](../TECH/13-design-system.md) |
+| Why the product does this at all | [`PRD/`](../PRD/) |
+| A decision that closes off an alternative system-wide | [`decisions/`](../decisions/) |
+| The long story of getting it wrong four times | [`HISTORY.md`](../../HISTORY.md) |
+| Any measurement the code already owns | `theme.ts`, and nowhere else |
+
+## Obligations get promoted, always
+
+A visual choice can create a hard contract for code that has nothing to do with the surface.
+Floating the tab bar obliges **every scrolling screen in the app** to reserve clearance or keep a
+last row nobody can read.
+
+So a design spec's "obligations" section is a **pointer**, never the only home. Anything listed
+there is also written into the relevant `TECH/` document or an ADR, because a per-surface design
+file is precisely where somebody building an unrelated roster screen will never look. That
+discipline is the whole reason this directory is worth having rather than being a folder of
+descriptions.
+
+## Rules are numbered so they can be cited
+
+The same reason [`PRD/`](../PRD/) numbers its behaviour rules. A commit message, a code comment, a
+review or another spec can say `DESIGN/01-tab-bar` rule 5 rather than restating it and slowly
+restating it wrongly.
+
+---
+
+## Surfaces
+
+| # | Surface | Covers |
+|---|---|---|
+| 01 | [Tab bar](01-tab-bar.md) | The four destinations: the floating bar, the sliding pill, the badge |
+
+**Written as surfaces are worked on, not backfilled in a pass.** A spec written by reading code
+rather than by looking at a device starts out wrong, and a directory of unverified documents is
+worse than an empty one.
+
+## Templates
+
+- [Design spec](../templates/design-spec-template.md) - starting a new surface
+- [Design review checklist](../templates/design-review-checklist.md) - before calling any visual
+  change done. **Every item on it shipped as a defect once.**

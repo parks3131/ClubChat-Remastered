@@ -13,6 +13,78 @@ Newest first.
 
 ---
 
+## 2026-08-10 - A place for design to live, and a header that scrolls
+
+Two things, and the first exists because of the second's whole family: design work is arriving
+faster than anywhere existed to record it.
+
+### `SPEC/DESIGN/`, one file per surface
+
+`TECH/13` was becoming a catalogue. It is meant to be the *system* - tokens, the type scale, the
+structural rules, where design authority comes from - and the previous entry had grown one bullet
+about the tab bar into five paragraphs covering the pill, the labels, an accessibility fallback and
+an absolute-positioning contract. Two kinds of content at completely different rates, in one file.
+
+So: a fourth home in the documentation contract, a peer of `PRD/` and `TECH/`, **one file per
+surface rather than per screen**. A surface is a reusable piece of interface with its own identity
+wherever it appears; a screen is a composition of them. Describing the tab bar inside four screen
+files is the same drift `TECH/13` rule 5 already forbids in code.
+
+**The one rule, and the reason these can be expected to survive:**
+
+> **Record the relationship, not the value.** "Inset 24pt" is dead the moment somebody asks for a
+> bit more, and it duplicates `theme.ts` - which the repo's own rule says wins, so the spec is
+> guaranteed to lose that argument. "Inset further than the content gutter, so it reads as a
+> separate object rather than another block of the page" survives the number changing, and is the
+> thing that would otherwise have to be re-derived.
+
+**The part that prevents bugs rather than describing them** is the obligation-promotion rule. A
+visual choice can create a hard contract for code that has nothing to do with the surface: floating
+the tab bar obliges *every scrolling screen in the app* to reserve clearance. A per-surface design
+file is precisely where somebody building a roster screen will never look, so anything in a spec's
+obligations section is also written into the relevant `TECH/` doc or an ADR. That section is a
+pointer, never the only home.
+
+Shipped with it: the design spec template, a **design review checklist** whose every item is a
+defect this project actually shipped (the double-counted safe-area inset, the `marginTop` nudge
+that clipped every icon, the labels the navigator silently dropped, the sliced last row, the nested
+pressable, the native module that took the whole web bundle down), and `01-tab-bar.md` as the
+worked example while last night was fresh. **Written as surfaces are touched, never backfilled** -
+a spec written by reading code instead of by looking at a device starts out wrong.
+
+### The search field and the chips now scroll
+
+Asked for from a GroupMe screen recording. `ffmpeg` frames rather than a description, which settled
+what "only the chat stick" meant: the title row and its two buttons are pinned, and the search field
+and the filter chips are **content** that travels with the list and returns at the top.
+
+Two things were checked rather than assumed, and one is still owed.
+
+**The code carried a note saying the controls must sit outside `DataScreen`**, so a reload could not
+"blink them out of existence" - and this change puts them inside it. The note was defending a real
+property, so rather than overriding it: `DataScreen` only replaces its children while
+`load.data === null`, so a refresh with rows already on screen keeps them mounted. The blink it
+feared cannot happen. What is now true is that the first load and a hard error show no controls,
+and neither has a list to search.
+
+**The header is passed as an ELEMENT, not a function.** A function there is a new component type on
+every render, so the search field would remount and drop keyboard focus on every keystroke. It
+typechecks either way and the 67 mobile tests pass either way; it is only findable with a thumb.
+
+**Still owed: that thumb.** Committed unverified on device at the founder's instruction, with the
+scroll behaviour and the focus behaviour both unconfirmed. Recorded here rather than implied to be
+done.
+
+### A stale rule found on the way
+
+`PRD/15` rule 3 still described **three** chips with none selected on arrival, cleared by tapping
+the active one again. The 08-09 commit shipped **four** with `All` selected and never updated the
+rule. Corrected in the same change, per the standing rule that the repo is right and the doc is the
+bug - and worth noting how it was found: not by an audit, but by reading the rule for an unrelated
+reason. A spec nobody has cause to re-read goes stale silently.
+
+---
+
 ## 2026-08-09 (last) - The tab bar the screen ends at, and the one it floats over
 
 Four founder requests over one evening, taken in order: make the sliding pill faster, drop the

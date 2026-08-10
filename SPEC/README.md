@@ -16,6 +16,7 @@ server, not in the database.
 |---|---|
 | What the product does and why | [`PRD/`](PRD/) |
 | How it is built, and what must not break | [`TECH/`](TECH/) |
+| What a surface looks like, and why | [`DESIGN/`](DESIGN/) |
 | Why a decision was made, and what was rejected | [`decisions/`](decisions/) |
 | To add a feature, a migration, or a resource | [`templates/`](templates/) |
 | How to work in this repo | [`../AGENTS.md`](../AGENTS.md) |
@@ -89,6 +90,27 @@ other specs.
 | 16 | [Build phases](TECH/16-build-phases.md) | The phased plan, and the v1 debt each phase pays off |
 | 17 | [Diagrams](TECH/17-diagrams.md) | System overview, message flows, fan-out topology, failure behaviour |
 
+## DESIGN - what a surface looks like
+
+One file per **surface**: a reusable piece of interface with its own identity, wherever it appears.
+The tab bar is a surface; a screen is a composition of them. Added 2026-08-09, when
+[TECH/13](TECH/13-design-system.md) began turning into a catalogue - that file stays the *system*
+(tokens, type, structural rules), and per-surface detail moved here because the two change at
+completely different rates.
+
+**The rule that keeps these from going stale: record the relationship, not the value.** "Inset 24pt"
+is dead the moment somebody asks for a bit more, and it duplicates `theme.ts`, which the repo rule
+below says wins anyway. "Inset further than the content gutter, so it reads as a separate object"
+survives the number changing.
+
+| # | Surface | Covers |
+|---|---|---|
+| 01 | [Tab bar](DESIGN/01-tab-bar.md) | The four destinations: the floating bar, the sliding pill, the badge |
+
+Written as surfaces are worked on rather than backfilled in a pass, since a spec written by reading
+code instead of by looking at a device starts out wrong. See [`DESIGN/README.md`](DESIGN/README.md)
+for the obligation-promotion rule, which is the part that prevents bugs rather than describing them.
+
 ## Decisions
 
 Immutable once accepted. A spec says what and how; an ADR says **why this and not that**.
@@ -122,6 +144,8 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | Document | Use when |
 |---|---|
 | [Feature spec](templates/feature-spec-template.md) | Starting any new feature |
+| [Design spec](templates/design-spec-template.md) | Starting any new surface |
+| [Design review checklist](templates/design-review-checklist.md) | Before calling any visual change done. **Every item on it shipped as a defect once.** |
 | [Authorization checklist](templates/authorization-checklist.md) | Adding any resource, endpoint or scope. **Every item on it shipped as a bug once.** |
 | [Migration checklist](templates/migration-checklist.md) | Writing a new migration |
 | [Sending domain checklist](templates/sending-domain-checklist.md) | Pointing outbound mail at a domain. **A provider reading "verified" is a cached verdict, not a live check.** |
@@ -131,8 +155,9 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 
 ## Conventions
 
-- **PRD says what, TECH says how.** No file paths, schema or component names in `PRD/`; no
-  product justification in `TECH/`. Link across instead of duplicating.
+- **PRD says what, TECH says how, DESIGN says what it looks like.** No file paths, schema or
+  component names in `PRD/`; no product justification in `TECH/`; no measurement the code owns in
+  `DESIGN/`. Link across instead of duplicating.
 - **An ADR is immutable.** Change a decision by superseding it with a new ADR, never by editing
   the old one. The rejected alternatives are the point.
 - **Keep it compact.** This tree is loaded into context. Long narratives belong in a history
