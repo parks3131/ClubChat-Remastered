@@ -43,7 +43,8 @@ import type { InboxRow } from '../../src/api-types.ts';
 import { useSession } from '../../src/chat-provider.tsx';
 import { timeAgo } from '../../src/dates.ts';
 import { hrefFor } from '../../src/notification-href.ts';
-import { color, radius, space, type } from '../../src/theme.ts';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { color, radius, space, tabBarSpace, type } from '../../src/theme.ts';
 import { DataScreen, Row } from '../../src/ui.tsx';
 import { useLoad, usePullToRefresh } from '../../src/use-load.ts';
 
@@ -81,6 +82,8 @@ const ICON_BY_TYPE: Readonly<Record<string, IconName>> = {
 type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
 
 export default function NotificationsScreen() {
+  // The tab bar floats OVER this list, so the last row has to be able to scroll clear of it.
+  const insets = useSafeAreaInsets();
   const { authState, revision, notifyChanged } = useSession();
   const load = useLoad(() => inboxApi.page(), [revision]);
 
@@ -204,7 +207,7 @@ export default function NotificationsScreen() {
           <FlatList<InboxRow>
             data={[...data.rows, ...older]}
             keyExtractor={(row) => `${row.kind}:${row.id}`}
-            contentContainerStyle={styles.list}
+            contentContainerStyle={[styles.list, { paddingBottom: tabBarSpace(insets.bottom) }]}
             refreshControl={<RefreshControl {...pull} tintColor={color.accent} />}
             /*
               Paging is silent: no page numbers, and deliberately NO end-of-history footer.

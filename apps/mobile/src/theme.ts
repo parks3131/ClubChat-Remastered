@@ -65,6 +65,25 @@ export const color = {
   card: '#ffffff',
   /** Every header and the tab bar share this surface. */
   chrome: '#f2f4f6',
+  /**
+   * `chrome` with the page showing faintly through it, for the floating tab bar.
+   *
+   * The bar overlaps the screen it sits on, and while it was opaque that read as a lid closed over
+   * the content rather than as something hovering above it. Letting the page through is what says
+   * the list continues underneath and is merely covered here.
+   *
+   * **0.85, and the exact number is doing work.** Much lower and text passing under the bar stays
+   * legible enough to compete with the icons on top of it, which is worse than either extreme -
+   * two things asking to be read in the same place. Much higher and the effect is invisible at a
+   * glance. This is a flat tint rather than a blur on purpose: a blur separates the layers better
+   * but is a second treatment to maintain, and the bar sits over ordinary lists rather than over
+   * photography.
+   *
+   * It only shows at all because the bar is `position: absolute` and the scene runs underneath it.
+   * If the bar ever goes back into normal flow, this token becomes a slower way of writing
+   * `chrome` - there would be nothing behind it.
+   */
+  chromeTranslucent: 'rgba(242, 244, 246, 0.85)',
   /** A surface that sits above `card` without becoming chrome. */
   cardRaised: '#eceef0',
   /**
@@ -191,8 +210,16 @@ export const space = {
  * project's expo-router build does not re-export. Hence a token rather than a hook.
  */
 export const tabBar = {
-  /** The bar itself, excluding anything below it. */
-  height: 60,
+  /**
+   * The bar itself, excluding anything below it.
+   *
+   * It went 60 to 56 when the destination labels came off on 2026-08-09, since the bar had been
+   * sized for a 24pt icon stacked on a 10pt label, and then to 64 on the founder seeing it: a bar
+   * that is inset from the edges wants some weight to it, or it reads as a strip rather than as a
+   * control. Taller than it ever was WITH labels, which is the point - the height is now carrying
+   * the presence the label text used to.
+   */
+  height: 64,
   /** Between the bar and the content above it. */
   gap: 8,
 } as const;

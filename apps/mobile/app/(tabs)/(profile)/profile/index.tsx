@@ -21,13 +21,16 @@ import { useSession } from '../../../../src/chat-provider.tsx';
 import { formatDateOfBirth } from '../../../../src/dates.ts';
 import { RemoteImage } from '../../../../src/media-bubble.tsx';
 import { pickPhoto, uploadAvatar, UploadError } from '../../../../src/upload.ts';
-import { color, radius, space, type } from '../../../../src/theme.ts';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { color, radius, space, tabBarSpace, type } from '../../../../src/theme.ts';
 import { Action, Card, DataScreen, Field, Row, SearchField, SectionHeader } from '../../../../src/ui.tsx';
 import { useLoad } from '../../../../src/use-load.ts';
 
 export default function ProfileScreen() {
   const { authState, userId, signOut, revision } = useSession();
   const router = useRouter();
+  // The tab bar floats OVER this screen - "Edit Profile" was the row it was cutting in half.
+  const insets = useSafeAreaInsets();
   const [clubsOpen, setClubsOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [pictureError, setPictureError] = useState<string | null>(null);
@@ -74,7 +77,9 @@ export default function ProfileScreen() {
   return (
     <DataScreen load={profile}>
       {(data) => (
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView
+          contentContainerStyle={[styles.body, { paddingBottom: tabBarSpace(insets.bottom) }]}
+        >
             {/*
               Identity, centred and at the top: this screen is about a person, so it opens with
               their face rather than with a settings list they happen to own.

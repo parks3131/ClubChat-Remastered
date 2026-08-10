@@ -13,6 +13,89 @@ Newest first.
 
 ---
 
+## 2026-08-09 (last) - The tab bar the screen ends at, and the one it floats over
+
+Four founder requests over one evening, taken in order: make the sliding pill faster, drop the
+destination labels, shrink the bar's width and grow its height, and make it translucent like
+Strava's. The first three were what they sound like. The fourth was not, and it is the entry.
+
+### The tint that could not have worked
+
+The bar went translucent - `chrome` at 88% - and on the device it looked **exactly** as opaque as
+before. The obvious readings were all wrong: the colour was right, the token was reaching the
+style, and the same `expo-blur` treatment works on the chat header two screens away.
+
+The founder settled it with a screenshot, highlighting the strips either side of the inset bar and
+the band beneath it, saying he expected to see rows there while scrolling.
+
+> **Those strips were empty because the scene ended at the bar's top edge.** The bar was in normal
+> flow, so the navigator sized every screen to stop above it. There was no content behind the
+> glass. A translucent bar over blank background is an opaque bar, and no opacity value would ever
+> have produced the effect - the missing piece was something to see *through* to.
+
+`position: absolute` is the whole fix, and it is what makes the other three properties mean
+anything: the inset strips fill with list, the band above the home indicator fills with list, and
+88% starts reading as glass. It went to 85% once there was something behind it to reveal.
+
+### The comment that was confidently wrong, and what that cost
+
+The style carried a note arguing against exactly this, from the session that built the bar:
+
+> **In normal flow, NOT `position: absolute`.** Floating a tab bar absolutely (...) means every
+> list in every tab has to grow a bottom padding equal to the bar's height - and the one nobody
+> remembers is the one whose last row sits permanently under it. Keeping it in flow means the
+> screens end where the bar begins, which is the same look with none of that.
+
+Its *reasoning* is sound and is now this change's main liability. Its *claim about the look* was
+the error: in-flow is not "the same look", it is the look without the effect, which is only
+discoverable by asking for the effect and not getting it.
+
+Worth recording how it misled. Reading that comment, the earlier profile screenshot - an "Edit
+Profile" card sliced through by the bar's top edge - was interpreted here as proof the bar
+overlapped content, and this entry nearly recorded the comment as a lie. It was not. The card was
+being **clipped at the scene's bottom edge**, which looks identical to being covered and is not the
+same thing at all. Two mechanisms, one appearance, opposite conclusions about what to change.
+
+**The tell that resolved it was the negative space, not the sliced row**: a bar that overlaps
+content shows fragments of that content in the strips beside it, and those strips were clean. The
+absence was the evidence, and it took the founder's highlighter to make anybody look at it.
+
+### Why only one screen had ever needed padding
+
+`clubs/index.tsx` reserved `tabBarSpace()` and nothing else in the app did, which had read as an
+oversight in the other screens. It was not: in flow, nothing needs it, and the Chats list needed it
+only because it was the one screen tall enough to run its final row against the boundary.
+
+That inverts with this change. Calendar, Notifications and Profile were given the same reservation
+in this commit; **every screen deeper than the four destinations is still owed it**, and now
+genuinely broken rather than theoretically so - a row visible under glass and impossible to scroll
+clear is worse than a row that is simply absent. Recorded as owed work rather than swept quietly,
+because the founder chose the four-destination scope while it was still hypothetical.
+
+### The rest, briefly
+
+- **The slide went from ~400ms to a little over 200** (`damping` 18 to 26, `stiffness` 130 to 280,
+  `mass` 0.9 to 0.7). The previous session tuned it deliberately slow, reasoning that a fast
+  indicator reads as teleporting. That over-corrected: what removes the jump is the pill having a
+  continuous path at all, and past a point a slow trip stops reading as motion and starts reading
+  as lag behind a screen that has already changed.
+- **Labels off, icons alone.** This contradicts `TECH/13`, which gives the pill as a second channel
+  for the selected state *because* accent-versus-grey alone fails `PRD/16`. Raised before building
+  it, and the founder's call. Two things kept it from being a silent regression: the pill stays,
+  and it is now the only second channel; and each name moved to `tabBarAccessibilityLabel`, since a
+  tab with no text gives a screen reader nothing to read.
+- **Height 60 to 56 to 64, inset 8 to 16 to 24.** The bar shrank when the labels left, then grew
+  past its original height because the height is now carrying the presence the words used to. The
+  inset deliberately overshoots the 16pt content gutter: at the gutter its ends aligned with the
+  text above and still read as flush, and breaking that alignment is what makes it look like a
+  separate object rather than another block of the page.
+
+Full gate green: 940 tests, typecheck, `check:runtime`, `lint:emdash`. Every step was verified on
+the physical iPhone as it landed, which is the only reason the tint failure was caught at all - it
+typechecks, it renders, and it is wrong.
+
+---
+
 ## 2026-08-09 (later) - The Chats redesign, and a marker that told on people
 
 A founder mockup for the landing screen, taken as a **design** change: nothing about what a row

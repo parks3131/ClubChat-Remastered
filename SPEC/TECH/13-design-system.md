@@ -58,10 +58,23 @@ The **"Kinetic Performance System"**, extracted verbatim from the Stitch export'
 - **Gradient fill on sent message bubbles**, isolated in a container component so the list's
   row renderer never switches element types between sent and received.
 - **Chat hides the bottom tab bar** while open.
-- **A floating tab bar**, inset from the edges and rounded, with the active destination carrying an
-  `accentSoft` pill behind its icon **and** its label. The pill is a second channel for the selected
-  state, because orange-versus-grey alone fails `PRD/16`'s accessibility bar. It is drawn by the
-  app rather than by `tabBarActiveBackgroundColor`, which paints a box that excludes the label.
+- **A floating tab bar**, inset from the edges, fully rounded, translucent, and lifted off the
+  bottom, with the active destination carrying an `accentSoft` pill that **slides** between
+  destinations rather than fading in place - one pill that moves, since four separate backgrounds
+  can only cross-fade and that is what read as a jump. It is drawn by the app rather than by
+  `tabBarActiveBackgroundColor`, which paints a box of the navigator's own choosing.
+
+  **The destinations are icons alone since 2026-08-09**, at the founder's request. Two consequences
+  follow and neither is optional. The pill is now the *only* second channel for the selected state,
+  so removing it would leave accent-versus-grey by itself and fail `PRD/16` outright. And each
+  destination's name moved to an accessibility label, because a tab containing no text gives a
+  screen reader nothing to announce.
+
+  **The bar is positioned absolutely, and that is load-bearing twice.** It is what puts content
+  behind the glass: in normal flow the scene ends at the bar's top edge, so the strips either side
+  of an inset bar hold nothing and a translucent bar is indistinguishable from an opaque one. It is
+  also what obliges **every scrolling screen** to reserve `tabBarSpace()` from the same token the
+  bar is built from - a screen that does not has a last row that can never be scrolled clear.
 - **The Chats list is flat**, not carded: rows sit directly on the app background, and unread is an
   accent timestamp plus an accent count badge rather than a tinted row. Every other list still uses
   cards; unifying them is a deliberate follow-up rather than an oversight.

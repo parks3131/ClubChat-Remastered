@@ -29,7 +29,8 @@ import type { FeedItem } from '../../src/api-types.ts';
 import { bucketByDay, dayInView, type DayChoice } from '../../src/calendar-days.ts';
 import { useSession } from '../../src/chat-provider.tsx';
 import { formatDayTitle, formatMonthTitle, formatTimeOfDay, toDateKey } from '../../src/dates.ts';
-import { color, radius, space, type } from '../../src/theme.ts';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { color, radius, space, tabBarSpace, type } from '../../src/theme.ts';
 import { DataScreen, EmptyState } from '../../src/ui.tsx';
 import { useLoad } from '../../src/use-load.ts';
 
@@ -138,6 +139,9 @@ export function CalendarView({ clubId }: { clubId?: string } = {}) {
   const byDay = useMemo(() => bucketByDay(feed.data?.items ?? []), [feed.data]);
   const todayKey = toDateKey(new Date());
   const selected = dayInView(choice, byDay, todayKey);
+  // The tab bar floats OVER this screen, so the feed has to be able to scroll its last row clear
+  // of it. From the same token the bar is built from, so the two cannot drift.
+  const insets = useSafeAreaInsets();
 
   const step = (delta: number) => {
     // Paging is a deliberate move away from today, so it closes the day rather than reverting to
@@ -158,7 +162,10 @@ export function CalendarView({ clubId }: { clubId?: string } = {}) {
         const dayItems = selected === null ? [] : (byDay.get(selected) ?? []);
 
         return (
-          <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
+          <ScrollView
+            style={styles.flex}
+            contentContainerStyle={[styles.content, { paddingBottom: tabBarSpace(insets.bottom) }]}
+          >
             <MonthPager
               cursor={cursor}
               byDay={byDay}

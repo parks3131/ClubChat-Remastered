@@ -265,6 +265,16 @@ one tap from the four destinations. Signed-out screens have no tab bar at all.
 first destination's stack. The tab bar is now present everywhere v1 puts it, and absent only in
 chat.)*
 
+**It floats over the screen rather than sitting under it, and the content stays visible around and
+behind it.** The bar is inset from both edges and lifted off the bottom, and it is translucent, so
+a list scrolls past it and can be seen in the strips either side and in the band beneath. Anything
+else makes it read as a lid closed over the page rather than as a control resting on one. **The
+obligation this creates is absolute: a screen that scrolls must be able to bring its last row out
+from under the bar**, or that row is visible and unreadable, which is worse than it being absent.
+
+**The four destinations are named by icon alone**, from 2026-08-09. The name each one lost is still
+announced to a screen reader, because that is a different question from whether it is drawn.
+
 **The masthead.** ~~The word "ClubChat" is a one-time app masthead on the Clubs landing screen.~~
 **Gone as of 2026-08-02**: that screen became the Chats list, which draws its own "Chats" title
 alongside its two header actions, and a branded bar above it would be a second header saying
@@ -352,9 +362,11 @@ the protected content.
 **The Calendar destination is club-scoped when a club is active.** Entering a club sets it as
 current, and the Calendar tab then shows that club's feed with the club's name in its header
 (`Ridgeway Calendar`); leaving the club clears it and the tab shows the merged cross-club feed
-again. The **tab bar label stays "Calendar"** either way - only the header title changes. This is
+again. The **tab bar destination is unchanged** either way - only the header title is. This is
 why the club-scoped and cross-club calendars are one component: they are one screen with a
-parameter, reached two ways.
+parameter, reached two ways. *(This read "the tab bar label stays Calendar" until 2026-08-09,
+when the destinations lost their text labels. The point it was making survives the labels
+going: what changes is the header, never the bar.)*
 
 ### Motion
 
