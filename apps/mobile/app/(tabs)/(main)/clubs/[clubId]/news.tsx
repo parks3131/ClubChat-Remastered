@@ -17,7 +17,7 @@ import { reactionEmoji, type ReactionEmoji } from '@clubchat/shared';
 import { clubApi, contentApi } from '../../../../../src/api.ts';
 import type { NewsPost } from '../../../../../src/api-types.ts';
 import { RemoteImage } from '../../../../../src/media-bubble.tsx';
-import { pickPhoto, uploadAttachment, UploadError } from '../../../../../src/upload.ts';
+import { pickSquarePhoto, uploadAttachment, UploadError } from '../../../../../src/upload.ts';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import {
   Action,
@@ -209,7 +209,7 @@ function ComposePost({
       return;
     }
     setFailed(null);
-    const picked = await pickPhoto();
+    const picked = await pickSquarePhoto();
     if (picked === null) return;
 
     setUploading(true);
@@ -293,7 +293,7 @@ const styles = StyleSheet.create({
   meta: { ...type.bodySmall, color: color.textSecondary },
   error: { ...type.bodySmall, color: color.error },
   reactions: { flexDirection: 'row', gap: space.xs, flexWrap: 'wrap' },
-  photo: { width: '100%', height: 220, borderRadius: radius.sm, backgroundColor: color.fallback },
+  photo: { width: '100%', aspectRatio: 1, borderRadius: radius.sm, backgroundColor: color.fallback },
   actions: { flexDirection: 'row', gap: space.sm },
   actionButton: { flex: 1 },
 });

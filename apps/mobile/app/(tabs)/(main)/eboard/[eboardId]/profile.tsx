@@ -23,7 +23,7 @@ import { useSession } from '../../../../../src/chat-provider.tsx';
 import { useDeclareEboard } from '../../../../../src/current-space.tsx';
 import { RemoteImage } from '../../../../../src/media-bubble.tsx';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
-import { pickPhoto, uploadAvatar, UploadError } from '../../../../../src/upload.ts';
+import { pickSquarePhoto, uploadAvatar, UploadError } from '../../../../../src/upload.ts';
 import { Action, Avatar, Card, DataScreen } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
@@ -47,7 +47,7 @@ export default function EboardProfileScreen() {
 
   const changePicture = async () => {
     setPictureError(null);
-    const picked = await pickPhoto();
+    const picked = await pickSquarePhoto();
     if (!picked) return;
     setPicture(true);
     try {

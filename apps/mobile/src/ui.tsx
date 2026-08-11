@@ -662,7 +662,7 @@ export function Avatar({
   name,
   size = 40,
   image = null,
-  shape = 'circle',
+  shape,
   kind = 'person',
   tintId = null,
   ring = false,
@@ -671,6 +671,17 @@ export function Avatar({
   size?: number;
   /** A media id. Null - the common case - draws the initial instead. */
   image?: string | null;
+  /**
+   * Roundness, which **defaults to whatever `kind` already said** rather than to a fixed value.
+   *
+   * These two props encode one fact - is this a person or a thing - and while they were
+   * independent they drifted: the Chats list passed `kind="group"` and no shape, so every club
+   * on the landing screen drew the group glyph inside a circle. A caller that has said `group`
+   * has already said `square`, and having to say it twice is having the chance to say it once.
+   *
+   * Still overridable, because the override is legible at the call site and the disagreement
+   * was not.
+   */
   shape?: 'circle' | 'square';
   /**
    * What the fallback should draw when there is no picture.
@@ -697,7 +708,8 @@ export function Avatar({
    */
   ring?: boolean;
 }) {
-  const borderRadius = shape === 'circle' ? size / 2 : Math.round(size / 4);
+  const resolvedShape = shape ?? (kind === 'group' ? 'square' : 'circle');
+  const borderRadius = resolvedShape === 'circle' ? size / 2 : Math.round(size / 4);
 
   if (image !== null) {
     return (

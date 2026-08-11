@@ -21,7 +21,7 @@ import * as Linking from 'expo-linking';
 import { clubApi } from '../../../../../src/api.ts';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import { RemoteImage } from '../../../../../src/media-bubble.tsx';
-import { pickPhoto, uploadAvatar, UploadError } from '../../../../../src/upload.ts';
+import { pickSquarePhoto, uploadAvatar, UploadError } from '../../../../../src/upload.ts';
 import { Action, Card, DataScreen } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
@@ -41,7 +41,7 @@ export default function ClubProfileScreen() {
   /** The club's picture, admin only. Identity media, exactly like a person's avatar. */
   const changePicture = async () => {
     setPictureError(null);
-    const picked = await pickPhoto();
+    const picked = await pickSquarePhoto();
     if (!picked) return;
     setPicture(true);
     try {

@@ -20,7 +20,7 @@ import { accountApi, ApiError, clubApi } from '../../../../src/api.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { formatDateOfBirth } from '../../../../src/dates.ts';
 import { RemoteImage } from '../../../../src/media-bubble.tsx';
-import { pickPhoto, uploadAvatar, UploadError } from '../../../../src/upload.ts';
+import { pickSquarePhoto, uploadAvatar, UploadError } from '../../../../src/upload.ts';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { color, radius, space, tabBarSpace, type } from '../../../../src/theme.ts';
 import { Action, Card, DataScreen, Field, Row, SearchField, SectionHeader } from '../../../../src/ui.tsx';
@@ -44,7 +44,7 @@ export default function ProfileScreen() {
    */
   const changePicture = async () => {
     setPictureError(null);
-    const picked = await pickPhoto();
+    const picked = await pickSquarePhoto();
     if (!picked) return;
     setUploading(true);
     try {

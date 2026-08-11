@@ -2165,8 +2165,12 @@ export default function ChatScreen() {
             name={meta.name}
             size={36}
             image={meta.image}
-            // A DM is a person; a club, a race and the Eboard space are things.
-            shape={meta.scope === "dm" ? "circle" : "square"}
+            // A DM is a person; a club, a race and the Eboard space are things. Said once:
+            // `Avatar` takes the roundness from this, so the header cannot end up square with
+            // a letter in it - which is what it drew before, having named the shape and not
+            // the kind.
+            kind={meta.scope === "dm" ? "person" : "group"}
+            tintId={meta.channelId}
           />
         )}
         {/*

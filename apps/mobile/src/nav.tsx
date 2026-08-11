@@ -15,8 +15,8 @@ import { Link, useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { arrivedMarker } from './arrived.ts';
 import { useCurrentSpace, type SpaceKind } from './current-space.tsx';
-import { RemoteImage } from './media-bubble.tsx';
 import { color, radius, space, type } from './theme.ts';
+import { Avatar } from './ui.tsx';
 
 /**
  * How every screen enters and leaves.
@@ -323,18 +323,24 @@ export function SpaceHeaderTitle({
       accessibilityLabel={`${currentSpace.name}, open its profile`}
       style={styles.clubTitle}
     >
-      {currentSpace.image === null ? (
-        <View style={styles.clubAvatar}>
-          <Text style={styles.clubInitial}>{currentSpace.name.charAt(0).toUpperCase()}</Text>
-        </View>
-      ) : (
-        <RemoteImage
-          mediaId={currentSpace.image}
-          variant="thumb"
-          style={styles.clubAvatar}
-          resizeMode="cover"
-        />
-      )}
+      {/*
+        `Avatar` rather than a second hand-written one, which is what this was.
+
+        It drew its own 40px well at `radius.pill`, so the space header was a CIRCLE on every
+        screen that carries it - News & Highlights, Members, Polls, the lot - while chat's header
+        two taps away drew the same club as a rounded square through `Avatar`. Two implementations
+        of one face, and the roundness rule could only ever hold in the one that read it.
+
+        A club, a race and Eboard & Council are all things, so `kind` is constant here and the
+        shape follows from it.
+      */}
+      <Avatar
+        name={currentSpace.name}
+        image={currentSpace.image}
+        size={40}
+        kind="group"
+        tintId={currentSpace.id}
+      />
       <Text style={styles.clubName} numberOfLines={1}>
         {currentSpace.name}
       </Text>
@@ -407,17 +413,10 @@ export function QuickNav({ items }: { items: ReadonlyArray<{ href: string; label
 const styles = StyleSheet.create({
   backWrap: { paddingHorizontal: space.md, paddingVertical: space.xs },
   clubTitle: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  // 40px, which is v1's. The club's identity is the whole title here, so it carries the weight
-  // an app masthead would elsewhere rather than sitting as a small ornament beside the name.
-  clubAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.pill,
-    backgroundColor: color.cardSunken,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  clubInitial: { ...type.label, fontSize: 16, color: color.accent },
+  // The avatar is 40px, which is v1's: the club's identity is the whole title here, so it carries
+  // the weight an app masthead would elsewhere rather than sitting as a small ornament beside the
+  // name. The size is passed to `Avatar` rather than held as a style, because the roundness and
+  // the fallback glyph both scale from it.
   clubName: { ...type.headerTitle, fontSize: 19, lineHeight: 24, color: color.accent },
   back: { ...type.label, color: color.accent, textTransform: 'uppercase' },
   actionWrap: { paddingHorizontal: space.md, paddingVertical: space.xs },

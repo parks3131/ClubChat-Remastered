@@ -118,6 +118,61 @@ export async function pickPhoto(): Promise<PickedAttachment | null> {
   };
 }
 
+/**
+ * Pick a picture that will be shown in a **square frame**, with a crop step.
+ *
+ * Used by every avatar - a person, a club, a race, Eboard & Council - and by a news post's photo.
+ *
+ * **Its own function rather than a flag on `pickPhoto`**, because the two want opposite things and
+ * a boolean parameter would eventually be passed the wrong way round. The rule that separates
+ * them is not "identity versus content", which is what it looked like at first and would have put
+ * news on the wrong side:
+ *
+ * > **Crop where the frame is fixed. Do not crop where the picture sets its own proportions.**
+ *
+ * A chat photo is shown at its own aspect ratio, so there is nothing to crop it to and a forced
+ * square would throw away most of what somebody chose to send. An avatar and a news photo are
+ * both drawn into a frame the picture does not get a say in, so whatever does not fit is
+ * discarded either way - the only question is whether the person or a `cover` resize decides
+ * which part survives, and the person should.
+ *
+ * That is also why the news card is `aspectRatio: 1` rather than the 220pt landscape box it was.
+ * **The crop frame and the display frame have to be the same frame**, or the card silently
+ * crops a second time and the picture that posts is not the one that was chosen.
+ *
+ * `aspect` is Android-only in `expo-image-picker`; iOS's built-in editor is always square, which
+ * is the ratio wanted here, so both platforms land in the same place. A free-form crop would need
+ * a third-party cropper and a native rebuild, which is the whole reason the square is the shape
+ * everything here is cropped to.
+ *
+ * One crop serves both avatar shapes: a circle is a square with a rounded mask over it, so the
+ * picker's square frame is right whether the result ends up round (a person) or a rounded square
+ * (a club, a race, Eboard & Council).
+ */
+export async function pickSquarePhoto(): Promise<PickedAttachment | null> {
+  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!permission.granted) {
+    throw new UploadError('no_permission', 'ClubChat needs permission to open your photos.');
+  }
+
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images'],
+    allowsEditing: true,
+    aspect: [1, 1],
+    // Multi-select and `allowsEditing` are mutually exclusive: the editor crops one image.
+    allowsMultipleSelection: false,
+    quality: 0.85,
+  });
+  if (result.canceled) return null;
+
+  const asset = result.assets[0];
+  if (!asset) return null;
+  // The cropped copy's uri, not the original's - the editor writes a new file and that is the
+  // one whose bytes must be measured and uploaded. `uploadAttachment` resolves the blob from
+  // exactly this uri, so the declared length matches what `completeUpload` HEADs.
+  return { uri: asset.uri, mime: asset.mimeType ?? 'image/jpeg' };
+}
+
 /** Take a photo with the camera. Returns null if dismissed. */
 export async function takePhoto(): Promise<PickedAttachment | null> {
   const permission = await ImagePicker.requestCameraPermissionsAsync();

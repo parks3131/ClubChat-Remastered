@@ -14,7 +14,6 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Link, Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
-import { RemoteImage } from '../../../../../src/media-bubble.tsx';
 import { BackAlwaysTo } from '../../../../../src/nav.tsx';
 import { unreadCount } from '@clubchat/shared';
 import { channelApi, clubApi, dmApi, raceApi } from '../../../../../src/api.ts';
@@ -23,6 +22,7 @@ import { useSession } from '../../../../../src/chat-provider.tsx';
 import { longPressFeedback } from '../../../../../src/haptics.ts';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import {
+  Avatar,
   ConfirmDialog,
   ContextMenu,
   DataScreen,
@@ -669,21 +669,15 @@ function RaceRow({
  * screens apart. When they each had their own copy, adding pictures to one left the other on
  * initials - which is how this pair drifts every time.
  */
-function RaceFace({ race }: { race: { name: string; image: string | null } }) {
-  return (
-    <View style={styles.raceAvatar}>
-      {race.image === null ? (
-        <Text style={styles.raceInitial}>{race.name.charAt(0).toUpperCase()}</Text>
-      ) : (
-        <RemoteImage
-          mediaId={race.image}
-          variant="thumb"
-          style={styles.raceAvatarImage}
-          resizeMode="cover"
-        />
-      )}
-    </View>
-  );
+function RaceFace({ race }: { race: { id: string; name: string; image: string | null } }) {
+  /*
+   * `Avatar`, not a third hand-written well. This drew a 44px `radius.pill` circle, so a race on
+   * the hub was round while the same race's chat header and profile were both rounded squares -
+   * and a race is a thing, one level down from a club but the same kind of object.
+   *
+   * Tinted from the id rather than the name, so renaming a race does not recolour it.
+   */
+  return <Avatar name={race.name} image={race.image} size={44} kind="group" tintId={race.id} />;
 }
 
 function HubRow({
@@ -785,17 +779,6 @@ const styles = StyleSheet.create({
   emptyRaces: { ...type.bodySmall, color: color.textSecondary, paddingBottom: space.md },
 
   raceRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, paddingVertical: space.md },
-  raceAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.pill,
-    backgroundColor: color.cardSunken,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  raceInitial: { ...type.headline, fontSize: 17, color: color.accent },
-  // Fills the well the initial would sit in, so a race with a picture and one without line up.
-  raceAvatarImage: { width: 44, height: 44, borderRadius: radius.pill },
   raceUnread: {
     ...type.label,
     fontSize: 10,

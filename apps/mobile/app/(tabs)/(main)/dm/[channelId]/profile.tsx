@@ -130,7 +130,7 @@ export default function DmProfileScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={`Open ${club.name}`}
                 >
-                  <Avatar name={club.name} image={club.image} size={40} shape="square" />
+                  <Avatar name={club.name} image={club.image} size={40} kind="group" tintId={club.clubId} />
                   <View style={styles.rowText}>
                     <Text style={styles.rowTitle} numberOfLines={1}>
                       {club.name}
