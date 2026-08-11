@@ -293,13 +293,33 @@ on news posts. Recurring events. External calendar sync. RSVP or attendance, any
   it. He confirmed the silence is intended - a routine is reference material somebody consults,
   not an announcement - so the asymmetry with events, polls, news and meetings stands on purpose.
   Recorded so it is not re-raised as an omission.
-- **Should a mention require an exact name match?** `resolveMentions` filters a client's claimed
-  mentions to those whose `@name` literally appears in the body, which is the check that stops a
-  client ringing anybody it likes from a message addressed to nobody. But `body.includes` has **no
-  word boundary**, so `@Parks RPK` is also satisfied by a member called `Parks`, and any divergence
-  between the composer's rendered text and `users.full_name` - a rename mid-compose, trimming,
-  punctuation - drops the mention **silently**, with an ack and no signal to the sender. Over- and
-  under-matching in the same predicate, on a path that buzzes a phone.
+- ~~**Should a mention require an exact name match?**~~ **The over-matching half was fixed
+  2026-08-08**; what is left is one narrow case, described below. This entry originally read that
+  `body.includes` has no word boundary, so `@Parks RPK` also satisfied a member called `Parks`, and
+  that any divergence from `users.name` - a rename mid-compose, trimming, punctuation - dropped the
+  mention silently.
+
+  **Over-matching: fixed, and not by a word boundary.** A boundary would not have helped, because
+  the character after `@Parks` is a space and that is a perfectly good boundary. What separates the
+  two is that a *longer* candidate also matches at that exact index, so `resolveMentions` now sorts
+  candidates longest-name-first and lets each claim the indexes it matches, skipping any index a
+  longer name already took. A name survives only where it is the longest match at some position.
+  Asserted in both directions, since a rule that only ever excludes is the easy half: the prefix is
+  not dragged in, and the short name is still mentioned when it is the one actually written. The
+  client applies the same rule in `splitMentions`, so what is highlighted cannot disagree with who
+  was notified.
+
+  **Two of the three under-matching causes were never real.** Trimming and punctuation do not break
+  it: the check is a substring test, so `@Parks,` still contains `@Parks`. And `applyMention`
+  appends a trailing space on insert *specifically* so the next character cannot extend the name and
+  stop it matching on send - the composer was already defending this.
+
+  **What remains is a rename between picking the name and sending.** The client filters against the
+  name captured at pick time and the server checks `users.name` as of send, so a rename in that
+  window has the client claim a mention the server then drops. It is still silent: the ack is `ok`,
+  the envelope carries `mentions: []`, and nothing compares what was claimed against what came back.
+  The open question is whether that is worth a signal to the sender at all, given the window is one
+  person renaming themselves while another is mid-message.
 - **Hub placement:** Routines, Polls, and the Events list are fully reachable from club chat's
   header quick-nav, and work normally there. Whether they should *also* sit on the club hub is
   unresolved. A stopgap "More" menu on the hub was explicitly rejected.
