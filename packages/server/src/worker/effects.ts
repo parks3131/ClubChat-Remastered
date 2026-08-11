@@ -21,6 +21,7 @@ import { users } from '../db/schema.ts';
 import { appendMessage, deriveClientMsgId } from '../domain/append-message.ts';
 import { publishToChannel, publishRevocation, publishUpdate } from '../bus/redis.ts';
 import { reactionsForMessages } from '../domain/reactions.ts';
+import { nextRevision } from '../domain/revisions.ts';
 import { resolveAudience } from './audience.ts';
 import { notificationKey, resolvePendingRequests, writeNotifications } from './notify.ts';
 import { dispatchPush, PUSH_DEFERRAL_MS } from '../push/dispatch.ts';
@@ -1520,13 +1521,55 @@ function removeCards(
     const objectId = event.payload[payloadKey];
     if (typeof objectId !== 'string') return;
 
-    const removed = await deps.db.execute<{ channel_id: string; seq: number }>(sql`
-      UPDATE messages
-         SET deleted_at = now(), pinned = false, body = NULL
+    /*
+     * **The removal allocates a revision, and this is the fourth mutation site rather than a
+     * detail of this one.**
+     *
+     * The comment below used to say the publish was the ONLY route this change could travel.
+     * That was true when it was written on 2026-08-01, and stopped being true on 2026-08-03 when
+     * `last_rev` arrived precisely so a change had a second route - one that survives the client
+     * not being there. This handler was not revisited, so it kept relying on the route it had.
+     *
+     * The cost was specific: a phone closed when a poll was deleted kept the card forever, and
+     * kept it PINNED, because the same statement that clears `pinned` is the one that never
+     * advertised itself. Sync asks for `rev > mark` and this row's rev had not moved.
+     *
+     * Per channel, not once for the batch. `last_rev` is a per-channel counter, so one revision
+     * stamped across two channels would be a number that means something in one of them and is
+     * either a duplicate or a skip in the other. The cascade matches on the object id alone and
+     * nothing constrains it to a single channel, so the grouping is not hypothetical.
+     *
+     * In one transaction per channel with its own bump, for the same reason every other site is:
+     * a revision that committed without its change would tell clients to skip past something
+     * that did not happen.
+     */
+    const affected = await deps.db.execute<{ channel_id: string }>(sql`
+      SELECT DISTINCT channel_id
+        FROM messages
        WHERE ${sql.identifier(column)} = ${objectId}::uuid
          AND deleted_at IS NULL
-      RETURNING channel_id, seq
     `);
+
+    const removed: { rows: Array<{ channel_id: string; seq: number }> } = { rows: [] };
+
+    for (const { channel_id: channelId } of affected.rows) {
+      const rows = await deps.db.transaction(async (tx) => {
+        const rev = await nextRevision(tx, channelId);
+        // The channel is gone, so there is nobody left to tell and nothing to keep consistent.
+        if (rev === null) return [];
+
+        const updated = await tx.execute<{ channel_id: string; seq: number }>(sql`
+          UPDATE messages
+             SET deleted_at = now(), pinned = false, body = NULL, rev = ${rev}
+           WHERE ${sql.identifier(column)} = ${objectId}::uuid
+             AND channel_id = ${channelId}::uuid
+             AND deleted_at IS NULL
+          RETURNING channel_id, seq
+        `);
+        return updated.rows;
+      });
+      removed.rows.push(...rows);
+    }
 
     for (const row of removed.rows) {
       /*

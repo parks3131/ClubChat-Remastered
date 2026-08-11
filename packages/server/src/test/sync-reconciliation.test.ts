@@ -19,10 +19,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createClub } from '../domain/create-club.ts';
 import { sendMessage, setPinned, softDeleteMessage } from '../domain/send-message.ts';
+import { createPoll, deletePoll } from '../domain/polls.ts';
 import { toggleReaction } from '../domain/reactions.ts';
 import { getChannelRef, syncSince } from '../domain/reads.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { users } from '../db/schema.ts';
+import { drainOnce } from '../worker/drain.ts';
+import type { EffectDeps } from '../worker/effects.ts';
 import { anyViewer, startTestDb, type TestDb } from './harness.ts';
 import type { ChannelRef } from '../policy/predicates.ts';
 
@@ -40,6 +43,37 @@ beforeEach(async () => {
 });
 
 const ctxFor = (id: string) => loadAccessContext(h.db, id);
+
+/**
+ * Run the worker's effects once.
+ *
+ * A card is posted and removed by the WORKER, not by the command that triggered it, so a test
+ * about what a client can see has to drain or it is asserting against a half-applied change.
+ *
+ * Redis is a recorder rather than a stub that throws: the card cascade publishes, and the whole
+ * point of these tests is that the publish is not the route being relied on. Capturing it proves
+ * the live path still fires while the assertions below read only from sync.
+ */
+let published: Array<{ topic: string; payload: string }> = [];
+
+async function drain(): Promise<void> {
+  const deps = {
+    db: h.db,
+    redis: {
+      publish: async (topic: string, payload: string) => {
+        published.push({ topic, payload });
+        return 1;
+      },
+    },
+    push: { send: async () => ({ ok: true as const, receipts: [] }) },
+    log: () => undefined,
+    defer: (fn: () => Promise<void>) => {
+      void fn();
+    },
+  } as unknown as EffectDeps;
+
+  await drainOnce(h.db, deps);
+}
 
 async function makeUser(name: string): Promise<string> {
   const id = crypto.randomUUID();
@@ -226,5 +260,89 @@ describe('a client that predates revisions', () => {
     const page = await syncSince(h.db, anyViewer(), channel.id, first.seq);
 
     expect(page.messages.map((m) => m.body)).toEqual(['two']);
+  });
+});
+
+/**
+ * The same rule, on the path that removes a card because its object was deleted.
+ *
+ * > **This is the case the original fix missed.** Every mutation a PERSON performs on a message
+ * > allocates a revision inside its own transaction - `setPinned` and `softDeleteMessage` both do.
+ * > The card cascade does not: it is a bulk `UPDATE messages SET deleted_at = now(), pinned =
+ * > false` in the worker, and it advanced nothing.
+ * >
+ * > The comment on that handler said "the publish is the ONLY route this can travel", which was
+ * > true when it was written on 2026-08-01 and stopped being true on 2026-08-03, when the
+ * > revision counter arrived precisely so that a change had a second route. The handler was never
+ * > revisited, so a phone that was closed when a poll was deleted kept the card - and kept it
+ * > PINNED, since the cascade clears `pinned` in the same statement it fails to advertise.
+ *
+ * Worth stating why no existing test caught it: the three above cover a deletion, a pin and a
+ * reaction, and all three go through the paths that already bump. A test per mechanism would have
+ * looked complete. The gap was a fourth mechanism nobody listed.
+ */
+describe('a card removed while the client was away, because its object was deleted', () => {
+  it('reaches a client that already held the card', async () => {
+    const ownerId = await makeUser('CardSyncOwner');
+    const created = await createClub(h.db, {
+      name: `Club ${crypto.randomUUID().slice(0, 6)}`,
+      sport: 'running',
+      creatorId: ownerId,
+    });
+    const channel = await getChannelRef(h.db, created.mainChannelId);
+    if (!channel) throw new Error('no channel');
+
+    const ctx = await ctxFor(ownerId);
+    const poll = await createPoll(h.db, ctx, {
+      clubId: created.clubId,
+      scope: 'club',
+      scopeId: created.clubId,
+      question: 'Track or road on Saturday?',
+      options: ['Track', 'Road'],
+    });
+    if (!poll.ok) throw new Error(`poll refused: ${poll.code}`);
+
+    // The card is posted by the worker, so the client cannot see it until the outbox drains.
+    await drain();
+
+    const client = fakeClient(channel);
+    await client.sync();
+
+    /*
+     * The card by its LINK, not by position. Picking the first live row finds the "created the
+     * club" system message at seq 1, which has no link and is correctly untouched by the
+     * cascade - so the test passed its own setup and then asserted nothing about a card.
+     */
+    const cardRow = await h.db.execute<{ seq: number }>(sql`
+      SELECT seq FROM messages
+       WHERE channel_id = ${channel.id}::uuid AND linked_poll_id = ${poll.pollId}::uuid
+    `);
+    const cardSeq = cardRow.rows[0]?.seq;
+    if (cardSeq === undefined) throw new Error('the worker posted no card for the poll');
+    expect(client.held.get(cardSeq), 'the client should hold that card').toBeDefined();
+
+    // Pinned, because that is the state this defect strands. A member opening the app finds a
+    // pinned notice for a poll that no longer exists, and under the card-navigation behaviour
+    // it is a notice that opens nothing.
+    const pinned = await setPinned(h.db, ctx, channel, cardSeq, true);
+    expect(pinned.ok).toBe(true);
+    await client.sync();
+    expect(client.held.get(cardSeq)?.pinned).toBe(true);
+
+    // The client goes away HERE. Everything below happens while it is not listening, which is
+    // the entire point - the live publish reaches nobody and sync is the only route left.
+    const deleted = await deletePoll(h.db, ctx, poll.pollId);
+    expect(deleted.ok).toBe(true);
+    await drain();
+
+    await client.sync();
+
+    const after = client.held.get(cardSeq);
+    expect(after?.deleted, 'the card is still alive on a client that was offline for it').toBe(
+      true,
+    );
+    expect(after?.pinned, 'the card is still PINNED on a client that was offline for it').toBe(
+      false,
+    );
   });
 });

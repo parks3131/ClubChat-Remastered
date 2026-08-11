@@ -17,7 +17,7 @@ unless it names an exception, and the exceptions a DM carries are listed in
 | Announcements | Admin-only, visually distinct |
 | Pinning | Admin-only, with a floating dismissible pinned strip |
 | Highlights | Pinned / Announcements / Reports tabs over the same conversation |
-| Jump-to-message | Tapping a pinned notice lands on that exact message, highlighted |
+| Jump-to-message | Tapping a reply's quote, or arriving from a mention notification, lands on that exact message, highlighted |
 | Unread-aware entry | Chat opens on the first unread message |
 | Jump-to-latest | A floating "N new messages" control once messages arrive while the reader is back in history. Tapping lands on the FIRST of them, to read forward |
 | System messages | Joins, leaves, adds, removes, promotions, demotions |
@@ -88,8 +88,31 @@ second is a feature the whole product would have to bend around. Threads remain 
    keep pinning while losing announcements: "no admins" removes pinning-as-*authority*, and a
    pin is reference.
 7. **The pinned strip floats over the conversation and can be dismissed locally.** Dismissing
-   does not unpin for anyone. Tapping a pinned notice jumps the conversation to that message
-   and briefly highlights it.
+   does not unpin for anyone.
+
+   **Tapping a pinned notice opens what the pin is about, and that is not always the message.**
+   A poll, event or meeting card opens that poll, event or meeting; anything else opens
+   Highlights. It never jumps back into the conversation. **The same rule governs a row in
+   Highlights**, which is the other surface that lists pins - see the Highlights section.
+
+   *Corrected 2026-08-11, in two steps.* This rule used to say a tap jumps the conversation to
+   that message and briefly highlights it. It stopped describing the app some time before that
+   and nobody noticed: jumping dropped the reader into the middle of history with no clear way
+   back, and whether it worked depended on how far back the message was, so the app had settled
+   on Highlights. **The rule is the thing that changed here, not the behaviour** - per the
+   standing rule that the implementation is the fact and the spec was the bug.
+
+   The card half is a real behaviour change and the reason worth keeping: a poll is pinned
+   *because somebody should vote in it*, so sending them to a record of the card leaves them to
+   go and find the poll themselves. A pin that is about an object should reach the object.
+
+   Two consequences that are not optional:
+
+   - A pinned card whose object is deleted must leave the strip. The deletion cascade
+     soft-deletes the card and clears its pin in the same statement, and the strip drops
+     tombstones and unpinned rows - so this holds by construction rather than by a check.
+   - The destination must be the same one a **notification** about that object would reach, and
+     it is: both are derived from one route table, so they cannot disagree.
 8. **@mentioning a member notifies them individually**, and the mention renders highlighted.
    A mention only notifies someone who can actually access that chat.
 9. **A message can be deleted by its sender or by an admin of that space.** Deletion leaves a
@@ -182,9 +205,12 @@ second is a feature the whole product would have to bend around. Threads remain 
     [Direct messages](14-direct-messages.md).
 19. **A reply quotes exactly one earlier message, in the same conversation, and stays flat.**
     The quote shows who said it and a short preview - a thumbnail for a photo, the filename for
-    a document, otherwise the text - and tapping it jumps to the original and highlights it,
-    the same jump a pinned notice uses. A quote of a reply shows that reply's own words, never
-    a chain.
+    a document, otherwise the text - and tapping it jumps to the original and highlights it.
+    A quote of a reply shows that reply's own words, never a chain.
+
+    This is the jump-to-message window, which a mention notification also uses. **It is no longer
+    what a pinned notice does** - see rule 7 - so this is now its own behaviour rather than a
+    reference to that one.
 
     **A reply notifies nobody on its own.** Replying is a reading aid, not a summons: if you
     want the person to know, you @mention them, and that rule already exists. Adding a second
@@ -198,8 +224,18 @@ second is a feature the whole product would have to bend around. Threads remain 
 **Highlights**
 
 A view of chat, not a feed of its own. Tabs: **Pinned**, **Announcements**, and (admins only)
-**Reports**. The list is view-only; jumping to a message in context is the pinned strip's
-job in chat.
+**Reports**.
+
+**A row for a poll, event or meeting card opens that object; every other row is view-only**, and
+the avatar opens the sender. This is rule 7's destination rule applied to the second surface that
+shows pins, and it has to be, for a reason stronger than consistency: **the strip shows only the
+four most recent pins and this list shows all of them**, so a fifth pinned poll is reachable here
+and nowhere else. A row that displayed it without opening it would be the one surface that could
+show somebody a poll while giving them no way to reach it.
+
+An ordinary pinned message still goes nowhere from here, and that is not an omission - Highlights
+is where rule 7 sends it, so this screen is its destination rather than a waypoint. Nothing jumps
+back into the conversation from this list.
 
 In a DM the Reports tab does not appear at all: there is no admin of the conversation to read
 it, and the reports it would contain belong to the platform moderation queue.
@@ -235,6 +271,12 @@ it, and the reports it would contain belong to the platform moderation queue.
 - [ ] Every photo posted appears in that chat's Gallery and opens full screen from it.
 - [ ] A member cannot post an announcement or pin; an admin can do both.
 - [ ] The pinned strip appears when a message is pinned and can be dismissed without unpinning.
+- [ ] Tapping a pinned ordinary message opens Highlights; tapping a pinned poll, event or meeting
+      card opens that poll, event or meeting.
+- [ ] The same card row in **Highlights** opens the same object, including a pin old enough to
+      have fallen out of the four-item strip.
+- [ ] Deleting a poll removes its pinned notice, **including on a device that was offline when it
+      was deleted** - the case that only appears after a reconnect.
 - [ ] Highlights lists pinned and announcement messages.
 - [ ] Reopening a chat with unread messages lands on the first unread one with no visible scrolling.
 - [ ] Opening a chat with unread messages lands on the first one, with nothing seen to scroll.

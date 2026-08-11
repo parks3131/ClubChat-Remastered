@@ -11,8 +11,13 @@
  *    from the list whose entire job is to keep it findable.
  *  - **A DM has no Reports tab**, because there is no admin of the conversation to read it. A DM
  *    report goes to a platform moderator through a separate queue instead.
- *  - **Pinned and announcement rows are view-only.** Jumping to the message in chat is the pinned
- *    strip's job; this screen is the durable record. Only the avatar goes anywhere, to the person.
+ *  - **A pinned CARD row opens its poll, event or meeting; every other row is view-only.** This
+ *    read "jumping to the message in chat is the pinned strip's job" until 2026-08-11, which was
+ *    true while the strip jumped into the conversation and stopped being true when it started
+ *    opening the object instead. The strip is capped at four and this list is not, so a fifth
+ *    pinned poll is reachable from here and nowhere else. Ordinary messages still go nowhere,
+ *    because this screen is where the strip sends them - it is the destination, not a waypoint.
+ *    The avatar goes to the person, as it always did.
  *
  * It carries chat's glass header rather than the native one, because it hangs off chat and a
  * different header treatment one tap away reads as a different app.
@@ -30,6 +35,7 @@ import type { ReportRow } from '../../../../../src/api-types.ts';
 import { formatClock } from '../../../../../src/dates.ts';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import { useGoBack } from '../../../../../src/nav.tsx';
+import { hrefForCard } from '../../../../../src/notification-href.ts';
 import { Avatar, DataScreen, EmptyState, Tabs } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
@@ -195,13 +201,45 @@ export default function HighlightsScreen() {
 /**
  * One pinned or announced message.
  *
- * View-only by deliberate choice: only the avatar navigates, to the sender's profile. Jumping to
- * the message in chat belongs to the pinned strip, which is the surface for "take me there"; this
- * one is the record of what was said.
+ * Text rows stay view-only, and a CARD row opens the thing it stands for.
+ *
+ * > **The old rule here was "jumping to the message in chat is the pinned strip's job".** That was
+ * > written when the strip jumped into the conversation. It no longer does - it opens the poll,
+ * > event or meeting a pinned card announces - so the sentence stopped being true and this screen
+ * > was the half that did not move.
+ *
+ * Consistency is the weaker half of the argument. The stronger one: **the strip is capped at four
+ * and this list is not**, so a fifth pinned poll is reachable from here and nowhere else. Leaving
+ * the row inert did not make it a record, it made it the only surface that could show somebody a
+ * poll while giving them no way to reach it.
+ *
+ * An ordinary pinned message still goes nowhere, and that is not an omission: Highlights is where
+ * the strip sends it, so this screen IS its destination. There is nothing further to open.
+ *
+ * **Two sibling pressables inside a `View`, never one wrapping the other.** A pressable containing
+ * a pressable is failure mode 17, it swallows the outer gesture on native, and it has shipped in
+ * this repo once already.
  */
 function HighlightRow({ message, pinned }: { message: MessageEnvelope; pinned: boolean }) {
   const router = useRouter();
   const name = message.senderName ?? 'Deleted member';
+  // A tombstone links nowhere even if the row still remembers what it once pointed at.
+  const card = message.deletedAt === null ? hrefForCard(message) : null;
+
+  const body = (
+    <>
+      <View style={styles.rowHead}>
+        <Text style={styles.sender}>{name}</Text>
+        {pinned && <MaterialIcons name="push-pin" size={12} color={color.accent} />}
+        <Text style={styles.time}>{formatClock(message.createdAt)}</Text>
+      </View>
+      <Text style={message.deletedAt !== null ? styles.deleted : styles.body}>
+        {message.deletedAt !== null
+          ? 'This message was deleted'
+          : (message.body ?? preview(message))}
+      </Text>
+    </>
+  );
 
   return (
     <View style={styles.row}>
@@ -213,18 +251,23 @@ function HighlightRow({ message, pinned }: { message: MessageEnvelope; pinned: b
       >
         <Avatar name={name} image={message.senderImage} size={36} />
       </Pressable>
-      <View style={styles.rowBody}>
-        <View style={styles.rowHead}>
-          <Text style={styles.sender}>{name}</Text>
-          {pinned && <MaterialIcons name="push-pin" size={12} color={color.accent} />}
-          <Text style={styles.time}>{formatClock(message.createdAt)}</Text>
-        </View>
-        <Text style={message.deletedAt !== null ? styles.deleted : styles.body}>
-          {message.deletedAt !== null
-            ? 'This message was deleted'
-            : (message.body ?? preview(message))}
-        </Text>
-      </View>
+      {card === null ? (
+        <View style={styles.rowBody}>{body}</View>
+      ) : (
+        /*
+          Pressable only when there is somewhere to go. A row that takes a highlight under the
+          finger and then does nothing reads as a fault rather than as a design decision, which
+          is the same reasoning that gave the Chats rows their wash.
+        */
+        <Pressable
+          style={({ pressed }) => [styles.rowBody, pressed && styles.rowBodyPressed]}
+          onPress={() => router.push(card)}
+          accessibilityRole="button"
+          accessibilityLabel={`Open the pinned ${message.type}`}
+        >
+          {body}
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -407,6 +450,20 @@ const styles = StyleSheet.create({
     padding: space.md,
   },
   rowBody: { flex: 1, gap: space.xs },
+  /*
+   * Only a card row is pressable, so this is the one place the wash appears.
+   *
+   * A background tint rather than `opacity`, matching the Chats rows: dimming a row under the
+   * finger reads as it becoming disabled, which is the opposite of what a press means. It also
+   * needs the row's own padding so the tint reaches the edges - a highlight inset inside the
+   * gutter leaves an untinted stripe and reads as a rendering fault.
+   */
+  rowBodyPressed: {
+    backgroundColor: color.cardRaised,
+    borderRadius: radius.sm,
+    marginHorizontal: -space.xs,
+    paddingHorizontal: space.xs,
+  },
   rowHead: { flexDirection: 'row', alignItems: 'center', gap: space.xs + 2 },
   sender: { ...type.headline, fontSize: 14, color: color.textPrimary },
   reportedBy: { ...type.label, color: color.error, textTransform: 'none' },

@@ -62,6 +62,7 @@ import { ChatEventCard } from "../../src/screens/events.tsx";
 import { ChatMeetingCard } from "../../src/screens/meetings.tsx";
 import { ChatPollCard } from "../../src/screens/polls.tsx";
 import { QuickNav, spaceProfileHref, useGoBack } from "../../src/nav.tsx";
+import { hrefForCard } from "../../src/notification-href.ts";
 import { color, fontFamily, radius, space, type } from "../../src/theme.ts";
 
 /**
@@ -1936,15 +1937,27 @@ export default function ChatScreen() {
    * guess would be a second opinion about it.
    */
   /**
-   * Open a pinned notice: always Highlights, never a jump into the conversation.
+   * Open a pinned notice.
    *
-   * > **A pin is something to READ, not somewhere to go.** Jumping dropped the reader into the
-   * > middle of history with no clear way back to where they were, and whether it even worked
-   * > depended on how far back the message happened to be. Highlights shows the pin in full,
-   * > opens instantly whatever its age, and is the same answer every time.
+   * > **A pin is something to READ, not somewhere to go** - which is why this never jumps back
+   * > into the conversation. Jumping dropped the reader into the middle of history with no clear
+   * > way back, and whether it worked at all depended on how far back the message happened to be.
+   *
+   * **Unless the pin IS somewhere to go.** A poll, event or meeting card is pinned precisely
+   * because somebody should act on it, and sending them to Highlights to look at a picture of the
+   * card leaves them to find the poll themselves - the dead end this strip exists to prevent.
+   * So a card opens the thing it stands for and everything else opens Highlights.
+   *
+   * The route comes from `hrefForCard`, which builds the same target a notification about that
+   * poll would carry, so tapping the pin and tapping the notification land in the same place by
+   * construction rather than by two lists of routes agreeing.
+   *
+   * A card whose object was deleted cannot reach here: the cascade soft-deletes the card and
+   * clears its pin in one statement, and `pinnedRows` drops both tombstones and unpinned rows.
    */
-  const openPinned = () => {
-    router.push(`/channels/${channelId}/highlights`);
+  const openPinned = (message: MessageEnvelope) => {
+    const card = hrefForCard(message);
+    router.push(card ?? `/channels/${channelId}/highlights`);
   };
 
   const setPinned = async (seq: number, pinned: boolean) => {
@@ -2328,9 +2341,18 @@ export default function ChatScreen() {
             >
               <Pressable
                 style={styles.pinnedCardBody}
-                onPress={openPinned}
+                onPress={() => openPinned(message)}
                 accessibilityRole="button"
-                accessibilityLabel="Open this pinned message in Highlights"
+                /*
+                  The label names the actual destination, which now differs per notice. A screen
+                  reader announcing "in Highlights" on a poll card would be describing the old
+                  behaviour to the one person who cannot see where they landed.
+                */
+                accessibilityLabel={
+                  hrefForCard(message) === null
+                    ? 'Open this pinned message in Highlights'
+                    : `Open the pinned ${message.type}`
+                }
               >
                 <View style={styles.pinnedIcon}>
                   <MaterialIcons

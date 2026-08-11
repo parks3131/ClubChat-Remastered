@@ -12,7 +12,7 @@
  * see the note on `useGoBack` in `nav.tsx` - so it gets one definition here.
  */
 
-import type { NotificationTarget } from '@clubchat/shared';
+import type { MessageEnvelope, NotificationTarget } from '@clubchat/shared';
 
 /**
  * Exhaustive over `NotificationTarget`, which is the reason that type is imported from
@@ -80,3 +80,34 @@ export function hrefFor(target: NotificationTarget): string | undefined {
 
 /** Where the inbox lives, for the push path's `inbox` fallback. */
 export const INBOX_HREF = '/notifications';
+
+/**
+ * Where the object a CARD stands for lives, or null if the message is not a card.
+ *
+ * A poll, event or meeting created anywhere posts a card into chat, and that card is a real row
+ * in the channel log carrying the id of the thing it announces. So "open this card" and "open the
+ * notification about this card" are the same question asked twice, and this answers it by
+ * building the target the notification path already understands rather than by writing
+ * `/polls/${id}` a second time.
+ *
+ * > **The three route strings exist once, in `hrefFor` above.** That is the whole reason this
+ * > goes through a `NotificationTarget` instead of returning a template literal directly, which
+ * > would be shorter and would be the copy that survives the day somebody moves a screen.
+ *
+ * Returns null rather than a fallback, because what to do with a non-card is the caller's
+ * decision and differs by caller - the pinned strip opens Highlights, and something else might
+ * reasonably do nothing.
+ */
+export function hrefForCard(message: MessageEnvelope): string | null {
+  const target: NotificationTarget | null =
+    message.linkedPollId !== null
+      ? { kind: 'poll', pollId: message.linkedPollId }
+      : message.linkedEventId !== null
+        ? { kind: 'event', eventId: message.linkedEventId }
+        : message.linkedMeetingId !== null
+          ? { kind: 'meeting', meetingId: message.linkedMeetingId }
+          : null;
+
+  if (target === null) return null;
+  return hrefFor(target) ?? null;
+}
