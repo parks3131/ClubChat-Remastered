@@ -110,7 +110,7 @@ export default function HighlightsScreen() {
           hitSlop={space.sm}
           style={styles.backButton}
         >
-          <MaterialIcons name="arrow-back" size={20} color={color.textPrimary} />
+          <MaterialIcons name="arrow-back" size={22} color={color.accent} />
         </Pressable>
         <View>
           <Text style={styles.headerTitle}>ClubChat</Text>
@@ -417,13 +417,20 @@ const styles = StyleSheet.create({
     // react-native-web renders BlurView as a plain View, so the chrome tint has to be real.
     backgroundColor: color.chrome,
   },
+  /*
+   * Matched to chat's, which is itself matched to the capsule iOS draws on every native header.
+   *
+   * Changed in the same commit as chat's for the reason this screen carries chat's header at all:
+   * it hangs one tap off chat, and a back control that differed between them would be the exact
+   * "reads as a different app" this header was copied to avoid. See DESIGN/04.
+   */
   backButton: {
-    width: 36,
-    height: 36,
+    width: 48,
+    height: 40,
     borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: color.cardSunken,
+    backgroundColor: color.card,
   },
   headerTitle: {
     ...type.headerTitle,

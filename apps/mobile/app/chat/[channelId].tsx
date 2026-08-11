@@ -170,10 +170,30 @@ const DENIED_TEXT: Record<
  */
 function scopeLinks(
   scope: "club" | "race" | "eboard",
-  meta: { scopeId: string; clubId: string | null },
+  meta: { scopeId: string; clubId: string | null; channelId: string },
 ): Array<{ href: string; label: string; icon: MaterialIconName }> {
+  /*
+   * **Highlights leads the menu, having been a filled pill in the header until 2026-08-11.**
+   *
+   * The note that stood here said the pill was v1's weighting - Highlights is the destination
+   * somebody reaches for repeatedly and the rest are occasional - and that reasoning is still
+   * true. What changed is what it cost. This header carries six things where every other header
+   * in the app carries three, and the pill was the widest of them at around 100pt; with it there
+   * the conversation's own name rendered as "Bingha...". A title that cannot say which
+   * conversation you are in is a worse loss than a second tap to a screen.
+   *
+   * So it keeps its weighting where weighting is now expressed: first in the list, and the only
+   * entry whose destination is the conversation itself rather than one of its features.
+   */
+  const highlights = {
+    href: `/channels/${meta.channelId}/highlights`,
+    label: "Highlights",
+    icon: "bolt" as MaterialIconName,
+  };
+
   if (scope === "club") {
     return [
+      highlights,
       { href: `/clubs/${meta.scopeId}/members`, label: "Members", icon: "group" },
       { href: `/clubs/${meta.scopeId}/polls`, label: "Poll", icon: "how-to-vote" },
       { href: `/clubs/${meta.scopeId}/routines`, label: "Routines", icon: "fitness-center" },
@@ -182,6 +202,7 @@ function scopeLinks(
   }
   if (scope === "race") {
     return [
+      highlights,
       { href: `/races/${meta.scopeId}/roster`, label: "Members", icon: "group" },
       { href: `/races/${meta.scopeId}/meet`, label: "Meet Information", icon: "info" },
       { href: `/races/${meta.scopeId}/polls`, label: "Polls", icon: "how-to-vote" },
@@ -193,6 +214,7 @@ function scopeLinks(
     ];
   }
   return [
+    highlights,
     { href: `/eboard/${meta.scopeId}/members`, label: "Members", icon: "group" },
     { href: `/eboard/${meta.scopeId}/meetings`, label: "Meetings", icon: "groups" },
     { href: `/eboard/${meta.scopeId}/polls`, label: "Polls", icon: "how-to-vote" },
@@ -2219,8 +2241,11 @@ export default function ChatScreen() {
         >
           <MaterialIcons
             name="arrow-back"
-            size={20}
-            color={color.textPrimary}
+            size={22}
+            // The accent, which is what the system draws inside its capsule and what every
+            // native header in this app therefore shows. Black was the tell that this one was
+            // hand-made.
+            color={color.accent}
           />
         </Pressable>
         {/*
@@ -2287,37 +2312,31 @@ export default function ChatScreen() {
           </Text>
         </Pressable>
         {/*
-          Highlights is a filled pill and everything else hides behind the grid, which is v1's
-          weighting: Highlights is the one destination somebody reaches for repeatedly, and the
-          rest are occasional. A DM has neither - it gets the options sheet instead, because mute
-          and block are the only things hanging off a conversation with no club around it.
+          Everything this conversation owns is behind the one glyph, Highlights included.
+
+          It was a filled pill beside the title until 2026-08-11, on v1's weighting that
+          Highlights is reached for repeatedly while the rest are occasional. The pill was the
+          widest thing in the row at around 100pt, and this header carries six items where every
+          other header in the app carries three - so the name of the conversation you are in
+          rendered as "Bingha...". It leads the menu now instead. See `scopeLinks`.
+
+          A DM gets the options sheet rather than this, because mute and block are the only
+          things hanging off a conversation with no club around it.
+
+          Three dots, not a grid glyph. A grid says "a set of things laid out"; three dots is the
+          one glyph a phone user reads as "there is more behind this" without being taught, and it
+          is what every other menu in this app already uses.
         */}
         {meta !== null && meta.scope !== "dm" && (
-          <>
-            <Pressable
-              onPress={() => router.push(`/channels/${channelId}/highlights`)}
-              accessibilityRole="button"
-              accessibilityLabel="Highlights"
-              style={styles.highlightsPill}
-            >
-              <MaterialIcons name="bolt" size={16} color={color.onAccent} />
-              <Text style={styles.highlightsPillLabel}>Highlights</Text>
-            </Pressable>
-            {/*
-              Three dots, not a grid. A grid says "a set of things laid out"; three dots is the
-              one glyph a phone user reads as "there is more behind this" without being taught,
-              and it is what every other menu in this app already uses.
-            */}
-            <Pressable
-              onPress={() => setGridOpen((open) => !open)}
-              accessibilityRole="button"
-              accessibilityLabel="This conversation's screens"
-              hitSlop={space.sm}
-              style={styles.headerAction}
-            >
-              <MaterialIcons name="more-vert" size={20} color={color.textPrimary} />
-            </Pressable>
-          </>
+          <Pressable
+            onPress={() => setGridOpen((open) => !open)}
+            accessibilityRole="button"
+            accessibilityLabel="This conversation's screens"
+            hitSlop={space.sm}
+            style={styles.headerAction}
+          >
+            <MaterialIcons name="more-vert" size={20} color={color.accent} />
+          </Pressable>
         )}
         {meta?.scope === "dm" && (
           <Pressable
@@ -2329,7 +2348,7 @@ export default function ChatScreen() {
           >
             {/* Vertical, like the group header beside it: one corner, one glyph, whatever the
                 conversation is. It held the horizontal pair while the group chats held a grid. */}
-            <MaterialIcons name="more-vert" size={20} color={color.textPrimary} />
+            <MaterialIcons name="more-vert" size={20} color={color.accent} />
           </Pressable>
         )}
       </BlurView>
@@ -3829,14 +3848,46 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "rgba(0,0,0,0.05)",
   },
-  /** v1's circular back control: 36px, a faint wash, and an icon rather than a word. */
+  /*
+   * The back control, shaped to match the one iOS draws on every OTHER screen.
+   *
+   * > **Chat is the only screen that draws its own header, so it is the only one that does not
+   * > get the system's back button.** Everywhere else the navigator hands `headerLeft` to UIKit,
+   * > which wraps it in a near-white capsule with the accent arrow inside. This header is plain
+   * > views, so it got a hand-rolled 36pt circle with a faint grey wash and a BLACK arrow -
+   * > close enough to look deliberate and different enough to read as another app one tap away.
+   *
+   * Measured off a screen recording rather than guessed: 384x848 against a 393x852pt device, so
+   * a pixel is a point and the system capsule is 62 wide by 44 tall, inset by the content gutter.
+   * Written as literals because they are not ours to choose - they are a copy of something
+   * else's, and a token would imply this file gets a say in them.
+   *
+   * > **Deliberately SMALLER than the system's, which was tried and rejected on the device.**
+   * > Once Highlights moved into the overflow menu there was room for the full 62x44, and it was
+   * > restored on exactly that reasoning - the space existed, so why not match. Seen on a phone,
+   * > it was wrong: at full size the two capsules dominate a header whose job is to name the
+   * > conversation, and the row reads as a toolbar with a title squeezed into it rather than a
+   * > title with controls either side.
+   * >
+   * > The lesson is the one this file keeps relearning. **Room to do something is not a reason
+   * > to do it.** The measurement said what the system draws; it never said what this header
+   * > needs, and those are different questions.
+   *
+   * So the TREATMENT is copied and the SIZE is not: capsule shape, near-white fill, accent glyph,
+   * at the scale this row can carry.
+   *
+   * **It is an imitation and will not follow iOS if Apple restyles the bar.** The alternative was
+   * moving chat onto the native header, which would earn the real thing and cost the blur; that
+   * trade was considered and declined.
+   */
   backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 48,
+    height: 40,
+    // Clamps to half the height, so this is a capsule rather than a rounded rectangle.
+    borderRadius: radius.pill,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.05)",
+    backgroundColor: color.card,
   },
   // Same footprint as the avatar, so the row does not jump when the real one replaces it.
   headerAvatarPlaceholder: {
@@ -3875,17 +3926,6 @@ const styles = StyleSheet.create({
   },
   attachTileLabel: { ...type.bodySmall, color: color.textPrimary },
 
-  highlightsPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.xs,
-    backgroundColor: color.accent,
-    borderRadius: radius.pill,
-    paddingHorizontal: space.sm + 4,
-    paddingVertical: space.xs + 2,
-  },
-  highlightsPillLabel: { ...type.label, color: color.onAccent, textTransform: 'none' },
-
   // Full-bleed, so a tap anywhere outside the card closes it.
   gridScrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 60 },
   /** `top` is supplied at render from the measured header, and is not optional - see the note there. */
@@ -3909,13 +3949,26 @@ const styles = StyleSheet.create({
   },
   gridRowLabel: { ...type.body, color: color.textPrimary },
 
+  /*
+   * The overflow control, matched to the back control beside it.
+   *
+   * Left grey when the back button became a capsule, and the result was a header with a white
+   * capsule at one end and a grey disc at the other - which read as unfinished rather than as
+   * two different kinds of control, because they are not two different kinds of control. They
+   * are the two bar buttons on one bar.
+   *
+   * Height and fill match the back control; width is whatever the glyph needs, which is less.
+   * Matching the two properties that were actually mismatched - the wash and the icon colour -
+   * is what makes them read as a set. Width never carried that meaning, and a back arrow is
+   * wider than a single column of dots in the system's own bar too.
+   */
   headerAction: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: radius.pill,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.05)",
+    backgroundColor: color.card,
   },
   /** v1's pinned notice strip. `flexGrow: 0` keeps the row from claiming the list's height. */
   /*
