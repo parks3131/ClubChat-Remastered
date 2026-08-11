@@ -64,6 +64,7 @@ restating it wrongly.
 | # | Surface | Covers |
 |---|---|---|
 | 01 | [Tab bar](01-tab-bar.md) | The four destinations: the floating bar, the sliding pill, the badge |
+| 02 | [Avatar](02-avatar.md) | Every face in the product: the shape that says person or group, the fallback, the tint |
 
 **Written as surfaces are worked on, not backfilled in a pass.** A spec written by reading code
 rather than by looking at a device starts out wrong, and a directory of unverified documents is

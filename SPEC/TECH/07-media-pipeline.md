@@ -7,6 +7,33 @@
 | **Identity** | user/club/race/eboard avatars | public | CDN, stable path, `?v=` cache-bust on replace |
 | **Content** | chat photos, documents, news photos | **private** | authorized redirect → CDN (below) |
 
+### Cropping happens on the client, before any of this
+
+An obligation promoted here from [`DESIGN/02-avatar`](../DESIGN/02-avatar.md), because a per-surface
+design file is not where somebody adding an upload path will look.
+
+> **A picture destined for a fixed frame is cropped to that frame before it is uploaded, not
+> after.** Every avatar - user, club, race, Eboard - and a news photo. The crop frame and the
+> display frame must be the same frame, or the renderer's `cover` crops a second time and what
+> gets stored is not what the person chose.
+
+The server has no part in it and must not grow one: it re-verifies bytes and type at `complete`
+and stores what it is given. Cropping server-side would mean decoding and re-encoding an image in
+a request path, and would make the stored object disagree with the one the uploader saw.
+
+Two consequences worth stating, because both are invisible from the server:
+
+- **A chat photo is deliberately NOT cropped.** It is displayed at its own proportions, so there
+  is no fixed frame to crop to and a forced square would discard most of what was sent. The rule
+  is *crop where the frame is fixed*, which is not the same as *crop identity media* - news is
+  content and is still cropped.
+- **The crop produces a new file**, so the byte count declared at intent must be measured from the
+  cropped copy. Declaring the original's length is a guaranteed `mismatch` at `complete`, which
+  compares against the object's real length with no tolerance.
+
+`MEDIA_URL_MODE=cdn` does not change any of this, and neither does a future transformation layer:
+a server-side resize would still be choosing a crop the person did not.
+
 ### Upload - pre-signed, as the transcript describes
 
 ```

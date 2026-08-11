@@ -183,10 +183,15 @@ export default function ClubHubScreen() {
             {/*
               ONE continuous panel, not a stack of separately bordered cards.
 
-              Every row is flat with a divider between, and every icon is a filled circle. That
+              Every row is flat with a divider between, and every icon sits in a filled well. That
               is what gives the hub a group-list feel instead of the card-per-item look the rest
               of the app uses - v1's deliberate exception, and the reason the three destinations
               read as one place rather than three unrelated links.
+
+              The wells were circles until 2026-08-11. What carries the group-list feel is the
+              flat row, the divider and the filled tint - not the roundness, which was only ever
+              incidental to it and was putting these three spaces in the shape reserved for
+              people. See `DESIGN/02-avatar` rule 2.
             */}
             <View style={styles.panel}>
               <HubRow
@@ -745,10 +750,21 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: color.hairline },
 
   hubRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, paddingVertical: space.md },
+  /*
+   * The three spaces' wells, and they are SQUARE for the same reason every other space face is.
+   *
+   * News & Highlights, the main chat and Eboard & Council are each a group, so the roundness rule
+   * reaches them even though these draw a destination icon rather than a picture: what a viewer
+   * reads is "the club's spaces", and one of them being a different shape from the races directly
+   * beneath it is the confusion the rule exists to remove. See `DESIGN/02-avatar` rule 2.
+   *
+   * The radius matches what `Avatar` computes at this size, so the wells and the race faces below
+   * them agree rather than merely both being "squarish".
+   */
   well: {
     width: 44,
     height: 44,
-    borderRadius: radius.pill,
+    borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
   },
