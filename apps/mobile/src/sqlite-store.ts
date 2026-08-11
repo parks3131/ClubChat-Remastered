@@ -292,6 +292,17 @@ class SqliteMessageStore implements MessageStore {
       assignments.push('pinned = ?');
       values.push(patch.pinned ? 1 : 0);
     }
+    /*
+     * The column already existed and nothing ever wrote it on an update, so a live pin landed
+     * with `pinned = 1` and `pinned_at = NULL`. The strip sorts by pin time and puts nulls last,
+     * which sent every brand new pin to the far end of the strip until a full read replaced the
+     * row. A cache that stores half a change is worse than one that stores none of it: it looks
+     * current and is wrong.
+     */
+    if (patch.pinnedAt !== undefined) {
+      assignments.push('pinned_at = ?');
+      values.push(patch.pinnedAt);
+    }
     if (patch.reactions !== undefined) {
       assignments.push('reactions = ?');
       values.push(jsonListColumn(patch.reactions));

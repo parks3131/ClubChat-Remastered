@@ -365,7 +365,7 @@ export async function readHighlights(
   ctx: AccessContext,
   channelId: string,
   kind: 'pinned' | 'announcements',
-  opts: { before?: number | undefined; limit?: number | undefined } = {},
+  opts: { before?: number | undefined; beforePinnedAt?: string | undefined; limit?: number | undefined } = {},
 ): Promise<{ messages: MessageEnvelope[]; hasMore: boolean }> {
   const limit = Math.min(opts.limit ?? HISTORY_PAGE_SIZE, 200);
 
@@ -377,13 +377,46 @@ export async function readHighlights(
     // it is the one read that would happily reach back past a clear to the oldest pin.
     visibleToViewer(ctx, channelId),
   ];
-  if (opts.before !== undefined) conditions.push(lt(messages.seq, opts.before));
+  /*
+   * The cursor has to be in the same currency as the ordering, which is why there are two.
+   *
+   * Announcements are ordered by `seq` and page by `seq`. Pins are ordered by when they were
+   * PINNED, so a `seq` cursor cannot name a position in that list at all - it would silently
+   * return a page from somewhere else in the ordering, which is the failure that looks like data
+   * loss rather than like a bug.
+   */
+  if (kind === 'announcements' && opts.before !== undefined) {
+    conditions.push(lt(messages.seq, opts.before));
+  }
+  if (kind === 'pinned' && opts.beforePinnedAt !== undefined) {
+    conditions.push(lt(messages.pinnedAt, new Date(opts.beforePinnedAt)));
+  }
 
   const rows = await selectMessages(db)
     .where(and(...conditions))
-    // Newest first: Highlights is a reference list rather than a conversation, so the most
-    // recent pin is the one somebody opening the tab is looking for.
-    .orderBy(desc(messages.seq))
+    /*
+     * **Pins order by when they were PINNED. Announcements order by when they were SAID.**
+     *
+     * Not the same question, and this read answered the second one for both. Its own comment
+     * claimed "the most recent pin is the one somebody opening the tab is looking for" while
+     * ordering by `seq`, which is the most recent MESSAGE - so pinning something from last month
+     * filed it a month down the list, under pins that had been there for weeks. The exact defect
+     * the pinned strip had, in the surface that lists the same rows, found the day after the
+     * strip's was fixed because the two were never made to share the rule.
+     *
+     * `seq` remains the tiebreak, so two pins in the same instant still have a stable order and
+     * paging cannot loop. Nulls sort last: a row pinned before `pinned_at` existed keeps a place
+     * in the list, just not the front.
+     *
+     * Deliberately no index for this ordering. The partial index already narrows to one
+     * channel's pinned rows, which is a notice board rather than a log - sorting tens of rows
+     * costs nothing, and an index added on speculation is a write cost on every message forever.
+     */
+    .orderBy(
+      ...(kind === 'pinned'
+        ? [sql`${messages.pinnedAt} DESC NULLS LAST`, desc(messages.seq)]
+        : [desc(messages.seq)]),
+    )
     .limit(limit + 1);
 
   const hasMore = rows.length > limit;

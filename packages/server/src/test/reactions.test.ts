@@ -417,5 +417,74 @@ describe('a reaction reaches every open client', () => {
     // PRD/05 rule 7: the pinned strip appears when a message is pinned. The msg.update frame
     // was declared in Phase 0 and had no producer at all until reactions gave it one.
     expect(update).toBeDefined();
+
+    /*
+     * **And it carries the pin TIME, which is the half that was missing.**
+     *
+     * This test existed and passed through the entire defect, because it asked only whether the
+     * frame said `pinned`. The strip orders by `pinnedAt` and the frame did not carry it, so
+     * every client with the chat open stored a pin with no time and sorted the newest one to the
+     * END of the strip - visibly wrong, and self-correcting only on a reload, which is what made
+     * it look like a rendering quirk rather than a missing field.
+     *
+     * Asserting the field exists is not enough either: `null` is a legitimate value on this
+     * field, and null is precisely what the broken version would have produced.
+     */
+    expect(update?.update?.['pinnedAt']).toEqual(expect.any(String));
+  });
+
+  it('publishes the cleared time on unpin, so a stale one cannot linger', async () => {
+    const f = await setup();
+    const message = await say(f.ownerId, f.channel, 'never mind');
+    const { setPinned } = await import('../domain/send-message.ts');
+    const ctx = await ctxFor(f.ownerId);
+
+    await setPinned(h.db, ctx, f.channel, message.seq, true);
+    await drainOnce(h.db, deps);
+    published = [];
+
+    await setPinned(h.db, ctx, f.channel, message.seq, false);
+    await drainOnce(h.db, deps);
+
+    const update = published
+      .map((p) => p.payload as { kind?: string; update?: Record<string, unknown> })
+      .find((p) => p.kind === 'update' && p.update?.['pinned'] === false);
+    expect(update).toBeDefined();
+    // Explicitly null rather than absent: absence means "this frame says nothing about it" and
+    // would leave the client holding the time from when it WAS pinned.
+    expect(update?.update?.['pinnedAt']).toBeNull();
+  });
+
+  it('republishes a pin as current truth on redelivery, not the snapshot it was written with', async () => {
+    /*
+     * The reason this handler re-reads instead of publishing from the outbox payload, and the
+     * defect that shape would have: pin, unpin, then redeliver the FIRST event. A payload-driven
+     * publish announces a pin that has since been removed, and every open client puts the notice
+     * back on screen for a message nobody has pinned.
+     */
+    const f = await setup();
+    const message = await say(f.ownerId, f.channel, 'transient');
+    const { setPinned } = await import('../domain/send-message.ts');
+    const ctx = await ctxFor(f.ownerId);
+
+    await setPinned(h.db, ctx, f.channel, message.seq, true);
+    await drainOnce(h.db, deps);
+    await setPinned(h.db, ctx, f.channel, message.seq, false);
+    await drainOnce(h.db, deps);
+
+    published = [];
+    await h.db.execute(sql`UPDATE outbox SET processed_at = NULL WHERE event_type = 'message.pinned'`);
+    await drainOnce(h.db, deps);
+
+    const updates = published
+      .map((p) => p.payload as { kind?: string; update?: Record<string, unknown> })
+      .filter((p) => p.kind === 'update');
+    expect(updates.length).toBeGreaterThan(0);
+    // EVERY republish reports unpinned - the truth now - including the replay of the event that
+    // was written when it was pinned.
+    for (const update of updates) {
+      expect(update.update?.['pinned']).toBe(false);
+      expect(update.update?.['pinnedAt']).toBeNull();
+    }
   });
 });

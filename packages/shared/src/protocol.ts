@@ -189,6 +189,22 @@ export const MsgUpdate = z.object({
   channelId: Uuid,
   seq: z.number().int().positive(),
   pinned: z.boolean().optional(),
+  /**
+   * When it was pinned, or null if it is not.
+   *
+   * > **Travels WITH `pinned`, because `pinned` alone is not the change.** The pinned strip
+   * > orders by pin time rather than by message time - re-pinning something old has to make it
+   * > the most recent notice - and this field was on the full envelope but not on the update. So
+   * > a live pin arrived as `pinned: true` with no time, the receiving client stored a null, and
+   * > the sort put it LAST: the newest pin appeared at the far end of the strip on every device
+   * > that had the chat open. It corrected itself only on a reload, because a full read carries
+   * > the field and an update did not.
+   *
+   * Declaring it here is what makes it deliverable at all: Zod strips unknown keys silently, so
+   * publishing a field the schema does not name drops it with no error anywhere. That is how
+   * `replyToSeq` was lost for a day - see AGENTS.md 5.3.
+   */
+  pinnedAt: z.string().datetime().nullable().optional(),
   reactions: z.array(MessageReaction).optional(),
   deletedAt: z.string().datetime().nullable().optional(),
 });

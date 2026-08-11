@@ -2015,12 +2015,24 @@ export default function ChatScreen() {
     if (!channelId) return;
     setSelected(null);
     try {
-      await channelApi.setPinned(channelId, seq, pinned);
+      const result = await channelApi.setPinned(channelId, seq, pinned);
       /*
+       * The response is stored rather than discarded, and this is NOT the local guess the
+       * comment on this function warns about - it is the server's own answer, which was already
+       * on the wire and was being thrown away in favour of re-reading a cache that did not have
+       * it yet.
+       *
+       * What it buys is the pinner's own view. Everyone else learns the new pin time from the
+       * socket update, but the person who pinned races their own request: `refresh` reads local
+       * storage, and if the update has not landed yet they see the strip reorder a moment later.
+       * Writing the response first removes the race for the one client that already has the
+       * answer in its hand.
+       *
        * No confirmation banner. The pinned strip appearing or losing a card IS the feedback, and
        * a second line announcing it covered the top of the conversation to say what was already
        * visible. Failures below still speak, because nothing else would say so.
        */
+      if (client) await client.store.upsert([result.message]);
     } catch {
       setNotice("Could not change the pin. Try again.");
     }

@@ -94,6 +94,14 @@ export function strikeQuotedMessage(ref: MessageReplyRef): MessageReplyRef {
  */
 export type MessagePatch = {
   pinned?: boolean;
+  /**
+   * Kept alongside `pinned` rather than derived from it.
+   *
+   * The pinned strip orders by when something was PINNED, not by when it was said, so a patch
+   * that sets `pinned` and leaves the time behind stores a row that is pinned at no particular
+   * moment - and the sort puts those last, landing a brand new pin at the far end of the strip.
+   */
+  pinnedAt?: string | null;
   reactions?: MessageReaction[];
   deletedAt?: string | null;
 };

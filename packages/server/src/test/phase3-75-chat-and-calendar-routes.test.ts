@@ -355,6 +355,75 @@ describe('Highlights, and jump-to-message', () => {
     expect(pinned.body.hasMore).toBe(false);
   });
 
+  it('orders the Pinned tab by when each was PINNED, not by when it was said', async () => {
+    /*
+     * The case that separates the two rules, and the only one that does: pin something NEW, then
+     * pin something OLD. Ordered by message age the old one files itself at the bottom, under a
+     * pin that is objectively less recent - so an admin pinning a month-old result for tonight's
+     * race would find it buried beneath last week's notices.
+     *
+     * Any test that pins in chronological order passes under both rules and proves nothing,
+     * which is how the strip carried this same defect for as long as it did.
+     */
+    const owner = await signUp('PinOrderOwner');
+    const { channelId } = await createClubAs(owner);
+
+    const oldest = await post(owner, channelId, 'the oldest message');
+    await post(owner, channelId, 'something in between');
+    const newest = await post(owner, channelId, 'the newest message');
+
+    // Pin the NEWEST message first, then the OLDEST. Pin order is the reverse of message order,
+    // so the two rules disagree about every row.
+    await as(owner, 'POST', `/channels/${channelId}/messages/${newest}/pinned`, { pinned: true });
+    await as(owner, 'POST', `/channels/${channelId}/messages/${oldest}/pinned`, { pinned: true });
+
+    const pinned = await as(owner, 'GET', `/channels/${channelId}/pinned`);
+    expect(pinned.status).toBe(200);
+    // Most recently pinned first: the oldest MESSAGE leads, because it is the newest PIN.
+    expect(pinned.body.messages.map((m: { seq: number }) => m.seq)).toEqual([oldest, newest]);
+  });
+
+  it('re-pinning moves a message back to the top of the Pinned tab', async () => {
+    const owner = await signUp('RepinOwner');
+    const { channelId } = await createClubAs(owner);
+
+    const first = await post(owner, channelId, 'first');
+    const second = await post(owner, channelId, 'second');
+
+    await as(owner, 'POST', `/channels/${channelId}/messages/${first}/pinned`, { pinned: true });
+    await as(owner, 'POST', `/channels/${channelId}/messages/${second}/pinned`, { pinned: true });
+    expect(
+      (await as(owner, 'GET', `/channels/${channelId}/pinned`)).body.messages.map(
+        (m: { seq: number }) => m.seq,
+      ),
+    ).toEqual([second, first]);
+
+    // Unpin and re-pin the first. It is the most recent pin now, whatever its message age.
+    await as(owner, 'POST', `/channels/${channelId}/messages/${first}/pinned`, { pinned: false });
+    await as(owner, 'POST', `/channels/${channelId}/messages/${first}/pinned`, { pinned: true });
+
+    expect(
+      (await as(owner, 'GET', `/channels/${channelId}/pinned`)).body.messages.map(
+        (m: { seq: number }) => m.seq,
+      ),
+    ).toEqual([first, second]);
+  });
+
+  it('refuses a seq cursor on the Pinned tab, which cannot name a position in it', async () => {
+    // The list is ordered by pin time, so `before=<seq>` would filter on one axis while sorting
+    // on another and return a page from nowhere in particular. Rejected rather than ignored.
+    const owner = await signUp('PinCursorOwner');
+    const { channelId } = await createClubAs(owner);
+    const seq = await post(owner, channelId, 'pinned');
+    await as(owner, 'POST', `/channels/${channelId}/messages/${seq}/pinned`, { pinned: true });
+
+    expect((await as(owner, 'GET', `/channels/${channelId}/pinned?before=${seq}`)).status).toBe(400);
+    // Announcements still page by seq, because that is what they are ordered by.
+    expect(
+      (await as(owner, 'GET', `/channels/${channelId}/announcements?before=${seq}`)).status,
+    ).toBe(200);
+  });
+
   it('drops a tombstone out of both Highlights tabs', async () => {
     const owner = await signUp('TombstoneOwner');
     const { channelId } = await createClubAs(owner);

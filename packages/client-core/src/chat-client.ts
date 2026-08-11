@@ -467,6 +467,10 @@ export class ChatClient {
          * `.optional()` rather than `.nullable()` with a default.
          */
         if (frame.d.pinned !== undefined) patch.pinned = frame.d.pinned;
+        // Its own check rather than being folded into the one above, because the two are
+        // separately optional on the wire and a frame that carried only the time would still
+        // be a change worth storing.
+        if (frame.d.pinnedAt !== undefined) patch.pinnedAt = frame.d.pinnedAt;
         if (frame.d.reactions !== undefined) patch.reactions = frame.d.reactions;
         if (frame.d.deletedAt !== undefined) patch.deletedAt = frame.d.deletedAt;
 

@@ -1708,16 +1708,59 @@ export const handlers: Record<string, EffectHandler> = {
     });
   },
 
-  /** A pin or unpin. Notifies nobody: pins are reference, not interruption. */
+  /**
+   * A pin or unpin. Notifies nobody: pins are reference, not interruption.
+   *
+   * **Re-read at publish time rather than published from the payload**, which is the same choice
+   * the reaction handler makes and for the same two reasons.
+   *
+   * The first is idempotency, free. Pin, unpin, pin again is three events; a redelivery of the
+   * first would republish ITS snapshot over the current state, announcing a pin that has since
+   * been removed. Reading the row now means a redelivered event republishes current truth, so
+   * there is no ordering to get right and nothing to make the handler careful about.
+   *
+   * The second is that `pinned` alone was never the whole change. The strip orders by
+   * `pinnedAt`, the payload never carried it, and a client receiving `pinned: true` with no time
+   * stored a null and sorted the newest pin to the END of its strip. Reading the row supplies
+   * both halves without the outbox event having to be widened, so no event already sitting in
+   * the table is missing anything.
+   *
+   * One indexed lookup on a rare, human-initiated action, against a socket publish that was
+   * happening anyway.
+   */
   'message.pinned': async (event, deps) => {
     const channelId = String(event.payload['channelId'] ?? event.partitionKey);
     const seq = Number(event.payload['seq']);
+
+    const rows = await deps.db.execute<{ pinned: boolean; pinned_at: string | null }>(sql`
+      SELECT pinned, pinned_at
+        FROM messages
+       WHERE channel_id = ${channelId}::uuid AND seq = ${seq}
+       LIMIT 1
+    `);
+    const row = rows.rows[0];
+    // The message is gone, so there is no pin state to announce and nothing a client could do
+    // with one. A deletion publishes its own update.
+    if (!row) return;
+
     await publishUpdate(deps.redis, channelId, {
       channelId,
       seq,
-      pinned: event.payload['pinned'] === true,
+      pinned: row.pinned,
+      /*
+       * `db.execute` does not apply Drizzle's column coercion, so a timestamptz arrives as the
+       * driver's STRING rather than a Date - which is what the wire wants, and is exactly the
+       * trap recorded as AGENTS.md 5.3 entry 7 in the other direction. Normalised through Date
+       * anyway so the value is ISO-8601 with a `Z`, which is what the schema validates.
+       */
+      pinnedAt: row.pinned_at === null ? null : new Date(row.pinned_at).toISOString(),
     });
-    deps.log('info', 'message.pinned published', { eventId: event.id, channelId, seq });
+    deps.log('info', 'message.pinned published', {
+      eventId: event.id,
+      channelId,
+      seq,
+      pinned: row.pinned,
+    });
   },
 
   /**

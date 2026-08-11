@@ -107,6 +107,33 @@ export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
   });
 
   /**
+   * The Pinned tab's cursor, which is a pin TIME rather than a `seq`.
+   *
+   * That list is ordered by when each message was pinned, and a cursor has to be in the same
+   * currency as the ordering it pages: handed a `seq`, the query would filter on one axis and
+   * sort on another, returning a page from the middle of nowhere with no error. Naming the
+   * parameter differently is what stops a caller reaching for the wrong one by habit.
+   */
+  const PinnedQuery = z
+    .object({
+      beforePinnedAt: z.string().datetime().optional(),
+      limit: z.coerce.number().int().positive().max(200).optional(),
+    })
+    /*
+     * **Strict, so `before=<seq>` is a 400 rather than a silent no-op.**
+     *
+     * Zod strips unknown keys by default, so simply not declaring `before` here would accept it,
+     * discard it, and return the FIRST page every time - a caller paging through pins would loop
+     * on the same rows forever with a 200 on every request. Ignoring a cursor is worse than
+     * rejecting one: the failure is invisible at the call site and looks like the data repeating.
+     *
+     * This is the same silent-strip that lost `replyToSeq` for a day (AGENTS.md 5.3), reached
+     * from the other direction - there a field was sent and dropped, here one is sent and needs
+     * to be refused.
+     */
+    .strict();
+
+  /**
    * The Highlights tabs: Pinned and Announcements.
    *
    * Both read the whole channel rather than a loaded window, which is the point - v1 computed
@@ -121,7 +148,7 @@ export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
     const guard = await authorizeChannel(deps, request, request.params.id);
     if (!guard.ok) return reply.code(guard.code).send({ error: 'not_found' });
 
-    const query = HighlightQuery.safeParse(request.query);
+    const query = PinnedQuery.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
 
     return readHighlights(deps.db, request.access!, request.params.id, 'pinned', query.data);
