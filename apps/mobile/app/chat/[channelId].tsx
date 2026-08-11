@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -74,13 +75,30 @@ import { color, fontFamily, radius, space, type } from "../../src/theme.ts";
 const PINNED_STRIP_LIMIT = 4;
 
 /**
- * How far from the live tail the pinned strip stays visible, in points.
+ * How far the finger must travel before the pinned strip reacts, in points.
  *
- * Generous enough that a small nudge up does not flicker it away, short enough that reading back
- * through history clears it. Measured from the bottom, so it is a distance rather than a
- * direction and does not need to track which way the finger moved.
+ * > **This replaced a distance from the tail, and the two answer different questions.** The old
+ * > rule showed the strip while the reader was within 400pt of the newest message, which meant a
+ * > reader 3,000pt back in history could flick downward and see nothing happen - the strip only
+ * > returned after 2,600pt of travel. Nothing about that number was tunable, because the number
+ * > was not the problem: "are you near the bottom" is not the question a reader is asking. The
+ * > question is **"am I moving away from the conversation, or back toward it"**, and that is a
+ * > direction rather than a position.
+ *
+ * Small enough that a deliberate nudge registers immediately, large enough that a finger wobble
+ * or the rubber-band bounce at the end of the list does not flip it back and forth.
  */
-const PINNED_STRIP_FADE_AFTER = 400;
+const PINNED_STRIP_DEADZONE = 6;
+
+/**
+ * How long the strip takes to slide out of the way, in milliseconds.
+ *
+ * Fast enough to read as a response to the finger rather than as an animation being played at
+ * you, slow enough that the conversation reclaiming the space is legible as motion rather than a
+ * jump. The tab bar's pill learned the same lesson from the other side - see HISTORY 2026-08-09,
+ * where ~400ms read as lag behind a screen that had already changed.
+ */
+const PINNED_STRIP_SLIDE_MS = 180;
 
 /**
  * How long a jumped-to message stays highlighted.
@@ -1194,8 +1212,41 @@ export default function ChatScreen() {
    * scroll, and a message arriving while the reader is up in history extends the list away from
    * them rather than moving them. See the `FlatList` below.
    */
-  /** Whether the pinned strip is showing. Fades out once the reader leaves the live tail. */
+  /** Whether the pinned strip is showing. Follows the direction the reader is travelling. */
   const [pinnedStripVisible, setPinnedStripVisible] = useState(true);
+  /**
+   * The last scroll offset seen, so the next one can be read as a direction.
+   *
+   * A ref rather than state: this changes on every scroll frame and nothing renders off it, so
+   * holding it in state would re-render the whole log sixty times a second to store a number
+   * that only the next scroll event reads.
+   */
+  const lastOffsetRef = useRef(0);
+  /**
+   * The strip's natural height, measured once.
+   *
+   * Needed because the container animates between that height and zero, and a collapsing box has
+   * to know what it is collapsing FROM. Measured from the content rather than hardcoded, since
+   * the card's height comes from its type scale and would drift the day somebody changes it.
+   */
+  const [pinnedStripHeight, setPinnedStripHeight] = useState(0);
+  /** 1 showing, 0 hidden. Drives both the container's height and the slide. */
+  const pinnedSlide = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.timing(pinnedSlide, {
+      toValue: pinnedStripVisible ? 1 : 0,
+      duration: PINNED_STRIP_SLIDE_MS,
+      /*
+       * Height is a layout property and cannot be driven natively, so this runs on the JS thread.
+       * Acceptable here and worth stating: it fires only when the direction actually CHANGES,
+       * not per scroll frame, and it is 180ms. A native-driven `translateY` alone would not let
+       * the conversation reclaim the space, which is the half of this that makes it feel like
+       * the strip left rather than merely became invisible.
+       */
+      useNativeDriver: false,
+    }).start();
+  }, [pinnedStripVisible, pinnedSlide]);
   /**
    * Whether the reader is sitting at the newest message.
    *
@@ -2321,16 +2372,83 @@ export default function ChatScreen() {
         several notices and stacking them would eat the conversation.
       */}
       {pinnedRows.length > 0 && (
+        /*
+          Two nested boxes, and both are load-bearing.
+
+          The OUTER one owns the height and clips. Animating it from the measured height to zero
+          is what hands the space back to the conversation - the previous version set `opacity: 0`
+          and left the strip sitting in the layout, so there was a permanent empty band under the
+          header whether anything was pinned-and-visible or not.
+
+          The INNER one slides. Collapsing the height alone would wipe the strip away from its
+          bottom edge, which reads as a squash; translating the content up by the same amount as
+          the height it is losing makes it travel under the header instead. The two interpolations
+          are deliberately the same distance for that reason - change one and the other has to
+          follow, or the strip drifts against its own clip.
+
+          Height is measured rather than assumed, and only once it is non-zero: an early layout
+          pass reports 0, and adopting that would collapse the strip permanently.
+        */
+        <Animated.View
+          style={[
+            styles.pinnedStripClip,
+            pinnedStripHeight > 0
+              ? {
+                  height: pinnedSlide.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, pinnedStripHeight],
+                  }),
+                }
+              : null,
+          ]}
+          /*
+            Hidden, it must not intercept taps meant for the messages behind it - a strip you
+            cannot see but can still press is worse than one that is simply there. On the clip
+            rather than the scroller, so a partially slid strip is untappable throughout the
+            transition rather than only at the end of it.
+          */
+          pointerEvents={pinnedStripVisible ? "auto" : "none"}
+        >
+        <Animated.View
+          /*
+            Measured EXACTLY ONCE, on the pass before anything constrains it.
+
+            > **The node being measured is inside the box whose height is animated, so it can
+            > measure itself mid-collapse.** Accepting any non-zero value looked like a sufficient
+            > guard and is not: as the clip travels 76 -> 0 the child is squeezed, fires `onLayout`
+            > with whatever it has been squashed to, and the strip adopts that as its full height.
+            > Observed on the device settling at **8 points** - so the strip went on showing and
+            > hiding correctly, at a height nobody could see, which reads exactly like the feature
+            > never shipped.
+
+            The first pass is the trustworthy one precisely because `pinnedStripHeight` is still 0
+            there, so no `height` style is applied yet and the strip lays out naturally. Every
+            later pass happens under an explicit animated height and can only report the clip.
+
+            Safe to freeze because the height genuinely is constant: the card is a fixed 300 wide
+            with `numberOfLines={1}`, so no pin can make the strip taller than another.
+          */
+          onLayout={(event) => {
+            if (pinnedStripHeight > 0) return;
+            const measured = event.nativeEvent.layout.height;
+            if (measured > 0) setPinnedStripHeight(measured);
+          }}
+          style={{
+            transform: [
+              {
+                translateY: pinnedSlide.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [-pinnedStripHeight, 0],
+                }),
+              },
+            ],
+          }}
+        >
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          style={[styles.pinnedStrip, !pinnedStripVisible && styles.pinnedStripFaded]}
+          style={styles.pinnedStrip}
           contentContainerStyle={styles.pinnedStripContent}
-          /*
-            Faded out, it must not intercept taps meant for the messages behind it - a strip you
-            cannot see but can still press is worse than one that is simply there.
-          */
-          pointerEvents={pinnedStripVisible ? "auto" : "none"}
         >
           {pinnedRows.map((message) => (
             <BlurView
@@ -2386,6 +2504,8 @@ export default function ChatScreen() {
             </BlurView>
           ))}
         </ScrollView>
+        </Animated.View>
+        </Animated.View>
       )}
 
       {/*
@@ -2574,17 +2694,38 @@ export default function ChatScreen() {
             const near = fromBottom <= TAIL_SLACK;
             setAtNewest((current) => (current === near ? current : near));
             /*
-             * The strip fades once the reader has left the live tail.
+             * The strip follows the DIRECTION of travel, not the distance from the tail.
              *
-             * A pin is a shortcut back to something recent, so it earns its place over the
-             * conversation while you are AT the conversation. Reading back through history it is
-             * covering the thing you went looking for, so it gets out of the way and returns when
-             * you come forward again.
+             * A pin is a shortcut back to something recent, so it earns its place while you are
+             * at the conversation and is in the way while you are reading back through history.
+             * What tells you which of those is happening is which way the finger just moved -
+             * moving away hides it, moving back brings it, from anywhere in the log.
              *
-             * State rather than a ref, because this one has to re-render - and set only when it
+             * The list is INVERTED, so the offset grows as the reader goes back in time: a
+             * rising offset is travelling away from the newest message, which is an upward
+             * swipe, which hides. Getting that backwards is the easy mistake here, and it is
+             * invisible in a diff - it looks correct either way and is simply inverted on a
+             * device.
+             *
+             * State rather than a ref, because this has to re-render - and set only when it
              * actually flips, so a scroll does not re-render the screen on every frame.
              */
-            const shouldShow = fromBottom <= PINNED_STRIP_FADE_AFTER;
+            const previous = lastOffsetRef.current;
+            lastOffsetRef.current = fromBottom;
+            const delta = fromBottom - previous;
+
+            const shouldShow = near
+              ? // Arriving at the newest message always shows it, whichever way the last few
+                // points of travel went. Without this, easing into the tail from above ends with
+                // the reader at the conversation and the strip hidden, which is the one place it
+                // is unambiguously wanted.
+                true
+              : Math.abs(delta) < PINNED_STRIP_DEADZONE
+                ? // Too small to be a decision. Hold whatever is on screen rather than flipping
+                  // on a wobble or on the bounce at the end of the list.
+                  pinnedStripVisible
+                : delta < 0;
+
             setPinnedStripVisible((visible) =>
               visible === shouldShow ? visible : shouldShow,
             );
@@ -3765,13 +3906,19 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.05)",
   },
   /** v1's pinned notice strip. `flexGrow: 0` keeps the row from claiming the list's height. */
+  /*
+   * The clipping box, whose height is animated.
+   *
+   * `overflow: hidden` is what makes the slide a slide: without it the content translating up
+   * simply draws over the header instead of disappearing behind it, which looks like a bug
+   * rather than like motion.
+   */
+  pinnedStripClip: { overflow: "hidden" },
   pinnedStrip: {
     flexGrow: 0,
     paddingHorizontal: space.md,
     paddingTop: space.sm,
   },
-  /* Faded rather than unmounted, so it returns without the strip jumping back into layout. */
-  pinnedStripFaded: { opacity: 0 },
   pinnedStripContent: { gap: space.sm, alignItems: "center" },
   pinnedCard: {
     flexDirection: "row",

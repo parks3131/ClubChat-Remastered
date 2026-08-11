@@ -65,6 +65,7 @@ restating it wrongly.
 |---|---|---|
 | 01 | [Tab bar](01-tab-bar.md) | The four destinations: the floating bar, the sliding pill, the badge |
 | 02 | [Avatar](02-avatar.md) | Every face in the product: the shape that says person or group, the fallback, the tint |
+| 03 | [Pinned strip](03-pinned-strip.md) | The notices above a conversation: what makes them appear, and the measurement trap that made a working one invisible |
 
 **Written as surfaces are worked on, not backfilled in a pass.** A spec written by reading code
 rather than by looking at a device starts out wrong, and a directory of unverified documents is

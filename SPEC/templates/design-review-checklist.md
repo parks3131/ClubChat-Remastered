@@ -58,6 +58,19 @@ least once**, in this project, on this stack - the same claim
 - [ ] Does the animation have something continuous to move? Four things cross-fading cannot slide,
       however they are tuned - that is a jump with a duration on it.
 - [ ] Is it fast enough to read as motion rather than as lag behind a screen that already changed?
+- [ ] **Is anything measuring itself from inside the box being animated?** A node inside a
+      collapsing container reports its SQUASHED height mid-animation, and a component that adopts
+      that as its natural size shrinks a little more on every cycle. The pinned strip settled at 8
+      points this way, went on behaving perfectly at a height nobody could see, and was reported
+      as the feature not working at all. Measure on the first pass, before any size is applied,
+      and never again - `measured > 0` is not a guard, it rejects the one wrong value somebody
+      thought of and accepts the rest.
+- [ ] **Does the thing being hidden give its space back?** Opacity alone leaves the box in the
+      layout, so what is gone still occupies room and the gap it leaves reads as a bug in the
+      screen above it.
+- [ ] If a threshold is being tuned and no value feels right, **the quantity is probably wrong
+      rather than its size.** The pinned strip keyed on distance from the tail when the question
+      was direction of travel; no threshold expresses intent.
 
 ## Interaction
 
