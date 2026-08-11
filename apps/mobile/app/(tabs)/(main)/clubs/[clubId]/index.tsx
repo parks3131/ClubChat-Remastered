@@ -175,11 +175,13 @@ export default function ClubHubScreen() {
               }}
             />
 
-            {/* The club's name again, at display weight. The header states where you are; this
-                states what you are looking at, which is what makes the hub feel like a front
-                door rather than a menu. */}
-            <Text style={styles.identity}>{data.club.name.toUpperCase()}</Text>
-
+            {/*
+              The club's name used to be repeated here at display weight, on the argument that the
+              header states where you are and this states what you are looking at. Removed
+              2026-08-11: on a real screen those are the same sentence twice, one directly above
+              the other, and the second one costs a row of the list. The header already carries
+              the club's picture beside its name, which is the identity this was reaching for.
+            */}
             {/*
               ONE continuous panel, not a stack of separately bordered cards.
 
@@ -728,16 +730,6 @@ function HubRow({
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
   content: { padding: space.md, paddingBottom: space.xl },
-
-  identity: {
-    ...type.display,
-    fontSize: 24,
-    lineHeight: 30,
-    letterSpacing: 0.5,
-    color: color.textPrimary,
-    textAlign: 'center',
-    marginBottom: space.md,
-  },
 
   panel: {
     backgroundColor: color.card,
