@@ -13,6 +13,235 @@ Newest first.
 
 ---
 
+## 2026-08-11 (last) - The header that borrowed a control it could never have
+
+Four rounds on chat's back button, a full revert, and a restore of the half that was right. The
+shape of the day's ending is worth more than the pixels.
+
+**Reported as: "I love the back button on News and Highlights, I don't like the one in chat."**
+The difference turned out not to be styling at all. That white capsule is **not in this
+codebase**. `backWrap` in `nav.tsx` is padding and nothing else - iOS draws the capsule itself
+around whatever the navigator is handed as `headerLeft`, and every screen using the navigator's
+header gets it free.
+
+Chat and Highlights are the only two screens in the app that draw their own header out of plain
+views. No navigator, no UIKit, no capsule - so somebody had hand-rolled a 36pt grey circle with a
+black arrow. Close enough to look deliberate, different enough to be spotted instantly by the one
+person who uses the app every day.
+
+### Measuring, rather than guessing at, somebody else's design
+
+The recording came in at 384x848 against a 393x852pt device, so **a pixel was a point** and the
+system capsule could be read straight off the frame: 62 wide, 44 tall, inset by the content
+gutter. That is the good half of this entry - given a screen recording and a known device, a
+design can be measured instead of eyeballed, and the numbers went into the code as literals with
+a comment saying they are not ours to choose.
+
+### Then the measurement was obeyed too well
+
+At full size the title collapsed to "Bingha...". The first response was to shrink the controls,
+which was **treating the symptom**: the two controls came to 106pt and the Highlights pill beside
+them was 100pt on its own. This header carries six things where every other header in the app
+carries three.
+
+Moving Highlights into the overflow menu freed five times what shrinking the buttons had - and
+the full-size capsule became affordable in the same change that made compromising on it
+unnecessary. So it was restored, on exactly that reasoning.
+
+Seen on the phone, that was wrong, and the founder's verdict was that something was off about the
+result rather than about any one number. The whole thing was reverted, then restored without that
+last step.
+
+> **Room to do something is not a reason to do it.** The measurement said what the system draws.
+> It never said what this header needs, and those are different questions. The capsule at full
+> size dominates a row whose job is to name the conversation - it reads as a toolbar with a title
+> wedged into it.
+
+### A drift caused while fixing a drift
+
+Chat was shrunk and **Highlights was not**, so for a stretch the two headers that exist
+specifically to match each other did not. Arrived at by editing one file and not its twin, which
+is the failure the pairing exists to prevent. Both are 48x40 now.
+
+### What was kept, and what is on record
+
+Highlights lives in the overflow menu, first in the list. The back control is a near-white capsule
+with the accent arrow at the size this row can carry. The full revert stayed in history as a
+`git revert` rather than a force-push, because **the expensive part of the day was the finding,
+not the CSS** - where the capsule comes from, and the measurements - and that survives in
+`26f9e6b`'s message even though its code does not.
+
+The option not taken, and the one to revisit if this returns: move chat onto the native header and
+earn the real capsule instead of copying it. It costs the blur.
+
+---
+
+## 2026-08-11 (later) - A pin's recency is when it was pinned
+
+One rule, missing from two surfaces for the same reason, found a day apart. Re-pinning something
+old has to make it the most recent notice, or an admin pinning a month-old result for tonight's
+race finds it filed under last week's.
+
+### The strip: a field with nowhere to travel
+
+`pinned_at` was on the row and on every full read, and **`MsgUpdate` had no such field**. A live
+pin arrived as `pinned: true` with no time, the client stored a null, and the sort - nulls last -
+put the newest pin at the far end of the strip. It corrected on a reload, because a full read
+carries the field and an update could not, which is what made it read as a rendering quirk rather
+than a missing one.
+
+The hole ran through four layers - worker publish, wire type, patch type, SQLite - and every one
+needed the same field. No extra round trip anywhere: the frame was already being sent, and was
+sending half the change.
+
+**The worker now re-reads the row at publish time** rather than publishing its outbox payload,
+which is what the reaction handler does and for the same reason. That closed a second defect
+nobody had reported: pin, unpin, then redeliver the first event, and a payload-driven publish
+announces a pin that has since been removed - every open client puts the notice back for a message
+nobody has pinned.
+
+### Highlights: the same defect, and its own comment said so
+
+```
+// Newest first: ... the most recent pin is the one somebody
+// opening the tab is looking for.
+.orderBy(desc(messages.seq))
+```
+
+It named the right rule and implemented the other one. Pinned now orders by `pinned_at` with `seq`
+as tiebreak; announcements keep ordering by `seq`, because for an announcement the message time
+**is** its recency.
+
+**The cursor had to move with the sort.** `before=<seq>` cannot name a position in a list ordered
+by time - it filters on one axis and sorts on another, returning a page from nowhere with a 200.
+The Pinned tab takes `beforePinnedAt` now. Its schema is `.strict()`, and that was not cosmetic:
+simply not declaring `before` made Zod **strip** it, so the first draft accepted the old cursor,
+discarded it, and returned the first page every time - paging would have looped forever on the
+same rows, at 200 throughout. The same silent strip that lost `replyToSeq` for a day, reached
+from the other direction.
+
+### The test that proved nothing
+
+The existing pin-publish test asserted `pinned === true` and nothing else, so it stayed green
+through the entire defect. And the ordering test that matters pins the **newest** message first
+and the **oldest** second, so pin order is the reverse of message order and the two rules disagree
+about every row - **a test that pins chronologically passes under both rules**, which is how the
+strip carried this for as long as it did.
+
+---
+
+## 2026-08-11 - The pinned strip, and a working feature nobody could see
+
+Asked for from a GroupMe recording: the notices leave the instant you move up and return on the
+smallest move back. Ours took a long drag to do either.
+
+### The threshold was not too large. It was the wrong quantity.
+
+It showed the strip within a fixed distance of the newest message, so a member deep in history who
+nudged toward the conversation saw nothing happen - they had to travel the whole remaining
+distance first. **No value of that threshold is correct**, which is the tell that the number was
+never the problem. It follows the direction of travel now, with a deadzone so a wobble or the
+bounce at the end of the list cannot flip it, and the tail always shows. Measured after: a 7-point
+nudge returns the strip from 3,900 points deep.
+
+The list is inverted, so a rising offset is travelling **away** from the newest message. Getting
+that backwards looks correct in a diff and is simply inverted on a device.
+
+The strip also gives its space back now. It faded in place before, so the box stayed in the layout
+and left a permanent empty band under the header: gone, and still occupying room.
+
+### It shipped invisible, and was reported as done
+
+The strip has to know its own height to collapse from it, and **the node being measured sat inside
+the box whose height animates**. As the clip collapsed, the child was squeezed, reported its
+squashed height, and the strip adopted that as its full size. It settled at **8 points**.
+
+Everything else was right the whole time. It showed and hid on exactly the right gestures, at a
+height nobody could see - which from outside is indistinguishable from the feature never having
+been built, and was reported as "no change at all". Three separate readings of the code concluded
+it should work, and it did work.
+
+**One log line carrying the measured height beside the gesture ended it in a minute.**
+
+> `measured > 0` is not a guard. It excludes the one wrong value somebody thought of and accepts
+> every other one. The only trustworthy measurement is the one taken before anything constrains
+> it - the first pass, while no size has been applied. Every later pass can only report the clip.
+
+Recorded as [`SPEC/DESIGN/03-pinned-strip.md`](SPEC/DESIGN/03-pinned-strip.md), with three items
+added to the design review checklist: measuring inside an animated box, hiding without giving the
+space back, and tuning a threshold when the quantity is wrong.
+
+---
+
+## 2026-08-11 - A pinned card should open the thing it announces
+
+Pinning a poll and pinning a paragraph are not the same act. A poll is pinned because somebody
+should vote in it, so opening a record of the card leaves them to go and find the poll themselves.
+A card now opens the object; everything else opens Highlights, and nothing jumps back into the
+conversation.
+
+The route comes from the target a **notification** about that poll would carry, so the three route
+strings exist once and the pin and the push land in the same place by construction.
+
+Highlights got the same rule, and the reason there is stronger than consistency: **the strip shows
+four pins and that list shows all of them**, so a fifth pinned poll is reachable from Highlights
+and nowhere else. An inert row made it the one surface that could show somebody a poll while
+giving them no way to open it.
+
+### The bug this uncovered
+
+Deleting a poll soft-deletes its card and clears its pin in one statement, and **never advanced
+the channel's revision**. Sync asks for `rev > mark`, so a phone that was closed at that moment
+never learned: it kept the card, and kept it pinned, indefinitely. Live clients were fine, which
+is why nothing noticed.
+
+The handler's own comment said the publish was the ONLY route this could travel. **True when it
+was written on 2026-08-01; false from 2026-08-03**, when the revision counter arrived to give a
+change a route that survives the client not being there. Three mutation sites were updated and
+this fourth was on nobody's list, because it is a cascade rather than something a person does.
+
+Allocated per channel rather than once for the batch: `last_rev` is per-channel and the cascade
+matches on object id alone, so one revision stamped across two channels would be a duplicate in
+one and a skip in the other.
+
+Two of my own test bugs on the way, and the second is the instructive one: the first version
+picked the **first live message**, which is the "created the club" system message rather than the
+poll card. It would have passed its own setup and asserted nothing.
+
+---
+
+## 2026-08-11 - Circles are people, squares are things, and a picture you can crop
+
+Two reports from the phone that shared a cause: a face was drawn by three different pieces of
+code, so a rule could only ever hold in the one that read it.
+
+**Cropping.** `pickSquarePhoto` opens the picker with its editor on, at 1:1. Every avatar uses it,
+and so does a news post. The line is not identity versus content - which is what it looked like
+first and would have put news on the wrong side: **crop where the frame is fixed, do not crop
+where the picture sets its own proportions.** Chat keeps the uncropped picker because a chat photo
+is shown at its own ratio.
+
+The news card became `aspectRatio: 1` in the same change. **The crop frame and the display frame
+have to be the same frame** or the card crops a second time and what posts is not what was chosen.
+
+**Shape.** `Avatar` already carried the rule - circles are people, rounded squares are things -
+and `shape` defaulted independently of `kind`, so the two could disagree. They did: the Chats list
+passed `kind="group"` with no shape and drew every club as the group glyph inside a circle. Shape
+now derives from kind, so saying `group` is saying `square`.
+
+That left the two faces that never went through `Avatar` at all. The **space header** hand-rolled
+its own 40pt round well, which is why News & Highlights showed a round club while chat's header
+two taps away showed a square one; the club hub's race rows hand-rolled a third. Both call
+`Avatar` now.
+
+The roundness rule had been broken **four separate times**, every time by a surface drawing its
+own face. Fixing the instances again would have left the thing that keeps producing them, so it
+went into [`SPEC/DESIGN/02-avatar.md`](SPEC/DESIGN/02-avatar.md) - and rule 2 is stated wider than
+it had been: *every* space is a group, including the ones drawn as a destination icon rather than
+a picture, and including any space added later.
+
+---
+
 ## 2026-08-10 (later) - The screen that answered a question nobody asked
 
 Reported from the phone: a plain member opens a race, taps **Meet Information** from the header
