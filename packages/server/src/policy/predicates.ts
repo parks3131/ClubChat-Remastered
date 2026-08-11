@@ -9,7 +9,7 @@
  * See SPEC/TECH/05-authorization.md and SPEC/PRD/02-roles-and-permissions.md.
  */
 
-import { ADMIN_TIER, type ClubRole } from '@clubchat/shared';
+import { ADMIN_TIER, SYSTEM_ACTOR_ID, type ClubRole } from '@clubchat/shared';
 import type { AccessContext } from './context.ts';
 
 /** Just enough of a channel to authorize against, without loading the whole row. */
@@ -453,6 +453,98 @@ export const canReadReports = (ctx: AccessContext, ch: ChannelRef): boolean => {
  * plus reporting, and nobody deletes anyone else's message in a DM.
  */
 export const canDismissReport = canReadReports;
+
+/**
+ * Enough of an account for a platform moderator to authorize against.
+ *
+ * Loaded by the caller, like `DmCandidate`, because both extra facts are rows and a predicate
+ * must stay a pure function.
+ */
+export type ModerationSubject = {
+  readonly userId: string;
+  /** Another operator. See `canSuspendAccount` for why that matters. */
+  readonly isPlatformModerator: boolean;
+  /** An account that deleted itself: already blocked, and blocked for its own reasons. */
+  readonly isAnonymized: boolean;
+};
+
+/**
+ * May this moderator suspend that account?
+ *
+ * > **The "ejecting the user" half of Apple's guideline 1.2**, and until now there was no path to
+ * > it at all: `signin_blocked_at` was written in exactly one place, `deleteOwnAccount`. A
+ * > moderator could read an abusive conversation and dismiss the report, which is watching rather
+ * > than acting.
+ *
+ * Suspension is deliberately **not** deletion. It sets the same `signin_blocked_at` that every
+ * revocation path already respects, and it does **not** anonymise - so it is reversible, and the
+ * person's clubs, messages and Owner rows are all untouched. That last part is what makes it the
+ * right tool rather than a blunt one: ejecting a club Owner by deleting them would break domain
+ * invariant 1, and suspending them breaks nothing.
+ *
+ * Four refusals, and the middle two are the ones worth stating out loud:
+ *
+ *  1. **Not yourself.** Locking yourself out of the queue helps nobody.
+ *  2. **Not the system actor.** Its `signin_blocked_at` is set at creation precisely so nothing
+ *     can ever authenticate as it, and it authors every system message in the product.
+ *  3. **Not another platform moderator.** ADR-0021's safeguard, one layer up: a moderator who
+ *     could shut off the other moderators could disable everybody able to reverse them. The
+ *     operator set is changed in configuration and nowhere else, so it must not be reachable
+ *     through a runtime action.
+ *  4. **Not an account that already deleted itself.** It is blocked already, and an audit row
+ *     claiming an action that did nothing is worse than no row.
+ */
+export const canSuspendAccount = (ctx: AccessContext, subject: ModerationSubject): boolean => {
+  if (!ctx.isPlatformModerator) return false;
+  if (subject.userId === ctx.userId) return false;
+  if (subject.userId === SYSTEM_ACTOR_ID) return false;
+  if (subject.isPlatformModerator) return false;
+  if (subject.isAnonymized) return false;
+  return true;
+};
+
+/**
+ * May this moderator lift a suspension?
+ *
+ * **Any moderator, including one who did not impose it** - the same asymmetry ADR-0021 chose for
+ * club bans, and for the same reason: a wrongful ejection is the failure worth engineering
+ * against, so reversing one must be cheaper than performing one.
+ *
+ * Its own predicate rather than an alias of `canSuspendAccount` with the checks relaxed, because
+ * "may eject" and "may reinstate" are deliberately different capabilities and failure mode 10 is
+ * about exactly this.
+ *
+ * The system actor is refused here too, and that refusal is load-bearing rather than tidy: its
+ * block is a security property, not a punishment, and reinstating it would make the account that
+ * authors every system message signin-able.
+ */
+export const canReinstateAccount = (ctx: AccessContext, subject: ModerationSubject): boolean => {
+  if (!ctx.isPlatformModerator) return false;
+  if (subject.userId === SYSTEM_ACTOR_ID) return false;
+  // A deleted account's block belongs to its own deletion. Lifting it would be a resurrection,
+  // and the profile behind it has already been scrubbed.
+  if (subject.isAnonymized) return false;
+  return true;
+};
+
+/**
+ * May this moderator remove a reported message?
+ *
+ * > **This is the one place the product lets somebody delete a message they neither sent nor have
+ * > admin standing over**, and it needed Apple's guideline 1.2 to justify it: acting on a report
+ * > means *removing the content*, and in a DM there is nobody who can.
+ *
+ * It does not contradict `PRD/14`'s matrix, which says no participant may delete the other's
+ * message. A platform moderator is not a participant, and this is not the participant power -
+ * it is scoped to a message that has actually been reported, resolved through `message_reports`
+ * by the caller, so there is no door to a conversation nobody complained about.
+ *
+ * In a club, race or Eboard channel this adds nothing: `canDeleteMessage` already lets that
+ * space's admins remove anything, and a platform moderator has no standing there at all. So this
+ * is `dm`-only, which also keeps the blast radius exactly the size of the gap it fills.
+ */
+export const canRemoveReportedMessage = (ctx: AccessContext, ch: ChannelRef): boolean =>
+  ch.scope === 'dm' && ctx.isPlatformModerator;
 
 // ---------------------------------------------------------------------------
 // Club administration

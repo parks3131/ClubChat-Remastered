@@ -525,3 +525,17 @@ that records how to recognise the class._
     the client fix stopped it sending the offending frame at all, so nothing reached the server's
     half. A test for a server contract has to put the bytes on the wire itself. Both halves were
     verified to fail without their own fix, which is the only reason this was noticed.
+
+22. **A file watcher runs a half-finished edit, so the order of two edits to one file is a runtime
+    decision.** Symptom: `ReferenceError: parseModeratorList is not defined` in the API log, from
+    code that was correct thirty seconds later. Root cause: the call site was added in one edit and
+    its `import` in the next, and `node --watch` restarted the process in between - so a state that
+    existed only between two saves actually executed. **Rule: within one file, add the import
+    before the usage; across several, write the whole file at once.** This is the known live-reload
+    hazard for the Expo client - a half-saved screen is a red screen on the founder's phone - and
+    the point of this entry is that it applies identically to the three `--watch` server processes,
+    where the evidence is one line in a log nobody is tailing rather than something visible in your
+    hand. Note also what `--watch` covers: it restarts on a change to `--env-file` too, which is how
+    appending to `.env` reconfigured a running API with no explicit restart - convenient, and the
+    reason a "nothing changed" reconcile log can be telling the truth about a database an earlier
+    process already changed.

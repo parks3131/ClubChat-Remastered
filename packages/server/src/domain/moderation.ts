@@ -22,16 +22,26 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { replyPreview, type MessageEnvelope, type MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
-import { messageReports, moderationReads, outbox } from '../db/schema.ts';
+import {
+  messageReports,
+  moderationActions,
+  moderationReads,
+  outbox,
+} from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
   canDismissReport,
   canReadReports,
+  canReinstateAccount,
+  canRemoveReportedMessage,
   canReportMessage,
+  canSuspendAccount,
   type ChannelRef,
 } from '../policy/predicates.ts';
+import { accessibleChannelPredicate } from './channel-access.ts';
 import { getChannelRef } from './reads.ts';
 import { reactionsForMessages } from './reactions.ts';
+import { applySoftDelete } from './send-message.ts';
 
 export type ModerationRefusal = { ok: false; code: 'forbidden' | 'not_found' };
 export type ModerationResult<T> = ({ ok: true } & T) | ModerationRefusal;
@@ -270,6 +280,16 @@ export async function listDmReportQueue(
       seq: number;
       senderId: string;
       senderName: string;
+      /**
+       * Whether this account is already suspended, and whether the message is already a
+       * tombstone.
+       *
+       * Carried so the queue can say what has been done rather than offering an action that
+       * silently changes nothing. Still metadata - neither reveals a word of what was said - so
+       * the rule that this listing carries no content is intact.
+       */
+      senderSuspended: boolean;
+      removed: boolean;
       reporters: Array<{ userId: string; name: string; createdAt: string }>;
       dismissedAt: string | null;
       createdAt: string;
@@ -289,6 +309,8 @@ export async function listDmReportQueue(
     seq: number;
     sender_id: string;
     sender_name: string;
+    sender_suspended: boolean;
+    removed: boolean;
     dismissed_at: string | null;
     created_at: string;
     reporters: Array<{ userId: string; name: string; createdAt: string }>;
@@ -299,6 +321,8 @@ export async function listDmReportQueue(
            m.seq,
            m.sender_id::text AS sender_id,
            sender.full_name AS sender_name,
+           (sender.signin_blocked_at IS NOT NULL) AS sender_suspended,
+           (m.deleted_at IS NOT NULL) AS removed,
            MAX(r.dismissed_at)::text AS dismissed_at,
            MIN(r.created_at)::text AS created_at,
            json_agg(
@@ -316,7 +340,8 @@ export async function listDmReportQueue(
      -- club, race or Eboard chat belongs to that space's admins and must never appear here.
      WHERE c.scope = 'dm'
        ${opts.includeDismissed ? sql`` : sql`AND r.dismissed_at IS NULL`}
-     GROUP BY m.id, c.id, c.scope_id, m.seq, m.sender_id, sender.full_name
+     GROUP BY m.id, c.id, c.scope_id, m.seq, m.sender_id, sender.full_name,
+              sender.signin_blocked_at, m.deleted_at
      ORDER BY MIN(r.created_at) DESC
      LIMIT ${limit}
   `);
@@ -330,6 +355,8 @@ export async function listDmReportQueue(
       seq: Number(row.seq),
       senderId: row.sender_id,
       senderName: row.sender_name,
+      senderSuspended: row.sender_suspended === true,
+      removed: row.removed === true,
       reporters: row.reporters.map((r) => ({
         userId: r.userId,
         name: r.name,
@@ -351,6 +378,18 @@ export type ReportedContext = {
   reportedSeq: number;
   fromSeq: number;
   toSeq: number;
+  /**
+   * Who sent the reported message, and what has already been done about them.
+   *
+   * Answered here rather than worked out by the screen from the window, for the reason every
+   * other capability flag on a read is: the screen would be restating a rule, and the two
+   * definitions would drift. It is also the difference between offering "Suspend" and offering
+   * "Reinstate", which a screen must not guess at.
+   */
+  subjectUserId: string;
+  subjectSuspended: boolean;
+  /** Whether the reported message is already a tombstone. */
+  removed: boolean;
   messages: MessageEnvelope[];
 };
 
@@ -375,10 +414,20 @@ export async function readReportedContext(
   ctx: AccessContext,
   messageId: string,
 ): Promise<ModerationResult<ReportedContext>> {
-  const located = await db.execute<{ channel_id: string; seq: number }>(sql`
-    SELECT m.channel_id::text AS channel_id, m.seq
+  const located = await db.execute<{
+    channel_id: string;
+    seq: number;
+    sender_id: string;
+    sender_suspended: boolean;
+    removed: boolean;
+  }>(sql`
+    SELECT m.channel_id::text AS channel_id, m.seq,
+           m.sender_id::text AS sender_id,
+           (u.signin_blocked_at IS NOT NULL) AS sender_suspended,
+           (m.deleted_at IS NOT NULL) AS removed
       FROM message_reports r
       JOIN messages m ON m.id = r.message_id
+      JOIN users u ON u.id = m.sender_id
      WHERE r.message_id = ${messageId}
      LIMIT 1
   `);
@@ -481,6 +530,9 @@ export async function readReportedContext(
     reportedSeq,
     fromSeq,
     toSeq,
+    subjectUserId: target.sender_id,
+    subjectSuspended: target.sender_suspended === true,
+    removed: target.removed === true,
     messages: messages.map((row) => ({
       id: row.id,
       channelId: row.channel_id,
@@ -551,6 +603,203 @@ export async function listModerationReads(
       createdAt: row.createdAt.toISOString(),
     })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Acting on a report: ejecting the person, and removing what they said
+// ---------------------------------------------------------------------------
+
+/**
+ * Suspend an account, or lift a suspension.
+ *
+ * > **The "ejecting the user" half of Apple's guideline 1.2.** Before this, a moderator could
+ * > read a genuinely abusive conversation and then only dismiss the report - `signin_blocked_at`
+ * > was written in exactly one place in the whole codebase, and that place was somebody deleting
+ * > their own account.
+ *
+ * **Suspension is not deletion, and the difference is the point.** It writes the same
+ * `signin_blocked_at` that every entry point already re-asks about, and it deliberately does not
+ * anonymise: the profile, the memberships, the messages and any Owner row survive, so the action
+ * is reversible and no club is damaged by it. Ejecting a club Owner by deleting them would breach
+ * domain invariant 1; suspending one breaches nothing.
+ *
+ * **Both halves of revocation, because a per-request check is not a per-connection check.** The
+ * column is what makes the next HTTP request 401 and what the gateway re-asks on every frame that
+ * reloads the context. The outbox event is what drops a socket that is sitting there silently
+ * receiving - a passive connection sends no frames and so re-asks nothing. Getting only the first
+ * is the defect proved on 2026-08-08, where a shut-off account kept receiving club chat in real
+ * time indefinitely.
+ *
+ * Through the outbox rather than an immediate publish, for ADR-0006's reason: the event commits
+ * with the block, so no crash can leave an account suspended with its sockets still attached.
+ *
+ * **Nobody is notified.** They cannot sign in to read an inbox row, and naming a suspension in a
+ * push is the confrontational shape ADR-0021 already rejected for bans. The door tells them.
+ */
+export async function setAccountSuspended(
+  db: Db,
+  ctx: AccessContext,
+  subjectUserId: string,
+  suspended: boolean,
+  opts: { messageId?: string | undefined } = {},
+): Promise<ModerationResult<{ suspended: boolean; changed: boolean }>> {
+  const rows = await db.execute<{
+    id: string;
+    is_platform_moderator: boolean;
+    anonymized: boolean;
+    blocked: boolean;
+  }>(sql`
+    SELECT id::text AS id,
+           is_platform_moderator,
+           (anonymized_at IS NOT NULL) AS anonymized,
+           (signin_blocked_at IS NOT NULL) AS blocked
+      FROM users
+     WHERE id = ${subjectUserId}
+  `);
+  const subject = rows.rows[0];
+  if (!subject) return { ok: false, code: 'not_found' };
+
+  const ref = {
+    userId: subject.id,
+    isPlatformModerator: subject.is_platform_moderator,
+    isAnonymized: subject.anonymized,
+  };
+
+  /*
+   * Two predicates, not one with a flag. Imposing follows a ladder and lifting deliberately does
+   * not - the same asymmetry ADR-0021 chose for club bans, because a wrongful ejection has to be
+   * cheaper to reverse than to perform.
+   *
+   * `not_found` rather than `forbidden` on refusal, matching every other refusal in this API: a
+   * caller with no standing learns nothing, including whether the account exists.
+   */
+  const allowed = suspended
+    ? canSuspendAccount(ctx, ref)
+    : canReinstateAccount(ctx, ref);
+  if (!allowed) return { ok: false, code: 'not_found' };
+
+  // Already in the requested state. Reported rather than repeated, so the audit trail carries
+  // acts rather than clicks.
+  if (subject.blocked === suspended) {
+    return { ok: true, suspended, changed: false };
+  }
+
+  /*
+   * Every channel they can currently reach, captured BEFORE anything changes.
+   *
+   * Read through `accessibleChannelPredicate` rather than a hand-written join, because "which
+   * channels can this person reach" has exactly one definition and writing a seventh copy of it
+   * is the mistake that hid race chat for an entire phase (failure mode 9).
+   */
+  const reachable = suspended
+    ? await db.execute<{ id: string }>(sql`
+        SELECT c.id::text AS id FROM channels c WHERE ${accessibleChannelPredicate(subjectUserId)}
+      `)
+    : { rows: [] as Array<{ id: string }> };
+  const channelIds = reachable.rows.map((row) => row.id);
+
+  await db.transaction(async (tx) => {
+    if (suspended) {
+      if (channelIds.length > 0) {
+        await tx.insert(outbox).values({
+          partitionKey: subjectUserId,
+          eventType: 'account.suspended',
+          payload: { userId: subjectUserId, channelIds },
+        });
+      }
+      await tx.execute(sql`
+        UPDATE users SET signin_blocked_at = now() WHERE id = ${subjectUserId}
+      `);
+      /*
+       * The sessions go too. The block alone is enough - `isSessionUsable` re-asks on every
+       * request - but leaving rows in the table that look valid is the state that made the
+       * 2026-08-08 defect so hard to see. Reinstatement means signing in again, which is the
+       * honest outcome anyway.
+       */
+      await tx.execute(sql`DELETE FROM sessions WHERE user_id = ${subjectUserId}`);
+    } else {
+      await tx.execute(sql`
+        UPDATE users SET signin_blocked_at = NULL WHERE id = ${subjectUserId}
+      `);
+    }
+
+    await tx.insert(moderationActions).values({
+      moderatorId: ctx.userId,
+      action: suspended ? 'suspend' : 'reinstate',
+      subjectUserId,
+      // The report that prompted it, when there is one. Evidence in place of a free-text
+      // reason - see the table's own note, and ADR-0021 for why prose was rejected.
+      messageId: opts.messageId ?? null,
+    });
+  });
+
+  return { ok: true, suspended, changed: true };
+}
+
+/**
+ * Remove a reported message.
+ *
+ * > **The "removing the content" half of guideline 1.2**, and the only place in the product where
+ * > somebody deletes a message they neither sent nor hold admin standing over.
+ *
+ * It is not the participant power `PRD/14` withholds. That matrix says no *participant* may delete
+ * the other's message and it still says so; this is a platform action, gated on
+ * `canRemoveReportedMessage`, scoped to `dm`, and resolved **through `message_reports`** so there
+ * is no door to a conversation nobody complained about.
+ *
+ * A soft delete with a tombstone, exactly like every other delete in the product: domain invariant
+ * 7, and the reason is the same one that makes it a tombstone for an admin - a message vanishing
+ * from the middle of a conversation makes the replies unreadable. Reactions and pin state clear
+ * with it, and the change travels on `msg.update` and bumps the channel revision so a client that
+ * was offline learns about it rather than showing the words indefinitely.
+ */
+export async function removeReportedMessage(
+  db: Db,
+  ctx: AccessContext,
+  messageId: string,
+): Promise<ModerationResult<{ channelId: string; seq: number }>> {
+  const located = await db.execute<{ channel_id: string; seq: number; deleted: boolean }>(sql`
+    SELECT m.channel_id::text AS channel_id, m.seq, (m.deleted_at IS NOT NULL) AS deleted
+      FROM message_reports r
+      JOIN messages m ON m.id = r.message_id
+     WHERE r.message_id = ${messageId}
+     LIMIT 1
+  `);
+  const target = located.rows[0];
+  // No such REPORT, not merely no such message. Same rule as `readReportedContext`.
+  if (!target) return { ok: false, code: 'not_found' };
+
+  const channel = await getChannelRef(db, target.channel_id);
+  if (!channel || !canRemoveReportedMessage(ctx, channel)) {
+    return { ok: false, code: 'not_found' };
+  }
+
+  const seq = Number(target.seq);
+  // Already a tombstone. Answered as success because the outcome the moderator wanted is true,
+  // and without a second audit row for an act that changed nothing.
+  if (target.deleted) return { ok: true, channelId: channel.id, seq };
+
+  /*
+   * The tombstone and the audit row in ONE transaction, which is why `applySoftDelete` takes a
+   * transaction rather than opening its own. An audit written afterwards can be skipped by a
+   * failure between the two, and "the content was removed" with no record of who removed it is
+   * the half that matters least.
+   */
+  const removed = await db.transaction(async (tx) => {
+    const row = await applySoftDelete(tx, channel.id, seq, messageId);
+    if (!row) return null;
+
+    await tx.insert(moderationActions).values({
+      moderatorId: ctx.userId,
+      action: 'remove_message',
+      subjectUserId: null,
+      messageId,
+    });
+    return row;
+  });
+
+  if (!removed) return { ok: false, code: 'not_found' };
+  return { ok: true, channelId: channel.id, seq };
 }
 
 // ---------------------------------------------------------------------------

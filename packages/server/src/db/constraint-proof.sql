@@ -848,4 +848,46 @@ BEGIN
 END
 $ban$;
 
+-- ---------------------------------------------------------------------------
+-- moderation_actions: the record that a report was acted on  (ADR-0023)
+-- ---------------------------------------------------------------------------
+
+SELECT pg_temp.assert_accepted(
+  'moderation actions - a moderator suspends an account',
+  $$INSERT INTO moderation_actions (moderator_id, action, subject_user_id)
+    VALUES ('11111111-1111-4111-8111-111111111111',
+            'suspend',
+            '33333333-3333-4333-8333-333333333333')$$);
+
+-- The verb is closed. An action nobody can render is an audit row that says nothing, and the
+-- three the product performs are the three it should be able to record.
+SELECT pg_temp.assert_rejected(
+  'moderation actions - an action verb nobody implements',
+  $$INSERT INTO moderation_actions (moderator_id, action, subject_user_id)
+    VALUES ('11111111-1111-4111-8111-111111111111',
+            'shadowban',
+            '33333333-3333-4333-8333-333333333333')$$);
+
+-- An action about nobody and nothing is not a record, it is a row. Held by the database rather
+-- than by the handler, because a handler races and can be forgotten.
+SELECT pg_temp.assert_rejected(
+  'moderation actions - an action naming neither a person nor a message',
+  $$INSERT INTO moderation_actions (moderator_id, action)
+    VALUES ('11111111-1111-4111-8111-111111111111', 'suspend')$$);
+
+-- The audit trail must not be orphanable. An account is anonymised and never hard-deleted in
+-- this product, so RESTRICT costs nothing and guarantees the log has no holes - which is the
+-- whole property that makes it evidence rather than a table.
+INSERT INTO users (id, full_name, email) VALUES
+  ('ffffffff-ffff-4fff-8fff-ffffffffffff', 'Fran', 'fran@test.invalid');
+
+INSERT INTO moderation_actions (moderator_id, action, subject_user_id) VALUES
+  ('ffffffff-ffff-4fff-8fff-ffffffffffff',
+   'reinstate',
+   '33333333-3333-4333-8333-333333333333');
+
+SELECT pg_temp.assert_rejected(
+  'moderation actions - deleting a moderator who has acted',
+  $$DELETE FROM users WHERE id = 'ffffffff-ffff-4fff-8fff-ffffffffffff'$$);
+
 ROLLBACK;

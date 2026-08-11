@@ -1541,6 +1541,60 @@ export const moderationReads = pgTable(
   ],
 );
 
+/**
+ * Every time a platform moderator ACTED, as opposed to looked.
+ *
+ * > **The evidence that a report was dealt with.** `moderation_reads` above records who read
+ * > what; this records who did something about it. Apple's guideline 1.2 requires acting on a
+ * > report within 24 hours by removing the content and ejecting the user, and "we did" is a claim
+ * > that needs a row behind it rather than a memory.
+ *
+ * **There is deliberately no free-text reason**, which is ADR-0021's argument carried across from
+ * club bans: a note one moderator writes about somebody who can never read it or answer it is a
+ * place to record something damaging, and under any pressure a required one degrades to one word.
+ * What replaces it is `messageId` - the reported message that prompted the action - which is
+ * stronger evidence than prose and ties the act to the thing that justified it.
+ *
+ * Both user references are `restrict` rather than `cascade`: an account is anonymised and never
+ * hard-deleted in this product, so nothing should be able to orphan an audit row, and a log with
+ * holes in it is not a log. `messageId` is `set null` instead, because deleting a club really does
+ * cascade its messages away and the record of the action must outlive the conversation it was
+ * about.
+ */
+export const moderationActions = pgTable(
+  'moderation_actions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    moderatorId: uuid('moderator_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    /** `suspend` | `reinstate` | `remove_message`, constrained below. */
+    action: text('action').notNull(),
+    /** Whose account it was, for a suspension or a reinstatement. */
+    subjectUserId: uuid('subject_user_id').references(() => users.id, { onDelete: 'restrict' }),
+    /** Which message, for a removal - and which report prompted a suspension. */
+    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      'moderation_actions_known',
+      sql`action in ('suspend', 'reinstate', 'remove_message')`,
+    ),
+    /*
+     * An action about nobody and nothing is not an audit record, it is a row. The constraint is
+     * here rather than in the handler for the reason every other invariant in this file is: a
+     * handler races and can be forgotten, and a constraint cannot.
+     */
+    check(
+      'moderation_actions_has_a_subject',
+      sql`subject_user_id is not null or message_id is not null`,
+    ),
+    index('moderation_actions_recent').on(t.createdAt.desc()),
+    index('moderation_actions_by_subject').on(t.subjectUserId, t.createdAt.desc()),
+  ],
+);
+
 // ---------------------------------------------------------------------------
 // Media  (Phase 3)
 // ---------------------------------------------------------------------------

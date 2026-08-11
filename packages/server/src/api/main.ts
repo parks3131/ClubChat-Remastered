@@ -14,6 +14,10 @@ import { createDb, createPool } from '../db/client.ts';
 import { createKeyedRateLimiter, createRedis } from '../bus/redis.ts';
 import { assertProductionMailer, LoggingMailer, ResendMailer } from '../mail.ts';
 import { initMonitoring } from '../monitoring.ts';
+import {
+  parseModeratorList,
+  reconcilePlatformModerators,
+} from '../domain/platform-moderators.ts';
 import { buildApp } from './app.ts';
 import { S3MediaStore } from '../media/store.ts';
 
@@ -78,6 +82,43 @@ if (process.env['NODE_ENV'] !== 'production') {
 }
 
 const monitor = initMonitoring(config, 'api', logger);
+
+/*
+ * Make the platform-moderator flag agree with the configured list.
+ *
+ * Here rather than in the gateway or the worker because there should be exactly one writer, and
+ * the API is the process that serves the queue this staffs. Idempotent, so several instances
+ * booting together is a no-op rather than a race.
+ *
+ * **Reported and survivable rather than fatal.** A database hiccup at boot should not stop the
+ * API taking traffic, and the flag it failed to write is already whatever it was. But it must not
+ * be silent either: an unreconciled list means the person named in config cannot open the queue,
+ * which presents as "moderation is broken" with nothing anywhere saying why.
+ */
+const moderators = parseModeratorList(config.PLATFORM_MODERATORS);
+try {
+  const outcome = await reconcilePlatformModerators(db, moderators);
+  if (outcome.skipped) {
+    logger.warn(
+      'PLATFORM_MODERATORS is not set, so nobody can read the direct-message report queue. ' +
+        'Reports will be filed and never seen. Set it to a comma-separated list of emails.',
+    );
+  } else {
+    logger.info(
+      {
+        configured: moderators.length,
+        granted: outcome.grant.length,
+        revoked: outcome.revoke.length,
+        // Named, not counted: a typo here grants nobody and is otherwise indistinguishable from
+        // having worked.
+        unmatched: outcome.unmatched,
+      },
+      'platform moderators reconciled',
+    );
+  }
+} catch (error) {
+  monitor.capture(error, 'api.platformModerators.reconcile');
+}
 
 /*
  * Its own Redis connection, not the gateway's: these are separate processes. Failing open is

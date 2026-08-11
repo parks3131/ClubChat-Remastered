@@ -1,5 +1,5 @@
 /**
- * The reported message, and the few either side of it.
+ * The reported message, the few either side of it, and the two things a moderator can do.
  *
  * > **This is the single door to the contents of a private conversation, and opening it is
  * > written down.** Every other screen in the app reads messages a member is entitled to; this
@@ -20,15 +20,21 @@
  * Which is why the load is triggered by arriving on this screen rather than prefetched from the
  * queue: every fetch is a logged look at somebody's private messages, and a speculative one would
  * fill the audit trail with reads no person performed.
+ *
+ * **The actions live here rather than on the queue, deliberately.** Apple's guideline 1.2 asks a
+ * developer to act on a report within 24 hours by removing the content and ejecting the user, and
+ * both of those are judgements that should be made having read the evidence. Offering them on a
+ * list of names would be offering them to somebody who has not looked.
  */
 
+import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { moderationApi } from '../../../../src/api.ts';
 import type { ModerationContext } from '../../../../src/api-types.ts';
 import { formatInstant } from '../../../../src/dates.ts';
 import { color, radius, space, type } from '../../../../src/theme.ts';
-import { Body, DataScreen } from '../../../../src/ui.tsx';
+import { Action, Body, ConfirmDialog, DataScreen } from '../../../../src/ui.tsx';
 import { useLoad } from '../../../../src/use-load.ts';
 
 export default function ReportedContextScreen() {
@@ -85,9 +91,128 @@ export default function ReportedContextScreen() {
             Only these messages were shown. The rest of the conversation is not readable from
             here.
           </Text>
+
+          <Decide data={data} />
         </Body>
       )}
     </DataScreen>
+  );
+}
+
+/**
+ * What a moderator can do about it.
+ *
+ * > **Nothing here re-fetches the context, and that is not an optimisation.** Every call to
+ * > `moderationApi.context` writes an audit row, so reloading after an action would record a
+ * > second look at a private conversation that nobody performed. The two outcomes are tracked in
+ * > local state instead, seeded from what the server already said.
+ */
+function Decide({ data }: { data: ModerationContext }) {
+  const [removed, setRemoved] = useState(data.removed);
+  const [suspended, setSuspended] = useState(data.subjectSuspended);
+  const [asking, setAsking] = useState<'remove' | 'suspend' | 'reinstate' | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  const subject =
+    data.messages.find((message) => message.seq === data.reportedSeq)?.senderName ??
+    'this member';
+
+  /** Run one action, then reflect it locally. See the note above on why nothing reloads. */
+  const run = (work: () => Promise<unknown>, settle: () => void) => {
+    setBusy(true);
+    setFailed(null);
+    void work()
+      .then(() => settle())
+      // A failure has to be visible: a moderation action that silently did nothing is worse
+      // than one that refused, because the queue would read as handled.
+      .catch(() => setFailed('That did not go through. Try again.'))
+      .finally(() => {
+        setBusy(false);
+        setAsking(null);
+      });
+  };
+
+  return (
+    <View style={styles.decide}>
+      <Text style={styles.decideTitle}>Act on this report</Text>
+
+      {removed ? (
+        <Text style={styles.done}>The message has been removed. A tombstone is left in its place.</Text>
+      ) : (
+        <Action
+          label="Remove this message"
+          variant="danger"
+          disabled={busy}
+          onPress={() => setAsking('remove')}
+        />
+      )}
+
+      {suspended ? (
+        <Action
+          label="Reinstate this account"
+          disabled={busy}
+          onPress={() => setAsking('reinstate')}
+        />
+      ) : (
+        <Action
+          label="Suspend this account"
+          variant="danger"
+          disabled={busy}
+          onPress={() => setAsking('suspend')}
+        />
+      )}
+
+      {failed !== null && <Text style={styles.failed}>{failed}</Text>}
+
+      {/*
+        Confirmation-gated, and the body NAMES what is lost - PRD/16 rule 5. In-app rather than
+        a native alert, because `Alert.alert` is a no-op on web and this has to behave the same
+        on all three platforms.
+      */}
+      {asking === 'remove' && (
+        <ConfirmDialog
+          title="Remove this message?"
+          body={`It will be replaced by "This message was deleted" for both people in the conversation. Nothing else in the thread changes, and this is recorded against your name.`}
+          confirmLabel="Remove it"
+          onCancel={() => setAsking(null)}
+          onConfirm={() =>
+            run(() => moderationApi.remove(data.messageId), () => setRemoved(true))
+          }
+        />
+      )}
+
+      {asking === 'suspend' && (
+        <ConfirmDialog
+          title={`Suspend ${subject}?`}
+          body={`They will be signed out everywhere and unable to sign in again until somebody lifts it. Their clubs, messages and memberships are untouched, and this is recorded against your name.`}
+          confirmLabel="Suspend"
+          onCancel={() => setAsking(null)}
+          onConfirm={() =>
+            run(
+              () => moderationApi.setSuspended(data.subjectUserId, true, data.messageId),
+              () => setSuspended(true),
+            )
+          }
+        />
+      )}
+
+      {asking === 'reinstate' && (
+        <ConfirmDialog
+          title={`Reinstate ${subject}?`}
+          body={`They will be able to sign in again. They will have to enter their password, because suspending signed every device out. This is recorded against your name.`}
+          confirmLabel="Reinstate"
+          dismissLabel="Leave suspended"
+          onCancel={() => setAsking(null)}
+          onConfirm={() =>
+            run(
+              () => moderationApi.setSuspended(data.subjectUserId, false),
+              () => setSuspended(false),
+            )
+          }
+        />
+      )}
+    </View>
   );
 }
 
@@ -127,6 +252,15 @@ const styles = StyleSheet.create({
     color: color.textSecondary,
     textAlign: 'center',
     paddingTop: space.sm,
+  },
+
+  // The actions sit below the evidence, so the order of the screen is read-then-decide.
+  decide: {
+    gap: space.sm,
+    paddingTop: space.lg,
     paddingBottom: space.lg,
   },
+  decideTitle: { ...type.headline, color: color.textPrimary },
+  done: { ...type.bodySmall, color: color.textSecondary },
+  failed: { ...type.bodySmall, color: color.error },
 });

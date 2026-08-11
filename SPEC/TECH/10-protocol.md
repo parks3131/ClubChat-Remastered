@@ -139,6 +139,8 @@ GET    /blocks | POST /blocks | DELETE /blocks/:uid
 GET    /moderation/dm-reports                ← platform moderators only, metadata only
 GET    /moderation/reports/:id/context       ← the narrow, audit-logged read
 POST   /moderation/reports/:id/dismiss
+POST   /moderation/reports/:id/remove        ← soft-delete the reported message; dm scope only
+POST   /moderation/users/:uid/suspended      ← body { suspended, messageId? }; reversible ejection
 GET    /moderation/reads                     ← a moderator's own audit trail
 
 GET    /clubs/search?q=                      ← safe projection, non-members only, no paging

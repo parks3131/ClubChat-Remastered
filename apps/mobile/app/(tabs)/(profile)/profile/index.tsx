@@ -13,13 +13,22 @@
  */
 
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Link, Redirect, useRouter } from 'expo-router';
 import { accountApi, ApiError, clubApi } from '../../../../src/api.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { formatDateOfBirth } from '../../../../src/dates.ts';
 import { RemoteImage } from '../../../../src/media-bubble.tsx';
+import { supportMailto } from '../../../../src/support.ts';
 import { pickSquarePhoto, uploadAvatar, UploadError } from '../../../../src/upload.ts';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { color, radius, space, tabBarSpace, type } from '../../../../src/theme.ts';
@@ -210,7 +219,22 @@ export default function ProfileScreen() {
               <View style={styles.linkDivider} />
               <LinkRow icon="lock" label="Privacy Policy" href="/legal/privacy" />
               <View style={styles.linkDivider} />
-              <LinkRow icon="description" label="Terms of Service" href="/legal/terms" last />
+              <LinkRow icon="description" label="Terms of Service" href="/legal/terms" />
+              <View style={styles.linkDivider} />
+              {/*
+                Published contact information, which Apple's guideline 1.2 requires of any app
+                carrying user-generated content. Here as well as in the two legal screens because
+                somebody who needs to reach a person is not going to look for the address inside
+                the Terms.
+              */}
+              <LinkRow
+                icon="mail-outline"
+                label="Contact support"
+                onPress={() =>
+                  void Linking.openURL(supportMailto('ClubChat: support')).catch(() => {})
+                }
+                last
+              />
             </View>
 
             <Pressable

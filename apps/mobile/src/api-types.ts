@@ -468,6 +468,15 @@ export type DmReportRow = {
   seq: number;
   senderId: string;
   senderName: string;
+  /**
+   * What has already been done about this report.
+   *
+   * Both are metadata, so carrying them does not turn the listing into a content surface - the
+   * rule that reading what was said is a separate, logged act is intact. They exist so the queue
+   * can say "removed" and "suspended" instead of offering an action that would change nothing.
+   */
+  senderSuspended: boolean;
+  removed: boolean;
   /** Ordered oldest first, and never empty: a row exists because somebody reported it. */
   reporters: Array<{ userId: string; name: string; createdAt: string }>;
   dismissedAt: string | null;
@@ -487,6 +496,15 @@ export type ModerationContext = {
   reportedSeq: number;
   fromSeq: number;
   toSeq: number;
+  /**
+   * Who sent the reported message, and what has already been done about them.
+   *
+   * From the server rather than worked out here from the window: whether to offer "Suspend" or
+   * "Reinstate" is a rule, and a screen restating one is how two definitions drift apart.
+   */
+  subjectUserId: string;
+  subjectSuspended: boolean;
+  removed: boolean;
   messages: Array<{
     seq: number;
     body: string | null;

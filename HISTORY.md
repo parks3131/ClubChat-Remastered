@@ -13,6 +13,178 @@ Newest first.
 
 ---
 
+## 2026-08-11 (evening) - Somebody on the other end, and something they can do
+
+The moderation queue has had a screen since 2026-08-08 and, before today, no way to put a person
+behind it: `is_platform_moderator` was read in eight places and written in exactly one, a line of
+raw SQL inside a test file. In practice the flag was set by hand against whichever database was in
+front of you.
+
+That was found while reading the specs, and it looked like a small gap. Researching how other
+products appoint moderators turned it into three.
+
+### What the research actually changed
+
+Two useful things came back, and the second reframed the work.
+
+**The queue design is already the industry shape.** WhatsApp's report forwards the last five
+messages plus account metadata to an internal review team. ClubChat serves five either side, plus an
+audit row naming who looked and at what. Nothing needed rethinking, which is worth recording because
+the instinct on finding a gap is to re-examine everything around it.
+
+**Apple's guideline 1.2 asks for four things and we had two.** A report mechanism with a *timely
+response*, the ability to block abusive users, published contact information, and a method for
+filtering objectionable material. Blocking and reporting have been solid since Phase 3.5. The
+operative sentence is the one that did the damage: *act on reports within 24 hours by removing the
+content and ejecting the user.* **We could do neither**, in the one scope that has no admin to do it
+instead. `signin_blocked_at` existed, was respected everywhere, and was written only by
+`deleteOwnAccount`. `dismissReport` explicitly did not delete.
+
+So the appointment gap was the cheapest of three, and on its own it would have produced somebody who
+could watch.
+
+### Appointment is configuration, not a product role
+
+A platform moderator is an operator. Nobody earns it by using ClubChat, and every other operator
+fact here already comes from config - the mail transport, the proxy count, the media signer. So
+`PLATFORM_MODERATORS` is a comma-separated list reconciled against the column when the API boots.
+Revoking is deleting a line rather than remembering an inverse command, and it survives a restore, a
+`db:nuke` and a new environment.
+
+The rule worth stating: **an empty list never revokes.** Reconciling to zero moderators unstaffs the
+queue, which is the exact failure the subsystem exists to prevent - and an absent secret after a
+deploy is indistinguishable from a deliberate empty list while costing far more. Unset warns and
+changes nothing. A configured address matching no account is **named** in the log, because a typo
+grants nobody and otherwise looks exactly like success.
+
+Rejected, and recorded in [ADR-0022](SPEC/decisions/0022-platform-moderators-are-appointed-in-configuration.md):
+a management command (imperative, lost on every reset), first-user-wins (the first account here is a
+club founder, not an operator), and an in-app grant (needs a seed moderator anyway, so it postpones
+the problem rather than solving it, for a team of one).
+
+### Two powers, scoped as narrowly as the guideline allows
+
+**Removing a reported message** is addressed by the *report*, resolved through `message_reports`, so
+there is no door to a conversation nobody complained about. `dm` only - everywhere else that space's
+admins already hold the power. A tombstone like every other delete, clearing reactions and pin
+state, advancing the channel revision so an offline phone learns.
+
+This contradicts nothing in `PRD/14`, and the distinction took a moment to see clearly. That matrix
+says no **participant** may delete the other's message, and it still does. A platform moderator is
+not a participant.
+
+**Suspension** writes the same `signin_blocked_at` every entry point re-asks about, deletes the
+sessions, and publishes a revocation through the outbox. It deliberately does **not** anonymise, and
+that is what makes it the right tool rather than a blunt one: ejecting a club Owner by deleting them
+would breach domain invariant 1, and suspending one breaches nothing. Any moderator can lift it,
+which is [ADR-0021](SPEC/decisions/0021-club-bans-are-harder-to-impose-than-to-lift.md)'s asymmetry
+one layer up.
+
+Two refusals in `canSuspendAccount` are load-bearing rather than tidy. **The system actor**, whose
+block is a security property - it authors every system message and nothing may authenticate as it,
+so reinstating it would be the hole. And **another platform moderator**, because an operator who
+could shut off the other operators could disable everybody able to reverse them.
+
+`applySoftDelete` was extracted so the two authorization paths share one answer to "what does
+deleting a message do". A second hand-written copy of the tombstone, the cleared reactions and the
+revision bump is failure mode 9 with three things to drift.
+
+### The tests that would have passed anyway
+
+All twenty passed first time, which on a security boundary is a reason for suspicion rather than
+satisfaction - HISTORY already records a regression test that passed with the server bug still
+present. So two predicates were deliberately broken and the suite re-run:
+
+| Mutation | Result |
+|---|---|
+| `canRemoveReportedMessage` ignoring `isPlatformModerator` | "refuses a participant" failed, `404` became `200` |
+| `canSuspendAccount` dropping the peer check | "refuses a moderator suspending another" failed |
+
+Both refusals are real. Cheap to do, and the only thing that distinguishes a test that proves a
+refusal from one that asserts a refusal already happening for some other reason.
+
+### Two things the log said that disagreed
+
+Worth keeping, because both readings were true.
+
+The reconcile at boot logged `granted:0, revoked:0` while the database had visibly moved the flag
+from a leftover smoke-test account to the founder's. The answer was in the previous process's log:
+`node --watch` **restarts on a change to `--env-file`**, so appending to `.env` had already
+reconfigured a running API, which did the grant and the revoke. The fresh boot was correctly
+reporting an idempotent no-op.
+
+The same log carried `ReferenceError: parseModeratorList is not defined`, from adding a call in one
+edit and its import in the next while a watcher sat between them. That is the live-reload hazard
+already known for the phone, and it applies identically to the three `--watch` server processes -
+where the evidence is one line in a log nobody is tailing. `AGENTS.md` failure mode 22.
+
+### Two stale claims, found by reading rather than by auditing
+
+`PRD/17` asserted in two places that the moderation queue "has no screen at all" and that `hrefFor`
+returns `undefined` for it "on purpose". Both were false from 2026-08-08: the screens exist and
+`hrefFor` returns `/moderation`. Corrected, and noted where they sat, because this is the second
+time in two days that a stale rule was caught by somebody reading a document for an unrelated
+reason. **A spec nobody has cause to re-read goes stale silently.**
+
+### The suspension that did not stop a sign-in
+
+Found within the hour, by the founder asking a question rather than reporting a bug: *the login page
+should say you have been suspended.* Trying it first, per standing instruction 4, turned a wording
+request into a defect.
+
+```
+existing token after suspension   HTTP 401   correct
+FRESH sign-in as suspended        HTTP 200   a real session token
+sessions in the database                 2   a blocked account had just been issued one
+```
+
+**`signin_blocked_at` is our column and `/api/auth/sign-in/email` is better-auth's route, and the
+two had never met.** A suspended person signed in normally and then met a 401 on every screen - which
+presents as a broken app rather than as a suspension, and leaves session rows behind for an account
+that should have none. The founder had read it as "he cannot log in", and he could; everything
+*after* logging in was failing.
+
+The fix is better-auth's own pattern, read out of the `admin` plugin that implements banning rather
+than out of memory: a `session.create.before` database hook that throws. Three things about it are
+deliberate and none is obvious.
+
+- **It runs after the password is verified.** Checking the address earlier would answer "suspended"
+  to anybody who typed one, which is exactly the account-existence oracle `PRD/03` rule 14 refuses to
+  build on the reset form. Asserted in both directions: a wrong password on a suspended account still
+  answers `INVALID_EMAIL_OR_PASSWORD`.
+- **It refuses by throwing**, so no session is created, rather than deleting one afterwards and
+  leaving a window where a valid token existed.
+- **It reads the column from our own table.** The admin plugin reads `user.banned` off the adapter's
+  user object; ours is not in `additionalFields`, so that object would answer `undefined` forever.
+  That is failure mode 12 - the trap that left revocation silently dead for four phases - and it was
+  one line away from being repeated.
+
+No client change at all: the sign-in screen already renders the server's `message` inline, so the
+wording lives in one place.
+
+**My own tests had the hole.** The reinstate test signs in *after* lifting the suspension, so it
+never once tried signing in while suspended. Two of the three new tests fail without the hook; the
+third passes either way on purpose, guarding against somebody later "fixing" this by checking the
+email first.
+
+### Not built, deliberately
+
+**The filtering bullet.** Guideline 1.2 also asks for a method of filtering objectionable material
+*before* it is posted. That is a change to what happens when somebody presses send rather than a
+moderation feature, and adding a word list quietly would be inventing scope. Recorded in `PRD/17`
+with the options, as the likeliest thing a reviewer asks about given the product will include
+minors.
+
+**A support mailbox that exists.** The address is published in the Terms, the Privacy Policy and on
+Profile, from one constant. `clubchatapp.com` is registered and its sending domain is still
+unverified, so somebody has to confirm a mailbox before submission - a published contact that
+bounces is worse than none.
+
+**A screen for `moderation_actions`.** The audit trail is written and queryable, and nothing shows
+it.
+
+---
+
 ## 2026-08-11 (last) - The header that borrowed a control it could never have
 
 Four rounds on chat's back button, a full revert, and a restore of the half that was right. The

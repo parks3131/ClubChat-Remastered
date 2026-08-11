@@ -74,6 +74,8 @@ never shown to other members.
 | User belongs to no clubs | "Your clubs" empty state |
 | Deleted account's past messages | Remain in history, unattributed |
 | Deleted account tries to sign in | Permanently blocked |
+| **Suspended account tries to sign in** | **Refused at the form, and told plainly that the account is suspended**, with the support address to write to. No session is issued. The refusal comes *after* the password is checked, so a wrong password still answers "invalid email or password" and the form cannot be used to discover whether somebody is suspended - the same reasoning as rule 14. *(Until 2026-08-11 sign-in **succeeded** for a suspended account and every screen then answered 401, which reads as a broken app rather than as a suspension.)* |
+| Suspended account already signed in on a device | Signed out. The suspension deletes their sessions, so the token is dead on the next request, and it publishes a revocation so an open socket stops receiving. The app returns to sign-in when it next verifies |
 | Reset requested for an address with no account | The same confirmation as a registered one, and nothing is sent. Rule 14 |
 | Reset requested for a **deleted** account | Nothing is sent, and no rule is needed for it: deletion released the address (rule 11), so there is no account under it to find |
 | Reset link expired, already used, or tampered with | One message covering all three - "this link has expired or has already been used" - and a way back to request another. Distinguishing them would report whether a token was ever real |

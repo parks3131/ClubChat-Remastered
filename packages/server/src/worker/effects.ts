@@ -1029,6 +1029,35 @@ const onAccountDeleted: EffectHandler = async (event, deps) => {
 };
 
 /**
+ * An account was suspended by a platform moderator.
+ *
+ * > **The half of ejection that a column cannot do.** `signin_blocked_at` makes the next HTTP
+ * > request 401 and is re-asked on every gateway frame that reloads the access context - but a
+ * > socket sitting there *receiving* sends no frames, so it re-asks nothing. Without this publish
+ * > a suspended account carries on being delivered its clubs' conversations in real time until it
+ * > happens to reconnect, which is precisely the defect proved on 2026-08-08 for a deleted one.
+ *
+ * Identical in shape to `onAccountDeleted` and deliberately a separate event rather than reusing
+ * it: the two are different acts, one is reversible, and a log line reading "account deleted" for
+ * a suspension would be a lie in the one place somebody goes to find out what happened.
+ *
+ * No notification and no system message. They cannot sign in to read one, and announcing a
+ * suspension into their former clubs' chats would publish a moderation outcome to an audience
+ * that did not report it.
+ */
+const onAccountSuspended: EffectHandler = async (event, deps) => {
+  const userId = event.payload['userId'] as string | undefined;
+  const channelIds = (event.payload['channelIds'] as string[] | undefined) ?? [];
+  if (!userId || channelIds.length === 0) return;
+
+  await publishRevocation(deps.redis, { userId, channelIds });
+  deps.log('info', 'account suspended, subscriptions revoked', {
+    userId,
+    channels: channelIds.length,
+  });
+};
+
+/**
  * A generic "content was created" effect.
  *
  * Races, events, meetings, news posts and polls all resolve to the same three steps: work out
@@ -1812,6 +1841,13 @@ export const handlers: Record<string, EffectHandler> = {
    * socket kept delivering. See `onAccountDeleted`.
    */
   'account.deleted': onAccountDeleted,
+  /*
+   * Emitted by `setAccountSuspended`. Registered beside its sibling rather than sharing one
+   * entry, because `effect-coverage.test.ts` scans producers for event-type literals and an
+   * unclaimed one parks in silence - which is how three Eboard events lived unhandled for the
+   * life of that space.
+   */
+  'account.suspended': onAccountSuspended,
 
   // The Eboard space. Emitted since the space was built, handled since none of it worked.
   'eboard.join_requested': onEboardJoinRequested,

@@ -22,6 +22,11 @@
  *     another screen rather than being expanded inline. Nothing here prefetches it.
  *  3. **There is no door without a report.** The context read resolves through the report row, so
  *     a moderator cannot reach a conversation nobody complained about.
+ *
+ * **The two outcomes are shown but not offered.** A row says whether the message has been removed
+ * and whether the account is suspended, because a queue that cannot say what has been done invites
+ * the same report to be worked twice. Performing either is on the context screen, behind the
+ * evidence - deciding to eject somebody from a list of names is deciding without looking.
  */
 
 import { useState } from 'react';
@@ -92,8 +97,8 @@ export default function ModerationQueueScreen() {
 /**
  * One report, as metadata.
  *
- * Everything drawn here is who and when. **There is deliberately nothing to read**: the message
- * itself is behind the tap, on the screen whose opening is logged.
+ * Everything drawn here is who, when, and what has already been done. **There is deliberately
+ * nothing to read**: the message itself is behind the tap, on the screen whose opening is logged.
  */
 function ReportCard({ row, onOpen }: { row: DmReportRow; onOpen: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -116,13 +121,24 @@ function ReportCard({ row, onOpen }: { row: DmReportRow; onOpen: () => void }) {
         </View>
       </View>
 
+      {/*
+        What has been done, stated rather than implied. Both are metadata, so showing them does
+        not turn this list into a content surface.
+      */}
+      {(row.removed || row.senderSuspended) && (
+        <View style={styles.outcomes}>
+          {row.removed && <Text style={styles.outcome}>Message removed</Text>}
+          {row.senderSuspended && <Text style={styles.outcome}>Account suspended</Text>}
+        </View>
+      )}
+
       {dismissed && <Text style={styles.reviewed}>Reviewed</Text>}
 
       <View style={styles.actions}>
         {/*
           The wording is the honest one. "Read the messages" says what the tap does, where
           "View" or "Open" would hide that it is a deliberate look at private content that gets
-          written down.
+          written down. It is also where removing and suspending live, for the same reason.
         */}
         <Action label="Read the messages" onPress={onOpen} />
         {!dismissed && (
@@ -169,6 +185,17 @@ const styles = StyleSheet.create({
   name: { ...type.headline, color: color.textPrimary },
   meta: { ...type.bodySmall, color: color.textSecondary },
   reviewed: { ...type.label, color: color.textSecondary, textTransform: 'none' },
+
+  outcomes: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
+  outcome: {
+    ...type.label,
+    textTransform: 'none',
+    color: color.onErrorContainer,
+    backgroundColor: color.errorContainer,
+    borderRadius: radius.sm,
+    paddingHorizontal: space.sm,
+    paddingVertical: 2,
+  },
 
   actions: { gap: space.xs },
 });

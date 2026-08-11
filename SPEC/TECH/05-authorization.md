@@ -64,7 +64,55 @@ const canPinInChannel  = (ctx, ch) => ch.scope === 'dm'
                                     ? isDmParticipant(ctx, ch.scopeId) : isChannelAdmin(ctx, ch)
 const canReadReports   = (ctx, ch) => ch.scope === 'dm'
                                     ? ctx.isPlatformModerator : isChannelAdmin(ctx, ch)
+
+// Acting on a DM report - the two powers ADR-0023 adds. Both are the platform's rather than a
+// participant's, and both are scoped to a message somebody actually reported.
+const canRemoveReportedMessage = (ctx, ch) => ch.scope === 'dm' && ctx.isPlatformModerator
+const canSuspendAccount   = (ctx, subject) => ctx.isPlatformModerator
+                                           && subject.userId !== ctx.userId
+                                           && subject.userId !== SYSTEM_ACTOR_ID
+                                           && !subject.isPlatformModerator   // see below
+                                           && !subject.isAnonymized
+const canReinstateAccount = (ctx, subject) => ctx.isPlatformModerator
+                                           && subject.userId !== SYSTEM_ACTOR_ID
+                                           && !subject.isAnonymized
 ```
+
+**Who holds `isPlatformModerator` is decided in configuration, not in the product.** The
+`PLATFORM_MODERATORS` list is reconciled against the column when the API boots, so the flag is a
+cache of an operator setting rather than something anybody earns by using ClubChat. An empty list
+never revokes, because unstaffing the queue is the failure the whole subsystem exists to prevent.
+See [ADR-0022](../decisions/0022-platform-moderators-are-appointed-in-configuration.md).
+
+**Imposing follows a ladder and lifting does not**, which is
+[ADR-0021](../decisions/0021-club-bans-are-harder-to-impose-than-to-lift.md)'s asymmetry one layer
+up. Two of `canSuspendAccount`'s refusals are load-bearing rather than tidy: **the system actor**,
+whose block is a security property (it authors every system message and nothing may ever
+authenticate as it), and **another platform moderator**, because an operator who could shut off the
+other operators could disable everybody able to reverse them. The operator set changes in
+configuration and nowhere else.
+
+**Sign-in itself is refused**, in a `session.create.before` database hook. That is not where it
+would naturally go, and the position is the whole point: it runs **after** better-auth has verified
+the password, so a caller who does not know the credential is told "invalid email or password" and
+learns nothing - the form is not a suspension oracle. It refuses by throwing, so no session row is
+created rather than one being cleaned up afterwards. And it reads `signin_blocked_at` from **our**
+table rather than the adapter's user object, which returns only the columns declared in
+`additionalFields` and would answer `undefined` forever (failure mode 12).
+
+> Until 2026-08-11 there was no such hook and none of this was true: `/api/auth/sign-in/email` is
+> better-auth's route and had never heard of the column, so a suspended account signed in normally,
+> received a valid token, and met a 401 on every subsequent request.
+
+**Suspension is not deletion**, and that is what makes it the right tool. It writes
+`signin_blocked_at` and nothing else - no anonymisation, no dropped memberships - so ejecting a club
+Owner leaves their club intact and breaches no invariant, and a wrong call is one action to undo.
+Both halves of revocation are required: the column is what the next HTTP request and every
+context-reloading gateway frame re-ask, and an `account.suspended` outbox event is what drops a
+socket that is silently receiving and therefore re-asking nothing.
+
+Every action is recorded in `moderation_actions` with the moderator, the subject and the report that
+prompted it. There is deliberately no free-text reason.
 
 **`canViewProfile` is the rule three documents asserted and no code enforced.** Added 2026-08-08,
 by the security audit. `readProfile` took an access context and never consulted it, so **any

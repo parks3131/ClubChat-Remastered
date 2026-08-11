@@ -389,6 +389,71 @@ export async function setPinned(
   return { ok: true, message: toEnvelope(row, await senderIdentityOf(db, row.senderId)) };
 }
 
+/** A transaction handle, in the shape `races.ts` already names it. */
+export type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+/**
+ * What deleting a message DOES, with no opinion at all about who may do it.
+ *
+ * > **Extracted so there is exactly one answer to "what happens when a message is deleted".**
+ * > There are now two authorization paths into it - the sender or a space admin
+ * > (`softDeleteMessage`), and a platform moderator acting on a reported DM
+ * > (`removeReportedMessage`) - and a second hand-written copy of the body would be failure
+ * > mode 9 with the tombstone, the cleared reactions and the revision bump as the things that
+ * > silently drift apart.
+ *
+ * Takes a caller-supplied transaction rather than opening its own, so a caller with extra work
+ * that must land atomically with the delete - a moderator's audit row - can put it in the same
+ * one. An audit written outside the transaction is an audit a failure can skip.
+ */
+export async function applySoftDelete(
+  tx: DbTx,
+  channelId: string,
+  seq: number,
+  messageId: string,
+): Promise<typeof messages.$inferSelect | null> {
+  /*
+   * The revision this delete happens at.
+   *
+   * **This is the case the whole mechanism exists for.** A tombstone that did not advance
+   * `rev` reached only the clients that were connected at the time; anybody offline kept the
+   * message and its body forever, because sync never looks below the mark. Allocated first, so
+   * the tombstone and its revision commit or roll back as one.
+   */
+  const rev = await nextRevision(tx, channelId);
+  if (rev === null) return null;
+
+  const rows = await tx
+    .update(messages)
+    .set({
+      deletedAt: new Date(),
+      // Pin state is cleared with the message, so Highlights does not keep listing a
+      // tombstone as pinned content.
+      pinned: false,
+      body: null,
+      rev,
+    })
+    .where(and(eq(messages.channelId, channelId), eq(messages.seq, seq)))
+    .returning();
+
+  // Mentions go too: a deleted message must not keep a notification pointing at it
+  // claiming someone was mentioned in text that no longer exists.
+  await tx.delete(messageMentions).where(eq(messageMentions.messageId, messageId));
+
+  // And reactions, which PRD/05 rule 9 requires alongside the pin state. Six people
+  // having laughed at text nobody can read any more is not information, and leaving them
+  // would mean a tombstone that still carries a verdict on its own content.
+  await tx.delete(messageReactions).where(eq(messageReactions.messageId, messageId));
+
+  await tx.insert(outbox).values({
+    partitionKey: channelId,
+    eventType: 'message.deleted',
+    payload: { channelId, seq, messageId },
+  });
+
+  return rows[0] ?? null;
+}
+
 /**
  * Soft delete. The sender, or an admin of that space.
  *
@@ -408,48 +473,9 @@ export async function softDeleteMessage(
     return { ok: false, code: 'forbidden' };
   }
 
-  const updated = await db.transaction(async (tx) => {
-    /*
-     * The revision this delete happens at.
-     *
-     * **This is the case the whole mechanism exists for.** A tombstone that did not advance
-     * `rev` reached only the clients that were connected at the time; anybody offline kept the
-     * message and its body forever, because sync never looks below the mark. Allocated first, so
-     * the tombstone and its revision commit or roll back as one.
-     */
-    const rev = await nextRevision(tx, channel.id);
-    if (rev === null) return null;
-
-    const rows = await tx
-      .update(messages)
-      .set({
-        deletedAt: new Date(),
-        // Pin state is cleared with the message, so Highlights does not keep listing a
-        // tombstone as pinned content.
-        pinned: false,
-        body: null,
-        rev,
-      })
-      .where(and(eq(messages.channelId, channel.id), eq(messages.seq, seq)))
-      .returning();
-
-    // Mentions go too: a deleted message must not keep a notification pointing at it
-    // claiming someone was mentioned in text that no longer exists.
-    await tx.delete(messageMentions).where(eq(messageMentions.messageId, existing.id));
-
-    // And reactions, which PRD/05 rule 9 requires alongside the pin state. Six people
-    // having laughed at text nobody can read any more is not information, and leaving them
-    // would mean a tombstone that still carries a verdict on its own content.
-    await tx.delete(messageReactions).where(eq(messageReactions.messageId, existing.id));
-
-    await tx.insert(outbox).values({
-      partitionKey: channel.id,
-      eventType: 'message.deleted',
-      payload: { channelId: channel.id, seq, messageId: existing.id },
-    });
-
-    return rows[0] ?? null;
-  });
+  const updated = await db.transaction((tx) =>
+    applySoftDelete(tx, channel.id, seq, existing.id),
+  );
 
   if (!updated) return { ok: false, code: 'not_found' };
   return { ok: true, message: toEnvelope(updated, await senderIdentityOf(db, updated.senderId)) };

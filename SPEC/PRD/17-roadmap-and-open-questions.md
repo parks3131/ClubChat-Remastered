@@ -20,6 +20,7 @@
 | **A user interface for most of the product** | Races, polls, calendar, routines, news and Eboard are unreachable from the **app**, though no longer from the API | **Half closed 2026-07-30.** Phase 3.75a built the HTTP surface: 45 routes became 111, with the ~20 missing queries and the six capabilities that had no function of any kind. What is left is Phase 3.75b, the screens - and it is now ordinary client work rather than a screen with nothing to call |
 | **Legal review** of Privacy Policy and Terms | The shipped documents are an in-house first draft, explicitly not legal advice | Must happen before any public release |
 | **iOS distribution** | Blocked on paid developer-program enrolment | Not a code problem |
+| **App Review guideline 1.2, the filtering bullet** | An app with user-generated content must carry *"a method for filtering objectionable material from being posted"*, alongside the report mechanism, user blocking and published contact information | **Three of the four are now done.** Reporting and blocking have shipped since Phase 3.5; acting on a report - removing the message, suspending the account - and a published support address landed 2026-08-11. **Filtering is the one not built, and it is deliberately not being built without a product decision**: it is a change to what happens when somebody presses send, not a moderation feature, and quietly adding a word list would be inventing scope. It is also the likeliest thing a reviewer asks about, given the product will include minors. Options range from a server-side term list at `appendMessage` to nothing at all on the argument that reactive moderation plus instant blocking is proportionate for small, real-name, invite-scoped clubs |
 | ~~**Error monitoring**~~ | | **Done 2026-08-03, server side.** `monitoring.ts` reports from all three processes: 5xx on the API through a `setErrorHandler` that did not previously exist, parked outbox events, failed drain ticks, socket frames, and the rate limiter failing open. Reports to the process logger when `SENTRY_DSN` is absent, so the paths run in development and CI rather than first executing in production. **The mobile client is not covered** - a JS crash on the phone still reaches nobody, and closing that needs `@sentry/react-native` and a native rebuild |
 
 ### Important, not blocking
@@ -205,8 +206,13 @@ Things that are built and not yet proved on every surface they claim to work on.
 > - **`.env.bak` untracked**, and `.gitignore` changed from a list of guessed suffixes to `.env*`
 >   with `!.env.example`. The pattern was the finding; the file only ever held a placeholder.
 >
-> **Still open:** the dependency advisories (triaged below, not fixed) and the platform moderation
-> queue having no screen.
+> **Still open:** the dependency advisories (triaged below, not fixed).
+>
+> ~~the platform moderation queue having no screen~~ **Closed 2026-08-08**, when the queue and the
+> context reader were built. This entry went stale the same day and was still claiming otherwise on
+> 2026-08-11, which is worth noting for the reason the `PRD/15` chip rule was: **a spec nobody has
+> cause to re-read goes stale silently.** It was found by reading the document for an unrelated
+> question, not by an audit.
 >
 > **Dependency advisories, triaged 2026-08-08.** The entry below said "15 moderate, mostly
 > `@expo/config-plugins` transitives". The real number today is **30 - 12 moderate and 18 high** -
@@ -272,8 +278,17 @@ before a public release rather than after one.
    force-unsubscribe - the audit is whether every path that removes access actually publishes that
    revocation.
 6. **Safety surfaces, given minors are in scope.** Report reaches a queue, blocking works, DM
-   reports are metadata-only for platform moderators. The known gap is that the platform moderation
-   queue has no screen at all - `hrefFor` returns `undefined` for it on purpose.
+   reports are metadata-only for platform moderators. *(This read "the known gap is that the
+   platform moderation queue has no screen at all - `hrefFor` returns `undefined` for it on
+   purpose" until 2026-08-11. Both halves were already false: the screens landed on 2026-08-08 and
+   `hrefFor` returns `/moderation`. Corrected per the standing rule that the repo is right and the
+   doc is the bug.)*
+
+   **What was actually missing was everything after reading.** Closed 2026-08-11: a moderator can
+   now be appointed from configuration ([ADR-0022](../decisions/0022-platform-moderators-are-appointed-in-configuration.md)),
+   remove a reported message, and suspend the account that sent it
+   ([ADR-0023](../decisions/0023-a-moderator-may-remove-a-reported-message-and-suspend-an-account.md)).
+   Before that the flag was set by hand in SQL and the only verb in the queue was "dismiss".
 
 #### Explicitly not in scope
 

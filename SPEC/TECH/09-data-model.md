@@ -328,6 +328,28 @@ moderation_reads      id, moderator_id, message_id, channel_id, from_seq, to_seq
                       -- retention job: in a product that will include minors, the record
                       -- of who looked at what is the last thing to prune.
                       -- moderator_id is ON DELETE RESTRICT for the same reason.
+
+moderation_actions    id, moderator_id, action, subject_user_id NULL, message_id NULL, created_at
+                      CHECK (action IN ('suspend','reinstate','remove_message'))
+                      CHECK (subject_user_id IS NOT NULL OR message_id IS NOT NULL)
+                      INDEX (created_at DESC), INDEX (subject_user_id, created_at DESC)
+                      -- What a moderator DID, as opposed to what they looked at. Apple's
+                      -- guideline 1.2 requires acting on a report within 24 hours by removing
+                      -- the content and ejecting the user, and "we did" is a claim that needs
+                      -- a row behind it. See ADR-0023.
+                      -- NO free-text reason column, deliberately, for ADR-0021's argument
+                      -- about club bans: a note about somebody who can never read or answer
+                      -- it is a place to write something damaging, and a required one degrades
+                      -- to one word. message_id carries the report that prompted the action
+                      -- instead, which is stronger evidence than prose.
+                      -- Both user references are RESTRICT: an account is anonymised and never
+                      -- hard-deleted here, so nothing should be able to orphan an audit row.
+                      -- message_id is SET NULL instead, because deleting a club really does
+                      -- cascade its messages away and the record must outlive the conversation.
+                      -- Note this differs from moderation_reads above, whose message_id
+                      -- cascades - which quietly contradicts its own "never pruned" note. Left
+                      -- alone rather than changed in passing; recorded so the difference is a
+                      -- decision rather than an accident.
 ```
 
 ### Infrastructure

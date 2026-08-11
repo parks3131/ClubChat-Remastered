@@ -113,11 +113,20 @@ in two situations - blocked (rule 6) and no shared club left (rule 3) - and both
 conversation fully readable. A permission model that answered both with one membership check would
 have to choose between hiding history and letting a blocked member send.
 
-Note also the row that differs from every other scope: **nobody can delete someone else's message
-in a DM**, because the admin who would hold that power in club chat does not exist here.
-Moderation is blocking plus reporting, not deletion. Pinning is the counter-example worth keeping
-straight: it survives the absence of admins, because what "no admins" removes is
-pinning-as-*authority* and a pin is reference.
+Note also the row that differs from every other scope: **no participant can delete someone else's
+message in a DM**, because the admin who would hold that power in club chat does not exist here.
+Between the two people in the conversation, moderation is blocking plus reporting, not deletion.
+Pinning is the counter-example worth keeping straight: it survives the absence of admins, because
+what "no admins" removes is pinning-as-*authority* and a pin is reference.
+
+> **One person outside the conversation can remove a message in it, and only a reported one.**
+> Added 2026-08-11. A platform moderator acting on a report may remove the reported message and
+> suspend the account that sent it - the "removing the content and ejecting the user" that Apple's
+> guideline 1.2 requires within 24 hours, in the one scope with no admin to do it. The matrix above
+> is unchanged and still describes **participants**, which a platform moderator is not: the power
+> is resolved through `message_reports`, so it cannot reach a conversation nobody complained about,
+> and it leaves a tombstone like every other delete.
+> See [ADR-0023](../decisions/0023-a-moderator-may-remove-a-reported-message-and-suspend-an-account.md).
 
 **Edge cases**
 
@@ -134,6 +143,8 @@ pinning-as-*authority* and a pin is reference.
 | One participant deletes their account | Thread persists, their messages unattributed, as everywhere else |
 | A DM report is filed | Reaches platform moderators only; the other participant is not told |
 | **A platform moderator opens a report** | **They see the reported message and five either side, and the read is logged.** Moderation is not a licence to browse a private conversation |
+| **A platform moderator acts on a report** | They may remove the reported message, leaving a tombstone for both participants, and suspend the sender's account. Both are recorded against their name, and neither reaches a message nobody reported |
+| **A suspended account** | Signed out everywhere and unable to sign in. Their profile, clubs and messages are untouched, because a suspension is reversible and is not a deletion. Any moderator can lift it; they then sign in again with their password |
 
 **Out of scope.** Group DMs of three or more people (that is what a club, race, or Eboard is
 for). DM requests or acceptance flows. Disappearing messages. Voice notes, unless and until

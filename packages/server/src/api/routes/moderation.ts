@@ -13,10 +13,12 @@ import {
   listDmReportQueue,
   listModerationReads,
   readReportedContext,
+  removeReportedMessage,
   reportMessage,
+  setAccountSuspended,
 } from '../../domain/moderation.ts';
 import { getChannelRef } from '../../domain/reads.ts';
-import { authorizeChannel, type AppDeps } from '../plumbing.ts';
+import { authorizeChannel, isUuid, type AppDeps } from '../plumbing.ts';
 
 export function registerModerationRoutes(app: FastifyInstance, deps: AppDeps): void {
   app.post<{ Params: { id: string; seq: string } }>(
@@ -95,6 +97,56 @@ export function registerModerationRoutes(app: FastifyInstance, deps: AppDeps): v
     '/moderation/reports/:id/dismiss',
     async (request, reply) => {
       const result = await dismissReport(deps.db, request.access!, request.params.id);
+      if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+      return result;
+    },
+  );
+
+  /**
+   * Remove a reported message. **The "removing the content" half of Apple's guideline 1.2.**
+   *
+   * A soft delete with a tombstone, like every other delete in the product, and addressed by the
+   * REPORT rather than by the channel and seq - so this cannot become a way to delete a message
+   * in a conversation nobody complained about.
+   */
+  app.post<{ Params: { id: string } }>(
+    '/moderation/reports/:id/remove',
+    async (request, reply) => {
+      const result = await removeReportedMessage(deps.db, request.access!, request.params.id);
+      if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+      return result;
+    },
+  );
+
+  /**
+   * Suspend an account, or lift a suspension. **The "ejecting the user" half of guideline 1.2.**
+   *
+   * A boolean body rather than two verbs, matching `POST /polls/:id/closed` and
+   * `POST /races/:id/pin` - the state is being set, and the two directions carry deliberately
+   * different authority, which the domain applies rather than the router.
+   *
+   * `messageId` is the report that prompted it, optional and recorded in the audit trail. It
+   * stands in for the free-text reason ADR-0021 rejected: evidence rather than prose.
+   */
+  app.post<{ Params: { uid: string } }>(
+    '/moderation/users/:uid/suspended',
+    async (request, reply) => {
+      const body = (request.body ?? {}) as { suspended?: unknown; messageId?: unknown };
+      if (typeof body.suspended !== 'boolean') {
+        return reply.code(400).send({ error: 'invalid_suspended' });
+      }
+      const messageId = typeof body.messageId === 'string' ? body.messageId : undefined;
+      if (messageId !== undefined && !isUuid(messageId)) {
+        return reply.code(400).send({ error: 'invalid_message_id' });
+      }
+
+      const result = await setAccountSuspended(
+        deps.db,
+        request.access!,
+        request.params.uid,
+        body.suspended,
+        { messageId },
+      );
       if (!result.ok) return reply.code(404).send({ error: 'not_found' });
       return result;
     },

@@ -47,6 +47,26 @@ const Env = z.object({
    */
   TRUST_PROXY: z.string().default('false'),
 
+  // --- Platform moderation ---
+  /**
+   * Who may read the direct-message report queue, as a comma-separated list of email addresses.
+   *
+   * > **A platform moderator is an operator rather than a product role**, which is why it is
+   * > configured here beside the proxy count and the mail transport instead of being granted from
+   * > inside the app. Nobody earns this by using ClubChat; somebody holds it because they run the
+   * > service. See `domain/platform-moderators.ts`, and the ADR for the alternatives rejected -
+   * > notably first-user-wins and an in-app grant, both of which need a seed moderator anyway.
+   *
+   * The API reconciles `users.is_platform_moderator` against this at boot: named accounts are
+   * granted it, and accounts holding it that are no longer named lose it. So revoking somebody is
+   * deleting them from this line rather than remembering an inverse command.
+   *
+   * **Optional, and an empty list never revokes.** Unset means "leave the flag alone and warn",
+   * because reconciling to zero moderators would unstaff the queue - and an absent secret after a
+   * deploy looks exactly like a deliberate empty list while costing far more.
+   */
+  PLATFORM_MODERATORS: z.string().optional(),
+
   // --- Error monitoring ---
   /**
    * Where captured errors are sent, or absent.

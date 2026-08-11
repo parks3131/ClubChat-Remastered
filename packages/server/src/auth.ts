@@ -8,8 +8,10 @@
  */
 
 import { betterAuth } from 'better-auth';
+import { APIError } from 'better-auth/api';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { bearer } from 'better-auth/plugins/bearer';
+import { eq } from 'drizzle-orm';
 import type { Db } from './db/client.ts';
 import { accounts, sessions, users, verifications } from './db/schema.ts';
 import { passwordResetMessage, type Mailer } from './mail.ts';
@@ -154,6 +156,54 @@ export function createAuth(
           required: false,
           defaultValue: false,
           input: false,
+        },
+      },
+    },
+    /**
+     * A suspended account cannot sign in, and is told so.
+     *
+     * > **Sign-in used to succeed for a suspended account.** `signin_blocked_at` is our column and
+     * > `/api/auth/sign-in/email` is better-auth's route, so the two had never met: a suspended
+     * > person authenticated normally, was issued a real session token, and then every screen in
+     * > the app answered 401 because `isSessionUsable` refused them on each request. That reads as
+     * > a broken app rather than as a suspension, and it left session rows behind for an account
+     * > that may not have one. Found on 2026-08-11 by trying it, not by reading it.
+     *
+     * Three things about where this sits are deliberate.
+     *
+     *  1. **`session.create.before` runs AFTER the password is verified.** Checking the address
+     *     earlier would answer "suspended" to anybody who types it, turning the form into a test
+     *     for whether an account exists and is in trouble - the same oracle `PRD/03` rule 14 goes
+     *     out of its way to avoid on password reset. You only learn this by proving you are them.
+     *  2. **It refuses by throwing, so no session row is created at all.** Deleting one afterwards
+     *     would leave a window in which a valid token existed.
+     *  3. **The block is read from OUR table, not from the adapter's user object.** better-auth
+     *     returns only the columns declared in `additionalFields`, and this one deliberately is
+     *     not - so asking the user object would read `undefined` forever and the check would never
+     *     fire. That is `AGENTS.md` failure mode 12, which is exactly how revocation was silently
+     *     dead for four phases. The column is ours; the answer comes from us.
+     *
+     * The message is the one the member reads, so it is written for them rather than for a log,
+     * and it points at the published support address that Apple's guideline 1.2 requires.
+     */
+    databaseHooks: {
+      session: {
+        create: {
+          async before(session: { userId: string }) {
+            const rows = await db
+              .select({ blockedAt: users.signinBlockedAt })
+              .from(users)
+              .where(eq(users.id, session.userId));
+
+            if (rows[0]?.blockedAt != null) {
+              throw APIError.from('FORBIDDEN', {
+                message:
+                  'This account has been suspended. Email support@clubchatapp.com if you think that is a mistake.',
+                code: 'ACCOUNT_SUSPENDED',
+              });
+            }
+            return;
+          },
         },
       },
     },

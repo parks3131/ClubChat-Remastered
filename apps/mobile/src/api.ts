@@ -699,6 +699,31 @@ export const moderationApi = {
 
   dismiss: (messageId: string) =>
     apiFetch<unknown>(`/moderation/reports/${messageId}/dismiss`, { method: 'POST', body: {} }),
+
+  /**
+   * Remove the reported message. Apple's guideline 1.2, "removing the content".
+   *
+   * Addressed by the REPORT rather than by channel and seq, which is what stops it becoming a
+   * way to delete anything in a conversation nobody complained about. Leaves a tombstone.
+   */
+  remove: (messageId: string) =>
+    apiFetch<{ channelId: string; seq: number }>(`/moderation/reports/${messageId}/remove`, {
+      method: 'POST',
+      body: {},
+    }),
+
+  /**
+   * Suspend the account, or lift a suspension. Guideline 1.2, "ejecting the user".
+   *
+   * `messageId` is the report that prompted it and rides into the audit trail, standing in for
+   * the free-text reason ADR-0021 rejected. Reversible, and it deliberately does not delete the
+   * account: their clubs and messages are untouched.
+   */
+  setSuspended: (userId: string, suspended: boolean, messageId?: string) =>
+    apiFetch<{ suspended: boolean; changed: boolean }>(
+      `/moderation/users/${userId}/suspended`,
+      { method: 'POST', body: { suspended, ...(messageId ? { messageId } : {}) } },
+    ),
 };
 
 export const accountApi = {

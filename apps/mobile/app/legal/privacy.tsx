@@ -11,8 +11,9 @@
  * > blocker tracked in PRD/17.
  */
 
-import { StyleSheet, Text } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text } from 'react-native';
 import { Body, SectionHeader } from '../../src/ui.tsx';
+import { SUPPORT_EMAIL, supportMailto } from '../../src/support.ts';
 import { color, type } from '../../src/theme.ts';
 
 export default function PrivacyScreen() {
@@ -54,6 +55,19 @@ export default function PrivacyScreen() {
         them would tear holes in other people's conversations.
       </Text>
 
+      <SectionHeader title="Contact" />
+      <Text style={styles.p}>
+        To ask about your data, to report something, or to reach a person about anything on this
+        screen, email us.
+      </Text>
+      <Pressable
+        onPress={() => void Linking.openURL(supportMailto('ClubChat: privacy')).catch(() => {})}
+        accessibilityRole="link"
+        accessibilityLabel={`Email support at ${SUPPORT_EMAIL}`}
+      >
+        <Text style={styles.email}>{SUPPORT_EMAIL}</Text>
+      </Pressable>
+
       <Text style={styles.draft}>
         This is an in-house first draft and is not legal advice.
       </Text>
@@ -63,5 +77,6 @@ export default function PrivacyScreen() {
 
 const styles = StyleSheet.create({
   p: { ...type.body, color: color.textPrimary },
+  email: { ...type.body, color: color.accent },
   draft: { ...type.bodySmall, color: color.textSecondary, fontStyle: 'italic' },
 });
