@@ -715,7 +715,7 @@ three are not, and the three that are not are the ones a release actually waits 
 |---|---|
 | Rate limits everywhere | **Done.** A default bucket on the authenticated scope, named buckets on media intent, DM creation, join requests, invite redeem and reports, and per-IP on sign-in and sign-up |
 | Retention and GC | **Done.** `runMediaGc` and `runRetentionSweep` in the worker's hourly slot. Parked outbox rows are never pruned, deliberately |
-| Error monitoring | **Done server-side.** `monitoring.ts` reports from API, gateway and worker. **The mobile client is not covered** - a JS crash on the phone still reaches nobody |
+| Error monitoring | **Done server-side.** `monitoring.ts` reports from API, gateway and worker. The phone was covered on 2026-08-12 with the same port shape. **Source maps are still owed**, so a production stack trace is minified until an auth token exists |
 | Accessibility | **Not audited.** Controls carry roles and labels as they are built; contrast against WCAG AA, dynamic type, reduced motion and screen-reader order have never been checked |
 | Load test | **Not started.** At 10x projected peak. The two numbers to watch first are the per-channel `last_seq` row lock under concurrent sends, and the access-context query |
 | Parity checklist on iOS, Android and web | **Not run.** **Android has never been run at all in this project**, so no cross-platform claim is made anywhere in these documents |

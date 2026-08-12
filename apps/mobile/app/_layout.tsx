@@ -20,17 +20,32 @@
  * the composer would put two competing bars in the same thumb's reach.
  */
 
+import * as Sentry from '@sentry/react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SessionProvider } from '../src/chat-provider.tsx';
 import { CurrentSpaceProvider } from '../src/current-space.tsx';
 import { FontGate } from '../src/fonts.tsx';
+import { initMonitoring } from '../src/monitoring.ts';
 import { BackTo, STACK_MOTION, motionFor} from '../src/nav.tsx';
 import { PushGate } from '../src/push-gate.tsx';
 import { color, type } from '../src/theme.ts';
 
-export default function RootLayout() {
+/*
+ * At module scope, before any component renders, and deliberately not in an effect.
+ *
+ * A crash during the first render - a bad import, a provider throwing, a font gate failing - has
+ * already happened by the time an effect would run, and those are exactly the crashes nobody can
+ * see today because the app dies before anything is on screen. Starting the reporter here is what
+ * makes it able to report on itself.
+ *
+ * Safe with no DSN configured: it does not initialise the SDK and `capture` falls back to the
+ * console, which is the state every development launch runs in.
+ */
+initMonitoring();
+
+function RootLayout() {
   return (
     <SafeAreaProvider>
       <StatusBar style="dark" />
@@ -145,3 +160,16 @@ export default function RootLayout() {
     </SafeAreaProvider>
   );
 }
+
+/**
+ * Wrapped, which is what catches an uncaught error in the React tree itself.
+ *
+ * `initMonitoring` above arms the reporter for anything that throws in plain code; this covers the
+ * render path, where an error otherwise unmounts the tree and leaves a white screen with nothing
+ * written down anywhere. Between them the two halves cover the crash the founder actually
+ * experiences - the app dies and nobody can say why.
+ *
+ * It is the outermost export on purpose: a wrap further down would miss anything above it,
+ * including the font gate and the session provider, which are the two things that run first.
+ */
+export default Sentry.wrap(RootLayout);

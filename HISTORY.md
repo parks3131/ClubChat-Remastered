@@ -13,6 +13,81 @@ Newest first.
 
 ---
 
+## 2026-08-12 (close, again) - The phone can finally say what killed it
+
+`PRD/17` listed error monitoring as release-blocking and it was closed for the server on
+2026-08-03, with the row saying plainly what was left: *the mobile client is not covered; a JS
+crash on the phone still reaches nobody*. That stayed true through every defect this project found
+on a device, and almost all of them were found the same way - the founder was holding the phone and
+said something looked wrong. This closes it.
+
+`@sentry/react-native`, a `monitoring.ts` shaped exactly like the server's, `Sentry.wrap` on the
+root layout for render crashes, and `capture` on three failures that were previously a console line
+nobody was attached to.
+
+### Two things that would have led me wrong, and one that did
+
+**`expo install` pinned 7.11, not npm's 8.22.** The docs and the registry both say 8.x is current;
+Expo SDK 57's compatibility table says otherwise, and it is the one that matters. Non-negotiable 1
+exists for exactly this, and the trap here is subtler than "read the docs" - the docs were read,
+and they described a version this project may not use. Same shape as the TypeScript 6 pin in
+`AGENTS.md` 5.1: npm `latest` is not this repo's latest.
+
+**Web support needed checking rather than assuming**, because a platform-only module at module
+scope has taken this app's entire web bundle down twice (`TECH/14` pitfall, and again with
+`expo-media-library`). It turns out `@sentry/react-native` handles `react-native-web` itself since
+SDK 5.16, so no guard was needed - but that was established before writing the import, not after.
+
+**And then the web bundle broke anyway.** `UnableToResolveError: ./tracing/spanstatus.js` from a
+nested `@sentry/core`. The obvious readings were a Metro resolver gap or a version conflict, and
+the obvious fixes - patch `metro.config.js`, or platform-guard the import - would both have been
+changes to working code.
+
+**The file was on disk. I checked.** Metro had been running since before the install, so its file
+map had never seen the new packages. A restart with `--clear` was the whole answer. The general
+form is this repo's oldest hazard wearing new clothes: **a long-lived dev process serving a stale
+view of the world**, which `AGENTS.md` failure mode 15 records as reporting your new work as
+broken. Here it reported a dependency as broken instead, which is the same lie one layer out. The
+tell was the same one that always works: the thing it says is missing, is not missing.
+
+### What reports, and what deliberately does not
+
+Three sites, each a real defect signal:
+
+- **`chat.foregroundReconcile`** - the most valuable line in the client. Pitfall 25 is this
+  project's dangerous class: a phone that backgrounds and resumes can permanently miss messages
+  with no error and no indication. This reconcile *is* the cure, and on 2026-08-12 we learned the
+  cure had never once run on iOS. A cure that fails silently is the original bug with extra steps.
+- **`chat.authRejected`** - the 2026-08-09 defect that signed a member out holding a token the API
+  was answering `200` for.
+- **`cache.openFailed`** - SQLite falling back to memory, which costs a whole session of offline
+  chat and says nothing.
+
+**A failed initial connect and a failed badge read are deliberately NOT reported.** This app is
+built to work offline, so both fire constantly and normally, and wiring them would bury the three
+above. That is ADR-0018's argument about `parked > 0`: a signal that is rare by construction is
+worth alerting on, and one that fires in ordinary use trains people to ignore the channel.
+
+### The warning that would have taught people to ignore warnings
+
+First working version returned early from `initMonitoring` when no DSN was set, which left
+`Sentry.wrap` holding an uninitialised client and warned `App Start Span could not be finished` on
+**every launch**. Benign, and exactly the kind of line that sits above a real one until nobody reads
+either. `enabled` now carries the on/off inside `Sentry.init` rather than an early return - which is
+also the honest reading of the module's own second property: development runs the production path
+with the transport switched off, rather than a different path that has never run.
+
+### Verified
+
+1177 tests, typecheck, runtime parse, em-dash lint. The web bundle rebuilt and served (2,766
+modules), the native module linked through `pod install`, and the app launched on the physical
+iPhone with the socket up and no errors. **Still owed: source maps**, which need an org slug, a
+project slug and an auth token, so a production trace is minified until that pass. The DSN is also
+still empty, so today the reporter writes to the console - which is a supported state and not the
+feature.
+
+---
+
 ## 2026-08-12 (close) - You run the races you are in
 
 The founder described the race model plainly, and it was not the one in the spec: an admin outside

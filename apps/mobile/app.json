@@ -45,7 +45,8 @@
           "savePhotosPermission": "Allow ClubChat to save photos from your chats to your photo library.",
           "photosPermission": "Allow ClubChat to access your photos so you can post them in a chat."
         }
-      ]
+      ],
+      "@sentry/react-native"
     ],
     "scheme": "clubchat",
     "extra": {

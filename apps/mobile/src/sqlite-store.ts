@@ -28,6 +28,7 @@ import {
  * run them against a real SQLite engine. This file is the driver half: it does the I/O and owns
  * no SQL of its own beyond the statements below.
  */
+import { capture } from './monitoring.ts';
 import { jsonListColumn, pendingMigrations, SCHEMA } from './sqlite-schema.ts';
 
 async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
@@ -421,6 +422,13 @@ export function openMessageStore(): Promise<{ store: MessageStore; persistent: b
           'Chat will not be readable offline in this session.',
         error,
       );
+      /*
+       * Reported, because the fallback is what makes this survivable and also what makes it
+       * silent. The member keeps a working app and quietly loses offline chat for the session -
+       * the whole of Phase 3 - and today the only trace is a console line on a device nobody is
+       * attached to. A migration that fails on one OS version would look exactly like this.
+       */
+      capture(error, 'cache.openFailed');
       return { store: new InMemoryMessageStore(), persistent: false };
     }
   })();

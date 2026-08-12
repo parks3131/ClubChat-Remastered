@@ -30,6 +30,7 @@ import { randomUUID } from 'expo-crypto';
 import { AuthRejectedError, ChatClient, type SocketLike } from '@clubchat/client-core';
 import type { ChannelState } from '@clubchat/shared';
 import { config } from './config.ts';
+import { capture } from './monitoring.ts';
 import { unregisterForPush } from './push.ts';
 import { openMessageStore } from './sqlite-store.ts';
 import { sessionStore, verifySession } from './session.ts';
@@ -146,6 +147,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           (error.code === 'invalid_token' || error.code === 'signin_blocked')
         ) {
           console.warn('[chat] the gateway rejected this session, signing out', error.code);
+          /*
+           * Reported, because this is the one refusal that ENDS somebody's session, and on
+           * 2026-08-09 it did that to a member whose token the API was answering 200 for. The
+           * cause was a race in the gateway's frame handling, and it was invisible until the
+           * founder said he had been signed out. If it ever recurs, this is the line that says so.
+           *
+           * The code travels; the token does not. There is nothing here a report may not carry.
+           */
+          capture(error, 'chat.authRejected', { code: error.code });
           await sessionStore.clear();
           setUserId(null);
           setChannels([]);
@@ -225,7 +235,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           setChannels(client.channels);
           bump();
         })
-        .catch((error) => console.warn('[chat] foreground reconcile failed', error));
+        .catch((error) => {
+          console.warn('[chat] foreground reconcile failed', error);
+          /*
+           * **The most valuable report in the client**, and the reason this whole module exists.
+           *
+           * `TECH/14` pitfall 25 is the dangerous bug class in this project: a phone that
+           * backgrounds and resumes can permanently miss messages with no error and no
+           * indication. This reconcile is the cure. A cure that fails silently is the state the
+           * app was in for months on iOS - `/sync` answered 200 and reconciled nothing, and the
+           * socket hid it - so a failure here has to reach somebody.
+           */
+          capture(error, 'chat.foregroundReconcile');
+        });
     };
 
     const subscription = AppState.addEventListener('change', onAppStateChange);
