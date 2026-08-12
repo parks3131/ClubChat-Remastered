@@ -70,12 +70,38 @@ you are in`. Two of them were the interesting ones:
 - The **HTTP-level test** attempts each management route as an off-roster admin and watches it 404.
   The matrix proves the predicate; this proves every route asks it.
 
-### Left undone, deliberately
+### The client defect was the exact opposite of the one predicted
 
-**The client still shows the manage-from-outside screens.** The server refuses correctly, so nothing
-is exploitable, but a race hub reached by an off-roster admin still offers controls that now answer
-404. `PRD/09` rule 5 and `PRD/15`'s race tree are rewritten; the screens are not. Recorded in
-ADR-0027 as the follow-up rather than left to be discovered.
+The server change shipped with a recorded follow-up: *the app still offers manage controls that now
+answer 404*. That prediction was wrong, and the way it was wrong is the useful part.
+
+Those controls are gated on `viewer.isManager`, which **the server computes**. The moment
+`isRaceManager` gained its roster term they hid themselves - no client change needed, which is the
+same payoff as the seventeen call sites and for the same reason: the client asks rather than
+derives.
+
+What actually broke was the inverse. **The hub's only link to the roster lived inside that manage
+block**, so roster-gating management hid a capability this change deliberately keeps. The server
+went on granting the read, `GET /races/:id/members` went on answering `200`, and nothing in the app
+could reach it. An off-roster admin lost the roster entirely.
+
+The fix is `canReadRoster` as its own field on the race payload rather than something the client
+infers from `isManager`. They are now different questions with different answers, and the comment
+at the call site says so, because the next person to write `isManager && ...` around a read control
+will reintroduce it.
+
+**The shape worth keeping:** a permission narrowing hides the controls it should hide *and* any
+control that happened to be grouped with them. The first is the change; the second is a regression
+with no error, no failing test and no log line - the capability simply stops being reachable. Look
+for what else lived in the block you just gated, not only at what the gate now denies.
+
+Also removed: a "You manage this" badge on that hub, which could no longer be true there - the hub
+renders only for somebody off the roster, and managing now requires being on it.
+
+**ADR-0027's follow-up row was corrected rather than left standing.** An ADR is immutable about its
+decision and its rejected alternatives, both untouched here; a "follow-up needed" cell is a to-do
+list, and leaving a false claim in it would be worse than editing it. Same-day correction has
+precedent - ADR-0024's status line was amended the day it was written.
 
 ### Verified
 

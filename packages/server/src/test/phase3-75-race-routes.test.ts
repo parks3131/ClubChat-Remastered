@@ -266,6 +266,20 @@ describe('race routes: you run the races you are in', () => {
     expect(roster.body.members.map((m: { userId: string }) => m.userId)).toContain(member.userId);
     expect(roster.body.pendingRequests).toBeNull();
 
+    /*
+     * And the race read TELLS them they may, which is a separate failure from being allowed to.
+     *
+     * The hub's only route to the roster used to sit inside its `isManager` block, so when
+     * management became roster-gated the screen hid the manage controls and took the read link
+     * with them - the server went on granting the read and nothing in the app could reach it.
+     * `canReadRoster` is its own field for that reason, and this asserts the two answers differ.
+     */
+    const detail = await as(admin, 'GET', `/races/${raceId}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.race.viewer.canReadRoster).toBe(true);
+    expect(detail.body.race.viewer.isManager).toBe(false);
+    expect(detail.body.race.viewer.hasAccess).toBe(false);
+
     // And is still refused the race's own content, exactly as before.
     expect((await as(admin, 'GET', `/races/${raceId}/car-groups`)).status).toBe(404);
     expect((await as(admin, 'GET', `/channels/${channelId}/messages`)).status).toBe(404);

@@ -1014,6 +1014,15 @@ export type RaceDetail = {
   viewer: {
     hasAccess: boolean;
     isManager: boolean;
+    /**
+     * May read the roster, which is not the same question as `isManager` any more.
+     *
+     * An admin outside the race reads it and changes nothing; a race member reads it too. Sent
+     * as its own field because the client must not infer "can look" from "can act" - that
+     * inference is what hid the roster from every off-roster admin the moment management became
+     * roster-gated.
+     */
+    canReadRoster: boolean;
     requestPending: boolean;
     pinned: boolean;
     channelId: string | null;
@@ -1108,6 +1117,17 @@ export async function readRace(
       viewer: {
         hasAccess,
         isManager: isRaceManager(ctx, race),
+        /**
+         * Reading the roster, which since 2026-08-12 is the one race capability an admin keeps
+         * from outside the race (ADR-0027).
+         *
+         * **It has to be its own field rather than being inferred from `isManager`.** They are
+         * now different questions with different answers, and the hub's only route to the roster
+         * used to sit inside its `isManager` block - so when management became roster-gated, the
+         * screen correctly hid the manage controls and took the read link with them, leaving a
+         * capability the server grants with nothing in the app able to reach it.
+         */
+        canReadRoster: canReadRaceRoster(ctx, race),
         requestPending: row.request_pending,
         pinned: row.pinned,
         channelId: hasAccess ? row.channel_id : null,

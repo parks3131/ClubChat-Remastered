@@ -150,7 +150,17 @@ export type RaceDetail = {
   memberCount: number;
   viewer: {
     hasAccess: boolean;
+    /** Runs this race: an admin who is ALSO on its roster (ADR-0027). */
     isManager: boolean;
+    /**
+     * May read the roster, and possibly change nothing in it.
+     *
+     * **Never infer this from `isManager`.** An admin outside the race can look and not act, and
+     * writing `isManager && ...` around the roster link is precisely the bug this field exists to
+     * close: the link lived inside the manage block, so roster-gating management hid a capability
+     * the server still grants.
+     */
+    canReadRoster: boolean;
     requestPending: boolean;
     pinned: boolean;
     channelId: string | null;

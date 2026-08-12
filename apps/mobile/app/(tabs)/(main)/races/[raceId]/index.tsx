@@ -72,9 +72,14 @@ export default function RaceHubScreen() {
             <Text style={styles.title}>{race.name}</Text>
             {/* Absent for an ordinary group. Not drawn rather than drawn blank. */}
             {race.raceDate !== null && <Text style={styles.date}>{race.raceDate}</Text>}
+            {/*
+              No "You manage this" badge any more, and its absence is a consequence rather than a
+              tidy-up: this hub renders only for somebody OFF the roster, and since ADR-0027
+              managing requires being on it. The badge could no longer be true here, and a control
+              that cannot fire is a claim about a state the product no longer has.
+            */}
             <View style={styles.badges}>
               <Badge label={`${race.memberCount} going`} tone="muted" />
-              {viewer.isManager && <Badge label="You manage this" tone="accent" />}
             </View>
 
             <SectionHeader title="Meet Information" />
@@ -126,14 +131,26 @@ export default function RaceHubScreen() {
             )}
 
             {/*
-              A manager with no roster row gets exactly one thing: a way into the roster to manage
-              others. Not the race itself - rule 5.
+              Two different questions, and they were one block until 2026-08-12.
+
+              `isManager` now means an admin who is ALSO on this roster (ADR-0027), and this hub
+              only renders for somebody who is NOT - a member is redirected into chat above. So
+              the manage block is unreachable here by construction, and what remains is the one
+              capability an admin keeps from outside the race: reading the roster.
+
+              > **Splitting them is the whole fix.** The roster link used to live inside the
+              > manage block, so roster-gating management hid it too - the server went on granting
+              > the read and nothing in the app could reach it. A control gated on "can act" when
+              > the rule is "can look" fails silently in the direction nobody checks.
             */}
-            {viewer.isManager && (
+            {viewer.canReadRoster && (
               <>
-                <SectionHeader title="Manage" />
-                <Row title="Roster" subtitle="Approve, add and remove" href={`/races/${raceId}/roster`} />
-                <Row title="Meet Information" subtitle="Edit all five fields" href={`/races/${raceId}/meet`} />
+                <SectionHeader title="Roster" />
+                <Row
+                  title="Who is going"
+                  subtitle={`${race.memberCount} on the roster`}
+                  href={`/races/${raceId}/roster`}
+                />
               </>
             )}
           </Body>
