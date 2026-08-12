@@ -76,8 +76,19 @@ The **"Kinetic Performance System"**, extracted verbatim from the Stitch export'
   also what obliges **every scrolling screen** to reserve `tabBarSpace()` from the same token the
   bar is built from - a screen that does not has a last row that can never be scrolled clear.
 - **The Chats list is flat**, not carded: rows sit directly on the app background, and unread is an
-  accent timestamp plus an accent count badge rather than a tinted row. Every other list still uses
-  cards; unifying them is a deliberate follow-up rather than an oversight.
+  accent timestamp plus an accent count badge rather than a tinted row. **The notification inbox
+  went flat on 2026-08-12**, and did it as a `flat` parameter on the shared `Row` rather than as a
+  second row implementation - so the follow-up below is now half done and has somewhere to land.
+
+  The inbox is the case that shows why flat is not only a finish. Its unread rows are *tinted*, and
+  a card insets its tint, so consecutive unread rows read as separate blocks with gaps between
+  them; full-bleed rows meet, and a run of them becomes one band. That is a property of the
+  variant rather than of the caller, which is why it belongs in the component.
+
+  Every remaining list still uses cards; unifying them is a deliberate follow-up rather than an
+  oversight. **Whatever goes flat next owes a pressed wash**: flat removes the card edge and the
+  chevron, so without one a tap is acknowledged only by the next screen arriving, and on a slow
+  open the row reads as dead. `Row` now carries that with the variant.
 
 **Light mode only** today; there is no dark palette. The token module is a flat named export
 specifically so a dark variant can be swapped in without touching call sites.

@@ -19,10 +19,10 @@
  *
  * **The read treatment, which is v1's and is load-bearing rather than decorative.**
  *
- *  1. An unread row is *tinted* - `accentSoft` fill, `accentSoftBorder` edge, a filled accent icon
- *     well, full-strength body text and a dot. A read row is a plain white card with a neutral
- *     well and secondary text. The difference has to be visible at a glance across a long list,
- *     which a small "New" badge on the right is not.
+ *  1. An unread row is *tinted* - `accentSoft` fill, a filled accent icon well and full-strength
+ *     body text. A read row sits on the plain app background with a neutral well and secondary
+ *     text. The difference has to be visible at a glance across a long list, which a small "New"
+ *     badge on the right is not.
  *  2. **Discrete notifications are marked read on BLUR, not on focus.** Marking on arrival flips
  *     every row light before the reader can perceive that any of them were new, which defeats the
  *     entire point of having an unread state. They stay tinted for the whole visit and are light
@@ -32,6 +32,23 @@
  *     never by looking at this list. Glancing at an inbox is not reading 48 messages.
  *
  * Rules 2 and 3 are the ones that get "simplified" away by anybody who reads only rule 1.
+ *
+ * ---
+ *
+ * **The rows are flat and full-bleed, and the list draws its own title.** Both changed 2026-08-12.
+ *
+ * Flat is not a restyle for its own sake: a carded list insets its rows and tints *inside* that
+ * inset, so two adjacent unread rows read as two tinted cards separated by a gap. Tinting edge to
+ * edge makes a run of unread rows one continuous band, which is what says "everything above this
+ * line is new" at a glance. `TECH/13` had already recorded the Chats list going flat and called
+ * unifying the rest a follow-up; this is that follow-up, and it went into `Row` as a parameter
+ * rather than becoming a second row implementation.
+ *
+ * The title moved out of the navigator's branded header and into the body, matching the Chats
+ * list. `PRD/15` used to say Calendar and Notifications keep the branded header "because they have
+ * no nested stack of their own to host one" - true about where a header *can* live, and not a
+ * reason it has to be that one. A destination naming itself in the page reads as the page's own
+ * name rather than as chrome above it.
  */
 
 import { useCallback, useState } from 'react';
@@ -39,13 +56,13 @@ import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, View } f
 import { MaterialIcons } from '@expo/vector-icons';
 import { Redirect, useFocusEffect } from 'expo-router';
 import { inboxApi } from '../../src/api.ts';
-import type { InboxRow } from '../../src/api-types.ts';
+import type { InboxPicture, InboxRow } from '../../src/api-types.ts';
 import { useSession } from '../../src/chat-provider.tsx';
 import { timeAgo } from '../../src/dates.ts';
 import { hrefFor } from '../../src/notification-href.ts';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { color, radius, space, tabBarSpace, type } from '../../src/theme.ts';
-import { DataScreen, Row } from '../../src/ui.tsx';
+import { Avatar, DataScreen, Row } from '../../src/ui.tsx';
 import { useLoad, usePullToRefresh } from '../../src/use-load.ts';
 
 /**
@@ -197,6 +214,17 @@ export default function NotificationsScreen() {
 
   return (
     <View style={styles.flex}>
+      {/*
+        The screen's own title, in the body rather than in a header bar.
+
+        The top inset is added here rather than baked into the style, for the same reason the tab
+        bar adds it at its own call site: this number is about the design and that one is about
+        the hardware. 59pt on this phone, 0 in a browser.
+      */}
+      <View style={[styles.header, { paddingTop: insets.top + space.sm }]}>
+        <Text style={styles.title}>Notifications</Text>
+      </View>
+
       <DataScreen
         load={load}
         isEmpty={(data) => data.rows.length === 0 && older.length === 0}
@@ -248,11 +276,63 @@ function IconWell({ icon, unread }: { icon: IconName; unread: boolean }) {
 }
 
 /**
+ * What sits at the left of a row: a face, or a glyph.
+ *
+ * `PRD/12` rule 2c - **a picture when the row is about a place or a person, a glyph when it is
+ * about a thing that happened.** Which of the two a type gets is decided once, on the server,
+ * from the mapping in `@clubchat/shared`; this only draws whichever arrived. A `null` picture is
+ * an ordinary answer rather than a failure: the glyph tier never has one, and a subject that has
+ * since been deleted resolves to none.
+ *
+ * > **Forced to a circle, which is this surface's one sanctioned exception to `DESIGN/02` rule
+ * > 2.** Everywhere else a group is a rounded square and the shape answers person-versus-group
+ * > before a word is read. Here every row is a sentence that already names its own subject, so the
+ * > shape has nothing left to say and a column of alternating silhouettes costs more than it
+ * > carries. Passed explicitly, because an override is legible at the call site.
+ */
+function RowFace({
+  picture,
+  icon,
+  unread,
+}: {
+  picture: InboxPicture | null;
+  icon: IconName;
+  unread: boolean;
+}) {
+  if (picture === null) {
+    return (
+      <View style={[styles.face, unread && styles.faceUnread]}>
+        <IconWell icon={icon} unread={unread} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={[styles.face, unread && styles.faceUnread]}>
+      <Avatar
+        name={picture.name}
+        image={picture.image}
+        // Decides the FALLBACK, not the shape: a group draws a glyph, a person their initial.
+        kind={picture.kind}
+        shape="circle"
+        tintId={picture.tintId}
+        size={40}
+      />
+    </View>
+  );
+}
+
+/**
  * One row.
  *
  * Every row navigates to its target and **fails gracefully if access was lost** - a race you were
  * removed from between the notification and the tap. A target with no screen stays a plain row
  * rather than becoming a dead link.
+ *
+ * > **No trailing dot.** The tint, the filled well and the full-strength body already say unread
+ * > three times over, and on a full-bleed row a dot at the right edge has no edge to sit against.
+ * > It was decorative rather than a channel: it was hidden from the screen reader, which is told
+ * > by the label below instead - so removing it takes nothing away from anybody.
  */
 function InboxRowView({ row }: { row: InboxRow }) {
   const href = hrefFor(row.target);
@@ -268,22 +348,25 @@ function InboxRowView({ row }: { row: InboxRow }) {
       <Row
         title=""
         highlighted
-        left={<IconWell icon="chat-bubble" unread />}
+        flat
+        left={<RowFace picture={row.picture} icon="chat-bubble" unread />}
         {...(href ? { href } : {})}
-        accessibilityLabel={`${row.count} unread messages in ${row.channelName} chat. Open it`}
+        accessibilityLabel={`${row.count} unread ${row.count === 1 ? 'message' : 'messages'} in ${row.channelName} chat. Open it`}
         body={
           <>
             {/* The count and the chat's name carry the weight; the joining words do not. */}
             <Text style={styles.body}>
               <Text style={styles.bodyStrong}>{row.count} unread</Text>
-              {' messages in '}
+              {/* One message is the commonest case in a quiet club, not an edge case, so the
+                  plural is chosen rather than assumed. The Chats list already does this for its
+                  own count and this row read "1 unread messages" until 2026-08-12. */}
+              {row.count === 1 ? ' message in ' : ' messages in '}
               <Text style={styles.bodyStrong}>{row.channelName}</Text>
               {' chat'}
             </Text>
             <Text style={styles.time}>{timeAgo(row.createdAt)}</Text>
           </>
         }
-        right={<View style={styles.dot} accessibilityElementsHidden importantForAccessibility="no" />}
       />
     );
   }
@@ -294,7 +377,14 @@ function InboxRowView({ row }: { row: InboxRow }) {
     <Row
       title=""
       highlighted={unread}
-      left={<IconWell icon={ICON_BY_TYPE[row.type] ?? 'notifications'} unread={unread} />}
+      flat
+      left={
+        <RowFace
+          picture={row.picture}
+          icon={ICON_BY_TYPE[row.type] ?? 'notifications'}
+          unread={unread}
+        />
+      }
       {...(href ? { href } : {})}
       accessibilityLabel={`${unread ? 'Unread. ' : ''}${row.body}${href ? '. Open' : ''}`}
       body={
@@ -312,18 +402,28 @@ function InboxRowView({ row }: { row: InboxRow }) {
           </View>
         </>
       }
-      right={
-        unread ? (
-          <View style={styles.dot} accessibilityElementsHidden importantForAccessibility="no" />
-        ) : undefined
-      }
     />
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
-  list: { padding: space.md, gap: space.sm },
+
+  /*
+   * The title block. Horizontal padding only - the rows are full-bleed and pay their own gutter,
+   * so a padded list would put the title and the row text on two different left edges.
+   */
+  header: { paddingHorizontal: space.md, paddingBottom: space.md },
+  title: { ...type.title, color: color.textPrimary },
+
+  /*
+   * No horizontal padding and no gap: both belong to the row now.
+   *
+   * This is what lets consecutive unread rows meet, forming one tinted band rather than a stack of
+   * separated tinted blocks. A `gap` here would reintroduce exactly the seam the flat variant
+   * exists to remove.
+   */
+  list: { paddingTop: space.xs },
   empty: {
     ...type.body,
     color: color.textSecondary,
@@ -350,7 +450,31 @@ const styles = StyleSheet.create({
   },
   wellUnread: { backgroundColor: color.accent },
 
-  dot: { width: 8, height: 8, borderRadius: radius.pill, backgroundColor: color.accent },
+  /*
+   * The box both tiers sit in, so a picture row and a glyph row line up.
+   *
+   * The border is always drawn and only its COLOUR changes - transparent when read, accent when
+   * unread. Toggling `borderWidth` instead would resize the box, so every row would shift two
+   * points sideways the moment the inbox was marked read, in a list where read and unread rows
+   * are stacked directly on top of each other.
+   */
+  face: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  /*
+   * Unread, for a photograph.
+   *
+   * Rule 2b fills the icon well to say unread, and a picture cannot be filled without hiding the
+   * thing it is there to show. The ring says it around the outside instead, so both tiers signal
+   * the same fact with the same weight by different means (`PRD/12` rule 2e).
+   */
+  faceUnread: { borderColor: color.accent },
 
   decision: {
     ...type.label,

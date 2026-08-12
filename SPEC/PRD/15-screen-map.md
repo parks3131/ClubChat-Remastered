@@ -311,8 +311,11 @@ announced to a screen reader, because that is a different question from whether 
 **Gone as of 2026-08-02**: that screen became the Chats list, which draws its own "Chats" title
 alongside its two header actions, and a branded bar above it would be a second header saying
 something else. The word survives on sign-in, which is the one screen that has to say what the
-app is. Calendar and Notifications carry the branded header because they
-have no nested stack of their own to host one. Inside a club, the header title is instead the
+app is. **Calendar** carries the branded header because it has no nested stack of its own to host
+one, and because its title is about *context* rather than about the page - it names the active club
+(`Ridgeway Calendar`). **Notifications draws its own title in the body instead**, like the Chats
+list, from 2026-08-12: it is a plain list that can say its own name, and a branded bar above a page
+that already names itself is two headers. Inside a club, the header title is instead the
 club's own avatar and name, **tappable through to the club profile from every screen in the
 club**. Chat and Highlights replace the header entirely with the glass-blur one.
 

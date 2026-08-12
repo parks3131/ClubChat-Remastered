@@ -47,6 +47,24 @@ does not have.
    **This rule has been broken four separate times**, each time by a surface that drew its own
    face instead of using this one. It is the reason for rule 3.
 
+   2a. **The notification inbox is the one sanctioned exception: every picture there is a circle,
+   including a club's.** Added 2026-08-12, at the founder's request, and it is an exception rather
+   than a breach for a reason worth stating - otherwise it is indistinguishable from the four
+   accidents above.
+
+   The shape earns its keep everywhere else by answering person-versus-group **before a word is
+   read**: a roster and a club list are otherwise the same column of discs. That is not the
+   situation here. Every row in the inbox is a full sentence naming its own subject - "Molly Jesson
+   asked to join Arlington", "100 unread in Paper Running Club" - so the shape is restating
+   something the row has already said, and what it costs is a column of alternating silhouettes
+   down a list whose whole job is to be scanned. Consistency wins where the information is already
+   carried.
+
+   Note what this does **not** license. It is one surface, named here, reached through the explicit
+   `shape` override rule 3 already allows. It is not permission to pass `shape` wherever a square
+   looks unfamiliar, and the accessibility note below still applies everywhere the name is not
+   beside the face.
+
 3. **Roundness is derived, never passed alongside the kind.** `shape` defaults from `kind`, so
    naming the kind has already named the shape. They were independent props until 2026-08-11 and
    they drifted in both directions: the Chats list said `group` and got a circle, while the chat

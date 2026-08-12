@@ -618,6 +618,7 @@ export function Row({
   left,
   right,
   highlighted = false,
+  flat = false,
   accessibilityLabel,
   navigates,
 }: {
@@ -638,6 +639,16 @@ export function Row({
   right?: ReactNode;
   /** The singled-out treatment: an unread notification, a selected choice. */
   highlighted?: boolean;
+  /**
+   * Full-bleed and uncarded: no edge, no radius, no chevron, and the gutter on the row rather
+   * than on the list.
+   *
+   * The reason it is a parameter and not a second component is what `highlighted` does under it.
+   * A carded highlighted row is a tinted card with a gap above and below; a flat one tints edge
+   * to edge, so a run of unread rows becomes one continuous band. That is a property of the
+   * variant, not of the caller, and it cannot be expressed by a caller passing a style.
+   */
+  flat?: boolean;
   accessibilityLabel?: string;
   /**
    * Whether the tap goes somewhere, when the answer is not what the props suggest.
@@ -648,13 +659,30 @@ export function Row({
    */
   navigates?: boolean;
 }) {
-  // Navigable rows carry a chevron; rows that only hold a value do not. The design uses it as the
-  // affordance that a row goes somewhere, so it follows the presence of a destination rather than
-  // being decoration a caller opts into.
-  const navigable = navigates ?? (href !== undefined || onPress !== undefined);
+  /*
+   * Navigable rows carry a chevron; rows that only hold a value do not. The design uses it as the
+   * affordance that a row goes somewhere, so it follows the presence of a destination rather than
+   * being decoration a caller opts into.
+   *
+   * **A flat row never draws one.** The chevron belongs to the carded list, where it sits against
+   * an edge; on a full-bleed row it reads as a stray character at the end of a sentence. What
+   * replaces it as the "this is a control" cue is the pressed wash below, which is why that is not
+   * optional for the variant.
+   */
+  const navigable = !flat && (navigates ?? (href !== undefined || onPress !== undefined));
 
-  const content = (
-    <View style={[styles.row, highlighted && styles.rowHighlighted]}>
+  const content = (pressed: boolean) => (
+    <View
+      style={[
+        styles.row,
+        highlighted && styles.rowHighlighted,
+        flat && styles.rowFlat,
+        // Order matters: the tint has to sit over the unread fill rather than under it, or a
+        // pressed unread row shows no change at all.
+        flat && highlighted && styles.rowFlatHighlighted,
+        flat && pressed && styles.rowFlatPressed,
+      ]}
+    >
       {/* A plain View for the same reason `right` is - the row owns the gesture. */}
       {left !== undefined && <View>{left}</View>}
       <View style={styles.rowMain}>
@@ -688,7 +716,7 @@ export function Row({
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel ?? title}
       >
-        <Pressable>{content}</Pressable>
+        <Pressable>{({ pressed }) => content(pressed)}</Pressable>
       </Link>
     );
   }
@@ -699,7 +727,7 @@ export function Row({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? title}
     >
-      {content}
+      {({ pressed }) => content(pressed)}
     </Pressable>
   );
 }
@@ -1616,6 +1644,47 @@ const styles = StyleSheet.create({
     gap: space.md,
   },
   rowHighlighted: { backgroundColor: color.accentSoft, borderColor: color.accentSoftBorder },
+  /*
+   * The flat variant: no card, no edge, no radius, and full-bleed to the screen.
+   *
+   * The gutter moves from the LIST to the row, which is the whole point rather than a detail. A
+   * carded list insets its rows and tints inside that inset, so two adjacent unread rows read as
+   * two tinted cards with a gap between them. Flat rows tint edge to edge, so a run of unread ones
+   * is a single continuous band - which is what the design asks for and what a card can never do.
+   *
+   * `TECH/13` records the Chats list going flat first and calls unifying the rest a deliberate
+   * follow-up. This is that follow-up, as a parameter rather than a second implementation.
+   */
+  rowFlat: {
+    backgroundColor: 'transparent',
+    borderRadius: 0,
+    borderWidth: 0,
+    /*
+     * A full step on the scale rather than the half-step this started at.
+     *
+     * The flat row lost the card's own padding, and 12 left the rows closer together than the
+     * carded lists they sit beside - legible, but tighter than anything else in the product. At
+     * the gutter value the row breathes and the tinted unread band reads as a block rather than
+     * as a stripe. Raised 2026-08-12, on the founder seeing it on the phone.
+     */
+    paddingVertical: space.md,
+    paddingHorizontal: space.md,
+  },
+  /*
+   * A wash while the finger is down, and it is not optional here.
+   *
+   * Flat removes every other sign that a row is a control - no card edge, no chevron - so without
+   * this a tap is acknowledged only by the next screen arriving, and on a slow open the row reads
+   * as dead. The Chats list learned this when it went flat; the same reasoning, in one place now.
+   */
+  /*
+   * The unread fill, restated for the flat variant.
+   *
+   * `rowHighlighted` also sets `borderColor`, which is meaningless once `rowFlat` has taken the
+   * border away - so this carries the fill alone and leaves the edge gone.
+   */
+  rowFlatHighlighted: { backgroundColor: color.accentSoft },
+  rowFlatPressed: { backgroundColor: color.cardRaised },
   rowMain: { flex: 1, gap: space.xs },
   rowRight: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   rowTitle: { ...type.headline, color: color.textPrimary },

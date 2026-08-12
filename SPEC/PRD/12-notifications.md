@@ -68,9 +68,54 @@ message would flood the feed with exactly the per-message noise rule 8 rejects. 
    read, no matter what had just happened.
 
    2b. **Unread is a whole-row treatment, not a corner badge.** An unread row is tinted, with an
-   accent-filled icon well, full-strength body text and a dot; a read row is a plain card with a
-   neutral well and secondary text. It has to be legible at a glance down a long list, which a
-   small badge on the right is not.
+   accent-filled icon well and full-strength body text; a read row sits on the plain background
+   with a neutral well and secondary text. It has to be legible at a glance down a long list, which
+   a small badge on the right is not.
+
+   **The rows are full-bleed, so a run of unread ones is one continuous band** rather than a stack
+   of separately tinted cards. That is the reason this list is not carded: a card insets its tint,
+   so consecutive unread rows are broken up by the gaps between them, and the thing worth seeing at
+   a glance is where the new ones stop. *(Changed 2026-08-12. The rule previously also named a dot
+   at the right of each unread row; it was removed with the card, having been decorative rather
+   than a channel - it was hidden from screen readers, which are told by the row's own label.)*
+
+   2c. **A row shows the face of what it is about, when what it is about is a place or a person.
+   It keeps a glyph when it is about a thing that happened.** That split is the whole rule, and it
+   is why the club's picture belongs on "100 unread in Paper Running Club" and would be wrong on
+   "new poll": the first row is about a room you can walk into, the second is about an object
+   somebody made. A face on the second implies an author the row does not have.
+
+   | Tier | Rows | What it shows |
+   |---|---|---|
+   | **The conversation** | unread messages, caught up, an announcement, a mention | the space's own picture - club main chat the club's, a race the race's, the Eboard space the board's, **a direct message the other person's** |
+   | **The space, or your standing in it** | a race created, a request approved, being added, a role changed | that space's picture |
+   | **The person** | the three join requests | the requester's face - you are deciding about a person, not about a room |
+   | **The thing** | a poll, an event, a meeting, a news post, a car group needing an Incharge | its glyph, exactly as before |
+
+   **Removal and a denied request wear the face of the space they NAME, not of the club around
+   it.** They still *point* at the club, because the space they name is precisely the one the
+   reader can no longer open (rule 6a) - but the picture and the sentence have to agree. *(Shipped
+   the other way on 2026-08-12 and reported from a phone within the hour: "Parks removed you from
+   Cougars Invitational" beside the running club's picture, which tells somebody in pictures that
+   they lost the club. It is rule 6a's own false alarm, moved from the words to the image.)* A row
+   written before that carries no way to identify the space, and shows a **glyph** rather than
+   guessing the club - saying nothing beats saying something wrong.
+
+   **A report shows the channel's picture and never the reported member's** - the
+   row already withholds their name and the text of what they said, and a face would give back
+   what the words withhold.
+
+   2d. **Every picture in this list is a circle, including a club's and a race's.** This is the one
+   surface in the product where a group is not drawn as a rounded square, and it is a deliberate
+   exception rather than a drift - see [`DESIGN/02`](../DESIGN/02-avatar.md). The shape normally
+   carries person-versus-group before a word is read; in this list every row is a sentence that
+   already says which it is, so the shape has no work left to do and consistency down the column
+   is worth more.
+
+   2e. **An unread row rings its picture in the accent.** Rule 2b's unread treatment fills the icon
+   well, and a photograph cannot be filled - so the tint and the full-strength text survive as they
+   are and the ring replaces the fill. A glyph row keeps the filled well, so the two tiers signal
+   unread with the same weight by different means.
 
 3. **Chat-unread rows are never cleared by opening the inbox.** Only by opening that chat.
 

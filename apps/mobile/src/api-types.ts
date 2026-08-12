@@ -378,6 +378,25 @@ export type EboardRoster = {
  * rendered a real row. Which is precisely the warning at the top of this file: a hand-written type
  * over somebody else's response is an assertion, not a check.
  */
+/**
+ * The face a notification row wears, resolved by the server at read time.
+ *
+ * `PRD/12` rule 2c. Mirrors `InboxPicture` in `packages/server/src/domain/inbox.ts` - read that
+ * before changing this one, per failure mode 16: this file restates the server's response shapes
+ * by hand, and every crash in that class was a plausible guess that typechecked cleanly.
+ *
+ * `kind` is still needed even though this list draws every picture as a circle: it decides the
+ * **fallback**, which is a glyph for a group and an initial for a person.
+ */
+export type InboxPicture = {
+  name: string;
+  /** A media id, or null - which is the common case rather than an error. */
+  image: string | null;
+  kind: 'person' | 'group';
+  /** The id the fallback tint is derived from, so a rename does not change the colour. */
+  tintId: string;
+};
+
 export type InboxRow =
   | {
       kind: 'notification';
@@ -389,6 +408,8 @@ export type InboxRow =
       read: boolean;
       /** Present on a decided request, so the admin keeps a record of what they decided. */
       decision?: 'approved' | 'denied';
+      /** Null for the glyph tier, and for a subject that has since been deleted. */
+      picture: InboxPicture | null;
       createdAt: string;
     }
   | {
@@ -399,6 +420,7 @@ export type InboxRow =
       channelName: string;
       count: number;
       target: NotificationTarget;
+      picture: InboxPicture | null;
       createdAt: string;
     };
 

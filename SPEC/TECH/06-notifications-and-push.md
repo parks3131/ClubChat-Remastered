@@ -92,6 +92,38 @@ New capability this unlocks (formerly [Roadmap and open questions](../PRD/17-roa
 and notification preferences** are a single check inside the audience function, rather than
 something with nowhere to live.
 
+### The picture beside a row is joined, never stored
+
+[Notifications](../PRD/12-notifications.md) rule 2c gives most inbox rows the face of whatever they
+are about. **That subject is resolved when the row is read, and never written into `params`.**
+
+This is ADR-0013's own argument one field further on. `params` is a record of the moment the event
+happened; a picture is a fact about the subject *now*. Storing it would freeze a club's old avatar
+into every notification ever sent about it, and changing a picture would need a migration over
+history - which is exactly the retrofit that ADR closed off for the body and the target. It is the
+same reason `sender_name` is joined onto a message rather than stored on it
+([Message flows](03-message-flows.md)).
+
+Two things fall out of that, and both are cheap:
+
+- **The conversation tier costs nothing new.** `channelDisplayImage()` already exists, already
+  branches per scope, and already carries the fix for the trap that matters here - a race with no
+  picture must fall through to **its own initial**, never to the club's face, which a `COALESCE`
+  silently gets wrong because the names it coalesces are all `NOT NULL` while the pictures are not.
+  The inbox's unread rows already join the name; the picture is the column beside it.
+- **The discrete tier resolves per subject kind, batched.** Which kind a type resolves against is
+  **one exhaustive mapping in `packages/shared`**, so the server's resolver and the client's
+  renderer cannot disagree about it and a new notification type is a compile error rather than a
+  row with a blank circle. That is failure mode 9's rule applied before the second copy exists.
+
+**A subject that has been deleted, or that the reader has lost access to, resolves to nothing and
+the row draws its fallback.** [Notifications](../PRD/12-notifications.md) rule 6 already requires
+tapping such a row to fail gracefully; drawing it must fail the same way, and a missing picture is
+not an error state - it is the ordinary case, since most clubs have no picture at all.
+
+**Avatars are identity media on stable public URLs** ([Media pipeline](07-media-pipeline.md)), so
+none of this adds an authorization hop. That is the single fact that makes the whole change small.
+
 **Per-conversation mute was built in Phase 3.5** and applies to every scope, not only to DMs.
 `channel_mutes` had existed since Phase 1 for exactly this; the mute command is what finally
 writes to it. It suppresses the **push only** - the notification row is still written and the

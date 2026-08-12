@@ -13,6 +13,124 @@ Newest first.
 
 ---
 
+## 2026-08-12 (last) - The inbox learns whose face it is talking about
+
+Three changes to the notification list, asked for in that order: make it flat, make the rows
+taller, and give the rows the picture of whatever they are about. The third is the one with a
+server half.
+
+### The row that was a card
+
+The founder's mockup showed full-bleed rows where the app had cards. That looked like a finish
+and was not. **A card insets its tint**, so two adjacent unread rows are two tinted blocks with a
+gap between them; full-bleed rows meet, and a run of unread ones becomes one continuous band. The
+thing worth seeing at a glance in an inbox is where the new ones stop, and a card cannot draw it.
+
+It went into the shared `Row` as a `flat` parameter rather than becoming a second row component,
+which is `TECH/13`'s recorded follow-up finally starting. Two things came with it and neither is
+decoration: a **pressed wash**, because flat removes the card edge and the chevron so a tap is
+otherwise acknowledged only by the next screen arriving, and **no chevron**, which on a full-bleed
+row reads as a stray character at the end of a sentence.
+
+The title moved out of the navigator's branded header into the body, matching the Chats list.
+`PRD/15` had said Calendar and Notifications keep the branded header "because they have no nested
+stack of their own to host one" - true about where a header *can* live, and not a reason it has to
+be that one.
+
+The dot went. It was hidden from screen readers, so it was decoration rather than a channel.
+
+### Whose face, and the rule that decides
+
+The ask was pictures instead of glyphs, with an exception the founder stated himself: not on polls
+and events, "because you don't wanna put the profile pictures of the club". That exception is the
+whole rule, and writing it down first is what made the rest fall out:
+
+> **A row shows the picture of what it is about when that is a place or a person, and keeps a
+> glyph when it is about a thing that happened.**
+
+A club's face belongs on "100 unread in Paper Running Club" and would be wrong on "new poll",
+because the second is an object somebody made rather than a room you can walk into.
+
+Four questions the mapping raised that the ask had not covered, all settled before any code:
+
+- **A join request is about a person**, so it wears the requester's face rather than the club's -
+  which also makes the three request types visually distinct from everything else, and those are
+  the rows a glance must not dismiss.
+- **A report shows the channel and never the reported member.** The row already withholds their
+  name and their words because it can land on a lock screen; a face hands back what the words
+  withhold.
+- **Everything is a circle**, including a club - the one sanctioned exception to `DESIGN/02` rule
+  2, argued in that file rather than quietly broken. The shape earns its keep elsewhere by
+  answering person-versus-group before a word is read; here every row is a sentence naming its own
+  subject, so it is restating something already said.
+- **Unread rings the face** instead of filling the well, because a photograph cannot be filled
+  without hiding the thing it is there to show.
+
+The mapping lives in `packages/shared` as `notificationSubject`, exhaustive over the union with no
+`default`, so a twenty-first type is a compile error rather than a row with a blank circle. It is
+deliberately a **second function beside `notificationTarget` rather than a field on it**: they
+answer different questions and disagree more than they agree. A join request points at the roster
+and shows the requester; a report points at the reports tab and shows the channel. Deriving one
+from the other would be right about half the catalogue.
+
+**The picture is joined at read time and never written into `params`** - ADR-0013's argument one
+field further on. `params` records the moment the event happened; a picture is a fact about the
+subject now, so storing it would freeze a club's old avatar into every notification ever sent
+about it.
+
+### The test that had to have three different pictures
+
+`channel-access.ts` already carried the warning, from the Chats list: a race and an Eboard channel
+both carry a club id, so **resolving a chat row against its club still shows a picture, and it is
+the wrong one**. One picture in a fixture cannot tell the two implementations apart. So the test
+sets a club picture and a race picture and asserts the race row shows the race's - and its
+neighbour asserts the glyph tier resolves to nothing, because a resolver that gave everything a
+face would pass the first test and put a club's avatar on "new poll".
+
+### Then the founder removed somebody, and the picture disagreed with the sentence
+
+Reported within the hour of the pictures shipping: "Parks removed you from Cougars Invitational",
+beside the **running club's** picture.
+
+That was my call and it was wrong. I had raised it as an open question - `member_removed` and
+`request_denied` carry `scopeName` and deliberately **no `scopeId`** (`PRD/12` rule 6a), because
+the space they name is precisely the one the reader can no longer open - and proposed the club's
+face as the fallback, and it was agreed to in the abstract. Seen on a phone it is obviously wrong:
+rule 6a exists to stop a row telling somebody they lost the club when they lost a race, and the
+picture had reintroduced exactly that, one layer up. **An agreement about a described behaviour is
+not an agreement about the thing on screen.**
+
+The fix could not reuse `scopeId`, because that field's *absence* is a statement - it says there is
+nowhere to go. So the rows gained `subjectId`, named so it cannot become a destination, carrying
+identity alone. The target is unchanged and there is a test asserting so.
+
+**A row written before the fix shows a glyph rather than guessing the club.** The complaint was a
+picture that disagreed with the sentence; an old row falling back to the club would reproduce it
+precisely. Saying nothing beats saying something wrong.
+
+### Two red screens, both mine, both the same mistake
+
+`AGENTS.md` failure mode 22 - a watcher runs a half-finished edit - twice in one afternoon, on a
+phone in the founder's hand. `ReferenceError: Property 'flat' doesn't exist`, then
+`ReferenceError: Property 'subjectPicture' doesn't exist`. Both times a file was saved using a
+name that the *next* edit would declare. Both times I had written the correct ordering rule in the
+same conversation immediately beforehand.
+
+The entry is worth keeping because the rule as stated is not enough. "Imports before usage" is
+easy to hold; **"a declaration and its first use go in one write"** is the version that would have
+prevented both, and the difference only matters when the declaration is a `const` in the same file
+rather than an import at the top.
+
+### Verified
+
+1175 tests, typecheck across four workspaces, the runtime parse gate, and the em-dash lint. The
+device carried the rest: the founder confirmed the faces on his phone, found the removal defect
+there, and confirmed the fix afterwards. **Neither the flat rows nor the wrong picture was findable
+from the diff** - the first needed a screenshot, and the second needed somebody to remove a real
+person from a real race.
+
+---
+
 ## 2026-08-12 (close, again) - The second copy I wrote before finding the first
 
 Two things on a member's profile card: the clubs the two of you are both in, and a picture you

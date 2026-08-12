@@ -123,6 +123,24 @@ const decided = {
   decidedByName: z.string().optional(),
 };
 
+/**
+ * The id of the space whose FACE a row wears. Identity only, never a destination.
+ *
+ * **Deliberately not `scopeId`, and the distinct name is the whole point.** `member_removed` and
+ * `request_denied` carry `scopeName` and no `scopeId` because the space they name is precisely the
+ * one the reader can no longer open (`PRD/12` rule 6a) - the absence is a statement, and reusing
+ * that field for a picture would quietly turn it into "here is somewhere to go".
+ *
+ * These two rows still point at the club, exactly as they did. What changed on 2026-08-12 is that
+ * they no longer wear the club's *face* while naming a race: "Parks removed you from Cougars
+ * Invitational" beside the running club's picture is the same false alarm rule 6a exists to
+ * prevent, one layer up. Reported from the phone, the day the pictures shipped.
+ *
+ * Optional because rows written before that date have neither field, and must keep rendering
+ * years later. Their fall-back is a glyph rather than a guess - see `notificationSubject`.
+ */
+const subjectPicture = { subjectId: Uuid.optional() };
+
 export const notificationParams = {
   club_join_request: club.extend({ requesterName: z.string(), requesterId: Uuid, ...decided }),
   race_join_request: club.extend({
@@ -147,6 +165,7 @@ export const notificationParams = {
   request_denied: club.merge(actor).extend({
     scope: ChannelScope,
     scopeName: z.string(),
+    ...subjectPicture,
   }),
 
   member_added: club.merge(actor).extend({
@@ -173,6 +192,7 @@ export const notificationParams = {
   member_removed: club.merge(actor).extend({
     scope: ChannelScope.optional(),
     scopeName: z.string().optional(),
+    ...subjectPicture,
   }),
   role_changed: club.merge(actor).extend({ newRole: ClubRole }),
 
@@ -414,6 +434,138 @@ export function notificationTarget(n: {
       return { kind: 'race_car_groups', raceId: p['raceId']! };
     case 'chat_caught_up':
       return { kind: 'chat', channelId: p['channelId']! };
+  }
+}
+
+/**
+ * Whose face a notification wears, or `null` for the ones that keep a glyph.
+ *
+ * `PRD/12` rule 2c: **a row shows the picture of what it is about when that is a place or a
+ * person, and a glyph when it is about a thing that happened.** A club's face belongs on "100
+ * unread in Paper Running Club" and would be wrong on "new poll", because the second is an object
+ * somebody made rather than a room you can walk into.
+ *
+ * > **This lives beside `notificationTarget` on purpose, and it is deliberately a second function
+ * > rather than a field on the first.** They answer different questions - where a tap goes, and
+ * > whose face is drawn - and they disagree more often than they agree. A join request points at
+ * > the *roster* and shows the *requester*; a report points at the reports *tab* and shows the
+ * > *channel*. Deriving one from the other would be right about half the catalogue and silently
+ * > wrong about the rest.
+ *
+ * The server resolves this to a picture at read time and the client draws it. **Both ends read
+ * this one mapping** rather than each carrying its own copy of "which types get a face", which is
+ * the hand-copied-predicate class (`AGENTS.md` failure mode 9) closed before the second copy
+ * exists.
+ *
+ * Exhaustive over the union with no `default`, so adding a nineteenth type is a compile error here
+ * rather than a row that silently draws a blank circle.
+ */
+export type NotificationSubject =
+  | { kind: 'channel'; channelId: string }
+  | { kind: 'club'; clubId: string }
+  | { kind: 'race'; raceId: string }
+  | { kind: 'eboard'; eboardId: string }
+  | { kind: 'user'; userId: string };
+
+export function notificationSubject(n: {
+  type: NotificationType;
+  params: Record<string, unknown>;
+}): NotificationSubject | null {
+  const p = n.params as Record<string, string & number>;
+  switch (n.type) {
+    /*
+     * The person, not the room.
+     *
+     * You are deciding about somebody, so their face is the useful thing on the row - and it is
+     * what makes the three request types visually distinct from everything else in the list,
+     * which suits the one row type a glance must not dismiss (rule 4).
+     */
+    case 'club_join_request':
+    case 'race_join_request':
+    case 'eboard_join_request':
+      return { kind: 'user', userId: p['requesterId']! };
+
+    // The space you got into, or were added to. Same scope switch as the target above, because
+    // here the two genuinely do agree: the row is about the space, and it opens it.
+    case 'request_approved':
+    case 'member_added':
+      switch (p['scope'] as unknown as string) {
+        case 'race':
+          return { kind: 'race', raceId: p['scopeId']! };
+        case 'eboard':
+          return { kind: 'eboard', eboardId: p['scopeId']! };
+        default:
+          return { kind: 'club', clubId: p['clubId']! };
+      }
+
+    case 'role_changed':
+      return { kind: 'club', clubId: p['clubId']! };
+
+    /*
+     * These two name a space they cannot OPEN, and the face has to match the words anyway.
+     *
+     * They carry no `scopeId` on purpose (rule 6a) - the absence says there is nowhere to go, and
+     * the row still points at the club. But wearing the club's picture while the sentence says
+     * "removed you from Cougars Invitational" is a second false alarm on top of the one that rule
+     * exists to prevent: the reader is told, in pictures, that they lost the club. So identity
+     * comes from `subjectId`, which is not a destination and is named so it cannot become one.
+     *
+     * Three cases, and the last is the one worth being careful about:
+     *
+     * - **the club itself** - `clubId` is the right picture and always present;
+     * - **a race or the board, with a `subjectId`** - that space's own face;
+     * - **a race or the board, with none** - a row written before 2026-08-12. **A glyph, not the
+     *   club.** The whole complaint was a picture that disagreed with the sentence, and an old row
+     *   guessing the club would reproduce it exactly; a glyph says nothing rather than something
+     *   wrong.
+     */
+    case 'request_denied':
+    case 'member_removed': {
+      const scope = p['scope'] as unknown as string | undefined;
+      if (scope === 'race') return p['subjectId'] ? { kind: 'race', raceId: p['subjectId'] } : null;
+      if (scope === 'eboard') {
+        return p['subjectId'] ? { kind: 'eboard', eboardId: p['subjectId'] } : null;
+      }
+      // Undefined scope is a row from before 2026-08-05, which always meant the club.
+      return { kind: 'club', clubId: p['clubId']! };
+    }
+
+    case 'race_created':
+      return { kind: 'race', raceId: p['raceId']! };
+
+    /*
+     * The conversation's own picture - the club's, the race's, the board's, or in a DM the other
+     * person's. Resolved from the CHANNEL rather than from the club, because those four are
+     * different pictures and only the channel knows which one this is.
+     */
+    case 'announcement':
+    case 'mentioned':
+    case 'chat_caught_up':
+    case 'dm_message':
+      return { kind: 'channel', channelId: p['channelId']! };
+
+    /*
+     * The channel's picture, and **never the reported member's**.
+     *
+     * The row already withholds their name and the text of what they said, because it can land on
+     * a lock screen before anybody has looked at it (`PRD/05` rule 10). A face would hand back
+     * exactly what the words are withholding.
+     */
+    case 'message_reported':
+      return { kind: 'channel', channelId: p['channelId']! };
+
+    /*
+     * The glyph tier: a thing that happened rather than a place or a person. A poll, an event, a
+     * meeting, a post, and a car group that needs a new Incharge - which is about a car inside a
+     * race, and keeps the car.
+     */
+    case 'poll_created':
+    case 'poll_closing_soon':
+    case 'event_created':
+    case 'meeting_created':
+    case 'news_post_created':
+    case 'car_group_incharge_left':
+      return null;
   }
 }
 

@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   notificationParams,
+  notificationSubject,
   notificationTarget,
   notificationTypes,
   parseNotificationParams,
@@ -82,6 +83,9 @@ const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
     actorName: 'Riley',
     scope: 'race',
     scopeName: 'Spring Half',
+    // Identity only, never a destination. Without it the row named the race and wore the club's
+    // face - reported from the phone on 2026-08-12.
+    subjectId: RACE,
   },
   role_changed: { clubId: CLUB, clubName: 'Hillside', actorName: 'Riley', newRole: 'admin' },
   poll_created: {
@@ -389,5 +393,158 @@ describe('the pending-request set', () => {
     for (const type of PENDING_REQUEST_TYPES) {
       expect(notificationTypes).toContain(type);
     }
+  });
+});
+
+/**
+ * Whose face each row wears.
+ *
+ * `PRD/12` rule 2c splits the catalogue into rows about a place or a person, which show a
+ * picture, and rows about a thing that happened, which keep a glyph. These assert the split in
+ * BOTH directions - which types resolve a subject and which deliberately do not - because a test
+ * that only checks the picture tier passes against an implementation that gives everything a face,
+ * and that is the version that would put a club's avatar on "new poll".
+ */
+describe('notificationSubject', () => {
+  const GLYPH_TIER: readonly NotificationType[] = [
+    'poll_created',
+    'poll_closing_soon',
+    'event_created',
+    'meeting_created',
+    'news_post_created',
+    'car_group_incharge_left',
+  ];
+
+  it('resolves a subject for every type outside the glyph tier', () => {
+    for (const type of notificationTypes) {
+      if (GLYPH_TIER.includes(type)) continue;
+      const subject = notificationSubject({ type, params: fixtures[type] });
+      expect(subject, type).not.toBeNull();
+      // A blank id would draw a fallback forever and look exactly like "no picture set".
+      expect(Object.values(subject!).every((v) => v !== ''), type).toBe(true);
+    }
+  });
+
+  it('returns null for the glyph tier, so a thing never wears a face', () => {
+    for (const type of GLYPH_TIER) {
+      expect(notificationSubject({ type, params: fixtures[type] }), type).toBeNull();
+    }
+  });
+
+  it('shows the requester on a join request, not the space', () => {
+    // The one place target and subject deliberately disagree: the tap opens the roster, the
+    // face is the person you are deciding about.
+    for (const type of PENDING_REQUEST_TYPES) {
+      expect(notificationSubject({ type, params: fixtures[type] }), type).toEqual({
+        kind: 'user',
+        userId: USER,
+      });
+    }
+  });
+
+  it('follows the scope when a membership row names one', () => {
+    expect(notificationSubject({ type: 'request_approved', params: fixtures.request_approved }))
+      .toEqual({ kind: 'race', raceId: RACE });
+  });
+
+  it('shows the space a removal or a denial NAMES, not the club around it', () => {
+    // These two carry scopeName and no scopeId on purpose (rule 6a) - the space they name is the
+    // one the reader can no longer open - so the face comes from `subjectId`, which is identity
+    // and never a destination. The fixture removal is from a race; the fixture denial is a club.
+    expect(notificationSubject({ type: 'member_removed', params: fixtures.member_removed }))
+      .toEqual({ kind: 'race', raceId: RACE });
+    expect(notificationSubject({ type: 'request_denied', params: fixtures.request_denied }))
+      .toEqual({ kind: 'club', clubId: CLUB });
+  });
+
+  it('shows the channel on a report, never the reported member', () => {
+    const subject = notificationSubject({
+      type: 'message_reported',
+      params: fixtures.message_reported,
+    });
+    expect(subject).toEqual({ kind: 'channel', channelId: CHANNEL });
+    // The row withholds the reported member's name and words because it can land on a lock
+    // screen; a face would hand back exactly what the words withhold.
+    expect(subject).not.toEqual(expect.objectContaining({ kind: 'user' }));
+  });
+
+  it('resolves a chat row against the channel rather than the club', () => {
+    // A club, a race and an Eboard channel all carry a club id, so resolving against the club
+    // would put the club's face on every race and board row.
+    for (const type of ['announcement', 'mentioned', 'chat_caught_up', 'dm_message'] as const) {
+      expect(notificationSubject({ type, params: fixtures[type] }), type).toEqual({
+        kind: 'channel',
+        channelId: CHANNEL,
+      });
+    }
+  });
+});
+
+/**
+ * The face on a row that names a space it cannot open.
+ *
+ * Reported from the phone on 2026-08-12, hours after the pictures shipped: removing somebody from
+ * a race sent them "Parks removed you from Cougars Invitational" beside the running CLUB's
+ * picture. The words were right and the picture said they had lost the club, which is the same
+ * false alarm `PRD/12` rule 6a exists to prevent - it just moved from the sentence to the image.
+ */
+describe('a removal or a denial wears the face of the space it names', () => {
+  const removedFromRace = {
+    clubId: CLUB,
+    clubName: 'Hillside',
+    actorName: 'Parks',
+    scope: 'race',
+    scopeName: 'Cougars Invitational',
+    subjectId: RACE,
+  };
+
+  it('shows the race, not the club it belongs to', () => {
+    expect(notificationSubject({ type: 'member_removed', params: removedFromRace })).toEqual({
+      kind: 'race',
+      raceId: RACE,
+    });
+  });
+
+  it('shows the board when the board is what was lost', () => {
+    expect(
+      notificationSubject({
+        type: 'request_denied',
+        params: { ...removedFromRace, scope: 'eboard', scopeName: 'Eboard & Council', subjectId: EBOARD },
+      }),
+    ).toEqual({ kind: 'eboard', eboardId: EBOARD });
+  });
+
+  it('still shows the club when the club is what was lost', () => {
+    expect(
+      notificationSubject({
+        type: 'member_removed',
+        params: { ...removedFromRace, scope: 'club', scopeName: 'Hillside', subjectId: CLUB },
+      }),
+    ).toEqual({ kind: 'club', clubId: CLUB });
+  });
+
+  it('falls back to a glyph, never to the club, on a row written before subjectId existed', () => {
+    // The complaint was a picture that disagreed with the sentence. An old row guessing the club
+    // would reproduce it exactly, so it shows nothing rather than something wrong.
+    const { subjectId: _omitted, ...old } = removedFromRace;
+    expect(notificationSubject({ type: 'member_removed', params: old })).toBeNull();
+  });
+
+  it('treats a row with no scope at all as the club, which is what those rows always meant', () => {
+    expect(
+      notificationSubject({
+        type: 'member_removed',
+        params: { clubId: CLUB, clubName: 'Hillside', actorName: 'Parks' },
+      }),
+    ).toEqual({ kind: 'club', clubId: CLUB });
+  });
+
+  it('does not use subjectId as a destination', () => {
+    // The target stays the club: the space named is precisely the one they cannot open, and
+    // subjectId exists so the FACE can be right without making it look reachable.
+    expect(notificationTarget({ type: 'member_removed', params: removedFromRace })).toEqual({
+      kind: 'club',
+      clubId: CLUB,
+    });
   });
 });

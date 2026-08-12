@@ -790,6 +790,9 @@ const onEboardMembershipDecided: EffectHandler = async (event, deps) => {
       scopeName: 'Eboard & Council',
       // A denial has nowhere to send them, so it carries no scope id - the schema says so.
       ...(approved ? { scopeId: eboard.eboardId } : {}),
+      // But it still names the board, so it wears the board's face. `subjectId` is identity and
+      // never a destination, which is why it is a different field from the one above.
+      subjectId: eboard.eboardId,
     } as never,
     recipients: [userId],
     actorId,
@@ -846,6 +849,9 @@ const onEboardMemberDeparted: EffectHandler = async (event, deps) => {
         // their club chat exactly where they were.
         scope: 'eboard',
         scopeName: 'Eboard & Council',
+        // Identity only. Same reason as the race case: the row names the board, so it must not
+        // wear the club's face.
+        subjectId: eboard.eboardId,
       },
       recipients: [userId],
       actorId,
@@ -1318,6 +1324,8 @@ const onRaceMembershipDecided: EffectHandler = async (event, deps) => {
         scope: 'race',
         scopeName: raceName,
         ...(approved ? { scopeId: String(event.payload['raceId']) } : {}),
+        // Identity, not a destination - a denied request names the race and must show it.
+        subjectId: String(event.payload['raceId']),
       } as never,
       recipients: [userId],
       actorId,
@@ -1505,6 +1513,10 @@ const onRaceMemberDeparted: EffectHandler = async (event, deps) => {
           // which they are still a member of.
           scope: 'race',
           scopeName: race.name,
+          // Identity only, never a destination - the row still points at the club, because the
+          // race is the one thing they can no longer open. Without it the row named the race and
+          // wore the CLUB's face, which reads as having lost the club. See PRD/12 rule 6a.
+          subjectId: raceId,
         },
         recipients: [userId],
         actorId,

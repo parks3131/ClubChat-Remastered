@@ -487,6 +487,16 @@ export default function TabsLayout() {
         options={{
           title: 'Notifications',
           tabBarAccessibilityLabel: 'Notifications',
+          /*
+            Draws its own title in the body, like the Chats list, so the navigator must not put a
+            branded bar above it - two headers saying "Notifications", one of them accent-on-chrome
+            and one of them black-on-page, is what appeared the first time this was tried.
+
+            Calendar keeps the branded header. The two are deliberately different now: this screen
+            is a plain list that can own its own name, and the Calendar's header carries the active
+            club ("Ridgeway Calendar"), which is chrome about context rather than a page title.
+          */
+          headerShown: false,
           tabBarIcon: ({ focused }) => <TabItem name="notifications" focused={focused} badge />,
         }}
       />

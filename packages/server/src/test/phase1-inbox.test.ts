@@ -355,3 +355,140 @@ describe('caught up on N messages', () => {
     expect(Number(rows.rows[0]?.n)).toBe(1);
   });
 });
+
+/**
+ * Whose face each row wears (`PRD/12` rule 2c).
+ *
+ * > **The deciding case is three DIFFERENT pictures and a fourth subject with none.** A race and
+ * > an Eboard channel both carry a club id, so an implementation that resolves a chat row against
+ * > its club is wrong in exactly the way that looks right: every row still shows *a* picture, and
+ * > it is the club's. `channel-access.ts` records the same trap for the Chats list, where it was a
+ * > COALESCE whose fall-through never fired because the names were NOT NULL and the pictures were
+ * > not. One picture in a fixture cannot tell the two implementations apart.
+ */
+describe('the picture on a row', () => {
+  it('gives a race chat the race picture, never the club it belongs to', async () => {
+    const f = await setup();
+    await h.db.execute(sql`UPDATE clubs SET image = 'club-pic' WHERE id = ${f.clubId}`);
+
+    const raceId = crypto.randomUUID();
+    await h.db.execute(sql`
+      INSERT INTO races (id, club_id, name, image) VALUES (${raceId}, ${f.clubId}, 'Spring Half', 'race-pic')
+    `);
+    const raceChannelId = crypto.randomUUID();
+    await h.db.execute(sql`
+      INSERT INTO channels (id, club_id, scope, scope_id, last_seq)
+      VALUES (${raceChannelId}, ${f.clubId}, 'race', ${raceId}, 0)
+    `);
+    await h.db.execute(sql`
+      INSERT INTO race_memberships (race_id, user_id) VALUES (${raceId}, ${f.memberId})
+    `);
+
+    await writeNotifications(h.db, {
+      outboxEventId: 90,
+      type: 'announcement',
+      params: {
+        clubId: f.clubId,
+        channelId: raceChannelId,
+        channelName: 'Spring Half',
+        seq: 1,
+        preview: 'Leaving at six',
+        actorName: 'Owner',
+      },
+      recipients: [f.memberId],
+      actorId: null,
+      clubId: f.clubId,
+    });
+
+    const page = await readInbox(h.db, f.memberId);
+    const row = page.rows.find((r) => r.kind === 'notification' && r.type === 'announcement');
+    expect(row?.picture?.image).toBe('race-pic');
+    expect(row?.picture?.image).not.toBe('club-pic');
+    expect(row?.picture?.kind).toBe('group');
+  });
+
+  it('shows the requester on a join request, not the club', async () => {
+    const f = await setup();
+    await h.db.execute(sql`UPDATE clubs SET image = 'club-pic' WHERE id = ${f.clubId}`);
+    const requesterId = await makeUser('Hopeful');
+    await h.db.execute(sql`UPDATE users SET image = 'face-pic' WHERE id = ${requesterId}`);
+
+    await writeNotifications(h.db, {
+      outboxEventId: 91,
+      type: 'club_join_request',
+      params: {
+        clubId: f.clubId,
+        clubName: 'Hillside Running Club',
+        requesterName: 'Hopeful',
+        requesterId,
+      },
+      recipients: [f.ownerId],
+      actorId: null,
+      clubId: f.clubId,
+    });
+
+    const page = await readInbox(h.db, f.ownerId);
+    const row = page.rows.find((r) => r.kind === 'notification');
+    expect(row?.picture?.image).toBe('face-pic');
+    // A person's fallback is their initial; a group's is a glyph. Getting this wrong draws
+    // "H" inside a well that should hold a group glyph, or vice versa.
+    expect(row?.picture?.kind).toBe('person');
+  });
+
+  it('gives the glyph tier no picture at all', async () => {
+    const f = await setup();
+    await h.db.execute(sql`UPDATE clubs SET image = 'club-pic' WHERE id = ${f.clubId}`);
+
+    await writeNotifications(h.db, {
+      outboxEventId: 92,
+      type: 'poll_created',
+      params: {
+        clubId: f.clubId,
+        clubName: 'Hillside Running Club',
+        actorName: 'Owner',
+        pollId: crypto.randomUUID(),
+        question: 'Carpool or bus?',
+      },
+      recipients: [f.memberId],
+      actorId: null,
+      clubId: f.clubId,
+    });
+
+    const page = await readInbox(h.db, f.memberId);
+    const row = page.rows.find((r) => r.kind === 'notification' && r.type === 'poll_created');
+    // Asserted rather than assumed: a resolver that gave everything a face would put the club's
+    // picture on "new poll", which is the thing rule 2c exists to prevent.
+    expect(row?.picture).toBeNull();
+  });
+
+  it('resolves a subject with no picture to a fallback rather than to nothing', async () => {
+    const f = await setup();
+    // The club has no image at all, which is the ordinary case: most clubs never set one.
+    await anAnnouncementFor(f.clubId, f.mainChannelId, f.memberId, 93);
+
+    const page = await readInbox(h.db, f.memberId);
+    const row = page.rows.find((r) => r.kind === 'notification');
+    expect(row?.picture).not.toBeNull();
+    expect(row?.picture?.image).toBeNull();
+    // The name and the tint still arrive, because they are what the fallback is drawn from.
+    expect(row?.picture?.name).toBe('Hillside Running Club');
+    expect(row?.picture?.tintId).toBeTruthy();
+  });
+
+  it('gives a chat-unread row its conversation picture', async () => {
+    const f = await setup();
+    await h.db.execute(sql`UPDATE clubs SET image = 'club-pic' WHERE id = ${f.clubId}`);
+    const ctx = await loadAccessContext(h.db, f.ownerId);
+    const channel = await getChannelRef(h.db, f.mainChannelId);
+    await sendMessage(h.db, ctx, channel!, {
+      channelId: f.mainChannelId,
+      clientMsgId: crypto.randomUUID(),
+      body: 'anyone driving?',
+    });
+
+    const page = await readInbox(h.db, f.memberId);
+    const row = page.rows.find((r) => r.kind === 'chat_unread');
+    expect(row?.picture?.image).toBe('club-pic');
+    expect(row?.picture?.kind).toBe('group');
+  });
+});

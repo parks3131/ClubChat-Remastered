@@ -603,3 +603,16 @@ that records how to recognise the class._
     correctness depends on. Note it is the inverse of failure mode 9's shape - not a rule copied
     and drifted, but a rule that reads correctly at both ends while the data between them changed
     underneath. Only a test with the punctuation actually attached finds it.
+
+26. **A declaration and its first use go in ONE write, not two.** Failure mode 22 restated, because
+    the rule as written there did not cover the case that then happened twice in one afternoon on
+    2026-08-12 - both times on the founder's phone, both times minutes after the correct ordering
+    had been stated in the same conversation. `ReferenceError: Property 'flat' doesn't exist`, then
+    `ReferenceError: Property 'subjectPicture' doesn't exist`; each a red screen in somebody's hand
+    for the seconds between two saves. 22 says "within one file, add the import before the usage",
+    which is true and is about **imports**: a `const` declared lower in the same file is not one,
+    and writing the call site first leaves a state where the name genuinely does not exist.
+    **How to recognise the class:** you are about to save a file mentioning a name you intend to
+    define in the next edit. Ask whether the file runs *as saved*; if not, it is one write. Note
+    that typecheck cannot see this - each individual state is a type error at worst, and the thing
+    that actually breaks is a runtime lookup in a process that reloaded in between.

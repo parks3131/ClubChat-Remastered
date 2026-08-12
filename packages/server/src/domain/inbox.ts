@@ -17,10 +17,12 @@
 
 import { sql } from 'drizzle-orm';
 import {
+  notificationSubject,
   notificationTarget,
   renderNotification,
   requestDecision,
   PENDING_REQUEST_TYPES,
+  type NotificationSubject,
   type NotificationTarget,
   type NotificationType,
 } from '@clubchat/shared';
@@ -28,6 +30,7 @@ import type { Db } from '../db/client.ts';
 import { advanceReadCursor } from './reads.ts';
 import {
   accessibleChannelPredicate,
+  channelDisplayImage,
   channelDisplayName,
   channelNameJoins,
 } from './channel-access.ts';
@@ -51,6 +54,165 @@ function toIso(value: string | Date): string {
 /** Discrete notifications per page. Chat-unread rows ride along on top. */
 export const INBOX_PAGE_SIZE = 20;
 
+/**
+ * The face a row wears, resolved at read time.
+ *
+ * `PRD/12` rule 2c. Carries everything the client needs to draw it and nothing it does not:
+ *
+ * - `name` for the fallback, since most subjects have no picture at all.
+ * - `kind`, because the fallback differs - a **person** gets their initial and a **group** gets a
+ *   glyph (`DESIGN/02` rule 4). An initial is meaningless for a club: "B" says nothing about
+ *   Binghamton Running Club that the name beside it does not already say.
+ * - `tintId`, because the fallback's colour comes from an **id and never from a name**
+ *   (`DESIGN/02` rule 5), so a renamed club keeps the colour people find it by.
+ *
+ * The shape is deliberately absent: this list draws every one of them as a circle
+ * (`PRD/12` rule 2d), so it is a fact about the surface rather than about the subject.
+ */
+export type InboxPicture = {
+  name: string;
+  /** A media id, or null - which is the common case, not an error. */
+  image: string | null;
+  kind: 'person' | 'group';
+  tintId: string;
+};
+
+/**
+ * Resolve each row's subject to a picture, batched by kind.
+ *
+ * **Joined at read time, never stored in `params`.** `params` records the moment the event
+ * happened; a picture is a fact about the subject now, so storing it would freeze a club's old
+ * avatar into every notification ever sent about it and make changing a picture a migration over
+ * history - the retrofit ADR-0013 closed off for the body and the target. Same reason
+ * `sender_name` is joined onto a message rather than written into it.
+ *
+ * One query per subject kind rather than one per row, so a page of twenty costs at most five
+ * reads regardless of how the types are mixed.
+ *
+ * > **No authorization hop, and that is a fact about what these are rather than an omission.**
+ * > Avatars are identity media on public, stable URLs (`PRD/13`), and every row already renders
+ * > the subject's NAME in its own text - a club a member was just removed from, a requester whose
+ * > name an admin is reading in order to decide. The picture discloses nothing the sentence does
+ * > not. A content photo would be a different question entirely and does not appear here.
+ */
+async function resolveSubjectPictures(
+  db: Db,
+  userId: string,
+  subjects: readonly NotificationSubject[],
+): Promise<Map<string, InboxPicture>> {
+  const out = new Map<string, InboxPicture>();
+  if (subjects.length === 0) return out;
+
+  const idsOf = (kind: NotificationSubject['kind']): string[] => [
+    ...new Set(
+      subjects
+        .filter((s) => s.kind === kind)
+        .map((s) =>
+          s.kind === 'channel'
+            ? s.channelId
+            : s.kind === 'club'
+              ? s.clubId
+              : s.kind === 'race'
+                ? s.raceId
+                : s.kind === 'eboard'
+                  ? s.eboardId
+                  : s.userId,
+        ),
+    ),
+  ];
+
+  /** Parameterised, never interpolated - every id goes through a bind. */
+  const list = (ids: readonly string[]) => sql.join(ids.map((id) => sql`${id}`), sql`, `);
+
+  const channelIds = idsOf('channel');
+  if (channelIds.length > 0) {
+    /*
+     * The scope picks its own name and picture, through the same two fragments the Chats list
+     * uses. Resolving a chat row against its CLUB instead would be the failure that looks like
+     * success: a race and an Eboard channel both carry a club id, so every race row would wear
+     * the club's face over the race's name.
+     */
+    const rows = await db.execute<{
+      id: string;
+      name: string;
+      image: string | null;
+      scope: string;
+    }>(sql`
+      SELECT c.id,
+             ${channelDisplayName()} AS name,
+             ${channelDisplayImage()} AS image,
+             c.scope
+        FROM channels c
+        ${channelNameJoins(userId)}
+       WHERE c.id IN (${list(channelIds)})
+    `);
+    for (const row of rows.rows) {
+      out.set(`channel:${row.id}`, {
+        name: row.name,
+        image: row.image,
+        // A DM is a person - that is who is on the other end of it. Every other scope is a space.
+        kind: row.scope === 'dm' ? 'person' : 'group',
+        tintId: row.id,
+      });
+    }
+  }
+
+  /** The three space kinds are the same query against three tables. */
+  const spaces = [
+    ['club', 'clubs', idsOf('club')],
+    ['race', 'races', idsOf('race')],
+    ['eboard', 'eboard_channels', idsOf('eboard')],
+  ] as const;
+
+  for (const [kind, table, ids] of spaces) {
+    if (ids.length === 0) continue;
+    const rows = await db.execute<{ id: string; name: string; image: string | null }>(sql`
+      SELECT id, name, image FROM ${sql.raw(table)} WHERE id IN (${list(ids)})
+    `);
+    for (const row of rows.rows) {
+      out.set(`${kind}:${row.id}`, {
+        name: row.name,
+        image: row.image,
+        kind: 'group',
+        tintId: row.id,
+      });
+    }
+  }
+
+  const userIds = idsOf('user');
+  if (userIds.length > 0) {
+    const rows = await db.execute<{ id: string; full_name: string; image: string | null }>(sql`
+      SELECT id, full_name, image FROM users WHERE id IN (${list(userIds)})
+    `);
+    for (const row of rows.rows) {
+      out.set(`user:${row.id}`, {
+        name: row.full_name,
+        image: row.image,
+        kind: 'person',
+        tintId: row.id,
+      });
+    }
+  }
+
+  return out;
+}
+
+/** The map key for a subject, so the lookup cannot collide across kinds sharing an id space. */
+function subjectKey(s: NotificationSubject): string {
+  switch (s.kind) {
+    case 'channel':
+      return `channel:${s.channelId}`;
+    case 'club':
+      return `club:${s.clubId}`;
+    case 'race':
+      return `race:${s.raceId}`;
+    case 'eboard':
+      return `eboard:${s.eboardId}`;
+    case 'user':
+      return `user:${s.userId}`;
+  }
+}
+
 export type InboxRow =
   | {
       kind: 'notification';
@@ -62,6 +224,14 @@ export type InboxRow =
       read: boolean;
       /** Present on a decided request, so the admin keeps a record of what they decided. */
       decision?: 'approved' | 'denied';
+      /**
+       * The subject's face, or `null` for the glyph tier and for a subject that has gone.
+       *
+       * Null is an ordinary answer twice over: a poll notification never has one by design, and a
+       * club that was deleted resolves to nothing. `PRD/12` rule 6 already requires such a row to
+       * degrade rather than break, and this is the drawing half of that.
+       */
+      picture: InboxPicture | null;
       createdAt: string;
     }
   | {
@@ -72,6 +242,9 @@ export type InboxRow =
       channelName: string;
       count: number;
       target: NotificationTarget;
+      /** Always present in practice - a conversation always resolves - but nullable in shape so
+       *  the two row kinds carry one field rather than two that must be kept in step. */
+      picture: InboxPicture | null;
       createdAt: string;
     };
 
@@ -116,13 +289,30 @@ export async function readInbox(
   const hasMore = discrete.rows.length > limit;
   const page = discrete.rows.slice(0, limit);
 
-  const rows: InboxRow[] = page.map((row) => {
+  /*
+   * Whose face each row wears, resolved once for the whole page.
+   *
+   * The mapping from type to subject lives in `@clubchat/shared` so this resolver and the client's
+   * renderer read the same definition - the alternative is each end carrying its own copy of
+   * "which types get a face", which is the hand-copied-predicate class (failure mode 9).
+   */
+  const subjects = page.map((row) =>
+    notificationSubject({ type: row.type as NotificationType, params: row.params }),
+  );
+  const pictures = await resolveSubjectPictures(
+    db,
+    userId,
+    subjects.filter((s): s is NotificationSubject => s !== null),
+  );
+
+  const rows: InboxRow[] = page.map((row, i) => {
     const type = row.type as NotificationType;
     // Rendered here, from params. The row itself stores no prose and no route.
     const rendered = renderNotification({ type, params: row.params });
     // Present only on a request that somebody has since decided, which is what turns the row
     // from a job into a record. The body already names the decider; this drives the tag.
     const decision = requestDecision({ type, params: row.params });
+    const subject = subjects[i] ?? null;
     return {
       kind: 'notification' as const,
       id: row.id,
@@ -132,6 +322,9 @@ export async function readInbox(
       target: notificationTarget({ type, params: row.params }),
       read: row.read_at !== null,
       ...(decision ? { decision } : {}),
+      // A subject that resolved to nothing - deleted club, deleted account - falls back rather
+      // than erroring, exactly as tapping such a row does.
+      picture: subject ? (pictures.get(subjectKey(subject)) ?? null) : null,
       createdAt: toIso(row.created_at),
     };
   });
@@ -166,11 +359,15 @@ async function chatUnreadRows(db: Db, userId: string): Promise<InboxRow[]> {
   const rows = await db.execute<{
     channel_id: string;
     channel_name: string;
+    channel_image: string | null;
+    scope: string;
     unread: number;
     last_at: string;
   }>(sql`
     SELECT c.id AS channel_id,
            ${channelDisplayName()} AS channel_name,
+           ${channelDisplayImage()} AS channel_image,
+           c.scope,
            c.last_seq - COALESCE(rc.last_read_seq, 0) AS unread,
            COALESCE(
              (SELECT m.created_at FROM messages m
@@ -191,6 +388,18 @@ async function chatUnreadRows(db: Db, userId: string): Promise<InboxRow[]> {
     channelName: row.channel_name,
     count: Number(row.unread),
     target: { kind: 'chat' as const, channelId: row.channel_id },
+    /*
+     * The conversation's own face, from the same two fragments the Chats list uses.
+     *
+     * Tinted from the CHANNEL id rather than the club's, because that is the one id every scope
+     * has - a DM carries no club at all - and because it must stay stable when a club is renamed.
+     */
+    picture: {
+      name: row.channel_name,
+      image: row.channel_image,
+      kind: row.scope === 'dm' ? ('person' as const) : ('group' as const),
+      tintId: row.channel_id,
+    },
     createdAt: toIso(row.last_at),
   }));
 }
