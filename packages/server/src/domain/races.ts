@@ -57,8 +57,14 @@ async function raceRef(db: Db, raceId: string): Promise<RaceRef | null> {
 /**
  * Create a race.
  *
- * **A name and a date only.** No start time, no capacity, no structured results - those are
- * open questions, not omissions. A club admin creates it from the club's Races list.
+ * **A name, and optionally a date.** No start time, no capacity, no structured results - those
+ * are open questions, not omissions. A club admin creates it from the club's Races list.
+ *
+ * > **The date is what puts it on the calendar, and leaving it out is a real choice rather than
+ * > an incomplete form.** The same object serves an actual race and an ordinary side group, and
+ * > a group has no day. Requiring one meant inventing a date for every group, which put fictional
+ * > entries on the club calendar - worse than the group not being there at all. `readCalendar`
+ * > unions in only the races that carry a date.
  *
  * > **The channel is created BEFORE the creator's roster row.** That ordering is the v1
  * > lesson restated: creating the membership first meant the first system message had no
@@ -69,14 +75,21 @@ async function raceRef(db: Db, raceId: string): Promise<RaceRef | null> {
 export async function createRace(
   db: Db,
   ctx: AccessContext,
-  input: { clubId: string; name: string; raceDate: string },
+  input: { clubId: string; name: string; raceDate?: string | null | undefined },
 ): Promise<Result<{ raceId: string; channelId: string }>> {
   if (!isClubAdmin(ctx, input.clubId)) return { ok: false, code: 'forbidden' };
 
   return db.transaction(async (tx) => {
     const raceRows = await tx
       .insert(races)
-      .values({ clubId: input.clubId, name: input.name, raceDate: input.raceDate })
+      .values({
+        clubId: input.clubId,
+        name: input.name,
+        // `?? null` rather than letting `undefined` through: Drizzle omits an undefined column
+        // from the INSERT, which is the same result here only because the column has no default.
+        // Stating the null keeps that from being a coincidence.
+        raceDate: input.raceDate ?? null,
+      })
       .returning();
     const race = raceRows[0];
     if (!race) throw new Error('race insert returned no row');
@@ -413,7 +426,15 @@ export async function updateRace(
   raceId: string,
   fields: {
     name?: string | undefined;
-    raceDate?: string | undefined;
+    /**
+     * `null` clears it, which takes the race off the calendar.
+     *
+     * The three states are distinct and all three are reachable: absent means "leave it alone",
+     * a string sets it, and `null` removes it. Folding null into absent would make a date
+     * impossible to undo once set, so a group created by mistake as a dated race could never
+     * stop being a calendar entry.
+     */
+    raceDate?: string | null | undefined;
     image?: string | null | undefined;
   },
 ): Promise<Result<{ updated: true }>> {
@@ -430,11 +451,16 @@ export async function updateRace(
     patch['name'] = name;
   }
   if (fields.raceDate !== undefined) {
-    // A DATE column, and the column is what enforces the format - but a malformed string
-    // reaches Postgres as a type error rather than a refusal, and a 500 is the wrong way to
-    // tell somebody their date is wrong.
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.raceDate)) return { ok: false, code: 'invalid' };
-    patch['raceDate'] = fields.raceDate;
+    if (fields.raceDate === null) {
+      // Explicitly cleared: the race leaves the calendar and becomes an ordinary group.
+      patch['raceDate'] = null;
+    } else {
+      // A DATE column, and the column is what enforces the format - but a malformed string
+      // reaches Postgres as a type error rather than a refusal, and a 500 is the wrong way to
+      // tell somebody their date is wrong.
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.raceDate)) return { ok: false, code: 'invalid' };
+      patch['raceDate'] = fields.raceDate;
+    }
   }
   if (fields.image !== undefined) patch['image'] = fields.image;
   if (Object.keys(patch).length === 0) return { ok: true, updated: true };
@@ -841,7 +867,8 @@ async function departCarGroup(
 export type RaceListItem = {
   id: string;
   name: string;
-  raceDate: string;
+  /** Null for a group with no date, which is also what keeps it off the calendar. */
+  raceDate: string | null;
   /** The race's picture, or null for the initial fallback every avatar in the product uses. */
   image: string | null;
   /** This viewer's own pin. Personal, and never anybody else's (PRD/09 rules 21-22). */
@@ -866,10 +893,20 @@ export type RaceListItem = {
  * distinction the whole race design rests on: a member with no roster row still sees the race
  * exists, and gets a preview plus a request action rather than a 404.
  *
- * Ordering puts this viewer's pinned races first, then the most recent date - the club hub
- * shows a short preview of this list, and a pin exists precisely to control what appears in
- * it. The date direction is not specified by PRD/09; newest-first is chosen so a season's
- * upcoming races sit at the top rather than behind years of history.
+ * Ordering puts this viewer's pinned races first, then **the most recently created** - the club
+ * hub shows a short preview of this list, and a pin exists precisely to control what appears in
+ * it.
+ *
+ * > **It used to sort by the race's own date, and that stopped being possible when the date
+ * > became optional.** A group with no date cannot be placed on a date-ordered list at all: it
+ * > sorts to one end or the other depending on how NULLs are treated, and either answer is
+ * > arbitrary. Creation order is the one fact every race has, it needs no input from the person
+ * > creating it, and it matches what somebody expects from a list of conversations - the one you
+ * > just made is at the top. Chosen 2026-08-12; the previous rule was recorded here as "not
+ * > specified by PRD/09", which is what made it safe to change.
+ *
+ * Deliberately NOT alphabetical: a club that names its groups after opponents would get a list
+ * that reshuffles on every addition and never shows the newest thing.
  */
 export async function listRaces(
   db: Db,
@@ -885,7 +922,7 @@ export async function listRaces(
   const rows = await db.execute<{
     id: string;
     name: string;
-    race_date: string;
+    race_date: string | null;
     image: string | null;
     pinned: boolean;
     muted: boolean;
@@ -928,7 +965,11 @@ export async function listRaces(
             AND (mute.muted_until IS NULL OR mute.muted_until > now())
      WHERE r.club_id = ${clubId}
        ${query.length > 0 ? sql`AND r.name ILIKE ${'%' + query + '%'}` : sql``}
-     ORDER BY (rp.user_id IS NULL), r.race_date DESC, r.name
+     -- Pinned first, then newest-created. NOT the race date: it is optional now, so a dateless
+     -- group has nothing to sort on. The id breaks a tie between two races created in the same
+     -- transaction, so the order is total and a page cannot repeat or skip a row.
+     -- (No backticks in this comment: one of those ends the surrounding template literal.)
+     ORDER BY (rp.user_id IS NULL), r.created_at DESC, r.id
      LIMIT ${limit}
   `);
 
@@ -961,7 +1002,8 @@ export type RaceDetail = {
   id: string;
   clubId: string;
   name: string;
-  raceDate: string;
+  /** Null for a group with no date, which is also what keeps it off the calendar. */
+  raceDate: string | null;
   image: string | null;
   meetDescription: string | null;
   meetLocationUrl: string | null;
@@ -1008,7 +1050,7 @@ export async function readRace(
     id: string;
     club_id: string;
     name: string;
-    race_date: string;
+    race_date: string | null;
     image: string | null;
     meet_description: string | null;
     meet_location_url: string | null;

@@ -10,7 +10,7 @@
  * built from `<Action>` cannot ship without a label because the prop is required.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentProps, ComponentType, ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -34,6 +34,14 @@ import { BlurView } from 'expo-blur';
 import { Link } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RemoteImage } from './media-bubble.tsx';
+import {
+  WEEKDAYS,
+  monthCells,
+  shiftMonth,
+  todayParts,
+  useMonthPager,
+  type MonthCursor,
+} from './month-pager.tsx';
 import { avatarTint, color, radius, space, type } from './theme.ts';
 import type { Loaded } from './use-load.ts';
 
@@ -283,14 +291,70 @@ export function ConfirmDialog({
 // Date and time
 // ---------------------------------------------------------------------------
 
-const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'] as const;
-
 /** `YYYY-MM-DD` from a Date, in LOCAL time. `toISOString` would shift the day across midnight. */
 function isoDate(date: Date): string {
   const month = `${date.getMonth() + 1}`.padStart(2, '0');
   const day = `${date.getDate()}`.padStart(2, '0');
   return `${date.getFullYear()}-${month}-${day}`;
 }
+
+/**
+ * One month of day cells inside the picker's pager.
+ *
+ * **Memoised for the reason the calendar's grid is:** the live heading re-renders the pager as
+ * the finger crosses half a page, and without this that rebuilds 126 cells across three grids at
+ * the exact moment the frame budget is already going on a scroll.
+ *
+ * Filler days from the neighbouring months are drawn blank rather than as pickable dates. The
+ * grid is a fixed six weeks so its height never changes as months page, which is the same rule
+ * the calendar grid follows and the reason a month starting on a Saturday does not make the
+ * sheet jump.
+ */
+const PickerMonth = memo(function PickerMonth({
+  year,
+  month,
+  value,
+  width,
+  onPick,
+}: {
+  year: number;
+  month: number;
+  /** The chosen day, `YYYY-MM-DD`, or empty. */
+  value: string;
+  /** The pager's measured width. Null before first layout, when nothing is drawn yet. */
+  width: number | null;
+  onPick: (iso: string) => void;
+}) {
+  const cells = useMemo(() => monthCells(year, month), [year, month]);
+
+  return (
+    <View style={width === null ? undefined : { width }}>
+      <View style={styles.dayGrid}>
+        {cells.map((date, index) => {
+          // A day belonging to the month either side. Drawn as a hole rather than as a date,
+          // so tapping near the edge of a month cannot silently choose a day in another one.
+          if (date.getMonth() !== month - 1) {
+            return <View key={`pad-${index}`} style={styles.dayCell} />;
+          }
+          const iso = isoDate(date);
+          const chosen = iso === value;
+          return (
+            <Pressable
+              key={iso}
+              style={[styles.dayCell, chosen && styles.dayCellOn]}
+              onPress={() => onPick(iso)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: chosen }}
+              accessibilityLabel={iso}
+            >
+              <Text style={[styles.dayLabel, chosen && styles.dayLabelOn]}>{date.getDate()}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+});
 
 /**
  * A date, chosen from a month grid rather than typed.
@@ -315,17 +379,30 @@ export function DateField({
   optional?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [cursor, setCursor] = useState(() => (value ? new Date(`${value}T00:00`) : new Date()));
+  /*
+   * A 1-based `MonthCursor`, not a Date, because that is what the shared pager speaks.
+   *
+   * Seeded from the chosen day so reopening the picker lands on the month you are looking at,
+   * and built from split components rather than by parsing - `new Date('2026-09-12')` is UTC
+   * midnight and lands on the 11th west of Greenwich.
+   */
+  const [cursor, setCursor] = useState<MonthCursor>(() => {
+    if (value) {
+      const [y, m] = value.split('-');
+      return { year: Number(y), month: Number(m) };
+    }
+    return todayParts();
+  });
 
-  const year = cursor.getFullYear();
-  const month = cursor.getMonth();
-  const first = new Date(year, month, 1);
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const lead = first.getDay();
-  const cells: Array<number | null> = [
-    ...Array.from({ length: lead }, () => null),
-    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
-  ];
+  /*
+   * The same swipe the Calendar destination uses, from the same hook.
+   *
+   * > **Buttons AND slide.** The chevrons stay and are still the accessible path - a swipe is
+   * > not announceable and cannot be performed by anybody driving this with a switch or a
+   * > keyboard - and the drag is what somebody reaches for first.
+   */
+  const pager = useMonthPager(cursor, (delta) => setCursor((c) => shiftMonth(c, delta)));
+  const { shown } = pager;
 
   return (
     <>
@@ -352,18 +429,26 @@ export function DateField({
           <View style={styles.pickerSheet}>
             <View style={styles.pickerHead}>
               <Pressable
-                onPress={() => setCursor(new Date(year, month - 1, 1))}
+                onPress={() => setCursor((c) => shiftMonth(c, -1))}
                 hitSlop={space.sm}
                 accessibilityRole="button"
                 accessibilityLabel="Previous month"
               >
                 <MaterialIcons name="chevron-left" size={26} color={color.textPrimary} />
               </Pressable>
+              {/*
+                Named from the pager's `shown`, not from the cursor, so the month name travels
+                WITH the grid under the finger instead of snapping half a second after it. That
+                lag was the first thing reported about the calendar's swipe.
+              */}
               <Text style={styles.pickerMonth}>
-                {cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+                {new Date(shown.year, shown.month - 1, 1).toLocaleDateString(undefined, {
+                  month: 'long',
+                  year: 'numeric',
+                })}
               </Text>
               <Pressable
-                onPress={() => setCursor(new Date(year, month + 1, 1))}
+                onPress={() => setCursor((c) => shiftMonth(c, 1))}
                 hitSlop={space.sm}
                 accessibilityRole="button"
                 accessibilityLabel="Next month"
@@ -380,27 +465,27 @@ export function DateField({
               ))}
             </View>
 
-            <View style={styles.dayGrid}>
-              {cells.map((day, index) => {
-                if (day === null) return <View key={`pad-${index}`} style={styles.dayCell} />;
-                const iso = isoDate(new Date(year, month, day));
-                const chosen = iso === value;
-                return (
-                  <Pressable
-                    key={iso}
-                    style={[styles.dayCell, chosen && styles.dayCellOn]}
-                    onPress={() => {
+            {/*
+              Three months in a row, resting on the middle one. The sheet has no vertical scroll
+              of its own, so the only gesture to arbitrate against is the day tap - which a
+              ScrollView leaves alone and a PanResponder would eat.
+            */}
+            <View onLayout={pager.onLayout}>
+              <ScrollView ref={pager.pagerRef} {...pager.pagerProps}>
+                {pager.months.map((m) => (
+                  <PickerMonth
+                    key={`${m.year}-${m.month}`}
+                    year={m.year}
+                    month={m.month}
+                    value={value}
+                    width={pager.width}
+                    onPick={(iso) => {
                       onChange(iso);
                       setOpen(false);
                     }}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: chosen }}
-                    accessibilityLabel={iso}
-                  >
-                    <Text style={[styles.dayLabel, chosen && styles.dayLabelOn]}>{day}</Text>
-                  </Pressable>
-                );
-              })}
+                  />
+                ))}
+              </ScrollView>
             </View>
 
             {/* Only where the field may legitimately be empty, so it cannot clear a required one. */}
@@ -1418,7 +1503,20 @@ const styles = StyleSheet.create({
   confirmBody: { ...type.body, color: color.textSecondary },
   confirmActions: { flexDirection: 'row', gap: space.sm, paddingTop: space.sm },
   confirmAction: { flex: 1 },
-  pickerMonth: { ...type.headerTitle, fontSize: 18, color: color.textPrimary },
+  /*
+   * The accent, deliberately, and deliberately NOT what the Calendar destination uses.
+   *
+   * > **The two are different objects and the colour is what says so.** The Calendar's heading
+   * > sits on a full page where the month IS the screen's subject, so it is drawn in primary
+   * > text like any other title. This one is the heading of a small sheet floating over a form
+   * > somebody is filling in - it needs to read as part of the control they just opened rather
+   * > than as a second page title, and the accent is what the product already uses for "this is
+   * > the thing you are operating".
+   *
+   * Asked for on 2026-08-12: orange everywhere the picker appears - events, polls, races,
+   * meetings - and left alone on the main calendar.
+   */
+  pickerMonth: { ...type.headerTitle, fontSize: 18, color: color.accent },
   pickerClear: { ...type.label, color: color.accent, textAlign: 'center', paddingTop: space.sm },
   weekRow: { flexDirection: 'row' },
   weekday: {

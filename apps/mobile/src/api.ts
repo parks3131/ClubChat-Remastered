@@ -358,7 +358,8 @@ export const raceApi = {
 
   detail: (raceId: string) => apiFetch<{ race: RaceDetail }>(`/races/${raceId}`),
 
-  create: (clubId: string, body: { name: string; raceDate: string }) =>
+  // `raceDate` is nullable: null is an ordinary group, a date puts it on the club calendar.
+  create: (clubId: string, body: { name: string; raceDate: string | null }) =>
     apiFetch<{ raceId: string; channelId: string }>(`/clubs/${clubId}/races`, {
       method: 'POST',
       body,
@@ -374,7 +375,9 @@ export const raceApi = {
    */
   update: (
     raceId: string,
-    body: { name?: string; raceDate?: string; image?: string | null },
+    // `raceDate` has three states and they are all distinct: absent leaves it alone, a string
+    // sets it, and null CLEARS it - which is what takes a race off the club calendar.
+    body: { name?: string; raceDate?: string | null; image?: string | null },
   ) => apiFetch<unknown>(`/races/${raceId}`, { method: 'PATCH', body }),
 
   /** All five fields as one form: an absent field is cleared, not kept. */

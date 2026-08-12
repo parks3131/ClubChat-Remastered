@@ -25,7 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { clubApi } from '../../../../../src/api.ts';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { RemoteImage } from '../../../../../src/media-bubble.tsx';
-import { avatarTint, color, radius, space, tabBarSpace, type } from '../../../../../src/theme.ts';
+import { avatarTint, color, radius, space, type } from '../../../../../src/theme.ts';
 import { ConfirmDialog, DataScreen, Row } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
@@ -49,9 +49,15 @@ export default function ShareClubScreen() {
           <>
             <ScrollView
               style={styles.flex}
+              /*
+                No tab-bar clearance here any more: the bar is not drawn on this screen. It
+                reserved a bar's worth of empty space at the bottom until 2026-08-12, which
+                became visible dead space the moment the bar stopped appearing over it. The
+                safe-area inset stays, because the home indicator does not go away.
+              */
               contentContainerStyle={[
                 styles.body,
-                { paddingBottom: tabBarSpace(insets.bottom) + space.lg },
+                { paddingBottom: insets.bottom + space.lg },
               ]}
             >
               {/*
@@ -191,7 +197,9 @@ export default function ShareClubScreen() {
             */}
             {copied !== null && (
               <View
-                style={[styles.toast, { bottom: tabBarSpace(insets.bottom) }]}
+                // Sat above the tab bar until the bar stopped being drawn here. Now it sits above
+                // the home indicator, which is the only thing left at the bottom edge.
+                style={[styles.toast, { bottom: insets.bottom + space.lg }]}
                 accessibilityLiveRegion="polite"
               >
                 <MaterialIcons name="check-circle" size={18} color={color.onAccentSoft} />

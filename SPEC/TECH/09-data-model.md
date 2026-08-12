@@ -167,6 +167,12 @@ races                 id, club_id, name, race_date, created_at,
                       -- race_date is a DATE, not a timestamp: a race has a day, not a
                       -- time. A date-only value parsed as an ISO string is UTC
                       -- midnight and renders a day early in negative-offset zones.
+                      -- It is NULLABLE since 2026-08-12, and the null MEANS something:
+                      -- this space is not on the calendar. readCalendar unions in only
+                      -- the races that carry a date, which is the only thing enforcing
+                      -- that. The same row serves a dated race and an ordinary group.
+                      -- Ordering for the club's list is created_at DESC, never
+                      -- race_date - a dateless group has nothing to sort on.
                       -- The five meet* columns live here rather than in their own
                       -- table because they are edited together as ONE form; a
                       -- separate table would invite partial saves of something the

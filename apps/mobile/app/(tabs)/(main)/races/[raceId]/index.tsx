@@ -70,7 +70,8 @@ export default function RaceHubScreen() {
           <Body>
             <Stack.Screen options={{ title: race.name }} />
             <Text style={styles.title}>{race.name}</Text>
-            <Text style={styles.date}>{race.raceDate}</Text>
+            {/* Absent for an ordinary group. Not drawn rather than drawn blank. */}
+            {race.raceDate !== null && <Text style={styles.date}>{race.raceDate}</Text>}
             <View style={styles.badges}>
               <Badge label={`${race.memberCount} going`} tone="muted" />
               {viewer.isManager && <Badge label="You manage this" tone="accent" />}

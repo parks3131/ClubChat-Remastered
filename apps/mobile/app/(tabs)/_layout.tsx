@@ -1,11 +1,15 @@
 /**
  * The four top-level destinations: Clubs, Calendar, Notifications, Profile.
  *
- * `SPEC/PRD/15` opens with these four and puts the unread badge on Notifications. Until now there
- * was no tab bar at all - Messages hung off the bottom of the club list as a button, and Calendar,
- * Notifications and Profile had nowhere to be. Everything below a destination pushes on the parent
- * stack rather than living here, so a club, a race or a chat covers the tab bar instead of nesting
- * inside one tab's history.
+ * `SPEC/PRD/15` opens with these four and puts the unread badge on Notifications. Until the tab
+ * group existed there was no tab bar at all - Messages hung off the bottom of the club list as a
+ * button, and Calendar, Notifications and Profile had nowhere to be.
+ *
+ * > **The bar is drawn on five screens: the four destinations and a club's front door.** Everything
+ * > below a destination still *lives* inside this tab group - that is what keeps `/polls/:id` and
+ * > `/races/:id` at their own URLs - but the bar is not drawn over it. Where and why is
+ * > `showsTabBar` in `src/tab-bar-routes.ts`, which owns that decision alone and is tested on its
+ * > own. Changed 2026-08-12, from "every signed-in screen except chat".
  *
  * Messages is deliberately NOT a fifth tab. It is a sibling of Clubs reached from the Clubs
  * destination: group chat is the product and DMs are additive, so a peer tab would misrepresent
@@ -19,6 +23,7 @@ import { Animated, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSession } from '../../src/chat-provider.tsx';
 import { useCurrentSpace } from '../../src/current-space.tsx';
+import { showsTabBar } from '../../src/tab-bar-routes.ts';
 import { color, radius, space, tabBar, type } from '../../src/theme.ts';
 import { useBadge } from '../../src/use-badge.ts';
 
@@ -254,8 +259,13 @@ export default function TabsLayout() {
           > quietly deleted because the false version is what left every OTHER screen unpadded -
           > if the bar cannot cover anything, there is nothing to pad for, and nobody looked.
 
-          So every scrolling screen owes itself `tabBarSpace(insets.bottom)`. That is now true of
-          the four destinations; screens deeper in still need auditing.
+          So every scrolling screen the bar is drawn over owes itself `tabBarSpace(insets.bottom)`.
+
+          > **That debt is now paid, by shrinking the set rather than by padding it.** It used to
+          > be owed by every screen in the product and honoured by six, so every roster, poll,
+          > race and news list had a final row that was visible and unreachable. Since 2026-08-12
+          > the bar appears on five screens, and those five are exactly the five that reserve
+          > clearance - see `showsTabBar`. Twenty screens stopped owing anything at all.
 
           `marginBottom` carries the home-indicator inset, so the bar floats above it rather than
           being tucked under it. Zero in a browser, 34pt on this phone.
@@ -272,9 +282,9 @@ export default function TabsLayout() {
             > nothing for exactly this reason: there was no content behind it to come through.
 
             The cost is the one the old comment here was trying to avoid, and it is real: a
-            scrolling screen that does not reserve `tabBarSpace()` now has a last row it can never
-            bring out from under the bar. The four destinations reserve it. Screens deeper in do
-            not yet, and each one is a row somebody cannot read.
+            scrolling screen that does not reserve `tabBarSpace()` has a last row it can never
+            bring out from under the bar. That is why the bar is now drawn on five screens rather
+            than on all of them - the five reserve it, and nothing else has to.
           */
           position: 'absolute',
           left: 0,
@@ -328,9 +338,24 @@ export default function TabsLayout() {
            * never the height that was wrong.
            */
           paddingBottom: 0,
-          // Hidden entirely while the session is unresolved, so the shell does not flash
-          // chrome over the sign-in redirect.
-          display: authState === 'signed-in' ? 'flex' : 'none',
+          /*
+            Drawn on five screens, and nowhere else.
+
+            > **This used to be "every signed-in screen except chat", and the exception list was
+            > the wrong shape.** Everything below a destination lives inside `(main)`, so the bar
+            > followed a member down into the roster, car groups, Meet Information and every
+            > create form - chrome in the thumb's way on a screen they were filling in, and a row
+            > of content lost underneath it. It now appears on the four destinations and a club's
+            > front door: the places somebody is choosing where to go rather than doing something.
+
+            `showsTabBar` is a pure function over the pathname, in its own module with its own
+            tests, because every previous bug in this area was found by looking at a phone.
+
+            Still hidden while the session is unresolved, so the shell cannot flash chrome over
+            the sign-in redirect - and that check comes first, since a signed-out member has no
+            destinations to show whatever screen they are on.
+          */
+          display: authState === 'signed-in' && showsTabBar(pathname) ? 'flex' : 'none',
         },
         tabBarActiveTintColor: color.accent,
         tabBarInactiveTintColor: color.textSecondary,

@@ -118,12 +118,20 @@ export async function readCalendarFeed(
     -- Races. Visible to EVERY club member, accessible only with a roster row. Hiding races
     -- the viewer cannot enter was rejected: they need to know one exists to ask to join.
     -- race_date is a DATE, so this is the one branch that is a day rather than a moment.
+    --
+    -- **Only the races that HAVE a date.** The column went nullable on 2026-08-12 because the
+    -- same object serves an actual race and an ordinary side group, and a group has no day.
+    -- The null is what keeps it off the calendar, and this predicate is the only thing
+    -- enforcing that - without it an undated race lands on the feed with a NULL "at" column,
+    -- which every consumer would then have to defend against.
+    -- (No backticks in this comment: one of those ends the surrounding template literal.)
     SELECT 'race'::text, r.id::text, r.club_id::text, cl.name,
            r.name, r.race_date::text, true, NULL::boolean,
            (r.id IN (SELECT race_id FROM my_races)) AS accessible
       FROM races r
       JOIN clubs cl ON cl.id = r.club_id
      WHERE r.club_id IN (SELECT club_id FROM my_clubs)
+       AND r.race_date IS NOT NULL
        AND (${clubFilter}::uuid IS NULL OR r.club_id = ${clubFilter}::uuid)
 
     UNION ALL

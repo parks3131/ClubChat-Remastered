@@ -13,6 +13,223 @@ Newest first.
 
 ---
 
+## 2026-08-12 (last, again) - One swipe, written once
+
+"All calendars should move like sliding, how our actual calendar does." Only one did not: the
+`DateField` picker, which had chevrons and nothing else. Everywhere it appears - events, meetings,
+polls, and races since this morning - it was the odd calendar out.
+
+### The copy that was not made
+
+The gesture already existed, in `calendar.tsx`, and it is the most expensive hundred lines in this
+client: three wrong answers, four root causes and a red screen on a phone, all on 2026-08-06. The
+tempting move was to write a small version of it in `DateField`. That would have been the worst
+possible copy-paste in the codebase - every one of those root causes would have had two homes and
+only one of them would ever get the next fix.
+
+So the mechanics moved to `src/month-pager.tsx` as `useMonthPager`, and both callers use it. The
+split is on purpose: **the hook owns the gesture, each caller owns its chrome and its cells.** The
+Calendar draws event markers, a selected day and a month/year picker behind its title; the field
+draws a chosen day in a sheet. Neither of those is a swipe.
+
+`WEEKDAYS` was declared twice before this - once in each file - which is exactly the drift the
+extraction ends. The month vocabulary (`MonthCursor`, `shiftMonth`, `monthCells`, `todayParts`)
+went with it.
+
+### The heading was the tell that it was really shared
+
+The one property that looks decorative and is not: the heading reads the pager's `shown` rather
+than the committed cursor, so the month name travels **with** the grid instead of snapping half a
+second behind it. That was the first thing reported about the calendar's swipe in August, and the
+picker inherited the fix for free by inheriting the hook. Writing a second pager would have meant
+discovering it a second time.
+
+### Verified, and the part the browser cannot answer
+
+The pager was probed rather than eyeballed, because a mouse drag does not scroll a snap container
+on the web and dragging proves nothing - which is a harness artifact this project has already
+mistaken for a product bug once. Driving `scrollLeft` and reading what the component committed
+gave the whole cycle on both calendars: three pages wide, resting on the middle, the heading
+flipping to the next month at 1.6 pages **before** the commit, the commit landing, and the offset
+recentred to the middle page afterwards.
+
+**The founder confirmed the swipe on the iPhone while this was being written**, which is the half
+the browser never covers: the 2026-08-06 entry closes with "what none of it covers is how the snap
+feels under a finger", and that is now answered.
+
+Also asked for and done in the same pass: **the picker's month heading is the accent orange**, and
+the Calendar destination's is deliberately not. They are different objects - one is a page whose
+subject IS the month, the other is a small sheet floating over a form somebody is filling in, and
+it should read as part of the control they just opened.
+
+---
+
+## 2026-08-12 (last) - A group is a race that never picked a day
+
+Four changes to the club hub, asked for together, and one of them turned out to be a schema
+question wearing a form field's clothes.
+
+### What was asked
+
+Drop the date from race creation; make the name placeholder generic rather than
+`Nittany Lion Invitational`; replace "See all" with a **plus** and a **magnifying glass** beside
+the "Races and meets" heading, moving the add action off the full-width button at the bottom; and
+order the list by **when each was created**, newest first, since there is no date left to sort by.
+
+### The date was doing four other jobs
+
+"Remove the date from the form" reads like a form change. Tracing it found the column was
+`NOT NULL`, indexed, rendered in three places, and - the one that mattered - **what puts a race on
+the club calendar**. `readCalendar` unions races in by `race_date`. Removing it would have deleted
+a shipped feature that `PRD/07` and `PRD/09` both specify, silently, as a side effect of tidying a
+form.
+
+So it was raised rather than guessed at, and the founder's answer was better than either option I
+had prepared: **keep the date, make it optional, and have the form say what it is for.** A group
+has no day and should not be made to invent one; a race that genuinely has a day should still
+reach the calendar. The field now reads *"Add a date to put this on the club calendar. Leave it
+blank for an ordinary group."*
+
+That is the whole design in one sentence, and it is on the screen rather than in this file.
+
+### The null had to mean something everywhere
+
+Making a column nullable is one migration; making the null *mean* something is the rest of it.
+
+- `readCalendar` gained `AND r.race_date IS NOT NULL`. Without it an undated group lands on the
+  feed with a null day and every consumer downstream has to defend against it.
+- `PATCH /races/:id` takes `nullish` rather than `optional`, so an emptied field **clears** the
+  date. Folding null into absent would have made a date impossible to undo - a group created by
+  mistake as a dated race could never stop being a calendar entry, and the person emptying the box
+  would watch their change fail to happen.
+- Three render sites stopped drawing a blank line where a date used to be. TypeScript caught two
+  of them; the other two were `<Text>{race.raceDate}</Text>`, which typechecks perfectly with a
+  null and renders an empty row.
+
+### Ordering fell out of the same fact
+
+The list sorted by `race_date DESC`. A dateless group cannot be placed on a date-ordered list at
+all - it sorts to one end or the other depending on how NULLs are treated, and both answers are
+arbitrary. Creation order is the one fact every race has, it needs nothing from the person
+creating it, and it matches what a list of conversations is expected to do: the one you just made
+is at the top. Pins still win above it, because a pin exists precisely to control the hub's
+five-row preview and ignoring it would leave the feature drawing an icon and moving nothing.
+
+The old ordering comment said the direction was "not specified by PRD/09", which is exactly what
+made it safe to change - and is a small argument for writing down what a decision does *not* rest
+on.
+
+### Two things found by looking rather than by asking
+
+**The plus had to be admin-gated.** The button it replaced was wrapped in `viewer.isAdmin` and the
+icon was not, so for one edit a plain member had an add control whose only possible outcome was a
+refusal. Caught by reading what the old button was wrapped in before deleting it, which is an
+argument for deleting things last.
+
+**The create screen contradicted itself.** Its subtitle said *"Standalone from the calendar"* -
+true when nothing here ever reached the calendar, and directly contradicted by the new date field
+two inches below it. Seen in the browser, not in the diff.
+
+### And then the date stopped being typed
+
+Asked for immediately afterwards, and it is the same observation from the other end: if a date is
+optional and most groups will not have one, the people who *do* want one should not have to spell
+`YYYY-MM-DD` correctly to get it.
+
+**`DateField` already existed** and is what every other date in the product is chosen with - the
+event form uses it twice. The race form was the odd one out rather than a deliberate exception, so
+this was a reuse rather than a build: the month grid, the format it emits and the CLEAR action all
+came with it. Both the create and the edit screen now use it, so setting a date and taking one
+away are the same gesture in both places.
+
+Two things fell out of the swap. **`optional` draws CLEAR**, which turned out to be exactly the
+affordance the edit screen needed - the note there already promised "clear the field to take it
+off the calendar", and until now that meant selecting text and deleting it. And **the format
+checks became dead code**: the picker emits `YYYY-MM-DD` or nothing, so a malformed value cannot
+reach the handler. They were removed rather than left as reassurance, and the past-date check
+stayed, because the picker will happily offer last March.
+
+### Proved
+
+Nine server tests covering the pairs that matter in both directions: created with and without a
+date, malformed still refused, the calendar carrying the dated one and not the undated one, a
+cleared date **leaving** the calendar and a later-added date **joining** it, newest-created
+ordering against names and dates deliberately chosen to disagree with it, and a pin overriding
+all of it. Then walked in the browser: a group created with no date, a race created with one, the
+hub showing the newer on top, and the search sheet drawing the date under one row and a clean
+one-line row for the other.
+
+The picker was walked separately, because a control is only proved by using it: opened, a day
+picked, CLEAR emptying it again, the month chevron moved, a race created from a picked day, and
+then that date cleared from the edit screen and saved. The database was read at both ends rather
+than the screen believed - `2026-09-12` after the pick, `(none)` after the clear.
+
+---
+
+## 2026-08-12 (close) - The bar that followed you into the form
+
+The founder sent two screenshots and a rule: the tab bar belongs on the Chats list and on a club's
+front door, and nowhere else. Not while creating an event or a routine, not on the member list, not
+in car groups.
+
+### What it was doing instead
+
+Everything below a destination lives inside the Chats tab's stack, which is what keeps `/polls/:id`
+and `/races/:id` at their own URLs. That arrangement was built on 2026-07-30 specifically so the
+bar would stay - v1's rule is "every signed-in screen except chat", and matching it was treated as
+the goal. So the bar followed a member into the roster, into Meet Information, into every create
+form, and sat there floating over the content while they filled it in.
+
+### The rule was v1's, and v1's bar is a different object
+
+This is the part worth keeping. v1's tab bar sits **in flow**: the scene ends where the bar begins,
+so a bar on every screen costs nothing but space. The remaster's floats **over** the scene, which
+is what makes its translucency mean anything - and it means every screen underneath owes itself
+`tabBarSpace()` or its last row is visible and unreachable.
+
+`DESIGN/01` has recorded that obligation since the bar started floating, and named the screens that
+had not paid it: *"club hubs, rosters, polls, news, races, meetings... each is a row somebody can
+see and cannot read."* Six screens paid it. Twenty did not. **So inheriting v1's rule imported a
+defect v1 could not have.**
+
+Shrinking the set to five discharged it for all twenty at once. Padding them by hand would have
+fixed twenty screens and left the twenty-first to whoever adds it next.
+
+The worst offender was the club hub, which is one of the two screens the founder wants the bar on -
+so it is now the only one that needed clearance *added*. **Add Group is its last row**, so the bar
+sat across the button the screen exists for. It survived a month because a tall button with its
+bottom third covered still looks pressable.
+
+### Where the decision lives
+
+One pure function over the pathname, `showsTabBar`, in its own module with 45 tests. Not because
+the logic is hard - it is an allowlist plus a uuid check - but because every previous bug in this
+area was found by looking at a phone, and pitfall 34 is exactly this: *a pure function over a list
+has no business being unreachable from a test*.
+
+Two details in it are load-bearing. **The club id is matched by shape rather than by counting
+segments**, because `/clubs/add`, `/clubs/create` and `/clubs/join` are also two segments and all
+three are forms. And **an unknown route gets no bar**, so a screen added later inherits no clearance
+obligation by accident - the opposite default ships a sliced row and fails nothing.
+
+A race and the Eboard space do not keep it, though `PRD/00` principle 1 makes them the same shape as
+a club: both are reached from inside a club, so they sit below the front door.
+
+### Walked, including the part most likely to break
+
+The five screens show it and the deep ones do not, checked in the browser rather than reasoned
+about. The interesting one was the Clubs tab's **two-stage escape hatch**, which is the most
+intricate behaviour attached to this bar: from Calendar with a club in context, Chats returns to
+that club's hub - `?from=clubsTab` and all - and a second press leaves the club for the list. Both
+still work, and the query string the jump appends does not confuse the predicate, which is one of
+the cases the tests cover and now one that has actually been walked.
+
+Nothing about `(main)/_layout.tsx` changed, which is the note worth ending on: **where a screen
+lives and whether the bar is painted over it turned out to be separable questions**, and they had
+been tangled together for as long as the answer was "everywhere".
+
+---
+
 ## 2026-08-12 (last, again) - The filter that lets you swear
 
 The last of Apple's four guideline 1.2 requirements, and the only one that had been held open on

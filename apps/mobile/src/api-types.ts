@@ -116,7 +116,11 @@ export type ClubSearchResult = {
 export type RaceListItem = {
   id: string;
   name: string;
-  raceDate: string;
+  /**
+   * Null for an ordinary group. A date is what puts a race on the club calendar, so the null is
+   * meaningful rather than missing - see the note on the server's `races.raceDate`.
+   */
+  raceDate: string | null;
   /** The race's picture, as a media id. Null falls back to its initial. */
   image: string | null;
   pinned: boolean;
@@ -135,7 +139,8 @@ export type RaceDetail = {
   id: string;
   clubId: string;
   name: string;
-  raceDate: string;
+  /** Null for an ordinary group. See RaceListItem. */
+  raceDate: string | null;
   image: string | null;
   meetDescription: string | null;
   meetLocationUrl: string | null;

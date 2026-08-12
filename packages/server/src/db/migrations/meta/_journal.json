@@ -169,6 +169,13 @@
       "when": 1786511192990,
       "tag": "0023_member_invite_token",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786544564338,
+      "tag": "0024_race_date_optional",
+      "breakpoints": true
     }
   ]
 }

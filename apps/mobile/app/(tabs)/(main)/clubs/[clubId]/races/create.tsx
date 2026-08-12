@@ -43,10 +43,8 @@ import { useDeclareClub } from '../../../../../../src/current-space.tsx';
 import { toDateKey } from '../../../../../../src/dates.ts';
 import { color, radius, space, type } from '../../../../../../src/theme.ts';
 import { ARRIVED_FORWARD } from '../../../../../../src/nav.tsx';
-import { DataScreen } from '../../../../../../src/ui.tsx';
+import { DataScreen, DateField } from '../../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../../src/use-load.ts';
-
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export default function CreateRaceScreen() {
   const { clubId } = useLocalSearchParams<{ clubId: string }>();
@@ -100,13 +98,27 @@ export default function CreateRaceScreen() {
       setFailed('Name is required.');
       return;
     }
-    if (!DATE_RE.test(raceDate.trim())) {
-      setFailed('Date must be YYYY-MM-DD.');
-      return;
-    }
-    // Compared as strings against today's LOCAL key, so "today" is never rejected and no ISO
-    // string is ever parsed into a Date - which would land on UTC midnight and shift the day.
-    if (raceDate.trim() < toDateKey(new Date())) {
+    /*
+     * The date is OPTIONAL, and blank is a real answer rather than an unfinished form.
+     *
+     * Blank means "this is an ordinary group", which is the common case - most of what a club
+     * creates here is a side conversation with no day attached. It is only validated when
+     * somebody actually typed something, so an empty box can never produce an error message.
+     */
+    const dated = raceDate.trim();
+    /*
+     * Only the past-date check survives, and the format check is gone deliberately.
+     *
+     * `DateField` emits `YYYY-MM-DD` or the empty string and nothing else, so a malformed value
+     * cannot reach here at all - the check would be dead code asserting something the type of the
+     * control already guarantees. The server still validates the format, because the server does
+     * not get to assume which client is calling it.
+     *
+     * A past day IS reachable: the picker offers every month in both directions.
+     */
+    if (dated.length > 0 && dated < toDateKey(new Date())) {
+      // Compared as strings against today's LOCAL key, so "today" is never rejected and no ISO
+      // string is ever parsed into a Date - which would land on UTC midnight and shift the day.
       setFailed("Date can't be in the past.");
       return;
     }
@@ -115,7 +127,9 @@ export default function CreateRaceScreen() {
     try {
       const created = await raceApi.create(clubId, {
         name: name.trim(),
-        raceDate: raceDate.trim(),
+        // Null rather than omitted, so the server is told plainly that there is no date rather
+        // than being left to infer it from a missing field.
+        raceDate: dated.length > 0 ? dated : null,
       });
       if (picked.length > 0) {
         /*
@@ -144,29 +158,57 @@ export default function CreateRaceScreen() {
     >
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>New Race Channel</Text>
+        {/*
+          > **This used to say "Standalone from the calendar", and that stopped being true.**
+          > A date now puts the race ON the club calendar, so the old line contradicted the field
+          > directly below it - the screen would have been telling somebody the opposite of what
+          > the date box tells them, two inches apart. What it was really there to say is that
+          > this is a space rather than a diary entry, which the remaining words carry on their
+          > own.
+        */}
         <Text style={styles.subtitle}>
-          Standalone from the calendar - its own chat, roster, and meet info.
+          A space of its own - chat, roster, and meet info.
         </Text>
 
         <Text style={styles.label}>Name</Text>
+        {/*
+          A generic placeholder rather than a named race. "Nittany Lion Invitational" read as an
+          instruction to name a race, which is only half of what this screen makes: most of these
+          are ordinary groups.
+        */}
         <TextInput
           style={styles.input}
-          placeholder="Nittany Lion Invitational"
+          placeholder="Group name"
           placeholderTextColor={color.textSecondary}
           value={name}
           onChangeText={setName}
-          accessibilityLabel="Race name"
+          accessibilityLabel="Group name"
         />
 
-        <Text style={styles.label}>Date</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="YYYY-MM-DD"
-          placeholderTextColor={color.textSecondary}
-          value={raceDate}
-          onChangeText={setRaceDate}
-          accessibilityLabel="Race date, year month day"
-        />
+        <Text style={styles.label}>Date (optional)</Text>
+        {/*
+          > **The one sentence this screen has to get right.** The date is not decoration and it
+          > is not required: it is the single thing that decides whether this appears on the club
+          > calendar. Leaving that to be discovered means either a group nobody can find on the
+          > calendar, or a made-up date invented to satisfy a required field - which is what the
+          > form used to force, and it put fictional entries on the calendar.
+        */}
+        <Text style={styles.subtitle}>
+          Add a date to put this on the club calendar. Leave it blank for an ordinary group.
+        </Text>
+        {/*
+          The same picker the event form uses, rather than a typed `YYYY-MM-DD` box.
+
+          > **Reused, not rebuilt.** `DateField` already owns the month grid, the format it emits
+          > and the CLEAR action, and it is what every other date in the product is chosen with -
+          > a second picker here would be a second thing to keep in step, and a typed box was the
+          > odd one out rather than a deliberate choice.
+
+          `optional` is what draws CLEAR, which is exactly the affordance this field needs: a
+          date can be added and then taken away again, and taking it away is what returns this
+          to being an ordinary group.
+        */}
+        <DateField label="date" value={raceDate} onChange={setRaceDate} optional />
 
         <Text style={styles.label}>Add people (optional)</Text>
         <Text style={styles.subtitle}>

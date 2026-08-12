@@ -26,7 +26,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { raceApi } from '../../../../../src/api.ts';
 import { useDeclareRace } from '../../../../../src/current-space.tsx';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
-import { DataScreen } from '../../../../../src/ui.tsx';
+import { DataScreen, DateField } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
 export default function EditRaceScreen() {
@@ -54,11 +54,12 @@ function EditForm({
   onSaved,
 }: {
   raceId: string;
-  initial: { name: string; raceDate: string };
+  initial: { name: string; raceDate: string | null };
   onSaved: () => void;
 }) {
   const [name, setName] = useState(initial.name);
-  const [raceDate, setRaceDate] = useState(initial.raceDate);
+  // Empty box for a group with no date, which is the state clearing it returns to.
+  const [raceDate, setRaceDate] = useState(initial.raceDate ?? '');
   const [failed, setFailed] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -76,14 +77,25 @@ function EditForm({
      * a timestamp can never get in - a date-only value parsed as an instant becomes UTC midnight
      * and renders a day early in every negative-offset zone.
      */
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(raceDate.trim())) {
-      setFailed('Use a date like 2026-09-15.');
-      return;
-    }
+    /*
+     * No format check: `DateField` emits `YYYY-MM-DD` or nothing, so a malformed value cannot
+     * reach here. The server still validates, because it does not get to assume its caller.
+     */
+    const dated = raceDate.trim();
 
     setSaving(true);
     try {
-      await raceApi.update(raceId, { name: name.trim(), raceDate: raceDate.trim() });
+      /*
+       * An empty box sends `null`, which CLEARS the date and takes this off the calendar.
+       *
+       * Sending nothing would mean "leave it alone", so emptying the field would silently do
+       * nothing and the date would come back on the next load - a change somebody made and
+       * watched fail to happen. The three states are distinct all the way to the column.
+       */
+      await raceApi.update(raceId, {
+        name: name.trim(),
+        raceDate: dated.length > 0 ? dated : null,
+      });
       onSaved();
     } catch {
       setFailed('Could not save. Check your connection and try again.');
@@ -105,16 +117,17 @@ function EditForm({
           accessibilityLabel="Race name"
         />
 
-        <Text style={styles.label}>Date</Text>
-        <TextInput
-          style={styles.input}
-          value={raceDate}
-          onChangeText={setRaceDate}
-          placeholder="2026-09-15"
-          placeholderTextColor={color.textSecondary}
-          autoCapitalize="none"
-          accessibilityLabel="Race date, as year-month-day"
-        />
+        <Text style={styles.label}>Date (optional)</Text>
+        {/*
+          The same picker the create form and the event form use. `optional` draws CLEAR, which
+          is the control that takes this race off the calendar - the note below says so in words,
+          and this is the thing that does it.
+        */}
+        <DateField label="date" value={raceDate} onChange={setRaceDate} optional />
+        <Text style={styles.note}>
+          A date puts this on the club calendar. Clear the field to take it off and leave it as an
+          ordinary group.
+        </Text>
         <Text style={styles.note}>
           Moving the date does not move anything already arranged around it - car groups and Meet
           Information stay exactly as they are.

@@ -31,37 +31,23 @@ import { useSession } from '../../src/chat-provider.tsx';
 import { formatDayTitle, formatMonthTitle, formatTimeOfDay, toDateKey } from '../../src/dates.ts';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { color, radius, space, tabBarSpace, type } from '../../src/theme.ts';
+import {
+  WEEKDAYS,
+  monthCells,
+  shiftMonth,
+  todayParts,
+  useMonthPager,
+  type MonthCursor,
+} from '../../src/month-pager.tsx';
 import { DataScreen, EmptyState } from '../../src/ui.tsx';
 import { useLoad } from '../../src/use-load.ts';
 
-/** Six weeks, fixed, so the grid's height never changes as months are paged. */
-const CELLS = 42;
-const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'] as const;
-
-function todayParts(): { year: number; month: number } {
-  const now = new Date();
-  return { year: now.getFullYear(), month: now.getMonth() + 1 };
-}
-
-type MonthCursor = { year: number; month: number };
-
-/**
- * The month `delta` away, carrying the year.
- *
- * Its own function because the pager needs the two NEIGHBOURS as well as the destination: a swipe
- * draws the month either side of the current one before it knows which way you are going. This
- * was the body of `step` when only the arrows could move.
- *
- * The double modulo is what makes December + 1 and January - 1 both work: `%` keeps the sign of
- * the dividend in JavaScript, so a plain one gives -1 for January's predecessor.
+/*
+ * The month vocabulary and the swipe both live in `src/month-pager.tsx` now, so this screen and
+ * the date picker share one definition of each. `CELLS`, `WEEKDAYS`, `todayParts`, `MonthCursor`
+ * and `shiftMonth` were all declared here until 2026-08-12; `WEEKDAYS` was declared here AND in
+ * `ui.tsx`, which is the drift that extraction exists to end.
  */
-function shiftMonth(from: MonthCursor, delta: number): MonthCursor {
-  const zeroBased = from.month - 1 + delta;
-  return {
-    year: from.year + Math.floor(zeroBased / 12),
-    month: (((zeroBased % 12) + 12) % 12) + 1,
-  };
-}
 
 
 /**
@@ -308,125 +294,22 @@ function MonthPager({
   onStep: (delta: number) => void;
   onJump: (next: MonthCursor) => void;
 }) {
-  const [width, setWidth] = useState<number | null>(null);
   const [picking, setPicking] = useState(false);
-  const pager = useRef<ScrollView>(null);
-  const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** True from the moment a page is committed until the recentre it causes has been absorbed. */
-  const committing = useRef(false);
-  /** The most recent offset, so a settle acts on where the pager IS, not where it was. */
-  const lastX = useRef(0);
-  /**
-   * Which page the finger is over, as a delta from `cursor`. The TITLE reads this; nothing else
-   * does.
+
+  /*
+   * The swipe, from the shared hook.
    *
-   * **The heading has to move with the grid, not after it.** Committing is deliberately late -
-   * it waits for the scroll to come to rest - so a title driven by `cursor` alone stayed on the
-   * old month for the whole animation and then snapped, about half a second behind the thing it
-   * names. Naming the month you are moving to while you are moving to it is the difference
-   * between a heading and a report.
-   *
-   * It flips at the halfway mark, which is also the point the snap commits to: the month that
-   * owns most of the screen is the month named. A drag that falls short crosses nothing, so the
-   * title never lies about a swipe that snapped back.
+   * > **This block used to be about a hundred lines here**, and it moved to `src/month-pager.tsx`
+   * > on 2026-08-12 so the date picker could have the same gesture rather than a second copy of
+   * > it. Every root cause the 2026-08-06 session found - the stale settle offset, the double
+   * > commit, the late heading - lives there now, once. What stayed here is what is actually
+   * > this screen's: the day cells, the event markers, and the month/year picker behind the title.
    */
-  const [preview, setPreview] = useState(0);
+  const pager = useMonthPager(cursor, onStep);
+  const { width } = pager;
 
-  /** Put the viewport back on the middle page, where a swipe can go either way. */
-  const recentre = (animated: boolean) => {
-    if (width !== null) pager.current?.scrollTo({ x: width, y: 0, animated });
-  };
-
-  // Once the width is known, and again whenever it changes, rest on the middle page. Without
-  // this the pager opens showing the PREVIOUS month, which is page zero.
-  useEffect(() => {
-    if (width === null) return;
-    // After layout rather than during it: scrolling a view that has not been laid out is a no-op
-    // on Android, and the pager would silently open on the wrong page there alone.
-    const id = setTimeout(() => recentre(false), 0);
-    return () => clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [width]);
-
-  // Recentre after the cursor moves for any reason - an arrow, or the picker - so the pages
-  // either side of the new month are the ones a swipe reaches.
-  useEffect(() => {
-    recentre(false);
-    // An arrow or the picker moves the cursor with no scroll behind it, so the preview has
-    // nothing to reset it and would keep naming a month offset from the new one.
-    setPreview(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cursor.year, cursor.month]);
-
-  useEffect(() => () => (settle.current ? clearTimeout(settle.current) : undefined), []);
-
-  /**
-   * Commit a page once the scroll has come to rest.
-   *
-   * **Driven by a quiet period rather than by `onMomentumScrollEnd`.** That event is the obvious
-   * hook and it is not dependable across platforms: a slow drag released without a flick produces
-   * no momentum at all, and on web the paging is CSS scroll-snap, whose animation the event does
-   * not describe. Waiting for the offset to stop changing is true on every platform, because it
-   * is a statement about the offset rather than about how it got there.
-   */
-  /**
-   * Act on where the pager came to rest.
-   *
-   * Reads `lastX` rather than an offset captured when the timer was scheduled. The captured
-   * version acts on an offset up to 140ms old, which is most of a snap animation - it is only
-   * ever right when the scroll happens to have already stopped.
-   */
-  const commitPage = () => {
-    if (width === null || committing.current) return;
-    const x = lastX.current;
-    const page = Math.round(x / width);
-    const delta = page - 1;
-    // Ignore anything that has not landed on a neighbouring page: a drag that fell short snaps
-    // back on its own and must not be read as a month.
-    if (delta === 0 || Math.abs(x - page * width) > width * 0.1) return;
-    committing.current = true;
-    // Batched with the cursor move, so the title never flashes: it is already showing this month
-    // from the preview, and `cursor + delta` with the preview back at zero is the same month.
-    setPreview(0);
-    onStep(delta);
-    // Recentred here as well as by the `cursor` effect, because this is the path that must not be
-    // left mid-page for even a frame; the effect is what covers an arrow or the picker.
-    recentre(false);
-    setTimeout(() => (committing.current = false), 200);
-  };
-
-  const onScroll = (x: number) => {
-    if (width === null) return;
-    /*
-     * Deaf while committing.
-     *
-     * Committing recentres, recentring scrolls, and scrolling lands back here - so without this
-     * one swipe can page twice, the second time from an offset the first has already acted on.
-     */
-    if (committing.current) return;
-    lastX.current = x;
-
-    // The title, live. `round` puts the boundary at half a page, so this is at most two state
-    // changes across a whole swipe rather than one per frame.
-    const over = Math.round(x / width) - 1;
-    if (over !== preview) setPreview(over);
-
-    /*
-     * A quiet period, as the backstop.
-     *
-     * The scroll-end events below are the real signal and this covers what they miss: a slow
-     * drag released without a flick produces no momentum event on some platforms, and on web the
-     * paging is CSS scroll-snap, whose animation neither event describes. Waiting for the offset
-     * to stop moving is true everywhere, because it is a statement about the offset rather than
-     * about how it got there.
-     */
-    if (settle.current) clearTimeout(settle.current);
-    settle.current = setTimeout(commitPage, 140);
-  };
-
-  const months = [shiftMonth(cursor, -1), cursor, shiftMonth(cursor, 1)];
   /** What the heading says: the month under the finger, which is `cursor` once at rest. */
-  const shown = preview === 0 ? cursor : shiftMonth(cursor, preview);
+  const { months, shown } = pager;
 
   return (
     <View>
@@ -474,36 +357,15 @@ function MonthPager({
         ))}
       </View>
 
-      <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
-        <ScrollView
-          ref={pager}
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          // The parent is a vertical ScrollView, and the two arbitrate between themselves: a
-          // horizontal drag belongs to this one, a vertical drag passes through. That is the
-          // whole reason this is a ScrollView rather than a PanResponder - the arbitration is
-          // the hard part, and it already exists.
-          //
-          // It also keeps day taps working, which a responder claiming the touch would not.
-          scrollEventThrottle={16}
-          onScroll={(event) => onScroll(event.nativeEvent.contentOffset.x)}
-          /*
-            The authoritative signals on a device, both handled because only one of them fires
-            for any given gesture: a flick ends with momentum, a slow drag released in place
-            ends without it. Each carries the settled offset, so neither waits on the backstop.
-          */
-          onMomentumScrollEnd={(event) => {
-            lastX.current = event.nativeEvent.contentOffset.x;
-            commitPage();
-          }}
-          onScrollEndDrag={(event) => {
-            lastX.current = event.nativeEvent.contentOffset.x;
-          }}
-          // Turned off so a fast flick cannot cross two months in one gesture - there is no
-          // third page to land on, and the pager would snap back looking broken.
-          decelerationRate="fast"
-        >
+      {/*
+        The parent is a vertical ScrollView, and the two arbitrate between themselves: a
+        horizontal drag belongs to the pager, a vertical drag passes through. That is the whole
+        reason this is a ScrollView rather than a PanResponder - the arbitration is the hard
+        part, and it already exists. It also keeps day taps working, which a responder claiming
+        the touch would not.
+      */}
+      <View onLayout={pager.onLayout}>
+        <ScrollView ref={pager.pagerRef} {...pager.pagerProps}>
           {months.map((m) => (
             <MonthGrid
               key={`${m.year}-${m.month}`}
@@ -670,21 +532,18 @@ const MonthGrid = memo(function MonthGrid({
   /** The pager's measured width. Null before the first layout, when nothing is drawn yet. */
   width: number | null;
 }) {
-  const cells = useMemo(() => {
-    // Built from components, never from a parsed ISO string: an ISO date is UTC midnight and
-    // renders a day early in a negative-offset timezone.
-    const first = new Date(year, month - 1, 1);
-    const leading = first.getDay();
-    const start = new Date(year, month - 1, 1 - leading);
-    return Array.from({ length: CELLS }, (_, i) => {
-      const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
-      return {
+  const cells = useMemo(
+    () =>
+      // `monthCells` owns the six-week span and the build-from-components rule that keeps an ISO
+      // string from ever becoming UTC midnight and rendering a day early. Shared with the date
+      // picker, which draws the same span with different cells in it.
+      monthCells(year, month).map((date) => ({
         date,
         key: toDateKey(date),
         inMonth: date.getMonth() === month - 1,
-      };
-    });
-  }, [year, month]);
+      })),
+    [year, month],
+  );
 
   return (
     <View style={width === null ? undefined : { width }}>

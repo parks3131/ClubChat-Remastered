@@ -126,8 +126,13 @@ export default function RaceProfileScreen() {
               The date, spelled out. `raceDate` is a plain calendar day rather than a timestamp -
               a race has a day, not a time - so it is formatted without ever becoming a Date in
               UTC, which is the bug that rendered every race a day early west of Greenwich.
+
+              Absent for an ordinary group, and then the line is not drawn at all rather than
+              drawn empty: a blank row under the title reads as a date that failed to load.
             */}
-            <Text style={styles.date}>{formatDateLong(race.raceDate)}</Text>
+            {race.raceDate !== null && (
+              <Text style={styles.date}>{formatDateLong(race.raceDate)}</Text>
+            )}
             {pictureError !== null && <Text style={styles.error}>{pictureError}</Text>}
 
             <Pressable

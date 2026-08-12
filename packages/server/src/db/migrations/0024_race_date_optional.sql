@@ -1,0 +1,1 @@
+ALTER TABLE "races" ALTER COLUMN "race_date" DROP NOT NULL;

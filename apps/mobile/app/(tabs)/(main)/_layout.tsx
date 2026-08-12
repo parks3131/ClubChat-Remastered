@@ -8,12 +8,22 @@
  * > `/clubs/polls/:id`. The group is what lets the whole product nest inside one tab without a
  * > single href changing.
  *
- * **What this buys: the tab bar stays.** `SPEC/PRD/15` records v1's rule - the tab bar is present
- * on every signed-in screen except chat, so a member reading a roster or a poll is always one tap
- * from the four destinations. Reaching that in Expo Router means those screens live *inside* a
- * tab rather than beside the tab group, which is what this file makes possible. Chat stays a
- * sibling of `(tabs)` on the root stack precisely so that it is the one screen that covers the
- * bar, because chat owns both edges: a glass header at the top and the composer at the bottom.
+ * **What this buys: one stack for the whole product, at its own URLs.** These screens live *inside*
+ * a tab rather than beside the tab group, so `/polls/:id`, `/races/:id` and `/clubs/:id/members`
+ * are one history that a member walks down and back out of.
+ *
+ * > **It no longer buys a tab bar on all of them, and it used to.** The rule was v1's - present on
+ * > every signed-in screen except chat - and it meant the floating bar followed somebody into the
+ * > roster, the car groups and every create form, where it is chrome in the way and costs a row of
+ * > content underneath it. Since 2026-08-12 the bar is drawn on the four destinations and a club's
+ * > front door only; see `showsTabBar` in `src/tab-bar-routes.ts` and `SPEC/DESIGN/01-tab-bar.md`.
+ * > Nothing about *this* file changed, which is the point worth noticing: where a screen lives and
+ * > whether the bar is painted over it turned out to be separable questions, and they were tangled
+ * > together for as long as the answer was "everywhere".
+ *
+ * Chat stays a sibling of `(tabs)` on the root stack, because chat owns both edges - a glass header
+ * at the top and the composer at the bottom - and that is a stronger claim than not being painted
+ * over: it covers the whole shell.
  *
  * ---
  *

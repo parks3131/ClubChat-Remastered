@@ -961,6 +961,16 @@ export const messageMentions = pgTable(
  * `raceDate` is a DATE, not a timestamp: a race has a day, not a time. Storing it as a
  * timestamp would reintroduce the timezone bug where a date-only value parsed as an ISO
  * string becomes UTC midnight and renders a day early in negative-offset zones.
+ *
+ * > **It is NULLABLE, and the null carries meaning: this space is not on the calendar.**
+ * > A race started life as a dated event, so the column was `NOT NULL` and every race appeared
+ * > in the merged calendar feed. In practice the same object is used for anything a club wants a
+ * > side conversation about, and being forced to invent a date for a group that has none is
+ * > worse than the group being absent from the calendar. So the date is optional from
+ * > 2026-08-12, and `readCalendar` unions in **only the races that have one**.
+ * >
+ * > That is the whole contract: a date is what puts a race on the calendar, and the create form
+ * > says so in those words rather than leaving somebody to discover it.
  */
 export const races = pgTable(
   'races',
@@ -970,7 +980,7 @@ export const races = pgTable(
       .notNull()
       .references(() => clubs.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
-    raceDate: date('race_date').notNull(),
+    raceDate: date('race_date'),
     /** The race's picture, as a media id. Identity media, exactly like a club's `image`. */
     image: text('image'),
     // Meet Information. Empty-state behaviour differs per field on purpose: description,

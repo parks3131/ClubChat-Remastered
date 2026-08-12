@@ -42,8 +42,14 @@ Two views over **one merged feed**: a month grid for "what is happening when", a
    create action is offered.
 7. **Every read respects the viewer's own access.** An Eboard meeting only appears for Eboard
    members; a race poll only for race members.
-8. **Every race is visible on the calendar to every club member**, whether or not they have
-   race access. Tapping through without access leads to the race preview, not the race.
+8. **Every race that HAS a date is visible on the calendar to every club member**, whether or
+   not they have race access. Tapping through without access leads to the race preview, not the
+   race.
+
+   **A race's date is optional** ([Races and meets](09-races-and-meets.md) rule 1), and one
+   without a date is simply not a calendar item - it is an ordinary group with a chat and a
+   roster. That is the whole meaning of leaving the date blank, so the absence here is the
+   feature rather than a gap.
 9. Only an admin can create, edit, or delete an event. Creating one notifies every other club
    member.
 10. **A created event posts a card into club chat** with its title, date, and location, and

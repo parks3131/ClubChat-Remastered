@@ -100,10 +100,16 @@ export function registerRaceRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   const CreateRaceBody = z.object({
     name: z.string().min(1).max(200),
-    // A DATE, not a timestamp: a race has a day, not a time. Validated as `YYYY-MM-DD` and
-    // passed through as a string, so it is never parsed into a Date and re-serialised - an
-    // ISO date parsed as UTC midnight renders a day early in negative-offset zones.
-    raceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD'),
+    /*
+     * A DATE, not a timestamp: a race has a day, not a time. Validated as `YYYY-MM-DD` and
+     * passed through as a string, so it is never parsed into a Date and re-serialised - an
+     * ISO date parsed as UTC midnight renders a day early in negative-offset zones.
+     *
+     * **Optional, and its absence is what keeps a group off the calendar.** See the note on
+     * `createRace`. `nullish` rather than `optional` so a client can send an explicit null
+     * without a 400, which is what a form with an empty date box naturally produces.
+     */
+    raceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD').nullish(),
   });
 
   app.post<{ Params: { id: string } }>('/clubs/:id/races', async (request, reply) => {
@@ -154,7 +160,9 @@ export function registerRaceRoutes(app: FastifyInstance, deps: AppDeps): void {
     // domain. The domain still refuses a blank name - this only makes the refusal say the
     // right thing.
     name: z.string().trim().min(1).max(120).optional(),
-    raceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    // `nullish`, so an explicit null CLEARS the date and takes the race off the calendar.
+    // Absent still means "leave it alone" - the same three-state distinction `image` makes.
+    raceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
     image: z.string().uuid().nullish(),
   });
 

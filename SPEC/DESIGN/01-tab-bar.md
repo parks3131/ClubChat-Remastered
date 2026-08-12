@@ -2,16 +2,42 @@
 
 ## Purpose
 
-The four top-level destinations, always one tap away. It is the only persistent navigation in the
-product, so it is also the only thing keeping a member from having to unwind a stack to get
-anywhere.
+The four top-level destinations, offered where somebody is **choosing where to go** rather than
+doing something. It is the product's only lateral navigation, so it is what keeps a member from
+unwinding a stack to get anywhere.
 
 ## Where it appears
 
-Every signed-in screen **except chat**, in all four chat scopes. Chat hides it on mount and
-restores it on unmount, because chat owns both edges of the screen and a tab bar under the composer
-puts two competing bars in the thumb's way. Signed-out screens have none at all. See
-[Screen map](../PRD/15-screen-map.md).
+**Five screens**, and nowhere else:
+
+| Level | Screens |
+|---|---|
+| The four destinations | Chats, Calendar, Notifications, Profile |
+| A club's front door | The club hub |
+
+> **It used to be "every signed-in screen except chat", and that was the wrong rule.** Everything
+> below a destination lives inside the Chats tab's stack, so the bar followed a member all the way
+> down - over the roster, over car groups, over Meet Information, over every create form. Two costs,
+> and the second is the one that made it a defect rather than a preference. A floating bar over a
+> form is chrome in the thumb's way on a screen somebody is filling in. And because it floats over
+> the scene rather than sitting in flow, **every screen underneath it owes clearance** (rule 6), a
+> debt twenty screens never paid - so each had a last row that was visible and unreachable.
+>
+> Changed 2026-08-12, at the founder's request. Shrinking the set discharged the clearance debt
+> for twenty screens at once, which padding each of them by hand would not have done for the
+> twenty-first.
+
+**A race and the Eboard space do not keep it**, though [Overview](../PRD/00-overview.md) principle 1
+makes them the same shape as a club. They are reached from inside a club, so they sit below the
+front door and follow the general rule.
+
+**Chat is unchanged and is still a stronger case.** It lives outside the tab group entirely rather
+than merely not being painted over, because it owns both edges of the screen. Signed-out screens
+have none at all. See [Screen map](../PRD/15-screen-map.md).
+
+Which screen is which is one pure function over the pathname, `showsTabBar`, with its own tests.
+**Unknown routes get no bar**, so a screen added later inherits no clearance obligation by
+accident - the opposite default ships a sliced row and fails nothing.
 
 ## Anatomy
 
@@ -61,7 +87,7 @@ puts two competing bars in the thumb's way. Signed-out screens have none at all.
 | Inactive item | Icon in secondary text colour, no pill |
 | Badge present | Count on the Notifications icon, capped at 99+ |
 | Badge absent | Nothing drawn at zero, never a "0" |
-| Hidden | In chat, and while the session is unresolved - so the shell cannot flash chrome over the sign-in redirect |
+| Hidden | On every screen but the five above, and while the session is unresolved - so the shell cannot flash chrome over the sign-in redirect |
 
 The badge counts **things, not messages**: a chat with 48 unread adds one. A badge of 200 because
 somebody sent 200 messages is noise.
@@ -70,12 +96,18 @@ somebody sent 200 messages is noise.
 
 | Obligation | Who owes it | Recorded in |
 |---|---|---|
-| Reserve bottom clearance from the shared tab-bar token, or keep a last row that is visible and unreachable | **Every scrolling screen** | [Design system](../TECH/13-design-system.md), [Screen map](../PRD/15-screen-map.md) |
-| Hide the bar on mount and restore it on unmount | Chat, in all four scopes | [Screen map](../PRD/15-screen-map.md) |
+| Reserve bottom clearance from the shared tab-bar token, or keep a last row that is visible and unreachable | **The five screens the bar is drawn on** | [Design system](../TECH/13-design-system.md), [Screen map](../PRD/15-screen-map.md) |
+| Live outside the tab group | Chat, in all four scopes | [Screen map](../PRD/15-screen-map.md) |
 
-**The first one is live and only partly paid.** The four destinations reserve it. Every screen
-deeper in - club hubs, rosters, polls, news, races, meetings - does not, and each is a row somebody
-can see and cannot read.
+**The first one is now paid in full, and it was paid by shrinking the set rather than by extending
+it.** It was previously owed by every scrolling screen in the product and honoured by six, so every
+roster, poll, race and news list had a final row nobody could reach - the debt was recorded here
+and went unnoticed for a month because a sliced row still looks like a row. The five screens that
+keep the bar reserve the clearance; nothing else owes anything.
+
+The club hub was the last one outstanding, and it was the worst of them: **Add Group is its final
+row**, so the bar sat across the button the screen exists for. It survived because a tall button
+with its bottom third covered still looks pressable.
 
 ## Accessibility
 

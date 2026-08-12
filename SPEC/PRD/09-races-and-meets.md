@@ -5,10 +5,20 @@ logistics - replacing the throwaway group chat spun up per race.
 
 #### Creation and access
 
-1. **A race is created with a name and a date only**, by a club admin, from the club's Races
-   & Meets list.
-2. **Every club member can see every race exists** - in the races list, on the calendar, and
-   in the club hub preview.
+1. **A race is created with a name, and optionally a date**, by a club admin, from the club's
+   Races & Meets list.
+
+   **The date is what puts it on the club calendar, and leaving it out is a real answer.** The
+   same object serves an actual race and an ordinary side group, and a group has no day -
+   requiring one meant inventing a date, which put fictional entries on the calendar. The create
+   form says this in those words rather than leaving it to be discovered. A date can be added or
+   cleared later from Edit, so a group can become a dated race and back again.
+2. **Every club member can see every race exists** - in the races list and in the club hub
+   preview, and **on the calendar if it has a date**.
+
+2a. **The list is ordered by when each was created, newest first**, with the viewer's pinned
+   races above everything. Not by date - an undated group has none - and not alphabetical, which
+   would reshuffle on every addition and never show the newest thing.
 3. **Access is always by request.** There is no "open" race policy. A club member requests;
    any club admin approves, denies, or adds them directly. An admin may not add *themselves* -
    adding yourself is joining, and joining is by request.
@@ -32,8 +42,8 @@ logistics - replacing the throwaway group chat spun up per race.
    require a real roster row, for admins too.
 5. **A manager not on the roster** sees a request-to-join screen plus a way into the roster to
    manage others, not the race itself.
-6. **A club member with no access who taps a race gets a preview**: name, date, Meet
-   Information, and the request action. Nothing member-only is exposed.
+6. **A club member with no access who taps a race gets a preview**: name, its date if it has
+   one, Meet Information, and the request action. Nothing member-only is exposed.
 7. **A race member is redirected straight into race chat** on entering the race. Chat is the
    race's home screen; everything else is reached from its header menu.
 8. Any race member can leave the race, which also removes them from their car group.

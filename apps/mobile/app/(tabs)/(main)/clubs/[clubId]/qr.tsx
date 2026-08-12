@@ -28,7 +28,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { clubApi } from '../../../../../src/api.ts';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { QrCode } from '../../../../../src/qr-code.tsx';
-import { color, radius, space, tabBarSpace, type } from '../../../../../src/theme.ts';
+import { color, radius, space, type } from '../../../../../src/theme.ts';
 import { DataScreen } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
@@ -126,9 +126,13 @@ export default function ClubQrScreen() {
         return (
           <ScrollView
             style={styles.flex}
+            /*
+              No tab-bar clearance: the bar is not drawn on this screen. Reserving it left a
+              bar's worth of dead space under the Save button once the bar stopped appearing.
+            */
             contentContainerStyle={[
               styles.body,
-              { paddingBottom: tabBarSpace(insets.bottom) + space.lg },
+              { paddingBottom: insets.bottom + space.lg },
             ]}
           >
             <Text style={styles.name}>{club.name}</Text>

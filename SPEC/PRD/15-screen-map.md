@@ -270,16 +270,27 @@ Read off v1 directly on 2026-07-30, because none of it is derivable from the scr
 of it is load-bearing. **This is what shipped**, and where the remaster currently differs the
 difference is recorded as such rather than quietly kept.
 
-**The tab bar.** Present on every signed-in screen **except chat**, in all three chat scopes.
-Chat hides it on mount and restores it on unmount, because chat owns both edges of the screen: a
-translucent header at the top and the composer pinned to the bottom, and a tab bar under the
-composer would put two competing bars in the thumb's way. Everywhere else - club hub, roster,
-polls, races, highlights, gallery, calendar - the tab bar stays, so a member is never more than
-one tap from the four destinations. Signed-out screens have no tab bar at all.
+**The tab bar.** Present on **five screens**: the four destinations, and a club's front door.
+Absent everywhere else - the roster, polls, races, highlights, the gallery, every create form, and
+chat. Signed-out screens have none at all.
 
-*(The remaster differed here until 2026-07-30, when every non-destination screen moved inside the
-first destination's stack. The tab bar is now present everywhere v1 puts it, and absent only in
-chat.)*
+The principle is that the bar belongs where somebody is **choosing where to go**, and not where
+they are doing something. A club hub is a set of doors, so it keeps the bar; a form is work, so it
+does not. Chat is the strongest case of all and is handled differently again - it sits outside the
+tab group entirely rather than merely not being drawn over, because it owns both edges of the
+screen: a translucent header at the top and the composer pinned to the bottom.
+
+> **Changed 2026-08-12, and this is a deliberate divergence from v1.** v1 keeps the bar on every
+> signed-in screen except chat, and the remaster matched that from 2026-07-30. It was wrong for
+> this build for a reason v1 never had to face: **the remaster's bar floats over the scene rather
+> than sitting in flow**, so every screen underneath owes clearance (below), and twenty screens
+> never paid it - each had a last row that was visible and unreachable. Shrinking the set to five
+> discharged that for all of them at once. Recorded as a divergence rather than as a correction,
+> since v1's rule is right for v1's bar.
+
+**A race and the Eboard space do not keep it**, though [Overview](00-overview.md) principle 1 makes
+them the same shape as a club: both are reached from inside a club, so they sit below the front
+door.
 
 **It floats over the screen rather than sitting under it, and the content stays visible around and
 behind it.** The bar is inset from both edges and lifted off the bottom, and it is translucent, so
@@ -287,6 +298,11 @@ a list scrolls past it and can be seen in the strips either side and in the band
 else makes it read as a lid closed over the page rather than as a control resting on one. **The
 obligation this creates is absolute: a screen that scrolls must be able to bring its last row out
 from under the bar**, or that row is visible and unreadable, which is worse than it being absent.
+
+That obligation now falls on exactly the five screens above, and all five meet it. The club hub was
+the last one outstanding and the worst - **Add Group is its final row**, so the bar sat across the
+button the screen exists for, and it survived because a tall button with its bottom third covered
+still looks pressable.
 
 **The four destinations are named by icon alone**, from 2026-08-09. The name each one lost is still
 announced to a screen reader, because that is a different question from whether it is drawn.

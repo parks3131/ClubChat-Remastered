@@ -20,7 +20,8 @@ import { channelApi, clubApi, dmApi, raceApi } from '../../../../../src/api.ts';
 import type { RaceListItem } from '../../../../../src/api-types.ts';
 import { useSession } from '../../../../../src/chat-provider.tsx';
 import { longPressFeedback } from '../../../../../src/haptics.ts';
-import { color, radius, space, type } from '../../../../../src/theme.ts';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { color, radius, space, tabBarSpace, type } from '../../../../../src/theme.ts';
 import {
   Avatar,
   ConfirmDialog,
@@ -50,6 +51,18 @@ const raceHref = (race: { id: string; channelId: string | null }): string =>
 
 export default function ClubHubScreen() {
   const { clubId, from } = useLocalSearchParams<{ clubId: string; from?: string }>();
+
+  /*
+   * Clearance for the tab bar, which floats OVER this screen rather than sitting under it.
+   *
+   * > **This hub is one of the five screens the bar is drawn on** (`showsTabBar`), so it is one of
+   * > the five that owes itself the clearance - and it never paid. Add Group is the last row here,
+   * > so the bar sat across the button somebody taps to do the thing this screen exists for.
+   * > `DESIGN/01` has recorded the debt since the bar started floating and named club hubs
+   * > specifically; it went unnoticed because the button is tall enough to still look pressable
+   * > with its bottom third covered.
+   */
+  const insets = useSafeAreaInsets();
 
   /*
    * Where this hub's back control goes, which depends on how the hub was reached.
@@ -159,7 +172,13 @@ export default function ClubHubScreen() {
         const unread = unreadFor(data.club.channelId);
 
         return (
-          <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
+          <ScrollView
+            style={styles.flex}
+            contentContainerStyle={[
+              styles.content,
+              { paddingBottom: tabBarSpace(insets.bottom) },
+            ]}
+          >
             <Stack.Screen
               options={{
                 title: data.club.name,
@@ -262,24 +281,61 @@ export default function ClubHubScreen() {
               <View style={styles.racesHead}>
                 <Text style={styles.sectionTitle}>Races and meets</Text>
                 {/*
-                  A sheet, not a page. v1 has no races list screen at all - "See all" is usually
-                  "find the one I am looking for", and a search over the club's races answers that
-                  without a destination whose only other job would be to be a back target.
+                  Two controls where "See all" used to be one, and they are the section's whole
+                  toolbar: add a group, or find one.
+
+                  > **The add control moved here from a full-width button at the bottom of the
+                  > screen.** That button was the only thing below the panel, so on a club with a
+                  > few races it sat alone under a fold - the action lived furthest from the list
+                  > it acts on. Beside the heading it is next to the thing it adds to, and the
+                  > screen ends where its content ends.
+
+                  Search opens the same sheet "See all" opened, unchanged: a sheet rather than a
+                  page, because "see all" is nearly always "find the one I am looking for", and a
+                  search answers that without a destination whose only other job is to be a back
+                  target. The magnifying glass says that plainly, where the old label promised a
+                  list and delivered a search box.
                 */}
-                <Pressable
-                  onPress={() => {
-                    setRaceSearch('');
-                    setRacesOpen(true);
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="See all races"
-                >
-                  <Text style={styles.seeAll}>See all</Text>
-                </Pressable>
+                <View style={styles.racesActions}>
+                  {/*
+                    Admin only, exactly as the button it replaced was. Creating a race is
+                    `isClubAdmin` on the server, so offering it to a member would be a control
+                    whose only outcome is a refusal.
+                  */}
+                  {data.club.viewer.isAdmin && (
+                    <Link
+                      href={`/clubs/${clubId}/races/create`}
+                      asChild
+                      accessibilityRole="link"
+                    >
+                      <Pressable
+                        style={styles.raceAction}
+                        accessibilityLabel="Add a race or group"
+                        hitSlop={space.xs}
+                      >
+                        <MaterialIcons name="add" size={22} color={color.accent} />
+                      </Pressable>
+                    </Link>
+                  )}
+                  <Pressable
+                    style={styles.raceAction}
+                    onPress={() => {
+                      setRaceSearch('');
+                      setRacesOpen(true);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Search races and groups"
+                    hitSlop={space.xs}
+                  >
+                    <MaterialIcons name="search" size={22} color={color.accent} />
+                  </Pressable>
+                </View>
               </View>
 
               {previewed.length === 0 ? (
-                <Text style={styles.emptyRaces}>No upcoming races yet.</Text>
+                // "Upcoming" was a claim about dates, and a group has none - so an empty section
+                // used to promise something that would never arrive for most of what goes here.
+                <Text style={styles.emptyRaces}>Nothing here yet.</Text>
               ) : (
                 previewed.map((race, index) => (
                   <View key={race.id}>
@@ -457,15 +513,12 @@ export default function ClubHubScreen() {
               />
             )}
 
-            {/* Admin only: the one create action the hub carries. */}
-            {data.club.viewer.isAdmin && (
-              <Link href={`/clubs/${clubId}/races/create`} asChild accessibilityRole="link">
-                <Pressable style={styles.addGroup} accessibilityLabel="Add a race or meet">
-                  <MaterialIcons name="add" size={20} color={color.onAccent} />
-                  <Text style={styles.addGroupLabel}>Add Group</Text>
-                </Pressable>
-              </Link>
-            )}
+            {/*
+              The full-width "Add Group" button used to sit here, and it moved into the "Races
+              and meets" heading on 2026-08-12 - beside the list it adds to, rather than alone
+              below the panel where it was the furthest control on the screen from its own
+              subject. See the two icons up there.
+            */}
           </ScrollView>
         );
       }}
@@ -589,7 +642,12 @@ function SheetRaceRow({
         <Text style={styles.raceName} numberOfLines={1}>
           {race.name}
         </Text>
-        <Text style={styles.emptyRaces}>{race.raceDate}</Text>
+        {/*
+          The date, when there is one. An ordinary group has none, and an empty second line
+          leaves the name floating oddly high in a row sized for two - so the row simply
+          becomes a one-line row.
+        */}
+        {race.raceDate !== null && <Text style={styles.emptyRaces}>{race.raceDate}</Text>}
       </View>
       {/* The state the long press sets, shown here as well as in the preview list - otherwise
           pinning from this sheet looks like it did nothing. */}
@@ -729,7 +787,9 @@ function HubRow({
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
-  content: { padding: space.md, paddingBottom: space.xl },
+  // `paddingBottom` is supplied at the call site from the tab-bar clearance, which needs the
+  // safe-area inset and so cannot be a static value here.
+  content: { padding: space.md },
 
   panel: {
     backgroundColor: color.card,
@@ -783,7 +843,22 @@ const styles = StyleSheet.create({
     paddingVertical: space.md,
   },
   sectionTitle: { ...type.title, fontSize: 15, lineHeight: 20, color: color.textPrimary },
-  seeAll: { ...type.label, color: color.accent, textTransform: 'uppercase' },
+  /*
+   * The section's toolbar: add, and search.
+   *
+   * A row rather than two loose pressables, so the pair stays together against the heading
+   * however wide the panel gets. The gap is deliberately tight - these are two halves of one
+   * control cluster, not two unrelated buttons.
+   */
+  racesActions: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
+  /*
+   * A square press target around a 22pt icon.
+   *
+   * Sized rather than left to the icon's own bounds: an icon alone is a ~22pt target, which is
+   * under every platform minimum, and `hitSlop` at the call site widens the touch area without
+   * moving anything visually.
+   */
+  raceAction: { alignItems: 'center', justifyContent: 'center', width: 32, height: 32 },
   emptyRaces: { ...type.bodySmall, color: color.textSecondary, paddingBottom: space.md },
 
   raceRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, paddingVertical: space.md },
@@ -842,15 +917,4 @@ const styles = StyleSheet.create({
   },
   sheetRowText: { flex: 1 },
 
-  addGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: space.sm,
-    backgroundColor: color.accent,
-    borderRadius: radius.pill,
-    paddingVertical: space.sm + 6,
-    marginTop: space.md,
-  },
-  addGroupLabel: { ...type.title, fontSize: 17, lineHeight: 22, color: color.onAccent },
 });
