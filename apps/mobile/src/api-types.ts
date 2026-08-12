@@ -408,6 +408,20 @@ export type InboxPage = { rows: InboxRow[]; nextCursor: string | null };
 // Profile
 // ---------------------------------------------------------------------------
 
+/**
+ * A club the viewer and the person whose card this is are BOTH in.
+ *
+ * The intersection, never their own club list - a club the viewer does not belong to is not
+ * theirs to learn about. Enforced on the server; this type only carries the answer.
+ */
+export type SharedClub = {
+  clubId: string;
+  name: string;
+  sport: string;
+  /** The club's picture, as a media id, or null for the lettered fallback. */
+  image: string | null;
+};
+
 export type Profile = {
   userId: string;
   name: string;

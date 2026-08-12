@@ -34,6 +34,20 @@ never shown to other members.
     people still in the same club see each other on every roster anyway, so withholding the card
     alone would conceal nothing. *(Stated 2026-08-08. It had been asserted in three places and
     enforced in none: every profile was readable by every signed-in account.)*
+8b. **Another member's card names the clubs you are both in**, as a sentence naming one of them
+    and a stack of the rest, opening onto the full list. It is the **intersection**, never their
+    own membership: a club you are not in is not yours to learn about, and listing one would undo
+    rule 8a. The overlap discloses nothing new - you are in those clubs and can already read the
+    roster that names this person. Absent entirely when there is none, which is the state rule 8a's
+    conversation clause creates.
+8c. **A profile picture can be opened full size** by tapping it, on your own card and on anybody
+    else's. The lettered fallback is not a picture and does not open.
+
+    **It opens onto black with nothing else on the screen** - no close button, no menu - and a
+    swipe in any direction, or a tap, goes back. **There is deliberately no way to save, share or
+    export another member's profile picture.** A photograph somebody posts into a conversation
+    carries all three, because that is content; a face is identity, and the absence of the menu is
+    the enforcement rather than a styling choice.
 9. Privacy Policy and Terms are readable **both signed out and signed in**.
 10. Signing out returns to sign-in and clears the session.
 11. **Account deletion is permanent, self-service, and confirmation-gated on every

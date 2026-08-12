@@ -13,6 +13,104 @@ Newest first.
 
 ---
 
+## 2026-08-12 (close, again) - The second copy I wrote before finding the first
+
+Two things on a member's profile card: the clubs the two of you are both in, and a picture you
+can open full size. Both asked for from a GroupMe recording, which is also where the presentation
+came from - a sentence naming one club, the rest as a stack of overlapping faces with a `+N`, and
+the full list a tap away.
+
+### The duplicate
+
+`readProfile` already loads the subject's club ids to answer `canViewProfile`, so intersecting
+them with the viewer's own memberships looked like the obvious place. It was written, typed,
+tested with seven cases, and green.
+
+Then, wiring the client, `dmApi.sharedClubs` appeared two lines above where I was editing.
+**`sharedClubs` has existed since Phase 3.5**, does the intersection as a join, and its route note
+already said the quiet part: *"the answer is about two people and does not need a thread to exist
+- the same read serves a profile reached from a roster."* Somebody had anticipated this exact
+screen and left a note for whoever arrived next, and I had walked past it.
+
+The copy was deleted. What survived is the part that turned out to be worth more than the code:
+**that function had no tests at all**, and now has seven, including the two negative ones that
+matter. A test asserting "the club we share is listed" passes against an implementation returning
+the subject's *whole* club list - which would name clubs the viewer is not in and undo rule 8a
+outright. So every case establishing what IS listed is paired with one establishing what is not.
+
+The lesson is not "grep first", which I did. It is that the codebase's own notes are the index:
+the answer was written in the place a reader of `dm.ts` would find it, and I was reading
+`account.ts`.
+
+### The overlay that covered a third of the screen
+
+The photo viewer opened over the top of the page with the rest of the profile showing beneath it.
+`Body` is a `ScrollView`, and an absolutely-positioned overlay inside one resolves against the
+scroller's content box rather than the screen. Chat had already written the rule down - *"last in
+the tree and absolutely positioned, so it covers the conversation, the pinned strip and the
+composer rather than appearing inside them"* - and the fix was to make both overlays siblings of
+the body rather than children of it.
+
+Only visible in a browser. It typechecks, it renders, and it looks like a design decision.
+
+### The viewer that should not have been reused at all
+
+First attempt: reuse `PhotoViewer` and relax its required props, since a profile picture has no
+author, no day it was taken and no message to go back to. That was already uncomfortable - the
+alternative considered was passing the profile's `createdAt` as `takenAt`, which typechecks and
+displays a wrong date confidently - but it was the smaller change.
+
+The founder's answer settled it and was better than either: **black screen, the picture centred,
+no close button, no menu, and no way to download somebody else's profile picture.** Swipe in any
+direction to leave.
+
+That is not the same object as a photograph in a conversation, and the reuse was the mistake
+rather than the required props. `PhotoViewer` carries Share, Download, Report and a route back to
+the message because all of those are true of *content*; a profile picture is *identity*. **The way
+to guarantee nobody can save another member's face is to not build the menu**, so it became its
+own component and `PhotoViewer` went back to exactly what it was.
+
+Three things in it are load-bearing rather than polish. It is a **`Modal`**, because the
+navigator's header sits above a screen's content - an in-screen overlay covered everything except
+the one strip carrying a back arrow and somebody's name, which is precisely the chrome the screen
+exists to remove. The picture **follows the finger and the black fades as it goes**, so the
+gesture reports its own progress and a close button is not missed. And **a tap dismisses too**,
+which is not decoration: a drag cannot be performed with a switch, a keyboard or VoiceOver, so
+gesture-only would trap exactly the people least able to escape.
+
+Both halves of the gesture were driven rather than assumed: a 200pt drag dismissed, and a 45pt one
+stayed open and sprang back to the origin. The second is the one that would have been a bug.
+
+### The black had to belong to the screen, not to the photograph
+
+First version used `contain` and let each picture's own aspect decide. That looked right on the
+first face tried and wrong on the second: a phone photo held upright is very nearly the screen's
+own ratio, so one member's picture sat in generous black and another's bled edge to edge. Two
+people's faces opening into two differently-shaped screens.
+
+Capping the height fixed the bleed and introduced bands down the sides, which was also wrong. The
+answer was in the uploader the whole time: **`pickSquarePicture` already crops every profile
+picture to `aspect: [1, 1]`**, on both platforms, and every avatar in the product draws that
+square. So the viewer shows the same square at the full width of the screen - black above and
+below, none at the sides - and `cover` matters only for a picture uploaded before that crop step
+existed, where it fills the frame rather than leaving gaps.
+
+Measured rather than eyeballed: 402 wide by 402 tall on a 402x874 screen, 0 black at either side
+and 236 top and bottom.
+
+### Verified
+
+982 server tests, and the card walked in the browser at phone width rather than desktop, since
+this is a phone-first product and the block is centred: the sentence, the stack, the `+N`, "Since
+Aug 2026", the sheet with all six clubs, and a club row navigating through to its hub. The overlap
+was measured rather than eyeballed - each face laps the previous by exactly 10 points - because
+the seeded clubs had no pictures and a broken style would have looked identical to a working one.
+
+The rows seeded for that walk were removed afterwards. A development database accumulates real
+usage between sessions and is not fixtures.
+
+---
+
 ## 2026-08-12 (last, again) - One swipe, written once
 
 "All calendars should move like sliding, how our actual calendar does." Only one did not: the

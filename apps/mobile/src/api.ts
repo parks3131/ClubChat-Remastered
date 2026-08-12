@@ -50,6 +50,7 @@ import type {
   RaceRoster,
   ReportRow,
   RoutineDay,
+  SharedClub,
 } from './api-types.ts';
 import { config } from './config.ts';
 import { sessionStore } from './session.ts';
@@ -177,11 +178,15 @@ export const dmApi = {
    * answer to a question that already has one.
    */
 
-  /** The clubs you and this member are both in. Discloses nothing you cannot already see. */
+  /**
+   * The clubs you and this member are both in. Discloses nothing you cannot already see.
+   *
+   * **Not DM-specific despite living here**, and the server's own route note says so: the answer
+   * is about two people and needs no thread, so the same read serves a profile card reached from
+   * a roster. The member profile screen uses it for exactly that.
+   */
   sharedClubs: (userId: string) =>
-    apiFetch<{
-      clubs: Array<{ clubId: string; name: string; sport: string; image: string | null }>;
-    }>(`/dm/shared-clubs/${userId}`),
+    apiFetch<{ clubs: SharedClub[] }>(`/dm/shared-clubs/${userId}`),
 
   candidates: (query: string) =>
     apiFetch<{ candidates: DmCandidate[] }>(
