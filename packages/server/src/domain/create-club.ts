@@ -63,6 +63,9 @@ export async function createClub(db: Db, input: CreateClubInput): Promise<Create
         description: input.description ?? null,
         joinPolicy: input.joinPolicy ?? 'open',
         inviteToken,
+        // The member link, minted here so a club is never without one. Two independent tokens:
+        // deriving one from the other would make rotating either a lie. See ADR-0025.
+        memberInviteToken: mintInviteToken(),
       })
       .returning();
     const club = clubRows[0];

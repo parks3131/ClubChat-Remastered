@@ -86,7 +86,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const start = useCallback(
     async (token: string, id: string) => {
-      const { store } = await openMessageStore();
+      const { store, persistent } = await openMessageStore();
+      /*
+       * Said out loud, every time, because the fallback is invisible from inside the app:
+       * an in-memory cache behaves identically until you close the app, and "offline chat is
+       * empty" is the only symptom. It also names how many times a session has been started,
+       * which is the difference between one cache and two over the same connection.
+       */
+      console.log('[chat] local cache opened', { persistent });
 
       const client = new ChatClient({
         wsUrl: config.wsUrl,

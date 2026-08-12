@@ -652,7 +652,7 @@ describe('club reads, which the race add-member search needs', () => {
     expect((await as(outsider, 'GET', `/clubs/${clubId}/members`)).status).toBe(404);
   });
 
-  it('withholds the invite token from everyone but the admin tier', async () => {
+  it('gives every member a link, a different one per tier, and nothing to an outsider', async () => {
     const owner = await signUp('TokenOwner');
     const admin = await signUp('TokenAdmin');
     const member = await signUp('TokenMember');
@@ -661,19 +661,35 @@ describe('club reads, which the race add-member search needs', () => {
     await join(clubId, admin, 'admin');
     await join(clubId, member);
 
-    // The link is the only invite mechanism, so the token is the whole of a club's access
-    // control against anybody holding it.
-    expect((await as(owner, 'GET', `/clubs/${clubId}`)).body.club.inviteToken).toBeTruthy();
-    expect((await as(admin, 'GET', `/clubs/${clubId}`)).body.club.inviteToken).toBeTruthy();
+    // ADR-0024: a club grows by its members inviting people, so every member holds a link.
+    const token = (await as(owner, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+    expect(token).toBeTruthy();
+    expect((await as(admin, 'GET', `/clubs/${clubId}`)).body.club.inviteToken).toBe(token);
 
     const asMember = await as(member, 'GET', `/clubs/${clubId}`);
     expect(asMember.status).toBe(200);
-    expect(asMember.body.club.inviteToken).toBeNull();
+    expect(asMember.body.club.inviteToken).toBeTruthy();
+    /*
+     * ADR-0025: a DIFFERENT string, because what a link does depends on which one it is - and a
+     * member must never learn the one that bypasses the join policy. The effects of each are
+     * asserted in `phase3-75-account-and-eboard-routes`; what matters here is that the read
+     * hands out the right one per tier.
+     */
+    expect(asMember.body.club.inviteToken).not.toBe(token);
     expect(asMember.body.club.viewer.role).toBe('member');
     expect(asMember.body.club.viewer.isAdmin).toBe(false);
     expect(asMember.body.club.memberCount).toBe(3);
 
+    // The boundary that still holds: the token is the whole of a club's access control against
+    // anybody outside it, and a non-member cannot read the club at all.
     expect((await as(outsider, 'GET', `/clubs/${clubId}`)).status).toBe(404);
+
+    // Holding the link is not being able to change it. Rotation is the admin tier's alone,
+    // because it invalidates every link every other member has already handed out.
+    // 404 rather than 403, which is this API's discipline everywhere: a refusal that says
+    // "forbidden" confirms the resource to somebody who should learn nothing from asking.
+    expect((await as(member, 'POST', `/clubs/${clubId}/invite-token/rotate`)).status).toBe(404);
+    expect((await as(admin, 'POST', `/clubs/${clubId}/invite-token/rotate`)).status).toBe(200);
   });
 
   it('names the Eboard space only to somebody inside it', async () => {

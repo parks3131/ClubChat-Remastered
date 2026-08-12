@@ -12,12 +12,10 @@
  */
 
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
-import * as Linking from 'expo-linking';
 import { clubApi } from '../../../../../src/api.ts';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import { RemoteImage } from '../../../../../src/media-bubble.tsx';
@@ -32,11 +30,8 @@ export default function ClubProfileScreen() {
   const load = useLoad(() => clubApi.detail(clubId), [clubId]);
   // Declared after the read it names, so the header picks up a changed picture immediately.
   useDeclareClub(clubId, load.data?.club.name, load.data?.club.image);
-  const [busy, setBusy] = useState(false);
-
   const [picture, setPicture] = useState(false);
   const [pictureError, setPictureError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   /** The club's picture, admin only. Identity media, exactly like a person's avatar. */
   const changePicture = async () => {
@@ -62,8 +57,6 @@ export default function ClubProfileScreen() {
       {(data) => {
         const club = data.club;
         const viewer = club.viewer;
-        const inviteUrl =
-          club.inviteToken === null ? null : Linking.createURL(`/join/${club.inviteToken}`);
 
         return (
           <ScrollView style={styles.flex} contentContainerStyle={styles.body}>
@@ -112,41 +105,23 @@ export default function ClubProfileScreen() {
             {pictureError !== null && <Text style={styles.error}>{pictureError}</Text>}
 
             {/*
-              The invite link is the ONLY invite mechanism (ADR-0010 removed the typed code), and
-              the token is admin-only because it is the club's front door to anybody holding it.
+              One control rather than the link itself. The link is the ONLY invite mechanism
+              (ADR-0010 removed the typed code), and there are now three ways to hand it over -
+              copied, sent to another app, or held up as a code - which is a screen rather than a
+              row of buttons. Every member gets it (ADR-0024); only an admin can rotate it, and
+              that control lives with the link on the screen it invalidates.
             */}
-            {inviteUrl !== null && (
-              <View style={styles.shareRow}>
-                <Pressable
-                  style={styles.shareButton}
-                  onPress={() => {
-                    void Share.share({ message: inviteUrl }).catch(() => undefined);
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Share the join link"
-                >
-                  <MaterialIcons name="ios-share" size={18} color={color.onAccent} />
-                  <Text style={styles.shareLabel}>Share join link</Text>
-                </Pressable>
-                <Pressable
-                  style={styles.copyButton}
-                  onPress={() => {
-                    void Clipboard.setStringAsync(inviteUrl).then(() => {
-                      setCopied(true);
-                      setTimeout(() => setCopied(false), 1500);
-                    });
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Copy the join link"
-                >
-                  <MaterialIcons
-                    name={copied ? 'check' : 'content-copy'}
-                    size={18}
-                    color={color.accent}
-                  />
-                </Pressable>
-              </View>
-            )}
+            <View style={styles.shareRow}>
+              <Pressable
+                style={styles.shareButton}
+                onPress={() => router.push(`/clubs/${clubId}/share`)}
+                accessibilityRole="button"
+                accessibilityLabel={`Share ${club.name}`}
+              >
+                <MaterialIcons name="ios-share" size={18} color={color.onAccent} />
+                <Text style={styles.shareLabel}>Share club</Text>
+              </Pressable>
+            </View>
 
             <Pressable
               style={styles.card}
@@ -185,26 +160,6 @@ export default function ClubProfileScreen() {
                   <Text style={styles.cardLabel}>Gallery</Text>
                 </View>
                 <MaterialIcons name="chevron-right" size={22} color={color.textSecondary} />
-              </Pressable>
-            )}
-
-            {/* Rotation stays available: a leaked link has no alternative to fall back on. */}
-            {inviteUrl !== null && (
-              <Pressable
-                onPress={() => {
-                  setBusy(true);
-                  void clubApi
-                    .rotateInvite(clubId)
-                    .then(load.reload, load.reload)
-                    .finally(() => setBusy(false));
-                }}
-                disabled={busy}
-                accessibilityRole="button"
-                accessibilityLabel="Rotate the join link, invalidating every link already shared"
-              >
-                <Text style={styles.rotate}>
-                  {busy ? 'Rotating' : 'Rotate link - invalidates every link already shared'}
-                </Text>
               </Pressable>
             )}
 
@@ -387,15 +342,6 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm + 4,
   },
   shareLabel: { ...type.label, color: color.onAccent, textTransform: 'uppercase' },
-  copyButton: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: color.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 
   card: {
     flexDirection: 'row',
@@ -420,7 +366,6 @@ const styles = StyleSheet.create({
   cardLabel: { ...type.title, fontSize: 17, lineHeight: 22, color: color.textPrimary },
   cardMeta: { ...type.bodySmall, color: color.textSecondary },
 
-  rotate: { ...type.bodySmall, color: color.textSecondary, textAlign: 'center', paddingTop: space.sm },
   note: {
     ...type.bodySmall,
     color: color.textSecondary,

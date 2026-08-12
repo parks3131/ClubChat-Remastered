@@ -273,6 +273,56 @@ describe('soft delete', () => {
   });
 });
 
+describe('the sync cursor', () => {
+  /**
+   * A `channels[]` entry that does not parse must be REFUSED, never skipped.
+   *
+   * The iOS client double-encoded its URL for months - React Native re-encodes a query string
+   * it is handed, so our `%3A` arrived as `%253A` - and this route answered every one of those
+   * with `200` and a response that simply did not mention the channel. Six hundred syncs
+   * reconciled nothing and reported success. A silent skip is indistinguishable from a channel
+   * the caller may not read, which is the one case that IS deliberately omitted.
+   */
+  it('refuses a malformed channel entry instead of omitting it', async () => {
+    const owner = await signUp('SyncCursorOwner');
+    const { channelId } = await createClubAs(owner);
+
+    /*
+     * Exactly what the phone put on the wire: `%253A`. One decode by the framework turns that
+     * into the literal text `%3A`, so the entry the handler reads contains no colon at all.
+     * `%3A` alone would decode straight back to a colon and prove nothing.
+     */
+    const doubled = await as(owner, 'GET', `/sync?channels[]=${channelId}%253A0`);
+    expect(doubled.status).toBe(400);
+    expect(doubled.body.error).toBe('bad_channel_entry');
+
+    expect((await as(owner, 'GET', `/sync?channels[]=${channelId}:notanumber`)).status).toBe(400);
+    expect((await as(owner, 'GET', `/sync?channels[]=${channelId}:0:1:2`)).status).toBe(400);
+
+    // The well-formed forms still work, with and without the revision cursor.
+    expect((await as(owner, 'GET', `/sync?channels[]=${channelId}:0`)).status).toBe(200);
+    const withRev = await as(owner, 'GET', `/sync?channels[]=${channelId}:0:0`);
+    expect(withRev.status).toBe(200);
+    expect(withRev.body.channels[0].channelId).toBe(channelId);
+  });
+
+  /**
+   * The other half of the same discipline: a channel this caller cannot read is omitted and the
+   * rest of the request still answers, because a client holding a stale channel list must be
+   * able to sync everything else.
+   */
+  it('omits a channel the caller cannot read, and syncs the rest', async () => {
+    const owner = await signUp('SyncOmitOwner');
+    const outsider = await signUp('SyncOmitOutsider');
+    const { channelId } = await createClubAs(owner);
+    const { channelId: theirs } = await createClubAs(outsider);
+
+    const response = await as(outsider, 'GET', `/sync?channels[]=${channelId}:0&channels[]=${theirs}:0`);
+    expect(response.status).toBe(200);
+    expect(response.body.channels.map((c: { channelId: string }) => c.channelId)).toEqual([theirs]);
+  });
+});
+
 describe('sender attribution', () => {
   /**
    * A group chat that does not say who is talking is unusable, and the name reaches the client

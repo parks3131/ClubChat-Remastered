@@ -534,6 +534,7 @@ export function Row({
   right,
   highlighted = false,
   accessibilityLabel,
+  navigates,
 }: {
   title: string;
   subtitle?: string;
@@ -553,11 +554,19 @@ export function Row({
   /** The singled-out treatment: an unread notification, a selected choice. */
   highlighted?: boolean;
   accessibilityLabel?: string;
+  /**
+   * Whether the tap goes somewhere, when the answer is not what the props suggest.
+   *
+   * The chevron means "this row has a destination", and for almost every row that is exactly the
+   * presence of `href` or `onPress`. The exception is a row whose tap *does* something and stays
+   * put - "Copy Link" is one - where a chevron promises a screen that never arrives.
+   */
+  navigates?: boolean;
 }) {
   // Navigable rows carry a chevron; rows that only hold a value do not. The design uses it as the
   // affordance that a row goes somewhere, so it follows the presence of a destination rather than
   // being decoration a caller opts into.
-  const navigable = href !== undefined || onPress !== undefined;
+  const navigable = navigates ?? (href !== undefined || onPress !== undefined);
 
   const content = (
     <View style={[styles.row, highlighted && styles.rowHighlighted]}>

@@ -170,8 +170,10 @@ Chats  (every club chat and DM, newest first; chips: Unread | DMs | Clubs)
    │  └─ header quick-nav: Members · Poll · Routines · Events
    ├─ Eboard and Council         (admins only)
    ├─ Races and Meets            (preview of ~5 + searchable "See all")
-   ├─ Club profile               (identity, join-link actions)
+   ├─ Club profile               (identity, and the way in for everybody else)
    │  ├─ Edit club               (admin)
+   │  ├─ Share club              (preview, copy, share sheet; rotate is admin only)
+   │  │  └─ QR code              (the join link as a scannable square)
    │  ├─ Members                 (roster, pending requests, add-member search, Banned)
    │  └─ Gallery
    ├─ Member profile card        (read-only, from chat or any roster; carries Ban when
@@ -325,8 +327,10 @@ never "the tab root" and never nothing.
 | Races list | Club hub | | **Eboard chat** | **Club hub** |
 | Club profile | Club hub | | Eboard Highlights | Eboard chat |
 | Members | Club profile | | Eboard roster | Eboard hub |
-| Gallery | its chat | | Meetings list | Eboard hub |
-| Poll detail | Calendar | | Eboard polls | Eboard hub |
+| Share club | Club profile | | Meetings list | Eboard hub |
+| QR code | Share club | | Eboard polls | Eboard hub |
+| Gallery | its chat | | | |
+| Poll detail | Calendar | | | |
 
 **The two bold rows are a hard rule, not a preference.** A race hub and an Eboard hub each send a
 real member straight into chat, so if either chat pointed back at its own hub, somebody arriving

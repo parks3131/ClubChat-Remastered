@@ -140,7 +140,25 @@ export const clubs = pgTable('clubs', {
    */
   image: text('image'),
   joinPolicy: text('join_policy').notNull().default('open'),
+  /**
+   * The ADMIN link. Redeeming it joins instantly, whatever the join policy says.
+   *
+   * An admin sharing the link has already made the decision the `request` policy exists to
+   * capture, so the link stays the private side channel it has always been.
+   */
   inviteToken: text('invite_token').notNull().unique(),
+  /**
+   * The MEMBER link. Same club, and it obeys the join policy instead of bypassing it.
+   *
+   * > **Two tokens rather than one token plus a marker of who shared it** (ADR-0025). A link is a
+   * > bearer string that gets pasted, forwarded and screenshotted, so anything qualifying it -
+   * > a query parameter, a signature - is something that can be stripped or lost in a paste. Two
+   * > opaque tokens cannot be confused for each other and there is nothing to strip: the effect
+   * > IS the string. Guessing the other one is guessing 32 bytes of CSPRNG.
+   *
+   * On an `open` club the two behave identically, because there is nothing to bypass.
+   */
+  memberInviteToken: text('member_invite_token').notNull().unique(),
   inviteTokenRotatedAt: timestamp('invite_token_rotated_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

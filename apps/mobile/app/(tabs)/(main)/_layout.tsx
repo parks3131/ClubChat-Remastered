@@ -315,6 +315,25 @@ export default function MainStackLayout() {
           label: 'Club profile',
         }))}
       />
+      {/*
+        Sharing the club, and the code. Two screens rather than one sheet, because the code is a
+        thing somebody holds a phone up to - it wants the whole screen, and a back control that
+        returns to the share list rather than dismissing everything.
+      */}
+      <Stack.Screen
+        name="clubs/[clubId]/share"
+        options={parented('Share club', (p) => ({
+          href: `/clubs/${p.clubId}/profile`,
+          label: 'Club profile',
+        }))}
+      />
+      <Stack.Screen
+        name="clubs/[clubId]/qr"
+        options={parented('QR code', (p) => ({
+          href: `/clubs/${p.clubId}/share`,
+          label: 'Share club',
+        }))}
+      />
 
       {/*
         Races. A race screen falls back to the RACE, and the race itself falls back to the clubs

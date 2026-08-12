@@ -388,19 +388,41 @@ class SqliteMessageStore implements MessageStore {
  * the right trade for a surface the product treats as primarily a development and
  * testing one. It degrades loudly rather than silently.
  */
-export async function openMessageStore(): Promise<{ store: MessageStore; persistent: boolean }> {
-  try {
-    const db = await SQLite.openDatabaseAsync('clubchat.db');
-    await db.execAsync(SCHEMA);
-    // After CREATE, for the database that already existed before the column did.
-    await migrate(db);
-    return { store: new SqliteMessageStore(db), persistent: true };
-  } catch (error) {
-    console.warn(
-      '[clubchat] SQLite unavailable, falling back to an in-memory cache. ' +
-        'Chat will not be readable offline in this session.',
-      error,
-    );
-    return { store: new InMemoryMessageStore(), persistent: false };
-  }
+let opened: Promise<{ store: MessageStore; persistent: boolean }> | null = null;
+
+export function openMessageStore(): Promise<{ store: MessageStore; persistent: boolean }> {
+  /*
+   * **One process, one store, because the write lock lives on the instance and the transaction
+   * lives on the connection.**
+   *
+   * `openDatabaseAsync` hands back the SAME underlying connection for a given filename, so a
+   * second `SqliteMessageStore` is a second lock over one connection - and the two cannot see
+   * each other. Signing out and back in did exactly that, and the phone answered with
+   * `cannot start a transaction within a transaction`, then `cannot rollback - no transaction is
+   * active`, on the schema statement of the store being opened while the old one was mid-write.
+   *
+   * Worse than the noise: `execAsync` throwing is caught below, so the app quietly fell through
+   * to the IN-MEMORY store and carried on with no persistence at all - a failure whose only
+   * symptom is that offline chat is empty next launch.
+   *
+   * Memoized rather than reference-counted: the cache is keyed by channel and outlives any one
+   * session, exactly like the file it is stored in.
+   */
+  opened ??= (async () => {
+    try {
+      const db = await SQLite.openDatabaseAsync('clubchat.db');
+      await db.execAsync(SCHEMA);
+      // After CREATE, for the database that already existed before the column did.
+      await migrate(db);
+      return { store: new SqliteMessageStore(db), persistent: true };
+    } catch (error) {
+      console.warn(
+        '[clubchat] SQLite unavailable, falling back to an in-memory cache. ' +
+          'Chat will not be readable offline in this session.',
+        error,
+      );
+      return { store: new InMemoryMessageStore(), persistent: false };
+    }
+  })();
+  return opened;
 }

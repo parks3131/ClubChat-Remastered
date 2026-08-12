@@ -471,6 +471,30 @@ a plain member - against a real API, gateway, worker and Postgres:
 Still owed: the acceptance checklist run end to end on **all three platforms** - everything above is
 web only, and the simulator has still never been run.
 
+**Added 2026-08-12: the share sheet and the QR code**, the club's front door as a surface rather
+than a button. Two screens (`clubs/:id/share`, `clubs/:id/qr`), the code drawn from a zero-dependency
+encoder rather than a wrapper, and every rendered code **decoded back** with a reader instead of
+being eyeballed - including the exported PNG. Verified on web and on the iPhone.
+See [`DESIGN/04`](../DESIGN/04-share-sheet.md).
+
+Three defects, and the shape of them is the useful part:
+
+1. **A member could hand out instant-join access to a `request` club**, which is
+   [ADR-0024](../decisions/0024-every-member-holds-the-clubs-invite-link.md)'s recorded cost and
+   was not acceptable. A club now holds two links and the token itself decides
+   ([ADR-0025](../decisions/0025-a-members-invite-link-obeys-the-join-policy.md)).
+2. **`/sync` had never worked on iOS.** The client pre-encoded its URL, React Native re-encoded it,
+   and the server *skipped* what it could not parse - so every sync from the phone answered `200`
+   and reconciled nothing, for months, hidden by the socket. `AGENTS.md` failure mode 24, and it is
+   the same class as [Engineering pitfalls](14-engineering-pitfalls.md) 25 with the cure in place
+   but never running.
+3. **A banned person opening a link was told it was "no longer valid"**, which reads as a rotation
+   and sends them to ask a member for a fresh one. `PRD/04` had specified plainness since bans
+   shipped.
+
+The first was found by the founder using it, the second by a log line that repeated forever, and
+the third by writing the test for the first. **None of the three was findable by reading code.**
+
 **Phase 4 - Hardening.**
 Rate limits everywhere. Retention and GC jobs. Accessibility pass on every icon-only control.
 Sentry dashboards. Load test at 10× projected peak. The [Acceptance checklist](../PRD/18-acceptance-checklist.md) parity checklist, run on

@@ -106,6 +106,9 @@ survives the number changing.
 | # | Surface | Covers |
 |---|---|---|
 | 01 | [Tab bar](DESIGN/01-tab-bar.md) | The four destinations: the floating bar, the sliding pill, the badge |
+| 02 | [Avatar](DESIGN/02-avatar.md) | Every face in the product: the shape that says person or group, the fallback, the tint |
+| 03 | [Pinned strip](DESIGN/03-pinned-strip.md) | The notices above a conversation, and the measurement trap that hid a working one |
+| 04 | [Share sheet](DESIGN/04-share-sheet.md) | Handing a club to somebody: the preview, the ways the link travels, and the code |
 
 Written as surfaces are worked on rather than backfilled in a pass, since a spec written by reading
 code instead of by looking at a device starts out wrong. See [`DESIGN/README.md`](DESIGN/README.md)
@@ -140,6 +143,8 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0021](decisions/0021-club-bans-are-harder-to-impose-than-to-lift.md) | A club ban is harder to impose than to lift |
 | [0022](decisions/0022-platform-moderators-are-appointed-in-configuration.md) | Platform moderators are appointed in configuration, not from inside the app |
 | [0023](decisions/0023-a-moderator-may-remove-a-reported-message-and-suspend-an-account.md) | A platform moderator may remove a reported message and suspend an account |
+| [0024](decisions/0024-every-member-holds-the-clubs-invite-link.md) | Every member holds the club's invite link, and only an admin can rotate it |
+| [0025](decisions/0025-a-members-invite-link-obeys-the-join-policy.md) | A club has two invite links, and a member's obeys the join policy |
 
 ## Templates
 

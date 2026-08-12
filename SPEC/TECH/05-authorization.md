@@ -371,8 +371,29 @@ different, and the difference is the entire point of the feature.
 
 The ban check itself lives in `admit`, the one function every way into a club passes through -
 open join, invite link, admin add, approved request - so it is one line rather than four places
-that must remember. The request branch of `joinClub` does not pass through `admit` and carries its
-own. See [ADR-0021](../decisions/0021-club-bans-are-harder-to-impose-than-to-lift.md).
+that must remember. Asking to join does not pass through `admit`, so `fileJoinRequest` - the one
+function every *request* passes through, since ADR-0025 gave it a second caller - carries its own.
+See [ADR-0021](../decisions/0021-club-bans-are-harder-to-impose-than-to-lift.md).
+
+### The two invite links
+
+A club holds two tokens, and **which one is redeemed is an authorization decision made by the
+string itself** ([ADR-0025](../decisions/0025-a-members-invite-link-obeys-the-join-policy.md)): the
+admin token bypasses the join policy, the member token obeys it. Three properties keep that honest,
+and each is the answer to a way it could rot.
+
+- **`readClub` returns exactly one of them, chosen by tier.** Not both with a flag, and not the
+  admin one hidden behind a client check - a field the client is trusted to ignore is a field that
+  leaks the first time somebody logs a response.
+- **The comparison is against the ADMIN token**, with everything else falling to the member case.
+  A capability is granted by naming it; a future third link is therefore a request by default
+  rather than an accidental bypass.
+- **Rotation replaces both.** Whoever rotates cannot know which leaked, so replacing one would be
+  the theatre that rotation exists to refuse.
+
+Rotation itself stays admin-only through `canRotateInviteToken`, which is a distinct predicate from
+"may share" for the reason failure mode 10 records: holding a link and being able to invalidate
+everybody else's are two capabilities, and they now genuinely differ.
 
 ### Security headers
 

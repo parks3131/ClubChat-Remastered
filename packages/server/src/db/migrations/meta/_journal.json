@@ -162,6 +162,13 @@
       "when": 1786487218843,
       "tag": "0022_moderation_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1786511192990,
+      "tag": "0023_member_invite_token",
+      "breakpoints": true
     }
   ]
 }

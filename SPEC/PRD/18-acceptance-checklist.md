@@ -17,7 +17,12 @@ A remaster is at parity when every line below passes on **iOS, Android, and web*
 - [ ] Create → Owner, working main chat, and an Eboard space with the Owner in it.
 - [ ] Open club joins in one tap; request club files a request and shows "Requested".
 - [ ] Switching request → open admits everyone pending.
-- [ ] The invite link joins instantly even on a request club, and is idempotent.
+- [ ] An **admin's** invite link joins instantly even on a request club, and is idempotent.
+- [ ] A **member's** link on the same club files a request instead, and on an open club joins
+      instantly - the two tiers are handed different strings and neither can see the other's.
+- [ ] Rotating kills both links at once.
+- [ ] The QR code scans to the same link, and a banned person opening either link is told plainly
+      that they cannot rejoin.
 - [ ] Promote/demote announced in chat; Owner-only admin removal; ownership transfer leaves
       exactly one Owner.
 - [ ] Leaving cascades out of every race, car group, and the Eboard space.

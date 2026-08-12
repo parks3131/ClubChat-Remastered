@@ -82,6 +82,16 @@ they cost.
     row in the project, and the cost is per-subscriber authorization plus a full refetch each.
     Every subscription must carry a filter, or be replaced by a cheaper signal.
 
+> **Entry 25's fix can itself be silently dead, which the remaster proved on 2026-08-12.** The
+> reconciliation this list demands was built in Phase 0, tested, and **never once ran on iOS**: the
+> client pre-encoded its `/sync` URL, React Native re-encoded it, and the server skipped the
+> unparseable entry and answered `200`. Realtime hid it exactly as this section describes, so the
+> loss was again "a phone that backgrounds and resumes misses messages with no error". Two rules
+> came out of it and both are in `AGENTS.md` failure mode 24: never hand `fetch` a URL you have
+> already encoded, and never *skip* a malformed request element - refuse it, because a skip is
+> indistinguishable from a legitimate omission. **A cure with no failure path of its own is a
+> cure nobody checks.**
+
 ### The outbox and the effects that read it
 
 30. **A producer with no consumer parks in silence.** `dispatch` throws on an unknown event

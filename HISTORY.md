@@ -13,6 +13,238 @@ Newest first.
 
 ---
 
+## 2026-08-12 (last) - Your link does what you are allowed to do
+
+The founder tried the new share screen and came back with a rule, not a bug report: **on a
+`request` club, an admin's link should join somebody instantly and a member's link should make them
+ask.** On an open club it makes no difference who shared it.
+
+That is [ADR-0024](SPEC/decisions/0024-every-member-holds-the-clubs-invite-link.md)'s Negative
+column, written down that morning and left standing: *"Any of a club's members can hand out
+instant-join access, including to a `request`-policy club."* He would not accept the cost, and the
+objection is exact - a `request` club has said an admin decides, and a member who can bypass that
+has been handed the admin's authority by the back door, invisibly, because a link arriving looks
+the same whoever sent it.
+
+### One token cannot answer two questions
+
+The link is a bare bearer string. The server sees the token and nothing else, so **the token has to
+BE the answer**: each club now holds two, and `readClub` returns whichever belongs to the viewer's
+tier. A member never learns the admin string, and there is no branch in the client to get wrong.
+
+The alternative was one token plus a signed marker of who shared it, and it was rejected for a
+reason worth keeping: **a link gets pasted, forwarded, shortened and screenshotted, and anything
+travelling beside the token can be lost.** The safe fallback - treat a missing marker as a request -
+would then silently break every legitimate admin link that lost its query string. Two opaque strings
+cannot be separated from their own meaning. [ADR-0025](SPEC/decisions/0025-a-members-invite-link-obeys-the-join-policy.md).
+
+Two small decisions inside it, both one-way on purpose. Redeem compares against the **admin** token
+and treats everything else as the member case, so a future third link is a request by default - a
+capability is granted by naming it, never by failing to match. And **rotation replaces both**,
+because whoever rotates does not know which one leaked; that is the whole reason to rotate.
+
+### The request branch was written twice, briefly
+
+`redeemInvite` needed exactly what `joinClub` already did on a `request` club: file the row, publish
+`club.join_requested`, absorb the duplicate, refuse a banned person. Copying it would have been
+failure mode 9 with three things to drift, so it came out as `fileJoinRequest` beside `admit` - one
+function for every way of asking to join, mirroring the one function for every way of actually
+joining. Nothing new appears in the roster, because it is the same pending row an admin already
+approves.
+
+### A ban that read as a rotated link
+
+Writing the banned-person test found a defect three weeks old. `POST /invites/:token/redeem`
+flattened **every** refusal to `404 invite_invalid`, so somebody who had been banned was told the
+link was no longer valid - which reads as "an admin rotated it", so the natural next move is to ask
+another member for a fresh one. `PRD/04`'s edge-case table has said "told plainly they cannot
+rejoin this club" since bans shipped. It now answers `403 banned`, and only that case: a revoked or
+made-up token still must not hint at which clubs exist, and the banned answer leaks nothing new
+because they were in the club. No appeal path is offered, which is the same table's other half -
+naming a contact hands a determined harasser a specific person to pursue.
+
+### Proved by walking it, as three people
+
+Server tests assert each pair in both directions - the tier split, both policies, and the ban. Then
+the whole loop was walked in the running app: created a `request` club, copied the owner's link, and
+opened it as a second account, which **joined instantly**. That account then opened the share
+screen, saw a **different** string, no rotate control, and the sentence *"Anyone with this link asks
+to join Request Policy Club, and an admin approves them."* A third account opened that link and got
+**REQUESTED - an admin will approve or deny it.**
+
+The screen's explanatory line is per-viewer for that reason: it used to promise instant joining to
+everybody, which is now true for exactly half the people who can read it.
+
+---
+
+## 2026-08-12 (later) - Every sync the iPhone ever made returned nothing
+
+The founder scanned the code, joined a club from it, and sent three screenshots: the join worked,
+and behind it sat a red box - `cannot start a transaction within a transaction`, then `cannot
+rollback - no transaction is active`. Chasing that found a much larger thing underneath it.
+
+### The loop that was trying to tell us
+
+The phone's log carried the same line over and over: *repairing a gap below the high-water mark,
+channel 1f43…, missing 3*. A repair that runs on every sync forever is either a hole the server
+will not fill or a write that never lands, and the count could not tell those apart - so the log
+grew the seqs. **93, 94 and 95.** The server had them, and the phone did not.
+
+Three checks in a row said the impossible. The server returned all 27 messages from seq 92, for
+the exact account signed in on the phone. The store reported no remaining hole immediately after
+writing. And **the database pulled off the device with `devicectl` still had 116 rows and a hole
+at 93-95**, before and after.
+
+The tiebreaker was a probe placed immediately after the write, logging unconditionally. It never
+printed. So the code was returning *before* it - and there is exactly one silent return on that
+path: the response contained no entry for the channel we asked about.
+
+### The URL was encoded twice, and only on the phone
+
+The API's own access log had it in plain sight, two lines apart:
+
+```
+/sync?channels%5B%5D=1f43f56c-…%253A92     ← the phone
+/sync?channels[]=1f43f56c-…%3A92           ← the browser
+```
+
+`encodeURIComponent` wrote `%3A`. **React Native's `fetch` normalises the URL it is handed and
+percent-encodes the query string again**, so `%` became `%25`. Fastify decodes exactly once, the
+handler split on `:` and found none, and the entry was skipped. 609 of those had gone out. Every
+one answered `200` with an empty channel list.
+
+**So `/sync` has never worked on iOS**, since the client was written. The socket hid it completely:
+the phone stayed current in real time, and the only casualty was anything missed while the socket
+was down - which is precisely the class of bug this project has chased four separate times.
+
+Two rules, and the second is the one that let it live for months:
+
+1. **Never hand `fetch` a URL you have already encoded.** A uuid and an integer need no escaping,
+   and whatever the platform escapes on its own the server decodes back. The entry is written raw.
+2. **Never skip a malformed request element - refuse it.** The skip made a client bug
+   indistinguishable from the deliberate omission of a channel the caller may not read. A malformed
+   entry is now `400 bad_channel_entry`; an unauthorized one is still omitted, because a client
+   holding a stale channel list must be able to sync the rest.
+
+**Proved on the device.** After the fix, the phone's database went to 119 rows with zero gaps, and
+a fresh cold start logged no repair at all. `AGENTS.md` failure mode 24.
+
+### The red box: two caches over one connection
+
+The screenshotted error was its own defect, and it fires when somebody signs out and back in.
+`openMessageStore` built a **new** `SqliteMessageStore` per session, while `openDatabaseAsync`
+hands back the same underlying connection - so the second store's schema statement ran inside the
+first store's open transaction. The write lock that exists precisely to prevent that
+([HISTORY 2026-08-01]) is an instance field, and two instances cannot see each other.
+
+The visible error was the smaller half. `execAsync` throwing is caught by the fallback, so the app
+would quietly continue on the **in-memory** store - no persistence, no offline chat, and no symptom
+until the next launch. The store is now memoized: one process, one cache, one lock. It also logs
+which one it opened, because an in-memory fallback is invisible from inside the app.
+
+### What this says about the method
+
+Four separate readings of correct-looking code failed to explain it. What worked was, in order:
+the log line that repeated, the seqs it was made to print, the probe that never printed, and then
+**the server's access log** - which is the only place the client's and the browser's requests could
+be compared as strings. `AGENTS.md` standing instruction 4 says reproduce rather than reason; the
+sharper version this earned is that when two clients disagree, the thing to diff is what they
+actually put on the wire.
+
+---
+
+## 2026-08-12 - A club you can hand to somebody, and a save button that never came back
+
+Asked for from a GroupMe screen recording: their Share Group screen and the QR code behind it. What
+we had was one pill on the club profile firing the system sheet with a bare URL in it.
+
+### The video asked a permission question, not a design one
+
+GroupMe lets **any member** share the group. Ours returned `inviteToken` to the admin tier only, so
+the first honest answer to "build this screen" was "for whom?" - and the tier split turned out to be
+inherited rather than decided. `AGENTS.md` 2.1.3 says ask rather than guess at a permission model,
+and the answer changed the work: every member now holds the link, only an admin can rotate it
+([ADR-0024](SPEC/decisions/0024-every-member-holds-the-clubs-invite-link.md)).
+
+The reasoning that settled it is that admin-only did not withhold the secret, it **delayed** it. A
+member who wants to bring somebody in asks an admin, who pastes them the same string - identical
+access, one day later, minus the person who was interested at the time. Rotation stays with admins
+because it destroys **other members'** outstanding invitations, which is the same asymmetry as
+[ADR-0021](SPEC/decisions/0021-club-bans-are-harder-to-impose-than-to-lift.md): widening access is
+everybody's, revoking other people's work is not.
+
+One line of server change, and the test that guarded the old rule now proves the new one in both
+directions - every member gets the token, an outsider is refused the club outright, and a member
+attempting rotation gets `404`.
+
+### What the code carries, said out loud on the screen
+
+`Linking.createURL('/join/:token')` is `clubchat://join/…` in a real build. **A stranger scanning
+that gets nothing** - no prompt, no error, no page - and a stranger is exactly who a code taped to a
+table is for. [ADR-0010](SPEC/decisions/0010-link-only-invites.md) recorded the missing web fallback
+as the price of removing the typed code and it has never been built.
+
+Two things followed. The screen says it in words rather than letting a member find out at a club
+fair. And the obligation was **promoted into `PRD/17`'s blocking table** with what it actually needs
+- `clubchatapp.com` serving `/join/:token`, the association files, the entitlement, a rebuild -
+because a link in a message is at least read by somebody who can be told to install the app first.
+
+### Drawing the code, rather than installing something that draws it
+
+`react-native-svg` plus a zero-dependency encoder and about forty lines, instead of
+`react-native-qrcode-svg` - which is the same forty lines wrapped around `qrcode`, `text-encoding`
+and `yargs`, in a phone bundle. Three properties in `src/qr-code.tsx` are load-bearing and none is
+stylistic: the four-module quiet zone (specification, not padding - cropped, a scanner cannot find
+the symbol at all), dark-on-white at full contrast (the accent is 3:1 on white, which reads as ours
+to a person and as a maybe to a camera, so it went on the frame), and error correction `H` because
+the club's picture covers the middle.
+
+**Proved by decoding it, not by looking at it.** Every rendered code was read back with a decoder
+and compared against what Copy Link put on the clipboard: without a picture, with one, with the
+clear ring added around it, and - the one that matters - **the exported PNG itself**. A QR that
+looks like a QR is not evidence of anything.
+
+### The save button that sat on "Saving" forever
+
+Pressing Save on the web client disabled the button permanently. `toDataURL` takes a callback and
+never called it.
+
+**The first diagnosis was wrong**, and it is the useful part of this entry. The SVG had an `<image>`
+pointing at the media URL, so the remote reference was blamed and the bytes were inlined as a data
+URI - the hang survived it. That forced the search into the serialised string, where the cause was
+an **apostrophe in the accessibility label**: rasterising goes through `data:image/svg+xml`, and
+`react-native-svg` builds that URL by swapping every double quote for a single quote, so
+`"…this club's join link"` closed its own attribute, the SVG failed to parse, and `img.onerror`
+fired where the only handler is `onload`.
+
+That has a rule with a wider reach than one label: **nothing inside an exportable SVG may contain an
+apostrophe, including anything interpolated into it.** A club called "Roja's Runners" would do it,
+which is why the name is drawn by the screen around the code and never inside it. `AGENTS.md`
+failure mode 23, along with the second rule the day earned: **a callback API with silent failure
+paths gets a timeout**, or one unhandled case disables a control until the screen is closed.
+
+The inlining stayed - an export should not race a fetch - but it is recorded as fixing nothing here.
+Calling it the cause without re-running the failure would have shipped the real one.
+
+### Walked as two people
+
+Proved on the web client end to end: created a club, uploaded a picture, copied the link, scanned
+the rendered code with a decoder, saved the PNG and decoded that too. Then signed out, signed up as
+somebody else, **joined through the link**, and opened the share screen as a plain member - the
+preview, the link and the code are there, and the rotate control is not.
+
+### Not built, deliberately
+
+**The branded rows.** GroupMe lists Snapchat, Instagram Stories, iMessage and WhatsApp above its
+share sheet. Snapchat and Instagram Stories are image-based Creative Kit integrations rather than
+link shares, so each is an SDK, an asset render and a not-installed path of its own; the system
+sheet already lists every app on the phone. Recorded here rather than as a comment.
+
+**A share sheet for a race or the Eboard space.** Neither is joined by link, so neither has a link
+to share.
+
+---
+
 ## 2026-08-11 (evening) - Somebody on the other end, and something they can do
 
 The moderation queue has had a screen since 2026-08-08 and, before today, no way to put a person

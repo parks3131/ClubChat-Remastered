@@ -30,6 +30,29 @@ import {
 } from './store.ts';
 
 /**
+ * One `channels[]` entry for `GET /sync`, deliberately **not** percent-encoded.
+ *
+ * > **`encodeURIComponent` here is what stopped every sync the iPhone ever attempted.** React
+ * > Native's `fetch` normalises the URL it is handed, and on iOS that means percent-encoding the
+ * > query string *again* - so our `%3A` left the device as `%253A`. Fastify decodes exactly once,
+ * > the server saw `<uuid>%3A92` with no colon in it, the entry failed to parse, and the channel
+ * > was **omitted from the response**. Every `/sync` answered `200` with an empty list.
+ *
+ * It was invisible for months because the socket kept the phone current and the failure had no
+ * error at either end: 609 of these went out before anybody looked at a URL. What finally showed
+ * it was a gap repair that ran on every sync forever, because the one call that could have filled
+ * the hole was the call that was being silently dropped.
+ *
+ * The entry needs no encoding at all: a channel id is a uuid, the cursors are integers, and a
+ * colon is legal in a query string. Anything the platform escapes on top of that, the server
+ * decodes back. **The rule is not "encode less", it is: never hand `fetch` a URL you have already
+ * encoded, because you cannot stop the platform encoding it again.**
+ */
+export function syncEntry(channelId: string, since: number, rev?: number): string {
+  return rev === undefined ? `${channelId}:${since}` : `${channelId}:${since}:${rev}`;
+}
+
+/**
  * The gateway answered and refused us, with the reason it gave.
  *
  * > **A distinct type because "the server said no" and "I could not reach the server" are
@@ -941,7 +964,7 @@ export class ChatClient {
     // Keep pulling while the server says there is more, so a client that has been away
     // long enough to exceed one page does not stop half way and believe it is caught up.
     for (;;) {
-      const url = `${this.opts.apiUrl}/sync?channels[]=${encodeURIComponent(`${channelId}:${since}:${mark}`)}`;
+      const url = `${this.opts.apiUrl}/sync?channels[]=${syncEntry(channelId, since, mark)}`;
       const response = await this.fetch(url, {
         headers: { authorization: `Bearer ${this.opts.token}` },
       });
@@ -1023,11 +1046,14 @@ export class ChatClient {
       channelId,
       missing: gaps.length,
       from: since,
+      // The seqs themselves, not just how many. A repair that runs every sync forever is either
+      // a hole the server will not fill or a write that is not landing, and the count cannot
+      // tell those apart - the identity of the rows can.
+      seqs: gaps.slice(0, 8),
     });
 
     for (;;) {
-      const entry = encodeURIComponent(`${channelId}:${since}`);
-      const response = await this.fetch(`${this.opts.apiUrl}/sync?channels[]=${entry}`, {
+      const response = await this.fetch(`${this.opts.apiUrl}/sync?channels[]=${syncEntry(channelId, since)}`, {
         headers: { authorization: `Bearer ${this.opts.token}` },
       });
       if (!response.ok) throw new Error(`gap repair failed: ${response.status}`);
@@ -1039,6 +1065,23 @@ export class ChatClient {
       if (!result || result.messages.length === 0) return;
 
       await this.serialize(channelId, () => this.store.upsert(result.messages));
+
+      /*
+       * **A repair that does not repair has to say so.** This runs on every sync, so a hole the
+       * write never closes is an unbounded loop of fetch-and-discard that no error reports:
+       * the request succeeds, the upsert resolves, and the next sync asks for the same page
+       * again. Only comparing the hole before and after can tell that apart from a normal repair.
+       */
+      const remaining = findGaps(await this.store.seqs(channelId)).filter(
+        (seq) => seq <= Math.max(...result.messages.map((message) => message.seq)),
+      );
+      if (remaining.length > 0) {
+        this.log('gap repair wrote a page and the hole is still there', {
+          channelId,
+          wrote: result.messages.length,
+          stillMissing: remaining.slice(0, 8),
+        });
+      }
 
       const highest = Math.max(...result.messages.map((message) => message.seq));
       // Guard against a server that returns a page without advancing the cursor, which would

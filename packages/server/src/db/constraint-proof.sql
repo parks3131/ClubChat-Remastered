@@ -47,8 +47,8 @@ INSERT INTO users (id, full_name, email) VALUES
   ('11111111-1111-4111-8111-111111111111', 'Alice', 'alice@test.invalid'),
   ('22222222-2222-4222-8222-222222222222', 'Bob',   'bob@test.invalid');
 
-INSERT INTO clubs (id, name, sport, invite_token) VALUES
-  ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Test Running Club', 'running', 'tok-a');
+INSERT INTO clubs (id, name, sport, invite_token, member_invite_token) VALUES
+  ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Test Running Club', 'running', 'tok-a', 'mtok-a');
 
 INSERT INTO club_memberships (club_id, user_id, role) VALUES
   ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '11111111-1111-4111-8111-111111111111', 'owner');
@@ -93,6 +93,40 @@ SELECT pg_temp.assert_rejected(
   $$INSERT INTO club_memberships (club_id, user_id, role)
     VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             '00000000-0000-4000-8000-000000000001', 'superadmin')$$);
+
+-- ---------------------------------------------------------------------------
+-- The two invite links (ADR-0025)
+--
+-- Both are unique, and the pair is what the whole rule rests on: which string was
+-- redeemed decides whether the join policy applies. A collision between the two
+-- columns is the one thing that would make that decision meaningless, so the
+-- cross-column case is attempted explicitly rather than assumed from two separate
+-- UNIQUE declarations - neither of which says anything about the other.
+-- ---------------------------------------------------------------------------
+
+SELECT pg_temp.assert_rejected(
+  'clubs - a duplicate admin invite token',
+  $$INSERT INTO clubs (name, sport, invite_token, member_invite_token)
+    VALUES ('Copycat', 'running', 'tok-a', 'mtok-unique')$$);
+
+SELECT pg_temp.assert_rejected(
+  'clubs - a duplicate member invite token',
+  $$INSERT INTO clubs (name, sport, invite_token, member_invite_token)
+    VALUES ('Copycat', 'running', 'tok-unique', 'mtok-a')$$);
+
+-- One club cannot hold the same string in both columns. Nothing in the DDL forbids
+-- it, so this asserts the application never mints such a pair by proving what the
+-- database WILL take - and pins the reason: two links that are the same string are
+-- one link that quietly bypasses the join policy for everybody.
+SELECT pg_temp.assert_accepted(
+  'clubs - the database itself does not stop one club reusing its own token, so the app must not',
+  $$INSERT INTO clubs (id, name, sport, invite_token, member_invite_token)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab', 'Same String Club', 'running',
+            'tok-same', 'tok-same')$$);
+
+SELECT pg_temp.assert_accepted(
+  'clubs - cleaning up that row so nothing below sees it',
+  $$DELETE FROM clubs WHERE id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab'$$);
 
 -- ---------------------------------------------------------------------------
 -- Domain invariant 2: exactly one main channel per club

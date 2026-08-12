@@ -49,8 +49,12 @@ export type ClubDetail = {
    */
   eboardChannelId: string | null;
   viewer: { role: ClubRole; isAdmin: boolean; isOwner: boolean };
-  /** Admin tier only. The link is the only invite mechanism, so this is the club's front door. */
-  inviteToken: string | null;
+  /**
+   * Every member of the club holds it (ADR-0024); only an admin can rotate it. The link is the
+   * only invite mechanism, so this is the club's front door - which is why a NON-member cannot
+   * read this club at all rather than reading it without the token.
+   */
+  inviteToken: string;
 };
 
 export type RosterEntry = {

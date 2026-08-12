@@ -201,6 +201,117 @@ describe('invite-token rotation', () => {
     expect((await as(member, 'POST', `/clubs/${clubId}/invite-token/rotate`)).status).toBe(404);
     expect((await as(outsider, 'POST', `/clubs/${clubId}/invite-token/rotate`)).status).toBe(404);
   });
+
+  /**
+   * Rotation replaces BOTH links, because whoever rotates does not know which one leaked.
+   */
+  it('kills the member link as well as the admin one', async () => {
+    const owner = await signUp('RotateBothOwner');
+    const member = await signUp('RotateBothMember');
+    const joiner = await signUp('RotateBothJoiner');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, member);
+
+    const memberLink = (await as(member, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+    await as(owner, 'POST', `/clubs/${clubId}/invite-token/rotate`);
+
+    expect((await as(joiner, 'POST', `/invites/${memberLink}/redeem`)).status).toBe(404);
+    const fresh = (await as(member, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+    expect(fresh).not.toBe(memberLink);
+    expect((await as(joiner, 'POST', `/invites/${fresh}/redeem`)).status).toBe(200);
+  });
+});
+
+/**
+ * ADR-0025: a club has two links, and which one was redeemed decides whether the join policy
+ * applies. The point is that a member can bring somebody without being able to grant what only
+ * an admin may grant - so every assertion here is a pair, and the pairs are what make it a rule
+ * rather than a coincidence of one code path.
+ */
+describe('the member link and the admin link', () => {
+  it('hands an admin and a member different strings for the same club', async () => {
+    const owner = await signUp('TwoLinkOwner');
+    const admin = await signUp('TwoLinkAdmin');
+    const member = await signUp('TwoLinkMember');
+    const { clubId } = await createClubAs(owner, { joinPolicy: 'request' });
+    await join(clubId, admin, 'admin');
+    await join(clubId, member);
+
+    const ownerLink = (await as(owner, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+    const adminLink = (await as(admin, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+    const memberLink = (await as(member, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+
+    expect(adminLink).toBe(ownerLink);
+    expect(memberLink).toBeTruthy();
+    // The one that matters: a member never learns the string that bypasses the policy.
+    expect(memberLink).not.toBe(adminLink);
+  });
+
+  it('on a request club, joins through the admin link and files a request through the member one', async () => {
+    const owner = await signUp('PolicyOwner');
+    const member = await signUp('PolicyMember');
+    const viaAdmin = await signUp('PolicyViaAdmin');
+    const viaMember = await signUp('PolicyViaMember');
+    const { clubId } = await createClubAs(owner, { joinPolicy: 'request' });
+    await join(clubId, member);
+
+    const adminLink = (await as(owner, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+    const memberLink = (await as(member, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+
+    const bypassed = await as(viaAdmin, 'POST', `/invites/${adminLink}/redeem`);
+    expect(bypassed.status).toBe(200);
+    expect(bypassed.body.status).toBe('joined');
+
+    const asked = await as(viaMember, 'POST', `/invites/${memberLink}/redeem`);
+    expect(asked.status).toBe(200);
+    expect(asked.body.status).toBe('requested');
+
+    // Not a member yet, and visible to the admins as a pending row rather than as nothing.
+    const roster = await as(owner, 'GET', `/clubs/${clubId}/members`);
+    expect(roster.body.members.map((m: { name: string }) => m.name)).not.toContain('PolicyViaMember');
+    expect(roster.body.pendingRequests.map((r: { name: string }) => r.name)).toContain(
+      'PolicyViaMember',
+    );
+  });
+
+  it('on an open club, both links join immediately', async () => {
+    const owner = await signUp('OpenLinkOwner');
+    const member = await signUp('OpenLinkMember');
+    const viaAdmin = await signUp('OpenViaAdmin');
+    const viaMember = await signUp('OpenViaMember');
+    const { clubId } = await createClubAs(owner, { joinPolicy: 'open' });
+    await join(clubId, member);
+
+    const adminLink = (await as(owner, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+    const memberLink = (await as(member, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+
+    expect((await as(viaAdmin, 'POST', `/invites/${adminLink}/redeem`)).body.status).toBe('joined');
+    // Nothing to bypass, so the member's link is not a lesser one here.
+    expect((await as(viaMember, 'POST', `/invites/${memberLink}/redeem`)).body.status).toBe(
+      'joined',
+    );
+  });
+
+  it('refuses a banned person through the member link, without leaving a request behind', async () => {
+    const owner = await signUp('BanLinkOwner');
+    const member = await signUp('BanLinkMember');
+    const banned = await signUp('BanLinkBanned');
+    const { clubId } = await createClubAs(owner, { joinPolicy: 'request' });
+    await join(clubId, member);
+    await join(clubId, banned);
+    expect(
+      (await as(owner, 'POST', `/clubs/${clubId}/bans`, { userId: banned.userId })).status,
+    ).toBe(201);
+
+    const memberLink = (await as(member, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+    expect((await as(banned, 'POST', `/invites/${memberLink}/redeem`)).status).toBe(403);
+
+    // A ban that still produced a pending row would teach admins it does not hold.
+    const roster = await as(owner, 'GET', `/clubs/${clubId}/members`);
+    expect(roster.body.pendingRequests.map((r: { name: string }) => r.name)).not.toContain(
+      'BanLinkBanned',
+    );
+  });
 });
 
 describe('profile', () => {

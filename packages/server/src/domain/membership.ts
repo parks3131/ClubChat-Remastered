@@ -10,7 +10,7 @@
  * Authority comes from the policy module. Nothing here re-derives a predicate.
  */
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, or, sql } from 'drizzle-orm';
 import type { ClubRole, JoinPolicy } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { isUniqueViolation } from '../db/errors.ts';
@@ -78,9 +78,8 @@ export type JoinOutcome = { status: 'joined' | 'requested'; role?: ClubRole };
  * Join a club by finding it in search.
  *
  * The policy decides: `open` admits immediately, `request` files a pending row for an admin
- * to decide. Note that this is the SEARCH path - the invite link is a separate command that
- * joins instantly regardless of policy, because a link is a private side channel and is
- * deliberately independent of the public path.
+ * to decide. Note that this is the SEARCH path - the invite link is a separate command, and
+ * which of the club's two links was used decides whether it bypasses this (ADR-0025).
  */
 export async function joinClub(
   db: Db,
@@ -99,8 +98,73 @@ export async function joinClub(
     return admit(db, { clubId, userId, actorId: null, via: 'open' });
   }
 
+  return fileJoinRequest(db, clubId, userId);
+}
+
+/**
+ * Join by invite link.
+ *
+ * **Which of the club's two links was used is the whole decision** (ADR-0025). The admin link
+ * joins instantly whatever the join policy says - an admin sharing it has already made the call
+ * the `request` policy exists to capture, and that is what the link has always meant. The member
+ * link obeys the policy: instant on an `open` club, a request to be approved on a `request` one,
+ * so a member can bring somebody without being able to grant what only an admin may grant.
+ *
+ * The two are told apart by the string itself rather than by anything travelling beside it. A
+ * link gets pasted, forwarded and screenshotted; a marker qualifying it can be stripped or lost,
+ * and the safe fallback would then be the wrong answer for every legitimate admin link.
+ *
+ * Idempotent - opening the same link twice is a no-op, not an error.
+ */
+export async function redeemInvite(
+  db: Db,
+  userId: string,
+  token: string,
+): Promise<Result<JoinOutcome & { clubId: string }>> {
+  const rows = await db
+    .select()
+    .from(clubs)
+    .where(or(eq(clubs.inviteToken, token), eq(clubs.memberInviteToken, token)))
+    .limit(1);
+  const club = rows[0];
+  if (!club) return { ok: false, code: 'not_found' };
+
+  const existing = await roleOf(db, club.id, userId);
+  if (existing !== null) {
+    // The second attempt is a no-op, not an error.
+    return { ok: true, status: 'joined', role: existing, clubId: club.id };
+  }
+
+  // Compared against the ADMIN token rather than the member one, so a future third link is a
+  // request by default. A capability is granted by naming it, never by failing to match.
+  const bypassesPolicy = token === club.inviteToken;
+  if (!bypassesPolicy && (club.joinPolicy as JoinPolicy) !== 'open') {
+    const requested = await fileJoinRequest(db, club.id, userId);
+    if (!requested.ok) return requested;
+    return { ...requested, clubId: club.id };
+  }
+
+  const result = await admit(db, { clubId: club.id, userId, actorId: null, via: 'link' });
+  if (!result.ok) return result;
+  return { ...result, clubId: club.id };
+}
+
+/**
+ * File a pending join request, and tell the club's admins.
+ *
+ * The other half of `admit`: every way of asking to join lands here, exactly as every way of
+ * actually joining lands there. It has two callers since ADR-0025 - finding the club by name,
+ * and opening a member's link on a `request` club - and it was extracted rather than copied
+ * because a second hand-written copy of "file the row, publish the event, absorb the duplicate"
+ * is failure mode 9 waiting with three things to drift.
+ */
+async function fileJoinRequest(
+  db: Db,
+  clubId: string,
+  userId: string,
+): Promise<Result<JoinOutcome>> {
   /*
-   * Checked again on the request branch, which does NOT pass through `admit`.
+   * Checked here, because this branch does NOT pass through `admit`.
    *
    * Without it a banned person can still file a request, and every admin in the club gets a
    * notification asking them to decide something that is already decided. Worse, denying it is
@@ -138,34 +202,6 @@ export async function joinClub(
     if (isUniqueViolation(error)) return { ok: false, code: 'already_pending' };
     throw error;
   }
-}
-
-/**
- * Join by invite link.
- *
- * **Joins instantly regardless of join policy.** The link is a private side channel,
- * deliberately independent of the public search path: an admin who shares it has already
- * made the decision that the `request` policy exists to capture. Idempotent - opening the
- * same link twice is a no-op, not an error.
- */
-export async function redeemInvite(
-  db: Db,
-  userId: string,
-  token: string,
-): Promise<Result<JoinOutcome & { clubId: string }>> {
-  const rows = await db.select().from(clubs).where(eq(clubs.inviteToken, token)).limit(1);
-  const club = rows[0];
-  if (!club) return { ok: false, code: 'not_found' };
-
-  const existing = await roleOf(db, club.id, userId);
-  if (existing !== null) {
-    // The second attempt is a no-op, not an error.
-    return { ok: true, status: 'joined', role: existing, clubId: club.id };
-  }
-
-  const result = await admit(db, { clubId: club.id, userId, actorId: null, via: 'link' });
-  if (!result.ok) return result;
-  return { ...result, clubId: club.id };
 }
 
 /**
@@ -1010,13 +1046,19 @@ export type ClubDetail = {
     isOwner: boolean;
   };
   /**
-   * The invite token, for the admin tier only.
+   * The invite token **for the viewer asking**, which is a different string per tier.
    *
-   * The link is now the ONLY invite mechanism (ADR-0010 removed the typed code), so the token
-   * is the whole of a club's access control against anybody holding it. It is withheld from a
-   * plain member here rather than hidden in the UI, because a hidden field is not withheld.
+   * The link is the ONLY invite mechanism (ADR-0010 removed the typed code), so the token is
+   * the whole of a club's access control against anybody holding it - which is why it is
+   * withheld from a NON-member here rather than hidden in the UI, and why the club search
+   * projection carries no trace of it. This function refuses a non-member outright, so
+   * reaching this line already means membership.
+   *
+   * Every member holds one and only an admin can rotate it (ADR-0024). An admin's link joins
+   * instantly; a member's obeys the club's join policy, so on a `request` club it files a
+   * request an admin approves (ADR-0025).
    */
-  inviteToken: string | null;
+  inviteToken: string;
 };
 
 /** One club, for the club hub and the club profile screen. Members only. */
@@ -1036,6 +1078,7 @@ export async function readClub(
     image: string | null;
     join_policy: string;
     invite_token: string;
+    member_invite_token: string;
     created_at: string;
     member_count: string;
     channel_id: string | null;
@@ -1049,6 +1092,7 @@ export async function readClub(
            c.image,
            c.join_policy::text AS join_policy,
            c.invite_token,
+           c.member_invite_token,
            ${isoUtc('c.created_at')} AS created_at,
            (SELECT count(*) FROM club_memberships m WHERE m.club_id = c.id) AS member_count,
            ch.id::text AS channel_id,
@@ -1105,7 +1149,15 @@ export async function readClub(
         isAdmin,
         isOwner: role === 'owner',
       },
-      inviteToken: isAdmin ? row.invite_token : null,
+      /*
+       * The link for THIS viewer, and never both.
+       *
+       * One field rather than two, so no screen has to choose and no screen can show a member
+       * the admin one by picking wrong. A member's copy files a request on a `request` club;
+       * an admin's joins instantly (ADR-0025). The difference is invisible here on purpose -
+       * it is a property of the string, decided when it is redeemed.
+       */
+      inviteToken: isAdmin ? row.invite_token : row.member_invite_token,
     },
   };
 }
@@ -1196,6 +1248,11 @@ export async function searchClubs(
  * Invalidating every outstanding link is the correct and expected behaviour, not a side effect
  * to warn about: a rotation happens because a link got somewhere it should not have, and a
  * rotation that left the old one working would be theatre.
+ *
+ * **Both links go at once** (ADR-0025), and one control rotates them. Whoever rotates does not
+ * know which of the two leaked - the whole reason to rotate is that a link ended up somewhere
+ * nobody can see - so a rotation that replaced only one of them would be exactly the theatre
+ * this paragraph exists to refuse.
  */
 export async function rotateInviteToken(
   db: Db,
@@ -1204,14 +1261,19 @@ export async function rotateInviteToken(
 ): Promise<Result<{ inviteToken: string }>> {
   if (!canRotateInviteToken(ctx, clubId)) return { ok: false, code: 'not_found' };
 
-  const token = mintInviteToken();
   const rows = await db
     .update(clubs)
-    .set({ inviteToken: token, inviteTokenRotatedAt: new Date() })
+    .set({
+      inviteToken: mintInviteToken(),
+      memberInviteToken: mintInviteToken(),
+      inviteTokenRotatedAt: new Date(),
+    })
     .where(eq(clubs.id, clubId))
     .returning({ inviteToken: clubs.inviteToken });
 
   const updated = rows[0];
   if (!updated) return { ok: false, code: 'not_found' };
+  // The ADMIN token, because rotation is admin-only and the caller has just asked for a link to
+  // share. A member re-reads the club and gets theirs from the same field they always did.
   return { ok: true, inviteToken: updated.inviteToken };
 }

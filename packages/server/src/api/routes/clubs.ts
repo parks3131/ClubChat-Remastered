@@ -87,8 +87,20 @@ export function registerClubRoutes(app: FastifyInstance, deps: AppDeps): void {
   app.post<{ Params: { token: string } }>('/invites/:token/redeem', async (request, reply) => {
     const result = await redeemInvite(deps.db, request.userId!, request.params.token);
     if (!result.ok) {
-      // A revoked or malformed link gets a plain "no longer valid", never a hint about
-      // which clubs exist.
+      /*
+       * A ban is told plainly, and everything else is a flat "no longer valid".
+       *
+       * `PRD/04`'s edge-case table has asked for the first half since the ban shipped and this
+       * route answered `invite_invalid` to a banned person - which reads as "the admin rotated
+       * the link", so somebody who has been removed goes and asks another member for a fresh one.
+       * The plainness is deliberate and so is its limit: they are told they cannot rejoin THIS
+       * club, and there is no appeal path, because naming a contact hands a determined harasser
+       * a specific person to pursue.
+       *
+       * Nothing else is distinguished. A revoked or malformed token must not hint at which clubs
+       * exist, and the banned case leaks nothing new: they were in this club.
+       */
+      if (result.code === 'banned') return reply.code(403).send({ error: 'banned' });
       return reply.code(404).send({ error: 'invite_invalid' });
     }
     return result;

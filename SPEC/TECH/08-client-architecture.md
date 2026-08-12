@@ -59,6 +59,19 @@ on( msg.new with seq ) OR ( msg.ack with seq ):        ← both, identically
 Gapless sequence numbers make gap detection *exact*, not heuristic. There is no state in which
 the client silently believes it is caught up when it is not.
 
+> **The `channels[]` entry is written raw, and this is load-bearing rather than a formatting
+> preference.** React Native's `fetch` re-encodes the URL it is handed, so a `%3A` written by this
+> client left the phone as `%253A`; the server decodes exactly once, found no colon, and dropped
+> the entry. **Every `/sync` from iOS answered `200` with an empty list, for months** - the socket
+> kept the phone current, so the only casualty was precisely what this section exists to prevent.
+> A uuid and an integer need no escaping, and whatever the platform escapes on its own the server
+> decodes back. See [Protocol](10-protocol.md) and `AGENTS.md` failure mode 24.
+>
+> The half that made it survivable is the server's, and it is fixed there: an entry that does not
+> parse is now a `400` rather than being skipped. **A repair that achieves nothing must not report
+> success** - `repairGaps` compares the hole before and after writing its page and says so when
+> nothing changed, which is the signal that finally surfaced this.
+
 ### 4. Realtime remains an enhancement
 
 [Cross-cutting UX](../PRD/16-cross-cutting-ux.md) rule 4 stands: every screen also loads its data over REST, so a dropped socket

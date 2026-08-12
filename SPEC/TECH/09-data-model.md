@@ -48,8 +48,14 @@ authenticate as it. System messages are authored by it and never by `NULL`. See
 ### Clubs and membership
 ```
 clubs                 id, name, sport, description, avatar_media_id, join_policy,
-                      invite_token, invite_token_rotated_at, created_at
-                      UNIQUE (invite_token)
+                      invite_token, member_invite_token, invite_token_rotated_at,
+                      created_at
+                      UNIQUE (invite_token), UNIQUE (member_invite_token)
+                      -- TWO links, and which one is redeemed is the whole decision
+                      -- (ADR-0025): the admin token bypasses the join policy, the
+                      -- member token obeys it. Independently minted, never derived
+                      -- from each other - a derived pair would make rotating either
+                      -- one a lie - and rotation replaces both together.
                       -- invite_token, not invite_code. Nobody types it: it exists only
                       -- inside a share link (PRD/04 rule 5, changed 2026-07-28).
                       -- Therefore it is 32 bytes of CSPRNG, base64url, matched exactly

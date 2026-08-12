@@ -12,11 +12,31 @@ way in.
 3. **`open` policy:** finding the club by name and tapping Join adds the user immediately.
 4. **`request` policy:** finding the club by name files a pending request; an admin approves
    or denies.
-5. **The join link always joins instantly, regardless of join policy.** It is a private side
-   channel, deliberately independent of the public search path. *(Changed 2026-07-28: there is
-   no longer a manual invite code to type. Sharing a link is the only invite mechanism. The
+5. **An admin's join link always joins instantly, regardless of join policy.** It is a private
+   side channel, deliberately independent of the public search path. *(Changed 2026-07-28: there
+   is no longer a manual invite code to type. Sharing a link is the only invite mechanism. The
    opaque token still exists - it rides in the link - but it is never shown as a code, never
    entered by hand, and there is no code-entry screen.)*
+5a. **Every member of a club can share its link; only an admin can rotate it.** A club grows by
+    its members bringing people, and an invite path only an admin could walk is one a member
+    routes around by asking an admin for the same string. Rotation stays with the admin tier
+    because it invalidates every link **other members** have already sent - the same asymmetry as
+    banning, one layer over. A non-member gets nothing: the club refuses them, and club search
+    never carries the token. See
+    [ADR-0024](../decisions/0024-every-member-holds-the-clubs-invite-link.md).
+5b. **A member's link does what a member is allowed to do: on a `request` club it files a
+    request rather than joining somebody outright.** An admin's link still bypasses approval,
+    because sharing it *is* the approval. Without this split a member could hand out the one
+    thing a `request` club exists to withhold, and the club would have no way to tell that link
+    from an admin's. On an `open` club there is nothing to bypass and the two behave identically.
+    Each tier is simply handed its own link and never sees the other. See
+    [ADR-0025](../decisions/0025-a-members-invite-link-obeys-the-join-policy.md).
+5c. **The link can also be shown as a QR code**, for handing the club to somebody in the room
+    rather than in a message. It carries the same link and grants nothing extra. **It currently
+    opens the club only for somebody who already has the app** - a phone without ClubChat gets no
+    prompt and no page, which is [ADR-0010](../decisions/0010-link-only-invites.md)'s recorded and
+    still-unbuilt web fallback, and the screen says so plainly rather than letting a member find
+    out at a club fair.
 6. **Switching a club from `request` to `open` auto-approves every currently pending
    request**, rather than stranding them with no approval step left in the product.
 7. Join policy is editable after creation.

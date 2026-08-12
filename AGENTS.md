@@ -539,3 +539,42 @@ that records how to recognise the class._
     appending to `.env` reconfigured a running API with no explicit restart - convenient, and the
     reason a "nothing changed" reconcile log can be telling the truth about a database an earlier
     process already changed.
+
+23. **One apostrophe in an SVG attribute makes the whole image un-exportable, and the failure is a
+    button that never comes back.** Symptom: Save on the QR screen sat on "Saving" forever, with no
+    error anywhere. Root cause: rasterising goes through `data:image/svg+xml`, and
+    `react-native-svg`'s `encodeSvg` **replaces every double quote with a single quote** to build
+    that URL - so `accessibilityLabel="...this club's join link"` closed its own attribute early,
+    the SVG failed to parse, and `img.onerror` fired where the only handler is `onload`. The
+    callback simply never ran. **Rules: no apostrophe in any attribute of an SVG that will be
+    exported, and never interpolate user data (a club name, a person's name) into one.** Anything
+    that has to say a name belongs to the screen drawing around the code, not inside it. Second
+    rule, general: **a callback-based API with silent failure paths gets a timeout**, or one
+    unhandled case disables a control until the screen is closed. How to recognise the class: the
+    thing renders perfectly on screen and only the *export* is broken, so every visual check
+    passes. Worth recording that the first diagnosis was wrong - a remote `<image href>` was
+    blamed, inlined as a data URI, and the hang survived it, which is what forced the search into
+    the serialised string where the apostrophe was. The inlining stands on its own (an export
+    should not race a fetch) but it fixed nothing here, and calling it the cause before re-running
+    the failure would have left the real one in place.
+
+24. **React Native re-encodes a URL you hand `fetch`, so a pre-encoded one arrives double-encoded -
+    and a server that SKIPS what it cannot parse answers `200` forever.** Symptom: none, for
+    months. `GET /sync` from the iPhone returned `200` with an empty channel list every single
+    time; 609 requests reconciled nothing. Realtime hid it, so the phone stayed current and only a
+    message missed while the socket was down was lost - permanently, below the high-water mark.
+    Root cause: the client wrote `encodeURIComponent('<uuid>:92')`, iOS encoded the query string
+    again, and `%3A` became `%253A`; the route decoded once, found no colon, and `continue`d past
+    the entry. **Rules: never hand `fetch` a URL you have already encoded** - a uuid and an integer
+    need no escaping, and whatever the platform escapes the server decodes - **and never skip a
+    malformed request element, refuse it.** The skip is what made this survivable for months: it is
+    indistinguishable from the deliberate omission of a channel the caller may not read. How to
+    recognise the class: it cannot be reproduced on web (the browser leaves `%3A` alone) and no
+    unit test can see it, because the re-encoding happens below `fetch`. It was found by reading
+    the API's own access log and noticing that the phone's URLs and the browser's were different
+    strings for the same call - and before that, by a gap repair that ran on every sync forever,
+    because the one call that could fill the hole was the one being dropped.
+
+    **A repair that repeats is the tell, and now it says so**: `repairGaps` compares the hole
+    before and after writing its page and logs when nothing changed. An operation that silently
+    achieves nothing is worse than one that fails.

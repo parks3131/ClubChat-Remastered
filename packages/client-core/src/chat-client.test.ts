@@ -11,7 +11,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import type { MessageEnvelope } from '@clubchat/shared';
-import { ChatClient, type SocketLike } from './chat-client.ts';
+import { ChatClient, syncEntry, type SocketLike } from './chat-client.ts';
 import { findGaps } from './store.ts';
 
 const CHANNEL = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -179,6 +179,37 @@ async function setup(): Promise<Fixture> {
 
   return { client, socket, syncCalls, backlog };
 }
+
+describe('the sync URL', () => {
+  /**
+   * **Not encoded, and this is a contract with the platform rather than a style choice.**
+   *
+   * React Native's `fetch` normalises the URL it is handed, and on iOS that means percent-encoding
+   * the query string a second time - so a `%3A` we wrote left the phone as `%253A`, the server saw
+   * an entry with no colon in it, and the channel was dropped from the response. Every sync the
+   * iPhone ever made answered `200` and reconciled nothing.
+   *
+   * No fake can reproduce the platform's re-encoding, so what is pinned here is the property that
+   * makes it impossible: the URL we hand to `fetch` carries no percent escape at all.
+   */
+  it('sends a raw colon rather than a percent escape', async () => {
+    const { client, socket, syncCalls, backlog } = await setup();
+
+    backlog.push(envelope(1));
+    socket.deliver({ t: 'msg.new', d: envelope(3) });
+    await vi.waitFor(() => expect(syncCalls.length).toBeGreaterThan(0));
+
+    for (const url of syncCalls) {
+      expect(url, 'a pre-encoded URL is re-encoded by the platform').not.toContain('%');
+      expect(url).toContain(`channels[]=${CHANNEL}:`);
+    }
+  });
+
+  it('builds an entry with and without the revision cursor', () => {
+    expect(syncEntry('abc', 4)).toBe('abc:4');
+    expect(syncEntry('abc', 4, 9)).toBe('abc:4:9');
+  });
+});
 
 describe('ChatClient applies the gap rule', () => {
   it('appends in-order live messages without syncing', async () => {

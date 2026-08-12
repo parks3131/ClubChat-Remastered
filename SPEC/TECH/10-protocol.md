@@ -114,7 +114,9 @@ GET    /conversations                        ← the chat list: club chats + DMs
                                                a club row's unread covers EVERY channel of that
                                                club the caller can reach, not the main chat alone
 GET    /channels                             ← per-channel sync state; what the hub badges from
-GET    /sync?channels[]={id}:{since_seq}     ← the reconnect / foreground path
+GET    /sync?channels[]={id}:{since_seq}     ← the reconnect / foreground path. The entry is
+                                               NEVER percent-encoded by the client, and an entry
+                                               that does not parse is a 400 - see below
 GET    /channels/:id/messages?before={seq}&limit=40
 GET    /channels/:id/messages/around?around={seq}&radius=20   ← jump-to-message window
 GET    /channels/:id/pinned | /announcements ← Highlights; whole channel, never a loaded window
@@ -144,12 +146,15 @@ POST   /moderation/users/:uid/suspended      ← body { suspended, messageId? };
 GET    /moderation/reads                     ← a moderator's own audit trail
 
 GET    /clubs/search?q=                      ← safe projection, non-members only, no paging
-POST   /clubs · GET/PATCH/DELETE /clubs/:id  ← GET withholds the invite token from non-admins
+POST   /clubs · GET/PATCH/DELETE /clubs/:id  ← GET carries the invite token for any MEMBER
+                                               (ADR-0024); a non-member is refused the club
 GET    /clubs/:id/members                    ← roster; pendingRequests null for a non-admin
 POST   /clubs/:id/members/seen               ← clears that club's join-request rows
 POST   /clubs/:id/join | /join-requests/:id/approve | /deny
-POST   /invites/:token/redeem                ← the only invite path; no typed-code entry
-POST   /clubs/:id/invite-token/rotate        ← admin; invalidates every outstanding link
+POST   /invites/:token/redeem                ← the only invite path; no typed-code entry. WHICH
+                                               of the club's two links decides join vs request
+                                               (ADR-0025). A ban answers 403, everything else 404
+POST   /clubs/:id/invite-token/rotate        ← admin; invalidates BOTH links at once
 POST   /clubs/:id/members · PATCH /members/:uid/role · DELETE /members/:uid
 POST   /clubs/:id/transfer-ownership
 
@@ -217,6 +222,17 @@ DELETE /devices                              ← forget it on sign-out; scoped t
 > date, tapping the avatar sends nothing but a picture - so an omitted field means "not mine to
 > touch". Merged, an avatar upload would be indistinguishable from a form that cleared the name.
 > `PATCH /eboards/:id` and `PATCH /clubs/:id` follow the identity rule, not the form rule.
+
+> **A `channels[]` entry is written raw, and an entry that does not parse is refused.** Two rules
+> from one defect, found 2026-08-12. The client must never percent-encode the entry: React Native's
+> `fetch` re-encodes the URL it is given, so a `%3A` written by the client left the phone as
+> `%253A` and the server - which decodes exactly once - saw no colon at all. A uuid and an integer
+> need no escaping, and whatever the platform escapes on its own the server decodes back. The
+> server then made it invisible by **skipping** what it could not parse, which is the same answer
+> as omitting a channel the caller may not read: every iOS sync returned `200` with an empty list
+> and reconciled nothing for months. A malformed entry is now `400 bad_channel_entry`; an
+> unauthorized one is still omitted, because a client holding a stale channel list must be able to
+> sync the rest. See `AGENTS.md` failure mode 24.
 
 > **`/conversations` and `/channels` are not the same read, and the names are close enough to
 > matter.** `/channels` is sync state - ids, scopes and sequence numbers for the client's gap

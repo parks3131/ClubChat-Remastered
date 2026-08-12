@@ -104,22 +104,34 @@ export function registerInboxRoutes(app: FastifyInstance, deps: AppDeps): void {
        * a uuid and contains none - and the previous `lastIndexOf` would read the rev as the seq
        * the moment a third field appeared. The rev is optional so a client that has not been
        * updated keeps the old behaviour exactly rather than being refused.
+       *
+       * > **An entry that does not parse is a 400, and that is a correction rather than a
+       * > preference.** It used to `continue`, so a malformed entry was answered with `200` and a
+       * > response that simply did not mention that channel - indistinguishable from a channel the
+       * > caller may not read. The iOS client spent months in exactly that hole: its URL arrived
+       * > double-encoded, every entry failed this parse, and every sync reported success while
+       * > reconciling nothing. **Skipping an unauthorized channel is deliberate; skipping a
+       * > malformed one hides a client bug behind a success.**
        */
       const parts = entry.split(':');
-      if (parts.length < 2 || parts.length > 3) continue;
+      const malformed = () =>
+        reply.code(400).send({ error: 'bad_channel_entry', entry: entry.slice(0, 120) });
+      if (parts.length < 2 || parts.length > 3) return malformed();
       const [channelId, sinceRaw, revRaw] = parts;
-      if (!channelId) continue;
+      if (!channelId) return malformed();
 
       const since = Number(sinceRaw);
-      if (!Number.isInteger(since) || since < 0) continue;
+      if (!Number.isInteger(since) || since < 0) return malformed();
 
       let sinceRev: number | undefined;
       if (revRaw !== undefined) {
         const parsed = Number(revRaw);
-        if (!Number.isInteger(parsed) || parsed < 0) continue;
+        if (!Number.isInteger(parsed) || parsed < 0) return malformed();
         sinceRev = parsed;
       }
 
+      // Omitted rather than refused, and this one IS deliberate: a client holding a stale channel
+      // list - it was removed from a club while offline - must still sync everything else.
       const guard = await authorizeChannel(deps, request, channelId);
       if (!guard.ok) continue;
 
