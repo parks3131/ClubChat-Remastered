@@ -495,6 +495,24 @@ Three defects, and the shape of them is the useful part:
 The first was found by the founder using it, the second by a log line that repeated forever, and
 the third by writing the test for the first. **None of the three was findable by reading code.**
 
+**Added 2026-08-12: the content filter**, which closes the last of App Review guideline 1.2's four
+requirements and was the one item held open for a product decision rather than for engineering.
+Hate speech is refused at send; the ambiguous terms post and file an automatic report into the
+queue that already existed, filed as the seeded system actor so no new table, reader or screen was
+needed. **Profanity is deliberately allowed** - see
+[ADR-0026](../decisions/0026-filter-hate-speech-not-profanity.md). ClubChat is now **18+**, which
+was settled in the same conversation and is what the store age rating rests on.
+
+Three defects, and all three were in code written that day rather than found in shipped code:
+
+1. **A leetspeak fold ran before a word-boundary match**, mapping `!` to `i`, so `you faggot!`
+   did not match `\bfaggot\b`. `AGENTS.md` failure mode 25, and the most transferable thing here.
+2. **The obfuscation list contained flag-tier terms**, which the collapsed pass would have
+   promoted to refusals - silently removing the human judgement that tier exists for.
+3. **The sign-up consent line has never linked to the Terms**, though `legal/terms.tsx` has said
+   it does for the life of the project. Found by reading the rendered screen rather than the
+   code, which is the only place it was visible.
+
 **Phase 4 - Hardening.**
 Rate limits everywhere. Retention and GC jobs. Accessibility pass on every icon-only control.
 Sentry dashboards. Load test at 10× projected peak. The [Acceptance checklist](../PRD/18-acceptance-checklist.md) parity checklist, run on

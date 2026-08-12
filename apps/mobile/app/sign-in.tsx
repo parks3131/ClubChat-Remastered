@@ -171,9 +171,38 @@ export default function SignIn() {
           // PRD/03 rule 1: a consent line below the password field. The documents must be
           // readable both signed out and signed in, which is why this sits here and not
           // behind the auth gate.
+          //
+          // The age is stated here as well as in the Terms, because a declared minimum age is
+          // what the store age rating rests on and nobody reads the Terms. Declaring rather
+          // than collecting a date of birth is deliberate - see ADR-0026.
+          //
+          // > **Both documents are reachable from here, and that is a requirement rather than a
+          // > courtesy.** Apple's guideline 1.2 is discharged by the Terms screen's "no
+          // > tolerance" wording, and `legal/terms.tsx` has always said the consent line links
+          // > to it - while this line was plain text for the life of the project, so the only
+          // > stated route to the document somebody is agreeing to did not exist. Found on
+          // > 2026-08-12 by reading the rendered screen rather than the code.
           <View style={styles.consent}>
             <Text style={styles.consentText}>
-              By creating an account you agree to the Terms and the Privacy Policy.
+              By creating an account you confirm you are 18 or over, and you agree to the{' '}
+              <Text
+                style={styles.consentLink}
+                onPress={() => router.push('/legal/terms')}
+                accessibilityRole="link"
+                accessibilityLabel="Read the Terms"
+              >
+                Terms
+              </Text>{' '}
+              and the{' '}
+              <Text
+                style={styles.consentLink}
+                onPress={() => router.push('/legal/privacy')}
+                accessibilityRole="link"
+                accessibilityLabel="Read the Privacy Policy"
+              >
+                Privacy Policy
+              </Text>
+              .
             </Text>
           </View>
         )}
@@ -242,4 +271,6 @@ const styles = StyleSheet.create({
   },
   consent: { paddingHorizontal: space.sm },
   consentText: { ...type.bodySmall, color: color.textSecondary, textAlign: 'center' },
+  // The accent, so the two documents read as reachable rather than as emphasis.
+  consentLink: { color: color.accent },
 });

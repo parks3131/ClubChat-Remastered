@@ -21,7 +21,7 @@
 | **An https join page, and universal links** | The invite link is `clubchat://join/<token>`, so it opens the club for somebody who already has the app and does **nothing at all** for somebody who does not - no prompt, no error, no page. [ADR-0010](../decisions/0010-link-only-invites.md) recorded this as the cost of removing the typed code and named "a real web client" as the mitigation; it has never been built | **Promoted from a footnote on 2026-08-12**, when the club QR code shipped. A link in a message is at least *seen* by a person who can be told to install the app first; a code taped to a table is scanned by a stranger who gets a blank camera. What it needs: `clubchatapp.com` serving `/join/:token` with the club's name and a store link, `apple-app-site-association` plus the associated-domains entitlement, Android `assetlinks.json` and intent filters, and a native rebuild. The QR screen itself does not change - only the string it carries |
 | **Legal review** of Privacy Policy and Terms | The shipped documents are an in-house first draft, explicitly not legal advice | Must happen before any public release |
 | **iOS distribution** | Blocked on paid developer-program enrolment | Not a code problem |
-| **App Review guideline 1.2, the filtering bullet** | An app with user-generated content must carry *"a method for filtering objectionable material from being posted"*, alongside the report mechanism, user blocking and published contact information | **Three of the four are now done.** Reporting and blocking have shipped since Phase 3.5; acting on a report - removing the message, suspending the account - and a published support address landed 2026-08-11. **Filtering is the one not built, and it is deliberately not being built without a product decision**: it is a change to what happens when somebody presses send, not a moderation feature, and quietly adding a word list would be inventing scope. It is also the likeliest thing a reviewer asks about, given the product will include minors. Options range from a server-side term list at `appendMessage` to nothing at all on the argument that reactive moderation plus instant blocking is proportionate for small, real-name, invite-scoped clubs |
+| ~~**App Review guideline 1.2, the filtering bullet**~~ | | **Done 2026-08-12. All four requirements are now met.** Reporting and blocking shipped in Phase 3.5; acting on a report and a published support address landed 2026-08-11; filtering was the last one and needed the product decision this row was waiting on. It refuses hate speech at send and queues the ambiguous cases into the report queue that already existed, and it deliberately does **not** filter profanity - see [ADR-0026](../decisions/0026-filter-hate-speech-not-profanity.md), which records why a swear filter is the wrong target for a university club and what the term list knowingly cannot catch. The related age question was settled at the same time: **ClubChat is 18+**, declared at sign-up and in the Terms, which is also what the store age rating is declared against |
 | ~~**Error monitoring**~~ | | **Done 2026-08-03, server side.** `monitoring.ts` reports from all three processes: 5xx on the API through a `setErrorHandler` that did not previously exist, parked outbox events, failed drain ticks, socket frames, and the rate limiter failing open. Reports to the process logger when `SENTRY_DSN` is absent, so the paths run in development and CI rather than first executing in production. **The mobile client is not covered** - a JS crash on the phone still reaches nobody, and closing that needs `@sentry/react-native` and a native rebuild |
 
 ### Important, not blocking
@@ -367,6 +367,15 @@ on news posts. Recurring events. External calendar sync. RSVP or attendance, any
   auto-promoting the longest-serving admin (hands a club to somebody who never asked for it), and
   deleting the owned clubs (destroys other people's club to close one account).
 - Should an admin other than a poll's creator be able to close a poll whose creator has left?
-- Do clubs including **minors** need age gating, parental consent, or restricted profile
-  fields? Is a **data-retention policy** needed? Should a user be able to **export their own
-  data** before deleting?
+- ~~Do clubs including **minors** need age gating, parental consent, or restricted profile
+  fields?~~ **Settled 2026-08-12: ClubChat is 18+.** Declared at sign-up and stated in the Terms,
+  and it is what the store age rating rests on. The founding case is a university club, so the
+  minimum costs the product almost nothing and it keeps a one-to-one messaging surface out of the
+  children's-privacy regimes it would otherwise fall into. Declared rather than verified by a
+  date of birth, deliberately: collecting every member's birthday to check something almost none
+  of them would misstate is the wrong trade for a club app. See
+  [ADR-0026](../decisions/0026-filter-hate-speech-not-profanity.md). **Note what this does not
+  settle** - every earlier document that reasons from "the product will include minors" (this
+  file, `TECH/02`, `TECH/05`) now overstates the risk, and those sentences are true of the
+  *intent* rather than the *population*. Is a **data-retention policy** needed? Should a user be
+  able to **export their own data** before deleting?

@@ -39,6 +39,7 @@ import {
   type ChannelRef,
 } from '../policy/predicates.ts';
 import { accessibleChannelPredicate } from './channel-access.ts';
+import { fileReport } from './file-report.ts';
 import { getChannelRef } from './reads.ts';
 import { reactionsForMessages } from './reactions.ts';
 import { applySoftDelete } from './send-message.ts';
@@ -103,46 +104,31 @@ export async function reportMessage(
     return { ok: false, code: 'forbidden' };
   }
 
-  const inserted = await db.transaction(async (tx) => {
-    const rows = await tx
-      .insert(messageReports)
-      .values({ messageId: message.id, reporterId: ctx.userId })
-      .onConflictDoNothing()
-      .returning({ messageId: messageReports.messageId });
-
-    /*
-     * The report row and the event that tells somebody about it, in ONE transaction.
-     *
-     * The whole reason the outbox exists rather than notifying from here: either both land or
-     * neither does, so a report can never sit in the table with nobody told, and a notification
-     * can never point at a report that was rolled back.
-     *
-     * Only on a row that was actually created. A second report of the same message by the same
-     * person is a no-op by `onConflictDoNothing`, and re-notifying for it would let one person
-     * buzz every admin repeatedly by tapping Report again.
-     */
-    if (rows.length > 0) {
-      await tx.insert(outbox).values({
-        partitionKey: channel.id,
-        eventType: 'message.reported',
-        payload: {
-          channelId: channel.id,
-          messageId: message.id,
-          seq,
-          reporterId: ctx.userId,
-        },
-      });
-    }
-
-    return rows;
-  });
+  /*
+   * The report row and the event that tells somebody about it, in ONE transaction.
+   *
+   * The whole reason the outbox exists rather than notifying from here: either both land or
+   * neither does, so a report can never sit in the table with nobody told, and a notification
+   * can never point at a report that was rolled back.
+   *
+   * Through `fileReport` rather than written here, because the content filter files reports too
+   * and two copies of this would drift.
+   */
+  const created = await db.transaction((tx) =>
+    fileReport(tx, {
+      messageId: message.id,
+      reporterId: ctx.userId,
+      channelId: channel.id,
+      seq,
+    }),
+  );
 
   return {
     ok: true,
     messageId: message.id,
     // Reported already. Still a success - the outcome the reporter wanted is true - but the
     // client can say "already reported" rather than implying a second one was filed.
-    alreadyReported: inserted.length === 0,
+    alreadyReported: !created,
   };
 }
 

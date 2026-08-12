@@ -163,6 +163,19 @@ export const msgErrCodes = [
    * failure would turn a recoverable state into a lost message.
    */
   'media_not_ready',
+  /**
+   * The content filter refused the body.
+   *
+   * **Terminal, and that is the difference that matters.** `media_not_ready` says "finish the
+   * upload and retry the same message"; this says the identical bytes will be refused every
+   * time. A client that retries it wastes its outbox budget and then reports a generic failure,
+   * when what the member needs is their text back and a sentence explaining why.
+   *
+   * Deliberately does NOT name the term that matched. Telling somebody exactly which word to
+   * change turns the filter into a puzzle with a printed solution, and the server log already
+   * carries what a moderator would need.
+   */
+  'content_refused',
 ] as const;
 export const MsgErr = z.object({
   clientMsgId: Uuid,

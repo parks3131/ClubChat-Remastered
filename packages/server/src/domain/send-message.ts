@@ -8,7 +8,7 @@
  */
 
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import type { MessageEnvelope, MessageType } from '@clubchat/shared';
+import { SYSTEM_ACTOR_ID, type MessageEnvelope, type MessageType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import {
   mediaObjects,
@@ -20,6 +20,8 @@ import {
 } from '../db/schema.ts';
 import { appendMessage, type AppendMessageResult } from './append-message.ts';
 import { channelAudience } from './channel-access.ts';
+import { classifyContent } from './content-filter.ts';
+import { fileReport } from './file-report.ts';
 import { nextRevision } from './revisions.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
@@ -32,7 +34,13 @@ import {
 
 export type SendRefusal = {
   ok: false;
-  code: 'forbidden' | 'channel_gone' | 'invalid_type' | 'media_not_ready';
+  /**
+   * `content_refused` is the content filter's, and it is **terminal**: unlike
+   * `media_not_ready`, retrying the identical body can only be refused again. A client that
+   * retries it burns its whole outbox budget and then reports a generic failure for something
+   * the member could have fixed by editing one word.
+   */
+  code: 'forbidden' | 'channel_gone' | 'invalid_type' | 'media_not_ready' | 'content_refused';
 };
 export type SendSuccess = { ok: true } & AppendMessageResult;
 export type SendResult = SendSuccess | SendRefusal;
@@ -90,6 +98,22 @@ export async function sendMessage(
   if (type === 'announcement' && !canAnnounceInChannel(ctx, channel)) {
     return { ok: false, code: 'forbidden' };
   }
+
+  /*
+   * The content filter, and note where it sits: AFTER authorization and BEFORE anything is
+   * written.
+   *
+   * After, because a member who may not post here should be refused for that reason rather than
+   * told which of their words a filter dislikes - the refusal that leaks least is the one that
+   * comes first. Before, because "filtering objectionable material from being posted" means it
+   * is never stored, never allocated a `seq`, and never fanned out.
+   *
+   * It is a regex test over a string. No I/O, so the channel-log invariant that the
+   * sequence-allocating transaction performs no I/O is untouched, and this is also the whole
+   * reason a language model could not live here.
+   */
+  const verdict = classifyContent(input.body);
+  if (verdict.action === 'refuse') return { ok: false, code: 'content_refused' };
 
   // Media is validated BEFORE the send, never inside it.
   //
@@ -149,6 +173,34 @@ export async function sendMessage(
       .update(mediaObjects)
       .set({ ownerId: result.message.id })
       .where(eq(mediaObjects.id, input.mediaId));
+  }
+
+  /*
+   * The flag tier: it posted, and now a person is asked to look at it.
+   *
+   * **Filed AFTER the append rather than inside it**, and the trade is deliberate. Threading a
+   * transaction through `appendMessage` would put this write inside the one holding the
+   * `last_seq` row lock, serializing every send to the channel behind it. The cost is that a
+   * crash in the gap leaves a flagged message unreported - acceptable, because this is a
+   * best-effort second opinion and not a durability guarantee. The member-pressed Report path is
+   * the one that must never lose a row, and it is atomic.
+   *
+   * Reported as the system actor, which is what lets the whole existing queue work unchanged:
+   * the per-space Reports tab, the DM queue, removal, suspension and dismissal all read
+   * `message_reports` and none of them needs to know a human did not file this one.
+   *
+   * Skipped on a deduplicated send. `fileReport` would absorb the row anyway, but a retry must
+   * not look like a second opinion.
+   */
+  if (!result.deduplicated && verdict.action === 'flag') {
+    await db.transaction((tx) =>
+      fileReport(tx, {
+        messageId: result.message.id,
+        reporterId: SYSTEM_ACTOR_ID,
+        channelId: channel.id,
+        seq: result.message.seq,
+      }),
+    );
   }
 
   if (!result.deduplicated && mentions.length > 0) {

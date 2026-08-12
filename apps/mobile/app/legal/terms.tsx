@@ -9,6 +9,10 @@
  * > is no tolerance for objectionable content or abusive users", and the app must carry "published
  * > contact information so users can easily reach you". The Behaviour and Contact sections are
  * > those two, and neither should be softened without knowing what it is holding up.
+ *
+ * > **The minimum age is load-bearing too.** It is what the store age rating is declared against,
+ * > and it is what keeps the product outside the children's-privacy regimes that a one-to-one
+ * > messaging surface would otherwise pull it into. Settled 2026-08-12; see ADR-0026.
  */
 
 import { Linking, Pressable, StyleSheet, Text } from 'react-native';
@@ -25,11 +29,21 @@ export default function TermsScreen() {
         training. You are responsible for what you post.
       </Text>
 
+      <SectionHeader title="Who can use it" />
+      <Text style={styles.p}>
+        You must be 18 or over to use ClubChat. If you run a club with members under 18, they
+        cannot have an account here.
+      </Text>
+
       <SectionHeader title="Behaviour" />
       <Text style={styles.p}>
         There is no tolerance for objectionable content or abusive users. Do not harass, threaten
         or impersonate anybody, do not post sexual, violent or hateful content, and do not post
         content you have no right to post.
+      </Text>
+      <Text style={styles.p}>
+        Some language is refused when you press send, and some is passed to a moderator to look
+        at. Most messages are neither.
       </Text>
       <Text style={styles.p}>
         Anybody can report a message, and anybody can block another member instantly and without

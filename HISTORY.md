@@ -13,6 +13,109 @@ Newest first.
 
 ---
 
+## 2026-08-12 (last, again) - The filter that lets you swear
+
+The last of Apple's four guideline 1.2 requirements, and the only one that had been held open on
+purpose. Reporting and blocking shipped in Phase 3.5; acting on a report and a support address
+landed on 2026-08-11. Filtering was left unbuilt because it is the only one that changes what
+happens when somebody presses send, and picking its behaviour is a product call rather than an
+engineering one.
+
+### Two assumptions worth killing before designing anything
+
+The founder expected Apple to publish a checklist of banned words. **It does not**, and neither
+does Google. What Apple publishes is the requirement plus a definition of objectionable in
+guideline 1.1.1 - *defamatory, discriminatory, or mean-spirited content, including references or
+commentary about religion, race, sexual orientation, gender, national/ethnic origin* - and reading
+that carefully is the whole design. **It describes hate speech and says nothing about swearing.**
+
+So the obvious build, a profanity list, is wrong twice: it refuses ordinary college chat
+constantly while catching almost nothing the guideline actually names, and it teaches members to
+work around the filter, which makes every later signal worse. The best-known public list (LDNOOBW,
+maintained by Shutterstock) says in its own README that it exists to decide "what wouldn't we want
+to *suggest* that people look at" - it filters autocomplete, not human speech.
+
+The second assumption was the founder's own, and it was right for a better reason than he gave: a
+language model scoring every message was rejected on **architecture** before cost. The
+`last_seq` row lock is held until commit, so a network call on the send path serializes an entire
+channel behind a round trip. Scoring asynchronously in the worker stays open as a future upgrade
+to the *flag* tier; nothing can go in the send path.
+
+### Two tiers, because a list cannot judge
+
+Refuse only what no message in a running club could legitimately contain. Everything ambiguous -
+`nigga`, used in-group; `chink`, as in a chink in the armour; `retard`, as college shorthand; the
+`kys` family - **posts normally and files an automatic report**. `kys` between friends after a bad
+5k is not `kys` to somebody being pushed out, and no list separates them. A person can.
+
+The flag tier files an ordinary `message_reports` row as the **seeded system actor**, which is the
+part that made this cheap: the per-space Reports tab, the DM queue, dismissal, message removal and
+account suspension all work on it unchanged. The queue reads "reported by ClubChat" and offers the
+two powers an admin already had. `fileReport` was extracted so a member's Report button and the
+filter go through one mechanism rather than two copies - failure mode 9, pre-empted.
+
+### Three defects, all in code written that afternoon
+
+None was found by reading it back.
+
+**A leetspeak fold ran before a word-boundary match.** `!` folded to `i`, so `you faggot!` became
+`you faggoti` and `\bfaggot\b` stopped matching - the clearest possible slur, passed. The rule is
+general and now `AGENTS.md` failure mode 25: a substitution that turns a non-word character into a
+word character must never run before a `\b` match. A digit is safe; punctuation is not. Fixed with
+two normalizers rather than a cleverer one.
+
+**The obfuscation list contained flag-tier terms.** The collapsed pass returns a refusal, so
+listing `kys` there would have silently promoted it past the human judgement the tier exists for.
+Now asserted by a test, because the two lists sit far apart in the file.
+
+**And the fix for `niiiigger` was worse than the miss.** Squeezing repeated letters hard enough to
+catch it collapses `Nigeria` and the country `Niger` onto the slur. Refusing a member for naming
+where they are from is a far worse failure than the evasion, so the squeeze came out and the hole
+is recorded as a decision with a test asserting it.
+
+The innocent-word corpus is the part worth keeping. A filter that refuses everything passes every
+test that only checks slurs are caught, so `Scunthorpe`, `raccoon`, `auspicious`, `a fagot of
+kindling`, `hello Liam`, `is she male or female`, `Nikki Kern` and `that hill was fucking brutal`
+all assert *allow* - and one of them, the armour idiom, asserts *flag* instead, so the designed
+false positive reads as a decision rather than as a bug somebody later fixes by deleting the term.
+
+### A fourth, in code three months old
+
+The sign-up consent line has never linked to the Terms. `legal/terms.tsx` has said it does since
+it was written - "sign-up links to both from its consent line" - and the line was plain text, so
+the only stated route to the document somebody is agreeing to did not exist. Found by looking at
+the rendered screen in a browser, which is the only place it is visible: the code reads fine, the
+docstring reads fine, and they disagree.
+
+### Proved twice, because each proves what the other cannot
+
+**On the wire**, with a script that opens a real socket and sends the frames itself rather than
+driving the client - the rider from failure mode 21, where a regression test passed with the
+server bug still present because the client fix stopped it sending the offending frame. Fifteen
+checks: a slur refused, a spaced-out slur refused, swearing acked, the armour idiom acked, and
+**the refusals consumed no `seq`**, which is the one that matters for the channel log.
+
+**In the browser**, for the half the socket cannot show: the notice appears, the composer keeps
+the text, and no failed bubble is left offering a retry that cannot work. Then the admin's Reports
+tab, where the flagged message sits reported by ClubChat with Delete and Dismiss.
+
+One thing the smoke run got wrong and is worth recording: two system messages appeared mid-test
+and looked like the filter posting into the channel. They were the club-creation and join
+messages, drained late by a worker that had just started. Checked against the table rather than
+assumed either way.
+
+### Settled alongside it
+
+**ClubChat is 18+**, declared at sign-up and in the Terms. The founding case is a university club
+so the minimum costs nothing, it is what the store age rating rests on, and it keeps a one-to-one
+messaging surface out of the children's-privacy regimes. Declared rather than verified by a date
+of birth: collecting every member's birthday to check something almost nobody would misstate is
+the wrong trade. It also means every earlier document reasoning from "this product will include
+minors" is now describing intent rather than population, which is noted in `PRD/17` rather than
+edited out of the three places it appears.
+
+---
+
 ## 2026-08-12 (last) - Your link does what you are allowed to do
 
 The founder tried the new share screen and came back with a rule, not a bug report: **on a

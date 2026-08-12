@@ -578,3 +578,28 @@ that records how to recognise the class._
     **A repair that repeats is the tell, and now it says so**: `repairGaps` compares the hole
     before and after writing its page and logs when nothing changed. An operation that silently
     achieves nothing is worse than one that fails.
+
+25. **Normalizing text before a boundary match can destroy the boundaries the match depends on,
+    and it fails silently in the direction that matters.** Caught while building the content
+    filter on 2026-08-12, before it shipped. The matcher folded leetspeak before testing terms
+    at word boundaries, and the fold mapped `!` to `i` - so `you faggot!` normalized to
+    `you faggoti`, `\bfaggot\b` no longer matched, and **the clearest possible slur passed the
+    filter**. The same held for `@` and `$` at the end of a word. **Rule: a substitution that
+    turns a non-word character into a word character must never run before a `\b` match.** A
+    digit is safe because a digit is already a word character; punctuation is not. The fix is two
+    normalizers rather than a cleverer one: the boundary pass folds digits only, and the
+    collapsed pass - which has already thrown its boundaries away - folds everything.
+
+    Two more from the same afternoon, both the same shape of thinking. **A term list matched
+    after collapsing text to letters starts matching across word boundaries**, so `hello liam`
+    contains `loli` and `is she male` contains `shemale`; the collapsed pass therefore has to be
+    opt-in per term, with an innocent-word corpus in the tests proving it rather than a judgement
+    in a comment. And **the obvious way to catch `niiiigger` is worse than the miss**: squeezing
+    repeated letters hard enough to catch it also collapses `Nigeria` and the country `Niger`
+    onto the slur, refusing a member for naming where they are from. Some evasion is correctly
+    left uncaught.
+
+    How to recognise the class: a pipeline where one stage rewrites the input another stage's
+    correctness depends on. Note it is the inverse of failure mode 9's shape - not a rule copied
+    and drifted, but a rule that reads correctly at both ends while the data between them changed
+    underneath. Only a test with the punctuation actually attached finds it.

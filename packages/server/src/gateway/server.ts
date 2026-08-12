@@ -433,7 +433,9 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
               clientMsgId: payload.clientMsgId,
               // `invalid_type` is a client bug rather than a recoverable state, so it maps
               // to malformed. `media_not_ready` passes through unchanged because the client
-              // CAN recover from it by completing the upload and retrying.
+              // CAN recover from it by completing the upload and retrying, and
+              // `content_refused` passes through because the client must NOT retry it and
+              // needs to say why - see its note in the protocol.
               code: outcome.code === 'invalid_type' ? 'malformed' : outcome.code,
             },
           },

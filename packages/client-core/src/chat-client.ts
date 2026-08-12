@@ -125,6 +125,27 @@ type AckWaiter = {
   reject: (error: Error) => void;
 };
 
+/**
+ * `msg.err` codes that retrying cannot fix.
+ *
+ * > **The distinction the outbox turns on.** Every other refusal describes a moment - the socket
+ * > flapped, the upload had not finished, a bucket was empty - and the correct response is to try
+ * > the same message again. These describe the message itself, so the same bytes will be refused
+ * > forever and each retry is a wasted round trip ending in a worse error message.
+ *
+ * `forbidden` is here for the same reason as `content_refused`: a member who may not post in a
+ * channel does not become able to by trying five times. It was being retried before this set
+ * existed, which cost nothing visible only because the UI it produced was already a failure.
+ *
+ * Deliberately NOT here: `rate_limited` (a bucket refills) and `media_not_ready` (the upload
+ * completes), both of which the client genuinely recovers from.
+ */
+export const TERMINAL_SEND_CODES: ReadonlySet<string> = new Set([
+  'content_refused',
+  'forbidden',
+  'malformed',
+]);
+
 export class ChatClient {
   readonly store: MessageStore;
   /** The send outbox. Distinct from the server's transactional outbox. */
@@ -816,6 +837,13 @@ export class ChatClient {
    * A failed send must fail VISIBLY rather than silently dropping the message, so once
    * attempts are exhausted the entry is marked failed and left in the outbox for the UI
    * to offer a retry against.
+   *
+   * > **A terminal refusal is not retried, and is not left in the outbox.** See
+   * > {@link TERMINAL_SEND_CODES}. Retrying a body the server has refused on its content can
+   * > only be refused again, so the loop would spend every attempt, wait out the backoff, and
+   * > then report "send failed after 5 attempts" - which tells the member nothing about the one
+   * > thing they could act on. Instead the entry is dropped and the code is thrown immediately,
+   * > so the screen can hand the text back with an explanation.
    */
   async sendWithRetry(
     channelId: string,
@@ -839,10 +867,21 @@ export class ChatClient {
         if (!this.socket) await this.reconnect();
         return await this.flushOne(clientMsgId);
       } catch (error) {
+        const code = error instanceof Error ? error.message : String(error);
+
+        // Terminal: the same bytes cannot succeed later. Drop the optimistic bubble - leaving it
+        // would offer a retry that is guaranteed to fail - and let the caller explain.
+        if (TERMINAL_SEND_CODES.has(code)) {
+          this.outbox.delete(clientMsgId);
+          this.waiters.delete(clientMsgId);
+          this.opts.onChange?.();
+          throw error;
+        }
+
         this.log('send attempt failed', {
           clientMsgId,
           attempt: attempt + 1,
-          error: error instanceof Error ? error.message : String(error),
+          error: code,
         });
         await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
       }

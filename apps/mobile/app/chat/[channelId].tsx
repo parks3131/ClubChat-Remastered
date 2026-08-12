@@ -1995,8 +1995,29 @@ export default function ChatScreen() {
           ? {}
           : { replyToSeq: answering.seq, replyTo: quoteOf(answering) }),
       });
-    } catch {
-      // The send failed VISIBLY: the entry stays in the outbox marked failed, and the
+    } catch (error) {
+      /*
+       * The content filter refused it.
+       *
+       * > **Give the words back.** `ChatClient` has already dropped the optimistic bubble,
+       * > because a retry of the same body can only be refused again - so without this the
+       * > member watches their message vanish with no explanation and no way to recover what
+       * > they typed. Restoring the draft makes the refusal an edit rather than a loss.
+       *
+       * The notice says what happened and not which word did it. Naming the term turns the
+       * filter into a puzzle with the answer printed on it, and the reasoning is recorded
+       * with the wire code in `protocol.ts`.
+       */
+      if (error instanceof Error && error.message === "content_refused") {
+        setDraft(body);
+        if (answering !== null) setReplyingToSeq(answering.seq);
+        setAsAnnouncement(announcing);
+        setMentionPicks(mentionPicks);
+        setNotice(
+          "That message was not sent. It contains language this app does not allow. Edit it and try again.",
+        );
+      }
+      // Anything else failed VISIBLY: the entry stays in the outbox marked failed, and the
       // row below renders it with a retry affordance. It is never silently dropped.
     }
     await refresh();

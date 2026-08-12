@@ -147,6 +147,27 @@ second is a feature the whole product would have to bend around. Threads remain 
     [Direct messages](14-direct-messages.md) rule 7. Reporting is gated on being able to *read*
     the conversation rather than on being able to post in it, so a member who has just blocked
     somebody can still report what was said to them.
+10a. **A small set of language is refused when the member presses send, and a second set posts
+    and is queued for review.** Both sets target hate speech and explicit self-harm direction, in
+    the sense App Review guideline 1.1.1 defines: content aimed at somebody for their religion,
+    race, sexual orientation, gender or national origin. **Ordinary profanity is deliberately
+    allowed** - see [ADR-0026](../decisions/0026-filter-hate-speech-not-profanity.md) for why a
+    swear filter is the wrong target and what it would cost a university club.
+
+    | Verdict | What the member sees | What a reviewer sees |
+    |---|---|---|
+    | refused | The message is not sent. The composer keeps their text and a line explains why | nothing - it was never stored |
+    | queued | Nothing. The message posts normally | a report in the same queue rule 10 fills, filed by ClubChat rather than by a person |
+    | allowed | Nothing | nothing |
+
+    **A refusal never names the word that caused it.** Naming it turns the filter into a puzzle
+    with the answer printed on it. The refusal is also the one send failure that must not be
+    retried, so the client hands the text back to be edited rather than offering a retry that
+    cannot succeed.
+
+    **This is not a safety feature and must not be described as one.** A term list catches slurs.
+    Bullying, exclusion, grooming and a threat phrased politely all pass it, and each is a
+    likelier harm in a real club. Those are what rules 10 and blocking exist for.
 11. **The composer's "+" opens an attach menu** with Photos, Camera, and Document always
     available, plus admin-gated create actions for whatever the scope supports (club: Poll,
     Event; race: Poll; Eboard: Poll, Meeting).

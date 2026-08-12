@@ -348,6 +348,38 @@ on a process that is directly reachable lets any caller forge the header and tak
 per request, which removes the limit rather than loosening it. `1` is the answer on Fly.io, where
 the edge proxy is the only ingress.
 
+### The content filter, and why it is not authorization
+
+A second gate on the send path, and it answers a different question from everything above.
+Authorization asks **who** is sending; this asks **what** is being sent. It lives in
+`domain/content-filter.ts` as a pure function and is called from `sendMessage`, which is already
+the single place the "may this person post this kind of message here" decision is made.
+
+**Order: authorization first, filter second.** A member who may not post here is refused for that
+reason and never learns anything about which of their words a filter dislikes. Reversing it would
+leak a fact about the content rules to somebody with no standing in the channel.
+
+**Before the append, so nothing is stored.** Guideline 1.2 asks for material to be filtered *from
+being posted*, and a refusal after the insert would satisfy the sentence and not the requirement.
+It also matters for the channel log: a refusal that had already allocated a `seq` would leave every
+client's gap detection chasing a hole that will never be filled.
+
+**No I/O, and that is a constraint rather than an accident.** The
+[channel log](02-channel-log.md) invariant forbids I/O in the sequence-allocating transaction, and
+the filter sits close enough to it that a network call here would serialize a channel behind a
+round trip. It is a regex test over a string. This is the specific reason a language model cannot
+be put on this path, whatever it costs.
+
+Two verdicts, and the second is the one that keeps the first narrow. A refusal returns
+`content_refused`, which is **terminal** - the client must not retry it, and the protocol note on
+the code says why. A flag posts the message and files an ordinary report as the seeded system
+actor, which is what lets the per-space Reports tab, the DM queue, dismissal, message removal and
+suspension all work on it with no new reader. `fileReport` is the one mechanism both it and a
+member's Report button go through.
+
+See [ADR-0026](../decisions/0026-filter-hate-speech-not-profanity.md) for what the lists target,
+what they knowingly do not catch, and why profanity is allowed.
+
 ### Club bans, and the one asymmetric authority
 
 ```ts

@@ -31,6 +31,12 @@ class FakeSocket implements SocketLike {
   onclose: ((this: unknown, ev: unknown) => void) | null = null;
   onerror: ((this: unknown, ev: unknown) => void) | null = null;
   readonly sent: Array<Record<string, unknown>> = [];
+  /**
+   * Answer an outbound frame, for a test that needs the server to respond per attempt rather
+   * than once. Deferred to a microtask so the answer lands after `flushOne` has returned its
+   * promise, which is what a real socket does.
+   */
+  onSendFrame: ((frame: Record<string, any>) => void) | null = null;
 
   send(data: string): void {
     /*
@@ -44,7 +50,9 @@ class FakeSocket implements SocketLike {
     if (this.readyState !== 1) {
       throw new Error("Failed to execute 'send' on 'WebSocket': socket is not open");
     }
-    this.sent.push(JSON.parse(data) as Record<string, unknown>);
+    const frame = JSON.parse(data) as Record<string, any>;
+    this.sent.push(frame);
+    if (this.onSendFrame) queueMicrotask(() => this.onSendFrame?.(frame));
   }
 
   close(): void {
@@ -462,6 +470,36 @@ describe('the send outbox', () => {
     await expect(attempt).rejects.toThrow('rate_limited');
     // Still queued, so the UI can offer a retry. A send must fail VISIBLY.
     expect(client.outbox.get(clientMsgId)?.clientMsgId).toBe(clientMsgId);
+  });
+
+  /**
+   * A terminal refusal is the opposite case, and the two are worth reading together.
+   *
+   * `rate_limited` above describes a *moment* and the same bytes will succeed later, so the
+   * entry stays queued. `content_refused` describes the *message*, so retrying spends the whole
+   * attempt budget to arrive at a worse error - and leaving the entry queued offers a retry that
+   * is guaranteed to fail.
+   */
+  it('does not retry a content refusal, and drops it from the outbox', async () => {
+    const { client, socket } = await setup();
+
+    // One `msg.err` per attempt, so a retrying client would produce more than one.
+    let refusals = 0;
+    socket.onSendFrame = (frame) => {
+      if (frame.t !== 'msg.send') return;
+      refusals += 1;
+      socket.deliver({
+        t: 'msg.err',
+        d: { clientMsgId: frame.d.clientMsgId, code: 'content_refused' },
+      });
+    };
+
+    await expect(client.sendWithRetry(CHANNEL, 'you faggot')).rejects.toThrow('content_refused');
+
+    // Once, not five times.
+    expect(refusals).toBe(1);
+    // And nothing left behind offering a retry that cannot work.
+    expect(client.outbox.size).toBe(0);
   });
 });
 
