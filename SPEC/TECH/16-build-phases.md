@@ -17,7 +17,7 @@ Mapping [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) "a
 | 9 | File size and MIME limits | [Media pipeline](07-media-pipeline.md) enforced at intent and re-verified at complete |
 | 10 | Notification retention | [Effects engine](04-effects-engine.md) nightly archival job |
 | 11 | Localisation of notification bodies | Store `type` + structured `params`; render at read time. *(Design it in now - retrofitting means rewriting every historical row.)* |
-| 12 | Rate limiting beyond messages | [Authorization](05-authorization.md) extended to reports, reactions, join requests, presign |
+| 12 | Rate limiting beyond messages | **Built 2026-08-03.** A default bucket on the authenticated scope plus named buckets on media intent, DM creation, join requests, invite redeem and reports; sign-in and sign-up keyed per IP |
 | 13 | Backups and dev/prod parity | Managed Postgres PITR; migrations from one source of truth |
 
 And from [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) "blocking a real release":
@@ -25,7 +25,7 @@ And from [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) "
 | Gap | Resolved by |
 |---|---|
 | Push notifications | [Notifications and push](06-notifications-and-push.md) - designed into the fan-out from day one, as the brief instructs |
-| Error monitoring | [Stack and hosting](15-stack-and-hosting.md) - Sentry in the error path from the first commit |
+| Error monitoring | **Built 2026-08-03**, server-side only. `monitoring.ts` reports from all three processes. The mobile client is still uncovered |
 | Accessibility | Not architectural. Client work, tracked separately, started early rather than retrofitted |
 | Legal review | Not architectural. **Note the new obligation from [decisions/](../decisions/): without E2E, the Privacy Policy must state that message content is readable by the service.** |
 
@@ -33,7 +33,8 @@ And from [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) "
 
 ## Where we are
 
-**Last updated 2026-07-30, after Phase 3.75a.**
+**Last updated 2026-08-12.** Rows 3.75b and 4 were stale for a fortnight, and 4 disagreed with the
+root `README.md` about whether the project is release-ready - see the note under Phase 4.
 
 | Phase | State | Note |
 |---|---|---|
@@ -44,8 +45,8 @@ And from [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) "
 | 3 - Media and offline | **Done** | Closed 2026-07-30; the client can attach and render. Gallery grid and full-screen viewer both landed 2026-08-01 |
 | 3.5 - Direct messages and safety tooling | **Done** | |
 | 3.75a - The HTTP surface | **Done** | 2026-07-30. 45 routes became **111**; ~20 new query and command functions; one new table; 76 route-level tests; five defects in shipped code fixed on the way. Gate met: 73 checks against a running server, `npm run gate:surface` |
-| 3.75b - The screens | **In progress** | Started 2026-07-30. The tab shell, the shared primitives and ~28 screens exist; the client data layer covers the whole API. Chat integration and the full reachability walk are outstanding - see below |
-| 4 - Hardening | **Not started** | Its parity checklist cannot be attempted until 3.75b |
+| 3.75b - The screens | **Done** | The tab shell, the shared primitives and ~56 screens; the client data layer covers all 130 routes. Every screen walked by direct URL. The full acceptance run on all three platforms is Phase 4's, not this one's |
+| 4 - Hardening | **In progress** | Three of six items done - rate limits, retention and GC, server-side error monitoring. Outstanding: the accessibility audit, a load test, and the parity checklist on all three platforms. See the item-by-item table below |
 
 ### The two things this table is really saying
 
@@ -520,11 +521,17 @@ all three platforms.
 
 What that means concretely, as of today:
 
+> **This table was stale in the direction that matters, and was corrected on 2026-08-12.** Three
+> rows below said "not started" about work that had shipped on 2026-08-03, while the root
+> `README.md` simultaneously marked the whole phase **Done**. Two documents making opposite
+> release-readiness claims is worse than either being wrong alone, so both now state it item by
+> item.
+
 | Item | State | What is actually left |
 |---|---|---|
-| **Rate limits everywhere** | Messages only | The gateway throttles sends (burst 30, refill 1/sec). Reports, reactions, join requests and presign requests are unthrottled, and DMs need the second dimension [Authorization](05-authorization.md) describes: a per-sender, per-new-conversation limit, because one sender opening many threads stays under any per-sender bucket |
-| **Retention and GC** | Media GC exists | `runMediaGc` sweeps stale pending uploads and orphaned objects. Still owed: notification archival, and outbox pruning after 7 days - which the `push_deliveries` ledger is deliberately designed to outlive |
-| **Error monitoring** | **Not started** | No Sentry anywhere. [Stack and hosting](15-stack-and-hosting.md) says "in the error path from the first commit" and that has not been true for any commit |
+| **Rate limits everywhere** | **Done** | A default bucket on the authenticated scope - the same structural place as the session hook, so a new route is limited without anybody remembering - plus named buckets on media intent, DM creation, join requests, invite redeem and reports, and per-IP on sign-in and sign-up. Still open: anything finer than a per-user bucket, and the per-conversation dimension |
+| **Retention and GC** | **Done** | `runMediaGc` and `runRetentionSweep` run in the worker's hourly housekeeping slot. Read notifications go at 90 days, unread at 180, processed outbox rows at 7. **Parked events are never pruned**, deliberately: an event retried to the limit is the only durable evidence an effect never ran |
+| **Error monitoring** | **Done server-side** | `monitoring.ts` reports 5xx, parked outbox events, failed drain ticks, socket frames and the rate limiter failing open, from all three processes, to the logger when `SENTRY_DSN` is absent. **The mobile client is not covered** - a JS crash on the phone still reaches nobody, and closing that needs `@sentry/react-native` and a native rebuild |
 | **Accessibility** | Partial, by habit | Controls carry `accessibilityRole` and `accessibilityLabel` as they are built. Never audited: contrast against WCAG AA, dynamic type, reduced motion, screen-reader navigation order |
 | **Load test** | **Not started** | At 10× projected peak. The two numbers to watch first are the per-channel `last_seq` row lock under concurrent sends, and the access-context query now that it carries DM threads and blocks |
 | **Parity checklist** | Blocked | Cannot be run until the surface exists |

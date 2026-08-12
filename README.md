@@ -75,9 +75,14 @@ The organising idea that makes this small instead of sprawling:
 
 And one rule that keeps permissions honest:
 
-> **Access is earned per space, not inherited.** Being a club admin grants authority over a
-> race. It does not grant membership of that race's chat. Management is not access, and the
-> code is not allowed to confuse the two.
+> **Access is earned per space, not inherited.** Being a club admin grants nothing inside a race
+> until you are on its roster - not its chat, not its polls, not the right to run it. You run the
+> races you are in, and the code is not allowed to reach a nested space from a club role.
+
+*(That rule was narrower until 2026-08-12: an admin managed every race in the club from outside it
+and only lost access to the chat. The split was real and deliberate, and it was also wider than the
+notification that pages admins about a race - so the person who could act was not the person who
+was told. See [ADR-0027](SPEC/decisions/0027-race-management-requires-a-roster-row.md).)*
 
 It is also deliberately built as a **template**. A swim club, a running club and a climbing club
 should all fit with zero customisation work.
@@ -259,12 +264,12 @@ running on a physical device.
 |---|---|
 | **Language** | TypeScript throughout, strict, no `any` escape hatches in the domain layer |
 | **Runtime** | Node 24, npm workspaces monorepo, three server entrypoints (API, gateway, worker) |
-| **Data** | Postgres 17 via Drizzle, **39 tables**, **14 migrations**, invariants enforced as constraints rather than in handlers |
-| **HTTP surface** | **116 routes** across 12 route modules on Fastify |
+| **Data** | Postgres 17 via Drizzle, **43 tables**, **25 migrations**, invariants enforced as constraints rather than in handlers |
+| **HTTP surface** | **130 routes** across 12 route modules on Fastify |
 | **Realtime** | WebSocket gateway, Redis pub/sub per channel topic, gapless per-channel sequence numbers |
 | **Async** | Transactional outbox drained with `FOR UPDATE SKIP LOCKED`, with Kafka specified downstream |
 | **Client** | React Native / Expo, expo-router, local SQLite message cache, send outbox, sync engine |
-| **Tests** | **631 passing** across 19 files, real Postgres and Redis per suite via Testcontainers |
+| **Tests** | **1,177 passing** across 52 files, real Postgres and Redis per suite via Testcontainers |
 | **Code** | ~46,000 lines of TypeScript across server, shared protocol, client core and the app |
 | **Documentation** | 19 product docs, 18 technical docs, **17 architecture decision records** |
 
@@ -444,9 +449,10 @@ module, then write domain rows and outbox events in one transaction. **No handle
 a predicate inline, ever.** The separation that the product principle demands is enforced right
 there in the read path:
 
-> The race branch consults the roster set and **not** club-admin status. Management authority is
-> not access: a club admin may manage every race in the club and still have no right to open its
-> chat.
+> The race branch consults the roster set and **not** club-admin status. A club admin who is not
+> on a race's roster cannot open its chat, and since 2026-08-12 cannot run it either - `isRaceManager`
+> is `isRaceMember && isClubAdmin`. Changing that one definition moved seventeen call sites and no
+> handler was edited, which is the clearest return this design has produced.
 
 Because the predicates are plain functions over an in-memory context, the entire permission
 matrix is a unit test rather than an integration exercise against a live database.
@@ -565,12 +571,13 @@ Four layers, each catching something the layer below cannot.
 
 **1. Types.** `npm run typecheck` across all four workspaces. Clean.
 
-**2. Tests: 631 passing across 19 files.** `npm test`
+**2. Tests: 1,177 passing across 52 files.** `npm test`
 
 ```
- @clubchat/client-core   1 file    17 tests   passed
- @clubchat/server       16 files  589 tests   passed   (41s)
- @clubchat/shared        2 files   25 tests   passed
+ @clubchat/client-core    2 files    36 tests   passed
+ @clubchat/server        41 files   989 tests   passed   (~100s)
+ @clubchat/shared         2 files    40 tests   passed
+ @clubchat/mobile         7 files   112 tests   passed
 ```
 
 Handler tests run against a **disposable Postgres and Redis started per suite with
@@ -621,26 +628,26 @@ npm run verify   # typecheck + runtime parse + lint + the full suite
 ClubChat-Remastered/
 ├── apps/
 │   └── mobile/                  Expo app: iOS, Android, web from one codebase
-│       ├── app/                 expo-router file routes (~41 screens)
+│       ├── app/                 expo-router file routes (~56 screens)
 │       └── src/                 chat provider, API client, SQLite store, design tokens
 ├── packages/
 │   ├── server/
 │   │   └── src/
-│   │       ├── api/             Fastify app + 12 route modules (116 routes)
+│   │       ├── api/             Fastify app + 12 route modules (130 routes)
 │   │       ├── gateway/         WebSocket termination, subscribe-time authorization
 │   │       ├── worker/          outbox drain, effects, notifications, scheduled jobs
 │   │       ├── domain/          command handlers and queries, one file per area
 │   │       ├── policy/          every authorization predicate, defined once
-│   │       ├── db/              Drizzle schema, 14 migrations, constraint proof
+│   │       ├── db/              Drizzle schema, 25 migrations, constraint proof
 │   │       ├── media/           MediaStore port, S3 adapter, derivation pipeline
 │   │       ├── push/            audience, cursor suppression, per-device fan-out
 │   │       └── test/            Testcontainers harness and the phase suites
 │   ├── shared/                  wire protocol, domain types, notification rendering
 │   └── client-core/             socket, send outbox and sync engine (shared by app + drills)
 ├── SPEC/
-│   ├── PRD/                     product truth: 18 documents
+│   ├── PRD/                     product truth: 19 documents
 │   ├── TECH/                    system truth: 18 documents
-│   ├── decisions/               17 ADRs, immutable once accepted
+│   ├── decisions/               27 ADRs, immutable once accepted
 │   └── templates/               feature spec, migration checklist, authorization checklist
 ├── scripts/                     surface gate, service waiters, repo lint
 ├── AGENTS.md                    the working agreement this repo is built under
@@ -675,7 +682,7 @@ npm run dev:mobile            # :8081  Expo, press w for web
 Verify the whole thing:
 
 ```bash
-npm run verify                # typecheck, runtime parse, lint, 631 tests
+npm run verify                # typecheck, runtime parse, lint, 1,177 tests
 npm run db:prove              # attempt to violate every invariant, expect rejection
 npm run gate:surface          # 73 checks against the running API
 ```
@@ -697,11 +704,25 @@ Built in phases, each with a written exit gate that has to be met before the nex
 | 2 - Breadth across the domain | **Done** | Schema, 32 command handlers, and the permission matrix gate |
 | 3 - Media and offline | **Done** | Presigned uploads, derivation, local SQLite cache, attach and render |
 | 3.5 - Direct messages and safety tooling | **Done** | DMs, blocking, reports, moderator queue, reactions |
-| 3.75a - The HTTP surface | **Done** | 45 routes became 111, and 116 today; 73-check gate against a running server; five defects in shipped code found and fixed on the way |
-| 3.75b - The screens | **Done** | Tab shell, shared primitives and ~41 screens; the full reachability walk is outstanding |
-| 4 - Hardening | **Done**| Rate limiting, parity checklist, the launch gate |
+| 3.75a - The HTTP surface | **Done** | 45 routes became 111, and 130 today; 73-check gate against a running server; five defects in shipped code found and fixed on the way |
+| 3.75b - The screens | **Done** | Tab shell, shared primitives and ~56 screens; the full reachability walk is outstanding |
+| 4 - Hardening | **In progress** | Done: rate limits on every route, retention and media GC, Sentry across all three processes. Outstanding: the accessibility audit, a load test, and the parity checklist run on all three platforms |
 
+**Phase 4 is half of a phase, and saying so is the point.** Three of its six items are built and
+three are not, and the three that are not are the ones a release actually waits on:
 
+| Item | State |
+|---|---|
+| Rate limits everywhere | **Done.** A default bucket on the authenticated scope, named buckets on media intent, DM creation, join requests, invite redeem and reports, and per-IP on sign-in and sign-up |
+| Retention and GC | **Done.** `runMediaGc` and `runRetentionSweep` in the worker's hourly slot. Parked outbox rows are never pruned, deliberately |
+| Error monitoring | **Done server-side.** `monitoring.ts` reports from API, gateway and worker. **The mobile client is not covered** - a JS crash on the phone still reaches nobody |
+| Accessibility | **Not audited.** Controls carry roles and labels as they are built; contrast against WCAG AA, dynamic type, reduced motion and screen-reader order have never been checked |
+| Load test | **Not started.** At 10x projected peak. The two numbers to watch first are the per-channel `last_seq` row lock under concurrent sends, and the access-context query |
+| Parity checklist on iOS, Android and web | **Not run.** **Android has never been run at all in this project**, so no cross-platform claim is made anywhere in these documents |
+
+> This table said **Done** until 2026-08-12, against `SPEC/TECH/16` saying "Not started" for two of
+> the same rows. Both were wrong in opposite directions, which is the failure a release-readiness
+> claim can least afford - so it is now stated item by item rather than as one word.
 
 ---
 
@@ -715,7 +736,7 @@ The repository is written against a spec rather than the other way around.
 - [`SPEC/TECH/`](SPEC/TECH/) is **system truth**: connection layer, channel log, message flows,
   effects engine, authorization, push, media, client architecture, data model, wire protocol,
   failure modes, and a catalogue of every server-side event.
-- [`SPEC/decisions/`](SPEC/decisions/) holds **17 ADRs**, immutable once accepted, each recording
+- [`SPEC/decisions/`](SPEC/decisions/) holds **27 ADRs**, immutable once accepted, each recording
   the alternative that was rejected and why. Reversals are recorded as new decisions rather than
   by editing the old one, which is how ADR-0009 reads today.
 - [`SPEC/TECH/14-engineering-pitfalls.md`](SPEC/TECH/14-engineering-pitfalls.md) is the v1
