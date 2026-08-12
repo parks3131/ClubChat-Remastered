@@ -52,6 +52,13 @@
           "organization": "clubchat-ef",
           "project": "clubchat-mobile"
         }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow ClubChat to use the camera to scan a club QR code.",
+          "recordAudioAndVideo": false
+        }
       ]
     ],
     "scheme": "clubchat",

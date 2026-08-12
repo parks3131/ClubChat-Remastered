@@ -21,6 +21,13 @@ A remaster is at parity when every line below passes on **iOS, Android, and web*
 - [ ] A **member's** link on the same club files a request instead, and on an open club joins
       instantly - the two tiers are handed different strings and neither can see the other's.
 - [ ] Rotating kills both links at once.
+- [ ] **Scanning a code inside the app joins the club**, and a scanned code behaves exactly as the
+      same link tapped: an admin's admits outright, a member's obeys the join policy, a banned
+      person is refused, a rotated one is "no longer valid".
+- [ ] The scanner **refuses a code that is not ClubChat's** - a wifi code, a shop's link - without
+      leaving the camera, and asks for the camera only when the scanner is opened.
+- [ ] **The share screen says what the viewer's own link does**, and says something different to an
+      admin and to a member of the same `request` club.
 - [ ] The QR code scans to the same link, and a banned person opening either link is told plainly
       that they cannot rejoin.
 - [ ] Promote/demote announced in chat; Owner-only admin removal; ownership transfer leaves

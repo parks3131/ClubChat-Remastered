@@ -766,7 +766,19 @@ function HubRow({
         <MaterialIcons name={icon} size={20} color={color.onAccent} />
       </View>
       <View style={styles.rowText}>
-        <Text style={styles.rowLabel}>{label.toUpperCase()}</Text>
+        {/*
+          Written as given, not upcased - these were rendered `.toUpperCase()` until 2026-08-12.
+
+          The relationship to keep: **these sit in the same case as every other name in the
+          product.** A club, a race and a DM are all written the way they were typed, and a space
+          inside a club is not a different kind of noun. The heading directly below them - `Races
+          and meets` - was already sentence case, so the three spaces were reading as louder than
+          the heading over them.
+
+          Case and weight were two separate faults that looked like one, which is why fixing either
+          alone left it still wrong. See `rowLabel`.
+        */}
+        <Text style={styles.rowLabel}>{label}</Text>
         <Text style={styles.rowSubtitle}>{subtitle}</Text>
       </View>
       {badge !== undefined && <Text style={styles.badge}>{badge}</Text>}
@@ -821,7 +833,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   rowText: { flex: 1 },
-  rowLabel: { ...type.title, fontSize: 17, lineHeight: 22, color: color.textPrimary },
+  /*
+   * The three spaces carry the same weight as a conversation's name in the Chats list.
+   *
+   * They were Anton - the display face, which is what the `Races and meets` heading below them
+   * uses - and that put the name of a place you are about to open into the register reserved for
+   * the heading over a list of them.
+   *
+   * The relationship that has to hold, since the sizes will move again: **heavier than a race's
+   * name directly beneath them, lighter than the section heading above them.** `type.headline` is
+   * the role that sits there, and it is already the role the Chats list gives a DM or a club one
+   * screen earlier - the same job, so the same treatment.
+   *
+   * Spread whole, per `TECH/13` rule 3: the size and line-height overrides this replaces were a
+   * different role half-applied under this one's name.
+   */
+  rowLabel: { ...type.headline, color: color.textPrimary },
   rowSubtitle: { ...type.bodySmall, color: color.textSecondary, marginTop: 2 },
   badge: {
     ...type.label,

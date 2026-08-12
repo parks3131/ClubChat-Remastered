@@ -13,6 +13,113 @@ Newest first.
 
 ---
 
+## 2026-08-12 (last) - A code you can hold up, and one you can point at
+
+A mockup of the share screen, and it turned out to contain a feature, a correctness bug and three
+instances of the same mistake.
+
+### What the mockup actually asked for
+
+It merged two screens into one. Share club had listed rows - Copy Link, Share QR code, Share to -
+with the code a tap further in, on the reasoning that a code "wants the whole screen". It does, so
+it became the screen and the rows became two pills under it. `qr.tsx` is gone.
+
+The thing that made the split look right is the thing that killed it: somebody sharing a club in a
+room is not choosing between three ways to do it, they are holding up a phone. The rows put a menu
+in front of the only action that case needs.
+
+**One of the two pills said "Scan", and there was no scanner in the product.** That is a feature
+rather than a restyle - camera permission, a native module, a rebuild - and it is the half the code
+had always been missing: until now a club could be *shown* and not accepted, which made the code
+useful in a message and useless in the room it was designed for.
+
+The scanner **joins by handing its token to `/join/[token]`** rather than redeeming anything
+itself. That screen is "the only invite path there is" and already answers all five outcomes -
+joined, requested, banned, revoked, signed-out-and-back. A scanner calling `redeemInvite` directly
+would be a second join path starting out missing four of them. **Scanning is a new way to acquire a
+link, never a second way to redeem one**, so a ban and the two link tiers behave identically
+however the link arrived.
+
+### The caption that was accurate and still wrong
+
+The mockup captioned the code: *"Anyone who scans this joins the club straight away, even if it
+normally asks people to request."*
+
+True of an **admin's** link. A false promise to every member of a `request` club, which is exactly
+what ADR-0025 exists to prevent - and the screen deliberately cannot tell the two tiers apart,
+since the server sends one token chosen by tier and `DESIGN/04` says the screen must not choose.
+
+So the server gained a field saying what *this viewer's* link does, derived from `isAdmin ||
+policy === 'open'` in one place, with two tests. The caption became accurate for both tiers.
+
+**Then the founder saw it and removed it, and his reason was better than the engineering.** The
+sentence was correct and it read as a **warning**: "even if it normally asks people to request"
+names an exception to a rule the reader had not been thinking about, on a surface whose entire job
+is to be held out to another person. It invites somebody to wonder whether they are doing something
+they should not.
+
+The field went with it rather than being left as an answer nothing reads. What survived is a test,
+rewritten to assert the **behaviour** instead of the field: the same route hands two tiers two
+different tokens, and redeeming a member's queues somebody while an admin's walks them in. That is
+ADR-0025 itself, and it is worth pinning whether or not a screen mentions it.
+
+**Worth keeping: a field can be right, tested, and still be the wrong thing to have built.** The
+whole exchange cost an hour and the product is better for the deletion.
+
+### Three bugs, one mistake
+
+Static chrome put behind a data fetch, three times in one screen:
+
+- **The title flipped colour.** Set inside the `DataScreen` branch, so it drew accent and turned
+  ink the moment the club arrived.
+- **The share icon appeared about a second late**, for the same reason, which reads as the app
+  still deciding what the page is.
+- Both were fixed in the wrong order: the title moved to the route in `_layout`, and the icon was
+  left behind until the founder asked why it popped in.
+
+**The rule that would have prevented all three: anything not depending on loaded data belongs on
+the route, not in the data branch.** The icon now renders on the first frame, dimmed, and its
+*action* is what waits - which is a far smaller lie than appearing late, and it holds its place so
+nothing shifts when the club lands.
+
+### The logo that was costing the code its legibility
+
+The founder asked for the club's picture out of the middle of the code, since its face already sits
+above it. Removing it did more than tidy: **the logo was what forced error-correction level `H`**,
+which tolerates 30% damage so a picture can sit over the middle - and buys that by spending modules
+on redundancy. With nothing to survive, the level follows the logo and drops to `M`, so the same
+link is drawn in **fewer, larger modules**. That is the whole game when somebody reads a code off a
+phone across a table.
+
+Also fixed: the crest was drawn *behind* the card. It looked like a spacing bug and was a paint
+order one - later siblings paint on top in React Native, and the card is pulled up under the crest
+by a negative margin. It carries `zIndex` **and** `elevation`, because those are two platforms'
+answers to one question and setting only the first is right on the phone in your hand and wrong on
+the one nobody has run.
+
+### Alongside, and not mine
+
+The conversation bubbles changed in the same working tree: the sent bubble's Energetic-Orange-to-
+rust gradient became two light fills with dark text throughout, founder-specified. `bubbleSent` is
+deliberately a hair off `accentSoft` rather than reusing it, so that tuning a bubble later cannot
+silently repaint the tab pill, an unread notification row and a voted poll option.
+
+### Verified
+
+1185 tests, typecheck, runtime parse, em-dash lint. `NSCameraUsageDescription` in `Info.plist`,
+**BUILD SUCCEEDED** with the camera linked, installed and launched on the physical iPhone, and the
+founder confirmed the screen and the scanner working on the device. The parser that turns a scanned
+string into a token has seven tests of its own, most of them about **refusal** - a scanner points at
+the world, and the world is mostly wifi codes and menus.
+
+One of those tests was written expecting the wrong answer: it asserted that
+`https://example.com/how-to-join/club` yielded `club` and documented it as an accepted false
+positive. It does not - `/join/` is matched literally, so `-join/` is not a join path. The test is
+kept in its corrected form because the near miss is worth pinning: a later "simplification" to
+`join\/` would reintroduce it and nothing else would notice.
+
+---
+
 ## 2026-08-12 (close, again) - The phone can finally say what killed it
 
 `PRD/17` listed error monitoring as release-blocking and it was closed for the server on

@@ -196,7 +196,13 @@ const styles = StyleSheet.create({
   when: { ...type.label, color: color.textSecondary, textTransform: 'none' },
   error: { ...type.bodySmall, color: color.error },
 
-  /* The card in chat. Its own surface, because the creator's bubble behind it is accent-filled. */
+  /*
+    The card in chat. Its own surface, so it reads as a card on either bubble fill rather than
+    inheriting one - which is what lets the same component sit in a sent and a received message.
+
+    > It used to say "because the creator's bubble behind it is accent-filled". That stopped being
+    > true on 2026-08-12 when both fills went light; the conclusion survives the reason changing.
+  */
   card: {
     backgroundColor: color.card,
     borderRadius: radius.lg,

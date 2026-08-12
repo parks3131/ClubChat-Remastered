@@ -61,6 +61,24 @@ export const color = {
   /** Text and icons on `accentSoft`. v1's `onPrimaryFixedVariant`. */
   onAccentSoft: '#852400',
 
+  /*
+   * The two conversation bubble fills, founder-specified 2026-08-12.
+   *
+   * **Both are light, so everything inside either one is dark text.** The sent bubble used to be an
+   * Energetic-Orange-to-rust gradient carrying white, which is why changing this pair is never only
+   * a background change - every `mine` variant in the chat screen was picked to survive on that
+   * gradient and has to be re-picked here.
+   *
+   * > **`bubbleSent` is a hair off `accentSoft` (#ffdbd0) and that is deliberate, not drift.**
+   * > They are indistinguishable on a screen, but `accentSoft` is also the tab-bar pill, the unread
+   * > notification row and a voted poll option. Folding the bubble into it would mean the next
+   * > "make the bubble slightly deeper" silently repaints four unrelated surfaces. Kept separate so
+   * > the conversation can be tuned on its own - which it will be.
+   */
+  bubbleSent: '#ffdcd0',
+  /** The received fill. Translucent, so it sits on `appBackground` as a wash rather than a slab. */
+  bubbleReceived: '#d9d9d973',
+
   appBackground: '#f7f9fb',
   card: '#ffffff',
   /** Every header and the tab bar share this surface. */
@@ -261,6 +279,19 @@ export const type = {
   headline: { fontFamily: fontFamily.bodyBold, fontSize: 17, lineHeight: 24, fontWeight: '700' },
   body: { fontFamily: fontFamily.body, fontSize: 16, lineHeight: 26 },
   bodySmall: { fontFamily: fontFamily.body, fontSize: 14, lineHeight: 22 },
+  /*
+   * `bodySmall` with weight: small text that has to be read before the body beside it, such as
+   * the sender's name over a message bubble.
+   *
+   * > **A whole role rather than `bodySmall` with a `fontFamily` on top of it.** Mixing one role's
+   * > size with another's family is the half-applied role rule 3 exists to stop, and it is how a
+   * > line ends up with the right weight and the wrong line height.
+   *
+   * No `fontWeight` beside the bold family, deliberately - unlike `headline`, which carries both.
+   * The family is already the 700 cut, and asking for the weight again is what makes Android
+   * synthesise a second one on top of it.
+   */
+  bodySmallStrong: { fontFamily: fontFamily.bodyBold, fontSize: 14, lineHeight: 22 },
   /** Labels, badges and buttons: uppercase and letterspaced. */
   label: { fontFamily: fontFamily.label, fontSize: 12, lineHeight: 16, letterSpacing: 0.6 },
 } as const;

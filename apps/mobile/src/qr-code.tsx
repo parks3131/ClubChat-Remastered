@@ -97,9 +97,23 @@ export function QrCode({
   }, [image]);
 
   const symbol = useMemo(() => {
-    // Type 0 is "the smallest that fits", so a rotated token that happens to be longer still
-    // encodes rather than throwing.
-    const code = qrcode(0, 'H');
+    /*
+     * Type 0 is "the smallest that fits", so a rotated token that happens to be longer still
+     * encodes rather than throwing.
+     *
+     * **The correction level follows the logo rather than being fixed at `H`.** `H` tolerates 30%
+     * damage, which is what lets a picture sit over the middle - and it buys that tolerance by
+     * spending modules on redundancy, so the same link becomes a visibly denser grid. With no
+     * logo there is no hole to survive, and `M` draws the same URL in fewer, larger modules.
+     *
+     * That is not a micro-optimisation: this code is read off a phone screen held up across a
+     * table, where module size is the whole game. Keeping `H` for a code with nothing over it
+     * would be paying for a repair nobody needs with the pixels that make it scannable.
+     */
+    // Keyed on the RESOLVED logo rather than on the `image` prop, because that is what actually
+    // gets drawn: a picture whose URL fails to resolve leaves nothing over the middle, and the
+    // code should not go on paying for a repair that has no damage to fix.
+    const code = qrcode(0, logoUri === null ? 'M' : 'H');
     code.addData(value);
     code.make();
 

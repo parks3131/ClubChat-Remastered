@@ -37,6 +37,22 @@ way in.
     prompt and no page, which is [ADR-0010](../decisions/0010-link-only-invites.md)'s recorded and
     still-unbuilt web fallback, and the screen says so plainly rather than letting a member find
     out at a club fair.
+
+5d. **A member can also scan somebody else's code, from the same screen** *(added 2026-08-12)*.
+    Until then the code could only be shown, which made it useful in a message and useless in the
+    room it was designed for - one person could hold up a club and nobody had a way to accept it.
+
+    **Scanning is a way to acquire a link, never a second way to redeem one.** A scanned code
+    resolves to the same token a tapped link carries and goes through the same join path, so
+    everything that governs a link governs a scan without restating: an admin's code admits
+    outright, a member's obeys the join policy, a banned person is refused and told plainly, a
+    rotated code is "no longer valid", and opening it twice is a no-op. Nothing about the join
+    rules is a property of how the token arrived.
+
+    **The camera is asked for only when somebody opens the scanner**, with the reason stated
+    first, and it is used for nothing else - no photo is taken or stored. A code that is not
+    ClubChat's is refused without leaving the scanner, since almost everything a camera is pointed
+    at belongs to somebody else.
 6. **Switching a club from `request` to `open` auto-approves every currently pending
    request**, rather than stranding them with no approval step left in the product.
 7. Join policy is editable after creation.

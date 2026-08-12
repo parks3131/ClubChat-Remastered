@@ -164,6 +164,47 @@ describe('club search', () => {
   });
 });
 
+/**
+ * The two links, asserted through the routes rather than through the domain.
+ *
+ * ADR-0025's whole point is that the same endpoint hands two different strings to two tiers and
+ * they behave differently when redeemed. The permission matrix cannot see this - it is a property
+ * of which token the read returned - so it is asserted here, over HTTP, as a client meets it.
+ *
+ * *(A companion test asserted a `inviteJoinsInstantly` field on the club read, added so the share
+ * screen could caption the code accurately. The caption was removed on the founder's view that it
+ * warned about something nobody had asked about, which left the field with no reader - so it went
+ * too. This half survives because it is about the BEHAVIOUR, which is unchanged and is the thing
+ * worth pinning.)*
+ */
+describe('a member link and an admin link redeem differently', () => {
+  it('files a request for a member link on a request club, and admits on an admin one', async () => {
+    const owner = await signUp('TierTruthOwner');
+    const member = await signUp('TierTruthMember');
+    const viaMember = await signUp('TierTruthJoiner');
+    const viaAdmin = await signUp('TierTruthWalkIn');
+    const { clubId } = await createClubAs(owner, { joinPolicy: 'request' });
+    await join(clubId, member);
+
+    // The same route, read by two tiers, hands back two different strings.
+    const memberToken = (await as(member, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+    const adminToken = (await as(owner, 'GET', `/clubs/${clubId}`)).body.club.inviteToken;
+    expect(memberToken).not.toBe(adminToken);
+
+    expect((await as(viaMember, 'POST', `/invites/${memberToken}/redeem`)).status).toBe(200);
+    expect((await as(viaAdmin, 'POST', `/invites/${adminToken}/redeem`)).status).toBe(200);
+
+    const roster = await as(owner, 'GET', `/clubs/${clubId}/members`);
+    const memberIds = roster.body.members.map((m: { userId: string }) => m.userId);
+
+    // The admin's link walked somebody straight in, past a policy that says an admin decides.
+    expect(memberIds).toContain(viaAdmin.userId);
+    // The member's did not - it queued them, which is the whole of ADR-0025.
+    expect(memberIds).not.toContain(viaMember.userId);
+    expect(roster.body.pendingRequests.length).toBeGreaterThan(0);
+  });
+});
+
 describe('invite-token rotation', () => {
   it('invalidates every outstanding link at once', async () => {
     const owner = await signUp('RotateOwner');

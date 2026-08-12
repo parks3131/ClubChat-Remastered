@@ -43,7 +43,6 @@ import {
   type PickedAttachment,
   type UploadKind,
 } from "../../src/upload.ts";
-import { LinearGradient } from "expo-linear-gradient";
 import * as Clipboard from "expo-clipboard";
 import { BlurView } from "expo-blur";
 import { longPressFeedback } from "../../src/haptics.ts";
@@ -133,6 +132,17 @@ const JUMP_HIGHLIGHT_MS = 2200;
  * Verified on both: long press confirmed working on a physical iPhone on 2026-08-01.
  */
 const CARDS_ARE_LONG_PRESSABLE = Platform.OS !== 'web';
+
+/**
+ * The sender's face beside a message.
+ *
+ * > **One constant because THREE things have to agree**, and they were three separate `32`s: the
+ * > avatar itself, the spacer that stands in for it on an optimistic row so the bubble does not
+ * > jump sideways when the ack lands, and the left inset that lines the meta row up with the
+ * > bubble's edge rather than the avatar's. Changing the size in one place and not the others is a
+ * > misalignment that only shows up on a message that has reactions.
+ */
+const AVATAR_SIZE = 40;
 
 /**
  * How far from the bottom still counts as being AT the bottom, in pixels.
@@ -577,7 +587,7 @@ function QuotedMessage({
           <MaterialIcons
             name="insert-drive-file"
             size={16}
-            color={mine ? color.onAccent : color.secondary}
+            color={color.secondary}
           />
         </View>
       )}
@@ -612,13 +622,18 @@ function QuotedMessage({
 /**
  * The bubble shell.
  *
- * > **Ported verbatim from v1's `ChatScreen`**, including the reason it is its own component: the
- * > sent bubble is an Energetic Orange to rust diagonal gradient from the Stitch export, and every
- * > other bubble is a plain tinted View. Isolating it means `renderItem` never switches element
- * > types between a `View` and a `LinearGradient` mid-list, which is the kind of change that makes
- * > a virtualised list drop its recycling.
+ * > **The sent bubble was an Energetic-Orange-to-rust diagonal gradient carrying white text**,
+ * > ported verbatim from v1, and this component existed to keep `renderItem` from switching
+ * > element types between a `View` and a `LinearGradient` mid-list - the kind of change that makes
+ * > a virtualised list drop its recycling. Both branches are plain Views since 2026-08-12, so that
+ * > hazard is gone rather than merely managed.
  *
- * The asymmetric corners are v1's too: each bubble has one small corner where its tail would be.
+ * **It is still one component, and that is now the more important half.** Sent and received differ
+ * only in fill and in which corner is small, and the two fills have to be picked as a pair: they
+ * are both light, so every piece of text in either one is dark. A branch here is the only place
+ * that stays true. See `color.bubbleSent`.
+ *
+ * The asymmetric corners are v1's: each bubble has one small corner where its tail would be.
  */
 function BubbleContainer({
   mine,
@@ -629,19 +644,17 @@ function BubbleContainer({
   pending?: boolean;
   children: React.ReactNode;
 }) {
-  if (mine) {
-    return (
-      <LinearGradient
-        colors={[color.accent, color.accentPressed]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={[styles.bubble, styles.sent, pending === true && styles.pending]}
-      >
-        {children}
-      </LinearGradient>
-    );
-  }
-  return <View style={[styles.bubble, styles.received]}>{children}</View>;
+  return (
+    <View
+      style={[
+        styles.bubble,
+        mine ? styles.sent : styles.received,
+        mine && pending === true && styles.pending,
+      ]}
+    >
+      {children}
+    </View>
+  );
 }
 
 /**
@@ -870,7 +883,7 @@ const MessageRow = memo(function MessageRow({
         <Avatar
           name={message.senderName ?? "?"}
           image={message.senderImage}
-          size={32}
+          size={AVATAR_SIZE}
         />
       </Pressable>
       <Pressable
@@ -918,35 +931,41 @@ const MessageRow = memo(function MessageRow({
             ? "Press and hold to react to your message"
             : "Press and hold to react to or report this message"
         }
-        // The gesture stays on the OUTERMOST element and the gradient sits inside it,
-        // so the bubble's fill can be a LinearGradient without the pressable becoming
-        // one - and without nesting a second pressable (failure mode 16).
+        // The gesture stays on the OUTERMOST element and the fill sits inside it, so the
+        // bubble can be styled freely without the pressable becoming the styled thing -
+        // and without nesting a second pressable (failure mode 16).
         style={mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs}
       >
+        {/*
+          The sender's name, ABOVE the bubble rather than the first line inside it.
+
+          > **It was v1's bubble header**, sharing a row with the pin marker. Moved out
+          > 2026-08-12 at the founder's request, which puts it and the time on the same
+          > footing: the name and the time are both *about* the message, and the bubble
+          > holds only what was actually said. That is why it now takes the time's colour
+          > rather than the accent - they are one pair bracketing the bubble, not two
+          > unrelated labels.
+
+          On BOTH sides. Attribution on your own messages is not redundant here - the
+          avatar sits on the left of every bubble, so a nameless own bubble would be the
+          only unlabelled thing on screen.
+
+          Null when the message was cached before this column existed. It renders
+          unattributed rather than blank-labelled, and the next sync fills it in.
+        */}
+        {message.senderName !== null && (
+          <Text style={[styles.senderName, mine && styles.senderNameMine]}>
+            {message.senderName}
+          </Text>
+        )}
         <BubbleContainer mine={mine}>
           {/*
-            v1's bubble header: the name on BOTH sides, dimmed on your own, with the
-            pin marker beside it. Attribution on your own messages is not redundant
-            here - the avatar sits on the left of every bubble, so a nameless own
-            bubble would be the only unlabelled thing on screen.
-
-            Null when the message was cached before this column existed. It renders
-            unattributed rather than blank-labelled, and the next sync fills it in.
+            The pin marker stays INSIDE. It is a property of the message rather than of
+            who sent it, so it travels with the words and not with the attribution.
           */}
-          {(message.senderName !== null || message.pinned) && (
-            <View style={styles.bubbleHeader}>
-              {message.senderName !== null && (
-                <Text style={mine ? styles.senderNameMine : styles.senderName}>
-                  {message.senderName}
-                </Text>
-              )}
-              {message.pinned && (
-                <MaterialIcons
-                  name="push-pin"
-                  size={12}
-                  color={mine ? color.onAccent : color.accent}
-                />
-              )}
+          {message.pinned && (
+            <View style={styles.pinRow}>
+              <MaterialIcons name="push-pin" size={12} color={color.accent} />
             </View>
           )}
           {/*
@@ -1033,7 +1052,7 @@ const MessageRow = memo(function MessageRow({
                   <MaterialIcons
                     name="more-vert"
                     size={18}
-                    color={mine ? color.onAccent : color.textSecondary}
+                    color={color.textSecondary}
                   />
                 </Pressable>
               )}
@@ -1052,7 +1071,19 @@ const MessageRow = memo(function MessageRow({
               </Text>
             )
           )}
-          <Text style={mine ? styles.sentMeta : styles.receivedMeta}>
+          {/*
+            The time, in the bubble's bottom-right corner.
+
+            > It spent an hour beneath the bubble, next to the reactions. Back inside on
+            > 2026-08-12, in the corner rather than under the body where it started - the
+            > cost of it living here is that it claims a line of its own, which is the
+            > reason the padding around it came down at the same time.
+
+            `alignSelf` on the last child of the bubble's column: that is what "bottom
+            right" means here, and it needs no second style for `mine` because both
+            bubbles put it in the same corner.
+          */}
+          <Text style={styles.bubbleTime}>
             {new Date(message.createdAt).toLocaleTimeString([], {
               hour: "2-digit",
               minute: "2-digit",
@@ -1062,20 +1093,25 @@ const MessageRow = memo(function MessageRow({
       </Pressable>
 
       {/*
-        The reaction row.
+        The reaction row, beneath the bubble.
+
+        > **Conditional again, now that the time has gone back inside.** While the two shared
+        > this row it was rendered unconditionally, because the time always exists. An
+        > always-rendered empty row carries its own top margin, which is a gap under every
+        > unreacted message in the conversation - the same class of bug as `DESIGN/03` rule 4,
+        > where a hidden thing kept occupying room.
 
         > **Inside the bubble's own column, not a sibling of it.** The message row is a
-        > horizontal flex - avatar, then bubble - so a pill row added there became a
-        > THIRD column and sat beside the bubble rather than beneath it. Reactions belong
-        > to a message and have to read that way.
+        > horizontal flex - avatar, then bubble - so this row added there became a
+        > THIRD column and sat beside the bubble rather than beneath it. What belongs to a
+        > message has to read that way, which is why the row takes a full-width basis and
+        > the wrap above breaks before it.
 
         Only emoji anyone actually used, in the fixed order from the shared constant so
         the row does not reshuffle as counts change.
       */}
       {summary.length > 0 && (
-        <View
-          style={[styles.pillRow, mine ? styles.pillRowMine : styles.pillRowTheirs]}
-        >
+        <View style={[styles.metaRow, mine ? styles.metaRowMine : styles.metaRowTheirs]}>
           {summary.map((entry) => (
             <Pressable
               key={entry.emoji}
@@ -1089,9 +1125,7 @@ const MessageRow = memo(function MessageRow({
               }
             >
               <Text style={styles.pillEmoji}>{entry.emoji}</Text>
-              <Text
-                style={[styles.pillCount, entry.mine && styles.pillCountMine]}
-              >
+              <Text style={[styles.pillCount, entry.mine && styles.pillCountMine]}>
                 {entry.count}
               </Text>
             </Pressable>
@@ -3395,7 +3429,15 @@ const styles = StyleSheet.create({
   // v1's bubble metrics, verbatim: 82% max width, 12px padding, and one small corner per bubble
   // where its tail would be. The sent bubble carries no backgroundColor because its fill is the
   // gradient in BubbleContainer.
-  bubble: { padding: space.sm + 4, gap: space.xs },
+  /*
+    Tightened 2026-08-12: padding 12 -> 8, and the gap between stacked children 4 -> 2.
+
+    The bubble has to hold the time now as well as the words, and the time claims a line of its
+    own. Trading padding for that line is what keeps a short message from growing - the relationship
+    to hold is that **the bubble stays close to the size of what it contains**, so if the time ever
+    moves back out, this padding should come back up rather than staying tight by inertia.
+  */
+  bubble: { padding: space.sm, gap: 2 },
   /*
    * v1's announcement card, which is deliberately not a bubble.
    *
@@ -3455,7 +3497,7 @@ const styles = StyleSheet.create({
    * is a person, not prose" signal carried by weight rather than by colour.
    */
   mentionInTheirs: { color: color.accent, fontFamily: fontFamily.bodyBold },
-  mentionInMine: { color: color.onAccent, fontFamily: fontFamily.bodyBold },
+  mentionInMine: { color: color.accent, fontFamily: fontFamily.bodyBold },
 
   /*
    * The quote box, inside the bubble of the reply that carries it.
@@ -3483,7 +3525,14 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
   },
   quoteTheirs: { backgroundColor: color.appBackground },
-  quoteMine: { backgroundColor: "rgba(255,255,255,0.18)" },
+  /*
+    A white inset rather than the 18%-white wash it was.
+
+    That wash existed to lighten an orange gradient from inside. Over `bubbleSent` it is very
+    nearly the fill itself, so the quote box would stop having an edge at all. `card` is the one
+    surface that reads as inset on the warmer of the two fills.
+  */
+  quoteMine: { backgroundColor: color.card },
   quoteBar: {
     alignSelf: "stretch",
     width: 3,
@@ -3491,7 +3540,14 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     backgroundColor: color.accent,
   },
-  quoteBarMine: { backgroundColor: color.onAccent },
+  /*
+    Identical to `quoteBar` now, and the key is kept on purpose rather than deleted.
+
+    Every one of these `*Mine` overrides existed because the sent bubble was dark. With both fills
+    light they collapse onto their `theirs` counterpart - but the sent bubble is expected to get its
+    own treatment again, so the seam stays where the call sites already reach for it.
+  */
+  quoteBarMine: { backgroundColor: color.accent },
   quoteThumb: { width: 32, height: 32, borderRadius: radius.xs },
   quoteDocIcon: {
     width: 32,
@@ -3506,9 +3562,9 @@ const styles = StyleSheet.create({
   // rather than forcing the row wider than the bubble.
   quoteColumn: { flex: 1, minWidth: 0, gap: 1 },
   quoteSender: { ...type.label, fontSize: 10, color: color.accent },
-  quoteSenderMine: { color: color.onAccent, opacity: 0.9 },
+  quoteSenderMine: { color: color.accent },
   quotePreview: { ...type.bodySmall, fontSize: 12, color: color.textSecondary },
-  quotePreviewMine: { color: color.onAccent, opacity: 0.85 },
+  quotePreviewMine: { color: color.textSecondary },
   quoteDeleted: { fontStyle: "italic" },
 
   /*
@@ -3594,7 +3650,8 @@ const styles = StyleSheet.create({
     padding: space.md,
     gap: space.xs,
   },
-  overlayBubbleMine: { alignSelf: "flex-end", backgroundColor: color.accent },
+  /* The held-message preview has to be the bubble you are holding, so it tracks the same fill. */
+  overlayBubbleMine: { alignSelf: "flex-end", backgroundColor: color.bubbleSent },
   overlayBubbleSender: { ...type.label, color: color.textSecondary, textTransform: "none" },
   overlayBubbleBody: { ...type.body, color: color.textPrimary },
   overlayMenu: {
@@ -3676,17 +3733,42 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
   },
   messageRowMine: { justifyContent: "flex-end" },
-  avatarSpacer: { width: 32, height: 32 },
-  /** v1's treatment: 10px Inter in the accent colour, above the body. */
-  senderName: { ...type.label, fontSize: 10, color: color.accent },
-  /** The same label on your own bubble, over the accent fill rather than under it. */
-  senderNameMine: {
-    ...type.label,
-    fontSize: 10,
-    color: color.onAccent,
-    opacity: 0.85,
+  avatarSpacer: { width: AVATAR_SIZE, height: AVATAR_SIZE },
+  /*
+    The sender's name above the bubble.
+
+    > **It was 10px Inter**, v1's treatment, which is a caption rather than a name - at that size it
+    > read as metadata attached to the bubble instead of as the person saying the thing. Enlarged
+    > 2026-08-12 at the founder's request.
+
+    `type.bodySmall` spread whole rather than `label` with a bigger `fontSize` on it, per `TECH/13`
+    rule 3: the old declaration was a label role with its size overridden, which is the half-applied
+    role that rule exists to stop. The relationship to hold is that **the name sits just under the
+    message it introduces** - readable as a name, still quieter than the words themselves.
+  */
+  senderName: {
+    ...type.bodySmallStrong,
+    /*
+      The primary text colour, at the founder's request.
+
+      It briefly took the time's `textSecondary` on the reasoning that the name and the time were
+      a matched pair bracketing the bubble. That was true while the time sat outside; the time is
+      back in the corner now, so the name is the only thing above the bubble and is the darkest
+      thing in the row rather than half of a pair.
+    */
+    color: color.textPrimary,
+    marginBottom: space.xs,
   },
-  bubbleHeader: {
+  /*
+   * Your own name sits over a right-aligned bubble, so it right-aligns with it.
+   *
+   * `textAlign` rather than `alignSelf`: the wrapper is a column sized to its widest child, so a
+   * name shorter than the bubble has room to move inside its own full-width line, and one longer
+   * than the bubble is what sets the width in the first place.
+   */
+  senderNameMine: { textAlign: "right" },
+  /** Was `bubbleHeader`, when the name shared this row. It holds the pin marker alone now. */
+  pinRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: space.xs,
@@ -3694,32 +3776,41 @@ const styles = StyleSheet.create({
   },
   bubbleWrapMine: { maxWidth: "82%" },
   bubbleWrapTheirs: { maxWidth: "82%" },
+  /*
+    Both fills are LIGHT, and everything below this line follows from that one fact.
+
+    The sent bubble carried white on an orange gradient, so every `mine` variant in this file was
+    picked to survive on it. With the fill light, each of those is unreadable rather than merely
+    off, which is why this is a block of changes and not a background swap.
+
+    The received bubble drops the hairline border it had over near-white. `bubbleReceived` is
+    translucent grey on `appBackground`, which separates it from the page on its own; a border on
+    top of a fill that already reads is a second edge doing the first one's job.
+  */
   sent: {
+    backgroundColor: color.bubbleSent,
     borderTopLeftRadius: radius.lg,
     borderTopRightRadius: radius.lg,
     borderBottomLeftRadius: radius.xs,
     borderBottomRightRadius: radius.lg,
   },
   received: {
-    backgroundColor: "rgba(255,255,255,0.9)",
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.05)",
+    backgroundColor: color.bubbleReceived,
     borderTopLeftRadius: radius.xs,
     borderTopRightRadius: radius.lg,
     borderBottomLeftRadius: radius.lg,
     borderBottomRightRadius: radius.lg,
   },
   pending: { opacity: 0.6 },
-  pendingLabel: { ...type.label, color: color.onAccent },
+  pendingLabel: { ...type.label, color: color.textSecondary },
+  /* Was white-on-orange. `error` is the token that already means this, and it reads on both. */
   failed: {
     ...type.label,
-    color: color.onAccent,
+    color: color.error,
     textDecorationLine: "underline",
   },
-  sentText: { ...type.body, fontSize: 15, color: color.onAccent },
+  sentText: { ...type.body, fontSize: 15, color: color.textPrimary },
   receivedText: { ...type.body, fontSize: 15, color: color.textPrimary },
-  sentMeta: { ...type.label, color: color.onAccent, opacity: 0.8 },
-  receivedMeta: { ...type.label, color: color.textSecondary },
   systemRow: { alignItems: "center", paddingVertical: space.xs },
   /*
     The "Last read" rule: a line through the conversation with the label sitting in it.
@@ -4074,23 +4165,38 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   emojiGlyph: { fontSize: 24, lineHeight: 30 },
-  pillRow: {
+  metaRow: {
     flexDirection: "row",
+    alignItems: "center",
     gap: space.xs,
     flexWrap: "wrap",
-    marginTop: -space.xs,
-    // Full width is what makes the wrapping row above break BEFORE this, putting the pills on
-    // their own line rather than alongside the bubble.
+    marginTop: space.xs,
+    // Full width is what makes the wrapping row above break BEFORE this, putting the reactions
+    // and the time on their own line rather than alongside the bubble.
     width: "100%",
   },
   /*
-   * Aligned under the bubble they belong to, on whichever side it sits. `justifyContent` rather
+   * Aligned under the bubble it belongs to, on whichever side that sits. `justifyContent` rather
    * than `alignSelf`, because at full width there is no free space for `alignSelf` to move into.
-   * Theirs is inset past the avatar so the pills line up with the bubble's left edge, not the
-   * avatar's.
+   * Theirs is inset past the avatar so the row lines up with the bubble's left edge, not the
+   * avatar's - which is why it reads `AVATAR_SIZE` rather than repeating the number.
    */
-  pillRowMine: { justifyContent: "flex-end" },
-  pillRowTheirs: { justifyContent: "flex-start", paddingLeft: 32 + space.sm },
+  metaRowMine: { justifyContent: "flex-end" },
+  metaRowTheirs: { justifyContent: "flex-start", paddingLeft: AVATAR_SIZE + space.sm },
+  /*
+    The time, in the bubble's bottom-right corner. Same token on both fills, since both are light.
+
+    `marginTop: -2` cancels the bubble's own child gap for this one child: the time is metadata
+    tucked under the last line rather than another stacked block, so it sits closer to the words
+    than the words sit to a quote above them.
+  */
+  bubbleTime: {
+    ...type.label,
+    color: color.textSecondary,
+    textTransform: "none",
+    alignSelf: "flex-end",
+    marginTop: -2,
+  },
   pill: {
     flexDirection: "row",
     alignItems: "center",

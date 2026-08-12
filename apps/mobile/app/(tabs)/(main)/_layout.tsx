@@ -326,23 +326,45 @@ export default function MainStackLayout() {
         }))}
       />
       {/*
-        Sharing the club, and the code. Two screens rather than one sheet, because the code is a
-        thing somebody holds a phone up to - it wants the whole screen, and a back control that
-        returns to the share list rather than dismissing everything.
+        Sharing the club. **One screen since 2026-08-12, where it was two.**
+
+        The old split was Share club listing rows with the code a tap further in, on the reasoning
+        that a code "wants the whole screen". It does - so it became the screen, and the rows
+        became two buttons under it. There is no `/qr` route any more.
+
+        Scanning is its sibling rather than its child: it is reached from here, and it is about
+        somebody ELSE's club, so it falls back to the clubs list rather than to a club the scanner
+        may have nothing to do with.
       */}
       <Stack.Screen
         name="clubs/[clubId]/share"
-        options={parented('Share club', (p) => ({
-          href: `/clubs/${p.clubId}/profile`,
-          label: 'Club profile',
-        }))}
+        options={(props) => ({
+          ...parented('Share QR', (p) => ({
+            href: `/clubs/${p.clubId}/profile`,
+            label: 'Club profile',
+          }))(props),
+          /*
+            The title in ink rather than the accent every other screen inherits, and set HERE
+            rather than on the screen.
+
+            Why it matters where: this is chrome that does not depend on the club, so declaring it
+            inside the screen's data branch meant it applied only once the club had loaded - the
+            header drew accent, then flipped to ink at the moment the share icon appeared. Static
+            chrome on the route is right on the first frame.
+
+            Why ink at all: this screen is already almost entirely the club's accent - two pills
+            and the card's edge - and a third accent element at the top read as one orange field
+            rather than as a heading over a code.
+          */
+          headerTitleStyle: { ...type.headerTitle, color: color.textPrimary },
+        })}
       />
       <Stack.Screen
-        name="clubs/[clubId]/qr"
-        options={parented('QR code', (p) => ({
-          href: `/clubs/${p.clubId}/share`,
-          label: 'Share club',
-        }))}
+        name="clubs/scan"
+        options={{
+          title: 'Scan a code',
+          headerLeft: () => <BackTo href="/clubs" label="Chats" variant="icon" />,
+        }}
       />
 
       {/*

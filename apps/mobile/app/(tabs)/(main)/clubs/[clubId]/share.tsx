@@ -1,180 +1,334 @@
 /**
- * Sharing a club: the link, the code, and everywhere else the link can go.
+ * Handing the club to somebody: the code, the link, and the two ways out.
  *
- * **Every member sees this screen, and only an admin can rotate what it hands out** (ADR-0024).
- * A club grows by its members bringing people, and an invite only an admin could send is one a
- * member routes around by asking an admin to paste a link - the same access, with a person in
- * the middle and a day's delay.
+ * **One screen since 2026-08-12, where it used to be two.** Share club listed rows - Copy Link,
+ * Share QR code, Share to - and the code lived a tap further in. The code IS the share surface for
+ * the case this exists to serve, somebody standing in front of you, so it is now what the screen
+ * opens on and the rows became two buttons under it.
  *
- * > **The link is the only invite mechanism** (ADR-0010 removed the typed code), so this screen is
- * > the club's front door. It is reachable only from inside the club, and a non-member cannot read
- * > the club at all - which is what withholds the token, rather than anything this screen does.
+ * **Every member of the club sees this, and only an admin can rotate what it hands out**
+ * (ADR-0024). Each tier is handed its own link and the screen never chooses: the server returns
+ * exactly one token, picked by tier, so there is no branch here to get wrong and no way for a
+ * member to be shown the admin string (ADR-0025).
  *
- * Copy Link carries no chevron. Every other row here goes somewhere; that one acts and stays put,
- * and a chevron on it would promise a screen that never arrives.
+ * > **The screen does not narrate what the link does, and that is a decision rather than an
+ * > omission.** It briefly did: "anyone who scans this joins straight away, even if it normally
+ * > asks people to request". Accurate for an admin, and it read as a warning about something the
+ * > reader had not asked about, on a surface whose whole job is to be held out to another person.
+ * > Removed 2026-08-12. The behaviour is untouched - an admin's link admits outright, a member's
+ * > obeys the join policy (ADR-0025) - it is simply not explained here.
+ *
+ * The drawing, the quiet zone and the error-correction level are `src/qr-code.tsx`'s business.
+ * This screen owns the frame around it, the actions, and getting the image out.
  */
 
-import { useState } from 'react';
-import { Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { File, Paths } from 'expo-file-system';
 import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
-import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import type Svg from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { clubApi } from '../../../../../src/api.ts';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
-import { RemoteImage } from '../../../../../src/media-bubble.tsx';
-import { avatarTint, color, radius, space, type } from '../../../../../src/theme.ts';
-import { ConfirmDialog, DataScreen, Row } from '../../../../../src/ui.tsx';
+import { QrCode } from '../../../../../src/qr-code.tsx';
+import { color, radius, space, type } from '../../../../../src/theme.ts';
+import { Avatar, ConfirmDialog, DataScreen } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
-export default function ShareClubScreen() {
+/**
+ * The code's drawn size.
+ *
+ * Big enough to scan across a table, and small enough that the whole screen - crest, card, both
+ * pills and the caption - lands inside one phone screen without scrolling. That last part is the
+ * constraint: this surface is used by somebody holding a phone out to another person, and content
+ * they have to scroll to is content the other person is waiting through.
+ */
+const CODE_SIZE = 220;
+
+/** The club's face, overlapping the card's top edge by half of itself. */
+const CREST = 96;
+
+export default function ClubShareScreen() {
   const { clubId } = useLocalSearchParams<{ clubId: string }>();
   const load = useLoad(() => clubApi.detail(clubId), [clubId]);
   useDeclareClub(clubId, load.data?.club.name, load.data?.club.image);
   const insets = useSafeAreaInsets();
+  const router = useRouter();
 
-  const [copied, setCopied] = useState<string | null>(null);
-  const [rotating, setRotating] = useState(false);
+  const svgRef = useRef<Svg | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [confirmingRotate, setConfirmingRotate] = useState(false);
+  const [rotating, setRotating] = useState(false);
+
+  /**
+   * The code as PNG bytes, rendered from the view that is on screen.
+   *
+   * Through `react-native-svg`'s own `toDataURL` rather than a second drawing path, so what gets
+   * saved cannot drift from what was scanned in the app. Returns bare base64 - no `data:` prefix.
+   */
+  const exportPng = () =>
+    new Promise<string>((resolve, reject) => {
+      const svg = svgRef.current;
+      if (svg === null) {
+        reject(new Error('The code is not drawn yet.'));
+        return;
+      }
+      /*
+       * **Bounded, because `toDataURL` takes a callback and has silent failure paths.** Its web
+       * implementation returns without calling back when its own ref is missing, and waits on an
+       * `img.onload` that never fires if the SVG will not rasterise. A promise that never settles
+       * leaves the button disabled and saying "Saving" for as long as the screen is open, which
+       * is exactly what happened here before the picture was inlined.
+       */
+      const bail = setTimeout(() => reject(new Error('Rendering the code timed out.')), 5000);
+      svg.toDataURL((base64) => {
+        clearTimeout(bail);
+        resolve(base64);
+      });
+    });
+
+  const save = async (clubName: string) => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const base64 = await exportPng();
+      const filename = `clubchat-${clubName.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-qr.png`;
+
+      if (Platform.OS === 'web') {
+        // A browser has no photo library. It has a downloads folder, which is where somebody
+        // making a flyer on a laptop actually wants this.
+        const anchor = document.createElement('a');
+        anchor.href = `data:image/png;base64,${base64}`;
+        anchor.download = filename;
+        anchor.click();
+        setNotice('Saved to your downloads.');
+        return;
+      }
+
+      const file = new File(Paths.cache, filename);
+      file.create({ overwrite: true });
+      file.write(base64, { encoding: 'base64' });
+
+      /*
+       * **Imported here rather than at the top of the file, and that is load-bearing.**
+       * `expo-media-library` has no web implementation, so evaluating the module throws - and a
+       * static import is evaluated when the BUNDLE loads, which takes down every route rather
+       * than one button. AGENTS.md failure mode 8, which shipped exactly this way once.
+       */
+      const MediaLibrary = await import('expo-media-library');
+      // Write-only: "add to your photos" is the whole permission this needs.
+      const permission = await MediaLibrary.requestPermissionsAsync(true);
+      if (!permission.granted) {
+        setNotice('Allow photo access in Settings to save the code.');
+        return;
+      }
+      await MediaLibrary.Asset.create(file.uri);
+      setNotice('Saved to your photos.');
+    } catch {
+      // Never silent: somebody is standing there waiting for something to happen.
+      setNotice("Couldn't save the code. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /*
+   * The club, if it has arrived. Read here rather than inside `DataScreen` so the header can be
+   * declared from the first frame - see the note on the share control below.
+   */
+  const loadedClub = load.data?.club ?? null;
 
   return (
-    <DataScreen load={load} errorMessage="Couldn't load this club.">
-      {(data) => {
-        const club = data.club;
-        const inviteUrl = Linking.createURL(`/join/${club.inviteToken}`);
+    <>
+      {/*
+        The system share sheet, in the header rather than as a third pill.
 
-        return (
-          <>
+        It belongs there because it is a different KIND of act from the two below it: Scan and Copy
+        keep you on this screen, and this hands off to another app.
+
+        > **Declared OUTSIDE `DataScreen`, and that is the whole point of this block.** It lived
+        > inside the data branch, so it could not exist until the club fetch returned - the icon
+        > popped into the header about a second after the screen opened, which reads as the app
+        > still deciding what this page is. Chrome should be drawn on the first frame; only its
+        > ACTION needs the data. So the control renders immediately and does nothing until there
+        > is a link to share, which is a far smaller lie than appearing late.
+        >
+        > The title colour had the same fault and went further, onto the route in `_layout`,
+        > because it depends on nothing at all.
+      */}
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <Pressable
+              onPress={() => {
+                if (loadedClub === null) return;
+                const url = Linking.createURL(`/join/${loadedClub.inviteToken}`);
+                void Share.share({ message: url }).catch(() => undefined);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Share the join link"
+              // Announced as unavailable while the club is still loading, rather than looking
+              // identical to a control that works and silently doing nothing.
+              accessibilityState={{ disabled: loadedClub === null }}
+              hitSlop={space.sm}
+            >
+              <MaterialIcons
+                name="ios-share"
+                size={22}
+                // Dimmed until there is something to share. The control keeps its place either
+                // way, so nothing moves when the club arrives.
+                color={loadedClub === null ? color.border : color.textPrimary}
+              />
+            </Pressable>
+          ),
+        }}
+      />
+      <DataScreen load={load} errorMessage="Couldn't load this club.">
+        {(data) => {
+          const club = data.club;
+          const inviteUrl = Linking.createURL(`/join/${club.inviteToken}`);
+
+          return (
+            <>
             <ScrollView
               style={styles.flex}
               /*
-                No tab-bar clearance here any more: the bar is not drawn on this screen. It
-                reserved a bar's worth of empty space at the bottom until 2026-08-12, which
-                became visible dead space the moment the bar stopped appearing over it. The
-                safe-area inset stays, because the home indicator does not go away.
+                No tab-bar clearance: the bar is not drawn on this screen. Reserving it left a
+                bar's worth of dead space under the buttons once the bar stopped appearing.
               */
-              contentContainerStyle={[
-                styles.body,
-                { paddingBottom: insets.bottom + space.lg },
-              ]}
+              contentContainerStyle={[styles.body, { paddingBottom: insets.bottom + space.lg }]}
             >
               {/*
-                What the link looks like when it lands: the club's own face, its name, and what
-                tapping it does. The same three facts a recipient needs and the reason this is a
-                preview rather than a URL on its own - a raw `clubchat://` string tells somebody
-                nothing about whose club they are being asked to join.
+                The card, with the club's face straddling its top edge. The crest is drawn AFTER
+                the card in source order so it lands on top; a negative margin on the card pulls
+                it up under the face rather than the face being absolutely positioned, so the
+                whole block still grows with its contents.
               */}
-              <View style={styles.preview}>
-                {club.image === null ? (
-                  /*
-                    The lettered fallback, exactly as `Avatar` draws it: most clubs have no
-                    picture, so this is the ordinary case rather than a missing one, and a bare
-                    coloured rectangle would read as an image that failed to load.
-                  */
-                  <View
-                    style={[styles.previewFill, styles.previewFallback, { backgroundColor: avatarTint(clubId) }]}
-                    accessibilityElementsHidden
-                    importantForAccessibility="no"
-                  >
-                    <Text style={styles.previewInitial}>{club.name.charAt(0).toUpperCase()}</Text>
-                  </View>
-                ) : (
-                  <RemoteImage
-                    mediaId={club.image}
-                    variant="display"
-                    style={styles.previewFill}
-                    resizeMode="cover"
-                    accessibilityLabel={`${club.name}'s picture`}
-                  />
-                )}
-                {/*
-                  A scrim under the text rather than a solid band, because the picture is the
-                  point: it darkens where the words are and leaves the rest of the photograph
-                  alone. Without it a name lands on whatever the photo happens to be.
-                */}
-                <LinearGradient
-                  colors={['transparent', 'rgba(0,0,0,0.65)']}
-                  style={styles.previewFill}
+              {/*
+                Lifted above the card, and this needs saying because it looked like a layout bug
+                and was a paint-order one: later siblings paint on top in React Native, so the card
+                - which comes next and is pulled up under this by a negative margin - was covering
+                the crest's lower half. The face has to be the thing in front.
+              */}
+              <View style={styles.crest}>
+                <Avatar
+                  name={club.name}
+                  image={club.image}
+                  size={CREST}
+                  kind="group"
+                  shape="circle"
+                  tintId={clubId}
                 />
-                <View style={styles.previewText}>
-                  <Text style={styles.previewName} numberOfLines={2}>
-                    {club.name}
-                  </Text>
-                  <Text style={styles.previewJoin}>Join on ClubChat</Text>
-                </View>
               </View>
 
-              <View style={styles.rows}>
-                <Row
-                  title="Copy Link"
-                  navigates={false}
-                  left={
-                    <View style={[styles.well, styles.wellQuiet]}>
-                      <MaterialIcons name="link" size={22} color={color.textPrimary} />
-                    </View>
-                  }
-                  onPress={() => {
-                    void Clipboard.setStringAsync(inviteUrl).then(
-                      () => {
-                        setCopied('Link copied');
-                        setTimeout(() => setCopied(null), 2000);
-                      },
-                      () => {
-                        // A copy that fails silently is worse than one that fails: the member
-                        // walks away believing they are holding the link.
-                        setCopied("Couldn't copy - use Share to...");
-                        setTimeout(() => setCopied(null), 3000);
-                      },
-                    );
-                  }}
-                />
+              <View style={styles.card}>
                 {/*
-                  The featured row, and the only filled well on the screen: the code is the new
-                  thing here, and it is what somebody standing in front of you can use.
+                  Black on white with its quiet zone intact, whatever the frame around it is. The
+                  accent belongs to the screen: modules in the brand colour read as ours to a
+                  person and as a maybe to a camera. See `src/qr-code.tsx`.
                 */}
-                <Row
-                  title="Share QR code"
-                  href={`/clubs/${clubId}/qr`}
-                  left={
-                    <View style={[styles.well, styles.wellAccent]}>
-                      <MaterialIcons name="qr-code-2" size={22} color={color.onAccent} />
-                    </View>
-                  }
-                />
-                <Row
-                  title="Share to..."
-                  left={
-                    <View style={[styles.well, styles.wellQuiet]}>
-                      <MaterialIcons name="ios-share" size={20} color={color.textPrimary} />
-                    </View>
-                  }
-                  onPress={() => {
-                    void Share.share({ message: inviteUrl }).catch(() => undefined);
-                  }}
-                  accessibilityLabel="Share the join link to another app"
-                />
+                {/*
+                  **No picture in the middle of the code**, deliberately, since the club's face is
+                  already the largest thing on the screen directly above it. Two copies of one
+                  photograph a centimetre apart is not identification, it is repetition.
+
+                  It also makes the code easier to scan rather than only tidier: the logo is what
+                  forced correction level `H`, and `H` spends modules on redundancy. With nothing
+                  over the middle the same link is drawn in fewer, larger modules - which is what
+                  matters when somebody is reading it off a phone across a table.
+                */}
+                <QrCode value={inviteUrl} size={CODE_SIZE} svgRef={svgRef} />
+
+                {/*
+                  The club's name is drawn by the SCREEN and never inside the code. One apostrophe
+                  in an SVG attribute makes the whole export fail silently, and a club name is the
+                  most likely place to find one. AGENTS.md failure mode 23.
+                */}
+                <Text style={styles.name}>{club.name}</Text>
+                <Text style={styles.joinOn}>Join on ClubChat</Text>
               </View>
+
+              <View style={styles.actions}>
+                <Pressable
+                  style={({ pressed }) => [styles.pill, pressed && styles.pillPressed]}
+                  onPress={() => router.push('/clubs/scan')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Scan somebody else's club code with the camera"
+                >
+                  <Text style={styles.pillLabel}>Scan</Text>
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [styles.pill, pressed && styles.pillPressed]}
+                  onPress={() => {
+                    /*
+                      A copy that fails says so. The confirmation is the only evidence there is,
+                      because a clipboard cannot be read back from inside the app - without it
+                      somebody walks away believing they hold the link.
+                    */
+                    void Clipboard.setStringAsync(inviteUrl)
+                      .then(() => setNotice('Link copied.'))
+                      .catch(() => setNotice("Couldn't copy the link."));
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Copy the join link"
+                >
+                  <Text style={styles.pillLabel}>Copy</Text>
+                </Pressable>
+              </View>
+
+              {notice !== null && (
+                <Text style={styles.notice} accessibilityLiveRegion="polite">
+                  {notice}
+                </Text>
+              )}
 
               {/*
-                What YOUR link does, which is not the same sentence for everybody (ADR-0025).
-                An admin's bypasses the join policy; a member's obeys it. The screen says which
-                rather than describing the club, because the person reading this is about to
-                hand the link to somebody and needs to know what happens when they open it.
+                **No sentence describing what the link does.** Removed 2026-08-12, at the founder's
+                request, and the reasoning is worth keeping because the copy was accurate.
+
+                It said "anyone who scans this joins straight away, even if it normally asks people
+                to request" - true for an admin, and it read as a warning about a thing the reader
+                had not asked about. Naming an exception ("even if it normally...") makes somebody
+                wonder whether they are doing something they should not, on a screen whose whole
+                job is to be handed to another person. The behaviour is unchanged: an admin's code
+                still admits outright, a member's still obeys the policy (ADR-0025). It is simply
+                not narrated here.
+
+                What the screen still says is the LIMITATION below, which is a different kind of
+                statement: not a promise about the club's rules, but the one fact that makes the
+                code fail silently in somebody's hand.
+              */}
+
+              {/*
+                A code carrying an app-scheme link does nothing on a phone without ClubChat - no
+                prompt, no error, no page - and a member handing it to a stranger at a club fair
+                is exactly who finds that out the hard way. `PRD/04` rule 5c requires the screen to
+                say so rather than let it be discovered. ADR-0010's owed https join page is the
+                fix, and it is not on this screen.
               */}
               <Text style={styles.note}>
-                {club.viewer.isAdmin
-                  ? `Anyone with this link joins ${club.name} straight away, even if the club normally asks people to request.`
-                  : club.joinPolicy === 'request'
-                    ? `Anyone with this link asks to join ${club.name}, and an admin approves them.`
-                    : `Anyone with this link joins ${club.name} straight away.`}
+                Scanning works for people who already have ClubChat. Send the link to anybody else.
               </Text>
 
               {/*
-                Rotation is the admin tier's alone. It is the remedy for a leaked link and it
-                invalidates every link every member has already handed out, which is why it
-                confirms and why it sits at the bottom rather than beside the share actions.
+                Rotation, below everything and admin only.
+
+                It is the one destructive control here and it destroys OTHER people's outstanding
+                invitations, so it sits away from the share actions rather than beside them, and
+                the confirmation says so in those terms. DESIGN/04 rule 5.
               */}
               {club.viewer.isAdmin && (
                 <Pressable
@@ -182,7 +336,10 @@ export default function ShareClubScreen() {
                   disabled={rotating}
                   accessibilityRole="button"
                   accessibilityLabel="Rotate the join link, invalidating every link already shared"
+                  accessibilityState={{ disabled: rotating }}
+                  style={styles.rotateRow}
                 >
+                  <MaterialIcons name="autorenew" size={16} color={color.error} />
                   <Text style={styles.rotate}>
                     {rotating ? 'Rotating' : 'Rotate link - invalidates every link already shared'}
                   </Text>
@@ -190,105 +347,104 @@ export default function ShareClubScreen() {
               )}
             </ScrollView>
 
-            {/*
-              The confirmation sits at the bottom of the screen rather than beside the row, which
-              is where a hand that just tapped is, and where GroupMe puts it. It says the deed in
-              the past tense because it has already happened - there is nothing to undo or wait for.
-            */}
-            {copied !== null && (
-              <View
-                // Sat above the tab bar until the bar stopped being drawn here. Now it sits above
-                // the home indicator, which is the only thing left at the bottom edge.
-                style={[styles.toast, { bottom: insets.bottom + space.lg }]}
-                accessibilityLiveRegion="polite"
-              >
-                <MaterialIcons name="check-circle" size={18} color={color.onAccentSoft} />
-                <Text style={styles.toastLabel}>{copied}</Text>
-              </View>
-            )}
-
             {confirmingRotate && (
               <ConfirmDialog
                 title="Rotate the join link?"
-                body={`Every link already shared for ${club.name} stops working immediately, including ones members have sent to people who have not joined yet. You cannot bring the old one back.`}
+                body={`Every link and code already shared for ${club.name} stops working, including ones other members have sent. A new one is created in its place.`}
                 confirmLabel="Rotate link"
-                dismissLabel="Keep it"
                 onCancel={() => setConfirmingRotate(false)}
                 onConfirm={() => {
                   setConfirmingRotate(false);
                   setRotating(true);
+                  setNotice(null);
                   void clubApi
                     .rotateInvite(clubId)
-                    .then(load.reload, load.reload)
+                    .then(() => {
+                      setNotice('Link rotated. Every old link and code is now dead.');
+                      load.reload();
+                    })
+                    .catch(() => setNotice("Couldn't rotate the link. Try again."))
                     .finally(() => setRotating(false));
                 }}
               />
             )}
-          </>
-        );
-      }}
-    </DataScreen>
+            </>
+          );
+        }}
+      </DataScreen>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
-  body: { padding: space.md, gap: space.md, alignItems: 'center' },
+  /*
+   * `md` rather than `xl` at the top. The crest is the first thing and it is already a large
+   * round object; a section-sized gap above it pushed the caption off the bottom of the phone,
+   * which is the one thing this screen must not do.
+   */
+  body: { alignItems: 'center', paddingHorizontal: space.lg, paddingTop: space.md },
 
-  preview: {
-    width: 220,
-    height: 220,
-    borderRadius: radius.lg,
-    overflow: 'hidden',
-    backgroundColor: color.cardSunken,
-    marginTop: space.sm,
+  /*
+   * `zIndex` AND `elevation`, because they are two different platforms' answers to the same
+   * question and neither covers the other: iOS and web order by `zIndex`, Android by `elevation`.
+   * Setting only the first is the version that looks right on the phone in your hand and wrong on
+   * the one you have never run.
+   */
+  crest: { zIndex: 1, elevation: 1 },
+
+  card: {
+    backgroundColor: color.card,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    paddingHorizontal: space.lg,
+    paddingBottom: space.lg,
+    // Room for the code, plus the half of the crest that overlaps this edge.
+    paddingTop: CREST / 2 + space.lg,
+    // Pulls the card up under the crest rather than positioning the crest absolutely, so the
+    // block keeps growing with its contents.
+    marginTop: -(CREST / 2),
+    alignItems: 'center',
+    alignSelf: 'stretch',
   },
-  previewFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  previewFallback: { alignItems: 'center', justifyContent: 'center' },
-  previewInitial: { ...type.displayXl, color: color.onAccent, opacity: 0.9 },
-  previewText: { position: 'absolute', left: space.md, right: space.md, bottom: space.md },
-  previewName: { ...type.title, fontSize: 20, lineHeight: 25, color: color.onAccent },
-  previewJoin: { ...type.bodySmall, color: color.onAccent, opacity: 0.85 },
 
-  rows: { width: '100%', maxWidth: 460, gap: space.sm },
-  well: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.md,
+  // Anton, because this is the subject of the screen rather than a label on it.
+  name: { ...type.title, color: color.textPrimary, textAlign: 'center', marginTop: space.md },
+  joinOn: { ...type.body, color: color.textSecondary, marginTop: space.xs },
+
+  actions: { flexDirection: 'row', gap: space.md, marginTop: space.lg, alignSelf: 'stretch' },
+  /*
+   * A stadium rather than a rounded rectangle, matching the tab bar's pill and the app's other
+   * primary actions. Both are the accent: neither is secondary to the other - showing a code and
+   * sending a link are the same act by different means.
+   */
+  pill: {
+    flex: 1,
+    backgroundColor: color.accent,
+    borderRadius: radius.pill,
+    paddingVertical: space.md,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  wellQuiet: { backgroundColor: color.cardSunken },
-  wellAccent: { backgroundColor: color.accent },
+  pillPressed: { backgroundColor: color.accentPressed },
+  pillLabel: { ...type.headline, color: color.onAccent },
 
+  notice: { ...type.bodySmall, color: color.textSecondary, marginTop: space.md, textAlign: 'center' },
   note: {
     ...type.bodySmall,
     color: color.textSecondary,
     textAlign: 'center',
-    maxWidth: 420,
-    paddingTop: space.sm,
-  },
-  rotate: {
-    ...type.bodySmall,
-    color: color.textSecondary,
-    textAlign: 'center',
-    paddingTop: space.md,
+    marginTop: space.md,
+    maxWidth: 340,
   },
 
-  toast: {
-    position: 'absolute',
-    alignSelf: 'center',
-    // In the style rather than as a prop: the prop is deprecated, and it warns on every render.
-    pointerEvents: 'none',
+  rotateRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    backgroundColor: color.accentSoft,
-    borderWidth: 1,
-    borderColor: color.accentSoftBorder,
-    borderRadius: radius.pill,
-    paddingHorizontal: space.md,
+    gap: space.xs,
+    marginTop: space.xl,
     paddingVertical: space.sm,
   },
-  toastLabel: { ...type.label, color: color.onAccentSoft, textTransform: 'uppercase' },
+  rotate: { ...type.bodySmall, color: color.error, textAlign: 'center' },
 });

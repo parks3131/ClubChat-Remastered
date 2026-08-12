@@ -190,7 +190,7 @@ export function DocumentBubble({ name, size, mine }: DocumentProps) {
       </View>
       <View style={styles.documentMeta}>
         <Text
-          style={[styles.documentName, mine && styles.onAccent]}
+          style={styles.documentName}
           numberOfLines={2}
           // Break in the middle of a long name rather than truncating the extension away - the
           // extension is the most informative part of a filename.
@@ -199,9 +199,7 @@ export function DocumentBubble({ name, size, mine }: DocumentProps) {
           {name ?? 'Attachment'}
         </Text>
         {size !== null && (
-          <Text style={[styles.documentSize, mine && styles.onAccentDim]}>
-            {formatBytes(size)}
-          </Text>
+          <Text style={styles.documentSize}>{formatBytes(size)}</Text>
         )}
       </View>
     </View>
@@ -233,7 +231,21 @@ const styles = StyleSheet.create({
     padding: space.sm,
     borderRadius: radius.md,
   },
-  documentMine: { backgroundColor: color.accent },
+  /*
+    A document tile is a card on BOTH bubbles since 2026-08-12.
+
+    It was a solid accent slab on your own message, which worked while the sent bubble was an
+    orange gradient carrying white. On `bubbleSent` it is a saturated block sitting inside a pale
+    one - the loudest thing in the conversation, for an attachment.
+
+    The two keys stay separate although they now match: the sent bubble is expected to get its own
+    treatment again, and the call site already branches.
+  */
+  documentMine: {
+    backgroundColor: color.card,
+    borderWidth: 1,
+    borderColor: color.divider,
+  },
   documentTheirs: {
     backgroundColor: color.card,
     borderWidth: 1,
@@ -251,6 +263,4 @@ const styles = StyleSheet.create({
   documentMeta: { flex: 1, gap: space.xs },
   documentName: { ...type.body, color: color.textPrimary },
   documentSize: { ...type.label, color: color.textSecondary },
-  onAccent: { color: color.onAccent },
-  onAccentDim: { color: color.onAccent, opacity: 0.8 },
 });

@@ -172,8 +172,9 @@ Chats  (every club chat and DM, newest first; chips: Unread | DMs | Clubs)
    ├─ Races and Meets            (preview of ~5 + searchable "See all")
    ├─ Club profile               (identity, and the way in for everybody else)
    │  ├─ Edit club               (admin)
-   │  ├─ Share club              (preview, copy, share sheet; rotate is admin only)
-   │  │  └─ QR code              (the join link as a scannable square)
+   │  ├─ Share QR                (the code, the club's face, Scan and Copy;
+   │  │                            rotate is admin only, below the fold)
+   │  │  └─ Scan a code          (camera; joins through the same path a tapped link does)
    │  ├─ Members                 (roster, pending requests, add-member search, Banned)
    │  └─ Gallery
    ├─ Member profile card        (read-only, from chat or any roster; carries Ban when
@@ -349,8 +350,8 @@ never "the tab root" and never nothing.
 | Races list | Club hub | | **Eboard chat** | **Club hub** |
 | Club profile | Club hub | | Eboard Highlights | Eboard chat |
 | Members | Club profile | | Eboard roster | Eboard hub |
-| Share club | Club profile | | Meetings list | Eboard hub |
-| QR code | Share club | | Eboard polls | Eboard hub |
+| Share QR | Club profile | | Meetings list | Eboard hub |
+| Scan a code | Chats | | Eboard polls | Eboard hub |
 | Gallery | its chat | | | |
 | Poll detail | Calendar | | | |
 
