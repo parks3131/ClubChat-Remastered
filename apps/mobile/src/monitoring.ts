@@ -63,6 +63,11 @@ export function initMonitoring(): void {
     enabled,
     dsn: config.sentryDsn,
     /*
+     * Which build this came from, so a crash on the founder's dev phone is distinguishable from a
+     * crash in front of a real club. Both land in one project; only this tells them apart.
+     */
+    environment: config.sentryEnvironment,
+    /*
      * Errors only. Performance tracing is a separate decision with its own quota cost and its own
      * privacy questions, and belongs with a performance pass rather than being smuggled in with
      * crash reporting.
@@ -95,9 +100,22 @@ export function capture(error: unknown, where: Where, context?: Record<string, u
    * Logged every time, configured or not, and BEFORE the send is attempted. In development this
    * is the whole feature - it lands in the Metro log where somebody can see it - and in
    * production it is the copy that cannot fail.
+   *
+   * > **`warn` and never `error`, and this is behavioural rather than stylistic.** React Native's
+   * > LogBox turns a `console.error` into a **full-screen overlay** in development, so reporting a
+   * > handled failure would cover the app with a red screen the member has to dismiss. That breaks
+   * > this module's first property - reporting never changes behaviour - and it breaks it in the
+   * > worst place, because `capture` is called from paths that are already degraded and already
+   * > recovering: a failed reconcile, a cache falling back to memory. Those are handled, and the
+   * > app is meant to carry on.
+   * >
+   * > Found by shipping it: the smoke test that proved the pipeline works also put a Console Error
+   * > overlay on the founder's phone at launch. Severity here belongs to Sentry, which gets a real
+   * > `captureException` below; the console copy exists so a developer can see it, and a warning
+   * > is visible in Metro without seizing the screen.
    */
   // eslint-disable-next-line no-console
-  console.error(`[monitor] ${where}`, error, context ?? {});
+  console.warn(`[monitor] ${where}`, error, context ?? {});
 
   if (!enabled) return;
 

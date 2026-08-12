@@ -46,7 +46,13 @@
           "photosPermission": "Allow ClubChat to access your photos so you can post them in a chat."
         }
       ],
-      "@sentry/react-native"
+      [
+        "@sentry/react-native",
+        {
+          "organization": "clubchat-ef",
+          "project": "clubchat-mobile"
+        }
+      ]
     ],
     "scheme": "clubchat",
     "extra": {

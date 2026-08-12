@@ -77,14 +77,46 @@ either. `enabled` now carries the on/off inside `Sentry.init` rather than an ear
 also the honest reading of the module's own second property: development runs the production path
 with the transport switched off, rather than a different path that has never run.
 
+### The smoke test found a bug in the reporter, which is what smoke tests are for
+
+With a `clubchat-mobile` project created and its DSN in `.env`, a deliberate `capture` at startup
+proved the whole path: the event arrived as `CLUBCHAT-MOBILE-1`, tagged `development`, `handled:
+yes`, iPhone 15 Pro, release 1.0.0.
+
+It also **put a full-screen Console Error overlay on the founder's phone at launch**, and that was
+mine. `capture` wrote its local copy with `console.error`, and React Native's LogBox turns a
+`console.error` into a red screen in development.
+
+The bug is worth more than the fix. **The module's first stated property is that reporting never
+changes behaviour**, and the implementation broke it in the worst available place: `capture` is
+called from paths that are already degraded and deliberately carrying on - a failed reconcile, a
+cache falling back to memory - so a handled failure the app was designed to survive would have
+covered the screen with something to dismiss. `console.warn` now; severity belongs to Sentry, which
+still receives a real `captureException`.
+
+**The sequencing is the lesson.** The smoke test existed only to prove the pipeline, and it is the
+reason this was found on a launch nobody minded interrupting rather than during a genuine failure -
+which is precisely when an overlay does the most damage and is hardest to attribute. A step whose
+only purpose is to check that the new thing works will find defects in the new thing.
+
 ### Verified
 
 1177 tests, typecheck, runtime parse, em-dash lint. The web bundle rebuilt and served (2,766
-modules), the native module linked through `pod install`, and the app launched on the physical
-iPhone with the socket up and no errors. **Still owed: source maps**, which need an org slug, a
-project slug and an auth token, so a production trace is minified until that pass. The DSN is also
-still empty, so today the reporter writes to the console - which is a supported state and not the
-feature.
+modules), the native module linked through `pod install`, the app launched on the physical iPhone,
+and an error made the trip to Sentry and back to a human reading it.
+
+The verify run before the last one **failed**, and it is recorded because the temptation was to
+re-run and move on: `phase3-media` timed out waiting for a Postgres container port, which is
+`PRD/17` debt 15 - one container per test file against a hardcoded ten-second ceiling, with three
+other builds competing for Docker at the time. Re-run alone it passed in 3.22s, then the full suite
+passed clean. `AGENTS.md` standing instruction 6 forbids working around a flake by re-running until
+it passes, and the thing that made this safe to call environmental rather than a regression is that
+the change touches only `apps/mobile` while `phase3-media` is a server media suite that cannot see
+it. The same entry records two confident misdiagnoses of this exact timeout.
+
+**Still owed: source maps.** The org and project slugs are now configured on the Expo plugin
+(`clubchat-ef` / `clubchat-mobile`); only an auth token is missing, and until it exists a production
+stack trace is minified.
 
 ---
 

@@ -33,4 +33,22 @@ export const config = {
    * first time in production, which is when nobody is watching.
    */
   sentryDsn: process.env['EXPO_PUBLIC_SENTRY_DSN'] ?? '',
+  /**
+   * Which build a crash came from.
+   *
+   * **Derived from `__DEV__` rather than configured**, deliberately. The server takes
+   * `SENTRY_ENVIRONMENT` from its environment because a server is deployed into one; a phone build
+   * already knows which it is, and a value somebody has to remember to set is a value that will
+   * eventually be wrong in the direction that matters - a release build reporting as development,
+   * which is the one case where the label has to be right.
+   *
+   * Without this, a crash from a dev build and a crash from the App Store arrive in the same
+   * project looking identical, and the first question anybody asks - "is this real members, or is
+   * it me" - has no answer.
+   *
+   * Still overridable, for the build that is neither: a TestFlight release is `production` by this
+   * rule and may deserve its own name.
+   */
+  sentryEnvironment:
+    process.env['EXPO_PUBLIC_SENTRY_ENVIRONMENT'] ?? (__DEV__ ? 'development' : 'production'),
 } as const;
