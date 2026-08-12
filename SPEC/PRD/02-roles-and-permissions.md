@@ -30,8 +30,8 @@ This is the most-misunderstood part of the model, and it is deliberate.
 
 | Boundary | Rule |
 |---|---|
-| **Club admin → race chat** | Club admin status grants **management authority** over every race in the club (approve/add/remove members, edit Meet Information, manage car groups, delete the race) but **not** access to the race's chat, polls, or car-group membership. Those require a real roster row: the admin must request to join or be added like anyone else. |
-| **Club admin → race car group** | An admin not on the race roster cannot be assigned to a car group, even though they can manage the groups. |
+| **Club admin → a race** | **Nothing, until they join it.** *(Changed 2026-08-12.)* Club admin status grants no authority over a race the admin is not on the roster of - not its chat, not its polls, not its Meet Information, not its car groups, not its roster decisions, not deleting it. They may create a race, see that one exists, read its Meet Information and its roster, and ask to join, which is what any club member can do bar the first two. Authority over a race comes from being in it. |
+| **Club admin → race car group** | An admin not on the race roster cannot be assigned to a car group, and cannot manage the groups either. Under the old rule the second half was allowed, and it was the clearest example of authority without access. |
 | **Club admin → race polls** | Creating or even seeing a race poll requires being on the race roster **and** being an admin. |
 | **Club admin → Eboard membership** | Admin-tier membership **does** grant Eboard membership - automatically, and it is revoked automatically on demotion. But an admin who chooses to leave the Eboard space must request or be re-added; admin status alone does not re-admit them. |
 | **Race roster → parent club** | Race membership is always a subset of club membership. Leaving the club removes every race and Eboard row for that club. |
@@ -89,22 +89,48 @@ in both directions, by the permission-matrix test suite.
 
 #### Race
 
-| Action | Club Owner/Admin (manager) | Race member | Club member, not on roster |
-|---|---|---|---|
-| Create a race | ✅ | ❌ | ❌ |
-| See the race in lists; preview name, date, Meet Information | ✅ | ✅ | ✅ |
-| Request to join | ✅ | - | ✅ |
-| Approve/deny requests, add or remove roster members | ✅ | ❌ | ❌ |
-| Read/post in race chat | only if also on the roster | ✅ | ❌ |
-| Pin / announce in race chat | only if also on the roster | ❌ | ❌ |
-| Edit Meet Information | ✅ | ❌ | ❌ |
-| Create/delete car groups, assign members, set Incharge | ✅ | ❌ (view only) | ❌ |
-| Be assigned to a car group | only if also on the roster | ✅ | ❌ |
-| Create a race poll | only if also on the roster | ❌ | ❌ |
-| See/vote in a race poll | only if also on the roster | ✅ | ❌ |
-| Pin the race to their own hub | ✅ | ✅ | ✅ |
-| Leave the race | ✅ (own row) | ✅ | - |
-| Edit race identity / delete the race | ✅ | ❌ | ❌ |
+**You run the races you are in.** The columns are about the roster, not about the club: an admin
+who is not on a race's roster has a club member's powers over it and nothing more.
+
+| Action | Admin ON the roster | Race member | Admin NOT on the roster | Club member, not on roster |
+|---|---|---|---|---|
+| Create a race | ✅ | ❌ | ✅ | ❌ |
+| See the race in lists; preview name, date, Meet Information | ✅ | ✅ | ✅ | ✅ |
+| Read the roster | ✅ | ✅ | ✅ | ❌ |
+| See who is **waiting** to join | ✅ | ❌ | ❌ | ❌ |
+| Request to join | - | - | ✅ | ✅ |
+| **Join outright, with no request** | - | - | **Owner only** | ❌ |
+| Approve/deny requests, add or remove roster members | ✅ | ❌ | ❌ | ❌ |
+| Read/post in race chat | ✅ | ✅ | ❌ | ❌ |
+| Pin / announce in race chat | ✅ | ❌ | ❌ | ❌ |
+| Edit Meet Information | ✅ | ❌ | ❌ | ❌ |
+| Create/delete car groups, assign members, set Incharge | ✅ | ❌ (view only) | ❌ | ❌ |
+| Be assigned to a car group | ✅ | ✅ | ❌ | ❌ |
+| Create a race poll | ✅ | ❌ | ❌ | ❌ |
+| See/vote in a race poll | ✅ | ✅ | ❌ | ❌ |
+| Pin the race to their own hub | ✅ | ✅ | ✅ | ✅ |
+| Leave the race | ✅ (own row) | ✅ | - | - |
+| Edit race identity / delete the race | ✅ | ❌ | ❌ | ❌ |
+
+> **Changed 2026-08-12, and it inverts what this document called "the most-misunderstood part of
+> the model".** Management authority used to belong to every club admin over every race, from
+> outside it - the "manager" column above was a club role rather than a roster position. It is now
+> a roster position: an admin runs the races they joined.
+>
+> Two rows are the exceptions, and each is a **club** act rather than a race act. **Creating** a
+> race cannot need a roster row on a race that does not exist. **Reading the roster** stays open to
+> the admin tier so somebody fielding "who is driving to Cougars" can answer without joining a race
+> they are not going to - but not the pending queue, which is decision-making data and they have no
+> decision to make.
+>
+> What did **not** change is the reason the old rule existed: an admin is still not silently on
+> thirty rosters, because joining is still by request. Auto-joining every admin to every race was
+> built in v1 and reversed, and that stays reversed.
+>
+> **The Owner has no exemption.** Their route in is the same one that already existed for the
+> roster with no admin left on it: they may walk onto any roster with no request, and then they are
+> an ordinary race member who also happens to run the club. Managing from outside would have kept
+> the old model alive for one person.
 
 #### Eboard and Council
 
@@ -141,4 +167,4 @@ in both directions, by the permission-matrix test suite.
 | Remove-an-Admin is Owner-only, demote-an-Admin is any-admin | Symmetric permissions | Admins policing each other's role is normal; ejecting each other is not |
 | No separate "race admin" role | Per-race admin role | Club admins already have full authority; a second role adds UI for no new capability |
 | No separate "Eboard admin" role | Mirror club tiers inside Eboard | Every Eboard member is already a club admin, so the role would be constant |
-| Club admin gets authority over a race but not its chat | Auto-join every admin to every race (this was built, then reversed) | An admin auto-added to 30 races drowns in chat for races they are not running |
+| ~~Club admin gets authority over a race but not its chat~~ **Reversed 2026-08-12: authority over a race requires a roster row** ([ADR-0027](../decisions/0027-race-management-requires-a-roster-row.md)) | Auto-join every admin to every race (this was built, then reversed); and, in 2026, keeping the authority-without-access split | An admin auto-added to 30 races drowns in chat for races they are not running - which is why joining stays by request. The split that solved it was itself wider than the audience that pages admins about a race, so the person who could act was not the person who was told |

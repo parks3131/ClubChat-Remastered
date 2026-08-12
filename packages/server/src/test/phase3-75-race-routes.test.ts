@@ -213,8 +213,17 @@ describe('race routes: creation and visibility', () => {
   });
 });
 
-describe('race routes: the authority-versus-access boundary', () => {
-  it('lets a manager with no roster row manage the roster and refuses them the race itself', async () => {
+describe('race routes: you run the races you are in', () => {
+  it('refuses an admin off the roster everything except reading it', async () => {
+    /*
+     * **This test asserted the opposite until 2026-08-12.** It used to prove that an admin with
+     * no roster row could add members, approve requests and edit Meet Information while being
+     * refused the race's own content - the authority-versus-access boundary. Management is now
+     * roster-gated: you run the races you are in.
+     *
+     * Over HTTP rather than against the predicate, because the permission matrix proves the
+     * predicate and this proves that every route actually asks it.
+     */
     const owner = await signUp('BoundaryOwner');
     const admin = await signUp('BoundaryAdmin');
     const member = await signUp('BoundaryMember');
@@ -222,6 +231,7 @@ describe('race routes: the authority-versus-access boundary', () => {
     await join(clubId, admin, 'admin');
     await join(clubId, member);
 
+    // The owner creates it, so the OWNER is on the roster - the creator always is.
     const created = await as(owner, 'POST', `/clubs/${clubId}/races`, {
       name: 'Boundary race',
       raceDate: '2026-12-05',
@@ -229,32 +239,44 @@ describe('race routes: the authority-versus-access boundary', () => {
     const raceId = created.body.raceId;
     const channelId = created.body.channelId;
 
-    // The admin holds full management authority and no roster row.
-    const added = await as(admin, 'POST', `/races/${raceId}/members`, {
-      userIds: [member.userId],
-    });
-    expect(added.status).toBe(200);
+    // An admin who is not on the roster now manages nothing, attempted directly rather than
+    // by checking a button is hidden.
+    expect(
+      (await as(admin, 'POST', `/races/${raceId}/members`, { userIds: [member.userId] })).status,
+    ).toBe(404);
+    expect(
+      (await as(admin, 'PATCH', `/races/${raceId}/meet-information`, { meetDescription: 'no' }))
+        .status,
+    ).toBe(404);
+    expect((await as(admin, 'POST', `/races/${raceId}/car-groups`)).status).toBe(404);
+    expect((await as(admin, 'DELETE', `/races/${raceId}`)).status).toBe(404);
 
-    // ...and can read the roster, which is the one race read authority does grant (rule 5).
+    // The rostered admin - here the owner, who created it - can do all of it.
+    expect(
+      (await as(owner, 'POST', `/races/${raceId}/members`, { userIds: [member.userId] })).status,
+    ).toBe(200);
+
+    /*
+     * The one thing an off-roster admin keeps: reading the roster, changing nothing. They see
+     * who is going and NOT who is waiting - `pendingRequests` is null rather than an empty list,
+     * so "not yours to see" cannot be misread as "nobody is waiting".
+     */
     const roster = await as(admin, 'GET', `/races/${raceId}/members`);
     expect(roster.status).toBe(200);
     expect(roster.body.members.map((m: { userId: string }) => m.userId)).toContain(member.userId);
-    // A manager sees who is waiting, because they are the one who decides.
-    expect(roster.body.pendingRequests).toEqual([]);
+    expect(roster.body.pendingRequests).toBeNull();
 
-    // ...and is refused the race's own content. Both answers are correct at once, which is
-    // the whole point of the boundary.
+    // And is still refused the race's own content, exactly as before.
     expect((await as(admin, 'GET', `/races/${raceId}/car-groups`)).status).toBe(404);
     expect((await as(admin, 'GET', `/channels/${channelId}/messages`)).status).toBe(404);
 
-    // A plain race member reads the roster but not the pending requests: null rather than
-    // an empty list, so "not allowed to see this" cannot be read as "nobody is waiting".
+    // A plain race member reads the roster on the same terms.
     const asMember = await as(member, 'GET', `/races/${raceId}/members`);
     expect(asMember.status).toBe(200);
     expect(asMember.body.pendingRequests).toBeNull();
   });
 
-  it('refuses to seat a manager who is not on the roster in a car', async () => {
+  it('refuses to seat an admin who is not on the roster in a car', async () => {
     const owner = await signUp('CarOwner');
     const admin = await signUp('CarAdmin');
     const { clubId } = await createClubAs(owner);
@@ -266,27 +288,29 @@ describe('race routes: the authority-versus-access boundary', () => {
     });
     const raceId = created.body.raceId;
 
-    const group = await as(admin, 'POST', `/races/${raceId}/car-groups`);
+    // The groups are made by the rostered admin - the creator. An off-roster admin cannot even
+    // create one now, which is asserted in the test above.
+    const group = await as(owner, 'POST', `/races/${raceId}/car-groups`);
     expect(group.status).toBe(201);
     // Auto-numbered, with no name in the request.
     expect(group.body.number).toBe(1);
 
-    // The clearest expression of authority not being access: they manage the groups and
-    // cannot be put in one.
-    const seated = await as(admin, 'POST', `/car-groups/${group.body.groupId}/members`, {
+    // A club admin with no roster row cannot be put in a car, and could not manage the group
+    // either. Under the old rule only the first half was true.
+    const seated = await as(owner, 'POST', `/car-groups/${group.body.groupId}/members`, {
       userId: admin.userId,
     });
     expect(seated.status).toBe(404);
 
     // The owner is on the roster, so they can be.
-    const ownerSeated = await as(admin, 'POST', `/car-groups/${group.body.groupId}/members`, {
+    const ownerSeated = await as(owner, 'POST', `/car-groups/${group.body.groupId}/members`, {
       userId: owner.userId,
     });
     expect(ownerSeated.status).toBe(200);
 
     // One group per person per race, enforced by the database rather than by this handler.
-    const second = await as(admin, 'POST', `/races/${raceId}/car-groups`);
-    const twice = await as(admin, 'POST', `/car-groups/${second.body.groupId}/members`, {
+    const second = await as(owner, 'POST', `/races/${raceId}/car-groups`);
+    const twice = await as(owner, 'POST', `/car-groups/${second.body.groupId}/members`, {
       userId: owner.userId,
     });
     expect(twice.status).toBe(409);

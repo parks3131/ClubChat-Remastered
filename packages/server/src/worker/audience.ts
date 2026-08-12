@@ -107,11 +107,14 @@ async function gather(db: Db, request: AudienceRequest): Promise<string[]> {
      * two types were the ones still resolving to every club admin, so an owner running none of
      * the races got every race's join requests and every stranded car group in the club.
      *
-     * **This does not change who may decide.** `canManageRace` is still every club admin
-     * (PRD/09 rules 4 and 5), so an off-roster admin who opens the roster can still approve -
-     * they are simply not paged about a race they are not on. When a roster has no admin left
-     * on it, this resolves to nobody and the request waits on the roster screen rather than
-     * widening to people who are not involved. That is the founder's call, recorded here
+     * **Since 2026-08-12 this is also exactly who may decide.** `canManageRace` used to be every
+     * club admin, so this audience was narrower than the permission and an off-roster admin could
+     * approve a request nothing had paged them about. Management is now roster-gated too
+     * (`isRaceManager`), and the two finally describe the same set of people.
+     *
+     * When a roster has no admin left on it this resolves to nobody, and the request waits rather
+     * than widening to people who are not involved. That is the founder's call, and the way out is
+     * the Owner walking onto the roster (`canJoinRaceDirectly`) and sorting it out. Recorded here
      * because "notifies nobody" looks like a bug to anyone reading it cold.
      */
     case 'race_join_request':

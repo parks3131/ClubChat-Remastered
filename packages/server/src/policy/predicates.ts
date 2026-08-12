@@ -705,26 +705,66 @@ export const isRaceMember = (ctx: AccessContext, race: RaceRef): boolean =>
   ctx.raceRoster.has(race.id);
 
 /**
- * A manager of the race: any admin of its club.
+ * A manager of the race: an admin of its club who is **also on its roster**.
  *
- * **Management authority, not access.** A manager may approve and add roster members, edit
- * Meet Information, manage car groups and delete the race - and may not read its chat, vote
- * in its polls, or be assigned to a car group. Auto-joining every admin to every race was
- * built in v1 and then reversed, because an admin auto-added to 30 races drowns in chat for
- * races they are not running.
+ * > **Changed 2026-08-12, and it inverts what this file said for the life of the project.**
+ * > Management authority used to be `isClubAdmin` alone - any admin ran every race in the club
+ * > from outside it, while having no access to its chat. `PRD/02` called that "the
+ * > most-misunderstood part of the model, and it is deliberate". It is now simply: **you run the
+ * > races you are in.**
+ *
+ * What survives from the old model is the half that mattered - an admin is still not silently on
+ * thirty rosters, because joining is still by request and auto-join was built in v1 and reversed.
+ * What goes is the idea that authority reaches into a space its holder is not part of.
+ *
+ * Three things already lined up with this before the change, which is what made it small:
+ *
+ * - **The creator is put on the roster when the race is created**, so nobody makes a race they
+ *   cannot then run.
+ * - **Join requests already notified only the admins on that roster.** The old permission was
+ *   wider than the notification, so an off-roster admin could approve a request nothing had told
+ *   them about; the two now agree.
+ * - **`canJoinRaceDirectly` is Owner-only and already existed** for the roster with no admin left
+ *   on it. It is now the only way that race gets managed again, which is the founder's call:
+ *   the Owner joins and sorts it out rather than authority quietly widening.
  */
 export const isRaceManager = (ctx: AccessContext, race: RaceRef): boolean =>
-  isClubAdmin(ctx, race.clubId);
+  isRaceMember(ctx, race) && isClubAdmin(ctx, race.clubId);
 
 /** Reading and posting in race chat requires a roster row. Managers included. */
 export const canPostInRace = isRaceMember;
 
-/** Pinning or announcing in race chat requires BOTH a roster row and club-admin status. */
+/**
+ * Pinning or announcing in race chat requires BOTH a roster row and club-admin status.
+ *
+ * **Its body is now identical to `isRaceManager`, and it keeps its own name anyway** - failure
+ * mode 10: a capability with its own name in the spec gets its own predicate even when the body
+ * matches, because an alias is a claim that two things will never diverge. "May run this race"
+ * and "may pin in its chat" are different questions that currently share an answer.
+ */
 export const canPinInRace = (ctx: AccessContext, race: RaceRef): boolean =>
   isRaceMember(ctx, race) && isClubAdmin(ctx, race.clubId);
 
 /** Approving, adding, removing, editing Meet Information, deleting the race. */
 export const canManageRace = isRaceManager;
+
+/**
+ * Creating a race in a club. Any admin of that club.
+ *
+ * **Deliberately NOT `canManageRace`, and it takes a club id rather than a race.** A race that
+ * does not exist yet has no roster to be on, so the roster-gated manager predicate cannot express
+ * this and would refuse every creation if it were reused here. Creating is a club act; running
+ * the result is a race act, and the creator is put on the roster in the same transaction so the
+ * second follows from the first.
+ *
+ * It had no predicate at all until 2026-08-12 - `createRace` asked `isClubAdmin` inline - which is
+ * the failure mode 19 shape: a capability the spec names in its own matrix row, with nothing to
+ * grep for. It surfaced when management became roster-gated and the permission matrix modelled
+ * this row with `canManageRace`, which would have quietly started asserting that nobody can
+ * create a race.
+ */
+export const canCreateRace = (ctx: AccessContext, clubId: string): boolean =>
+  isClubAdmin(ctx, clubId);
 
 /**
  * Meet Information is readable by **any club member**, including those with no race access.
@@ -770,20 +810,25 @@ export const canJoinRaceDirectly = (ctx: AccessContext, race: RaceRef): boolean 
 export const canBeInCarGroup = isRaceMember;
 
 /**
- * Reading the roster. A race member, **or** a manager with no roster row.
+ * Reading the roster. A race member, **or any admin of the club**, who may change nothing.
  *
- * The only race read where management authority does grant sight, and the only union of
- * `isRaceMember` and `isRaceManager` in this file. PRD/09 rule 5 gives a manager who is not on
- * the roster exactly one thing - "a way into the roster to manage others" - so this is neither
- * of the two predicates it is built from, and takes its own name rather than a caller reaching
- * for whichever one looks close (failure mode 10).
+ * **The one thing an off-roster admin kept when management became roster-gated**, and the
+ * founder's explicit call: an admin fielding "who is driving to Cougars" can answer it without
+ * joining a race they are not going to. Seeing who is going is not authority over them.
  *
- * Note what it deliberately does not cover: the roster's **pending requests** go through
- * `canManageRace`, because who is waiting to be let in is decision-making data rather than
- * roster data, and a plain race member has no decision to make.
+ * > **Note it is NOT `isRaceMember || isRaceManager` any more, and writing it that way would
+ * > silently delete it.** `isRaceManager` now implies `isRaceMember`, so that union collapses to
+ * > the first term and every off-roster admin loses the roster. The second term has to be
+ * > `isClubAdmin`, spelled out, which is why this predicate no longer reads as the union of its
+ * > two neighbours - exactly the failure mode 10 shape, arrived at from the other direction: a
+ * > predicate that was a union becomes an alias when one of its arms moves under the other.
+ *
+ * What it deliberately does not cover: the roster's **pending requests** go through
+ * `canManageRace`, because who is waiting to be let in is decision-making data. So an off-roster
+ * admin sees the members and not the queue - they have no decision to make about either.
  */
 export const canReadRaceRoster = (ctx: AccessContext, race: RaceRef): boolean =>
-  isRaceMember(ctx, race) || isRaceManager(ctx, race);
+  isRaceMember(ctx, race) || isClubAdmin(ctx, race.clubId);
 
 /** Viewing the groups. Any race member, read-only unless they also manage. */
 export const canViewCarGroups = isRaceMember;

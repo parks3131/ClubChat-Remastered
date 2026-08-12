@@ -209,19 +209,33 @@ describe('races', () => {
     expect(ctx.raceRoster.has(race.raceId)).toBe(false);
   });
 
-  it('Meet Information is editable by any manager and readable by any club member', async () => {
+  it('Meet Information is editable from inside the race and refused from outside it', async () => {
+    /*
+     * **Inverted 2026-08-12.** This used to assert that ANY club admin could edit Meet
+     * Information, because management authority did not require a roster row. It does now: you
+     * run the races you are in. Reading is unchanged and stays open to every club member, which
+     * is what the request-to-join decision is made on (PRD/09 rule 13).
+     */
     const f = await setup();
     const race = await setupRace(f);
     const admin = await makeUser('OtherAdmin');
     await addMember(h.db, await ctxFor(f.ownerId), f.clubId, admin);
     await changeRole(h.db, await ctxFor(f.ownerId), f.clubId, admin, 'admin');
 
-    // Not the race's creator, and not on its roster.
-    const result = await updateMeetInformation(h.db, await ctxFor(admin), race.raceId, {
+    // An admin of the club, not the race's creator, and not on its roster.
+    const fromOutside = await updateMeetInformation(h.db, await ctxFor(admin), race.raceId, {
       meetDescription: 'Bus at 6am',
       meetHotelUrl: 'https://hotel.example',
     });
-    expect(result.ok).toBe(true);
+    expect(fromOutside.ok).toBe(false);
+
+    // The creator is on the roster, so they can - which is what keeps a race runnable by
+    // whoever made it.
+    const fromInside = await updateMeetInformation(h.db, await ctxFor(f.ownerId), race.raceId, {
+      meetDescription: 'Bus at 6am',
+      meetHotelUrl: 'https://hotel.example',
+    });
+    expect(fromInside.ok).toBe(true);
   });
 
   it('a plain member cannot edit Meet Information', async () => {

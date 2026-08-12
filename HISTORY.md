@@ -13,6 +13,79 @@ Newest first.
 
 ---
 
+## 2026-08-12 (close) - You run the races you are in
+
+The founder described the race model plainly, and it was not the one in the spec: an admin outside
+a race can see it, read its Meet Information and ask to join, and **cannot change any detail,
+manage the roster, or write in it**. Authority comes from being in the race.
+
+What that reverses is the most-cited rule in the document. `PRD/02` called the authority-versus-
+access split "the most-misunderstood part of the model, and it is deliberate"; `isRaceManager` and
+`isRaceMember` were named differently precisely so the distinction could not be collapsed by
+accident, and collapsing it was recorded as having been wrong in five separate places in v1.
+
+### The rule was already inconsistent with itself
+
+The argument that settled it was not "the founder said so". **A race join request is sent to the
+admins on that race's roster and to nobody else** - narrowed deliberately on 2026-08-05, because an
+owner running none of the club's races was being paged about every one of them. So the permission
+was strictly wider than the notification: an off-roster admin could approve a request that nothing
+had told them about, while the roster's own admins were the only people who knew it existed. Two
+halves describing different sets of people, and one of them had to be wrong.
+
+The change makes them the same set.
+
+### One definition moved seventeen call sites
+
+`isRaceManager` went from `isClubAdmin(race.clubId)` to `isRaceMember && isClubAdmin`, and that was
+the whole server change - every route already went through the policy module. This is the thing
+ADR-0002 was written for, and it is the first time the payoff has been this visible: seventeen
+places changed behaviour and none of them was edited.
+
+### Two things the change surfaced that nobody asked about
+
+**Creating a race had no predicate at all.** `createRace` asked `isClubAdmin` inline, and the
+permission matrix modelled its "Create a race" row with `canManageRace` - which had just become
+roster-gated. Left alone, the matrix would have started asserting that **nobody can create a race**,
+against code that still worked perfectly. It is `canCreateRace` now, taking a **club** id, because
+a race that does not exist has no roster to be on. Failure mode 19's shape: a capability the spec
+names in its own matrix row, with nothing to grep for.
+
+**`canReadRaceRoster` could not stay written as `isRaceMember || isRaceManager`.** Once the second
+term implies the first, that union collapses to `isRaceMember` and every off-roster admin silently
+loses the roster - the one thing the founder had explicitly said they keep. It spells `isClubAdmin`
+out now. Note the shape, because it is failure mode 10 arrived at from the other end: not an alias
+that hides a capability, but **a union that becomes an alias when one of its arms moves under the
+other**. Nothing fails; a predicate just quietly starts answering a narrower question.
+
+### The tests inverted rather than being deleted
+
+Nine assertions flipped, and the block named `authority is not access` became `you run the races
+you are in`. Two of them were the interesting ones:
+
+- The **property test** used to assert that every authority-gated capability was *allowed* to an
+  admin off the roster. It now asserts the opposite for those four, and a second test pins what an
+  off-roster admin still keeps - see, read Meet Information, read the roster, request, create, pin -
+  so "roster-gate everything" cannot pass either. A rule that only ever denies is the easy half.
+- The **HTTP-level test** attempts each management route as an off-roster admin and watches it 404.
+  The matrix proves the predicate; this proves every route asks it.
+
+### Left undone, deliberately
+
+**The client still shows the manage-from-outside screens.** The server refuses correctly, so nothing
+is exploitable, but a race hub reached by an off-roster admin still offers controls that now answer
+404. `PRD/09` rule 5 and `PRD/15`'s race tree are rewritten; the screens are not. Recorded in
+ADR-0027 as the follow-up rather than left to be discovered.
+
+### Verified
+
+1177 tests, typecheck, runtime parse, em-dash lint. Specs updated in the same change: `PRD/02` (the
+matrix rewritten to four columns), `PRD/09`, `PRD/10` - whose Race-versus-Eboard comparison had
+three rows made stale by this - `PRD/15`, `PRD/18`, `TECH/05`, and the authorization checklist,
+whose "authority versus access" section had been teaching the old rule to every future change.
+
+---
+
 ## 2026-08-12 (last) - The inbox learns whose face it is talking about
 
 Three changes to the notification list, asked for in that order: make it flat, make the rows

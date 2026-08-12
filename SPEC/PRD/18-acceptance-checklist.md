@@ -50,8 +50,15 @@ A remaster is at parity when every line below passes on **iOS, Android, and web*
 
 - [ ] Create with name and date; visible to every club member.
 - [ ] A no-access member sees the preview (name, date, Meet Information) and can request.
-- [ ] **An admin who is not on the roster cannot open race chat or race polls and cannot be
-      assigned to a car group**, but can manage the roster and edit Meet Information.
+- [ ] **An admin who is not on the roster manages nothing** - cannot approve a request, add or
+      remove a member, edit Meet Information, touch a car group, or delete the race, and cannot
+      open its chat or polls or be seated in a car. **Attempted directly, not by checking the
+      buttons are hidden.**
+- [ ] That same admin **can** still create a race, see this one, read its Meet Information, read
+      its roster, and ask to join - and **cannot** see who else is waiting to join.
+- [ ] The race's **creator is on its roster**, so the person who made it can run it.
+- [ ] The **Owner** is refused the same management from outside a race, and can walk onto the
+      roster with no request - after which they can run it.
 - [ ] A race member entering the race lands in race chat.
 - [ ] Meet Information saves as one form; empty description/location/hotel hidden; empty
       photos/results show the placeholder.

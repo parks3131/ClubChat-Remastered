@@ -8,13 +8,21 @@ their membership models are opposites:
 | | Race | Eboard and Council |
 |---|---|---|
 | Who may be a member | Any club member | Club admins only |
-| How a member gets in | Requests, or is added by any club admin | **Automatically, on becoming admin-tier** |
+| How a member gets in | Requests, or is added by an admin **on that roster** | **Automatically, on becoming admin-tier** |
 | Does admin status grant membership? | **No** | **Yes** - promotion auto-joins, demotion auto-removes |
-| Who approves requests / adds members | Any club admin, from outside | **Existing members only** |
-| Who can remove a member | Any club manager | **The club Owner only** |
+| Who approves requests / adds members | An admin **on that roster** | **Existing members only** |
+| Who can remove a member | An admin on that roster | **The club Owner only** |
 | How many per club | Many | Exactly one |
 | Who can create one | Any club admin | Nobody - created with the club |
-| Who can create content inside | Admins only (polls) | **Any member** (meetings and polls) |
+| Who can create content inside | Admins on the roster (polls) | **Any member** (meetings and polls) |
+
+> **The two spaces stopped disagreeing about authority on 2026-08-12.** Three rows above used to
+> read "any club admin, from outside", which was the real difference between them: a race could be
+> run by somebody who was not in it, and the Eboard never could. Now neither can, and **the only
+> difference left is how you get in** - Eboard membership follows the admin tier automatically,
+> while a race roster is joined by request. That one difference still produces very different
+> reach, because an admin is inside every Eboard by construction and inside only the races they
+> asked to be in.
 
 The consequence worth stating plainly: **the request-to-join path exists, but in normal
 operation nobody uses it.** It matters only for an admin who deliberately left and wants back
@@ -80,8 +88,9 @@ in.
 
 **Rejected alternatives.** Manual "+ Create" the first time (pure friction; every club wants
 one). Keeping the original request-only model (leadership churn meant the space drifted out
-of sync with who was actually an admin). Reusing Race's model wholesale (race separates
-authority from access; for Eboard the two are the same thing). Letting "any club admin"
+of sync with who was actually an admin). Reusing Race's model wholesale (**at the time** race
+separated authority from access and Eboard did not; since 2026-08-12 neither does, so what remains
+is the joining model - by request for a race, automatic here). Letting "any club admin"
 approve (an admin outside the space could add themselves in, defeating the privacy boundary).
 Mutual removal (highest-trust space in the product). Any-member meeting EDITING (**two
 explicit founder follow-ups** after meetings first shipped) - note that any-member

@@ -146,6 +146,7 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0024](decisions/0024-every-member-holds-the-clubs-invite-link.md) | Every member holds the club's invite link, and only an admin can rotate it |
 | [0025](decisions/0025-a-members-invite-link-obeys-the-join-policy.md) | A club has two invite links, and a member's obeys the join policy |
 | [0026](decisions/0026-filter-hate-speech-not-profanity.md) | Filter hate speech, not profanity, and send the ambiguous cases to a human |
+| [0027](decisions/0027-race-management-requires-a-roster-row.md) | Managing a race requires a roster row |
 
 ## Templates
 

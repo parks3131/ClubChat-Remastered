@@ -37,6 +37,8 @@ import {
   isChannelMember,
   sharesAClub,
   canManageCarGroups,
+  canCreateRace,
+  canJoinRaceDirectly,
   canManageClubContent,
   canManageEboardMembers,
   canManageJoinRequests,
@@ -51,6 +53,7 @@ import {
   canPostInRace,
   canReadClubContent,
   canReadMeetInformation,
+  canReadRaceRoster,
   canRemoveEboardMember,
   canRemoveMember,
   canRequestRaceAccess,
@@ -241,8 +244,13 @@ type RaceRow = {
 
 const raceMatrix: RaceRow[] = [
   {
+    /*
+     * The one race capability an off-roster admin keeps, and it has to be modelled with its own
+     * predicate rather than with `canManageRace`. A race that does not exist has no roster, so
+     * asking the roster-gated predicate here would assert that nobody can create one.
+     */
     action: 'Create a race',
-    run: (c) => canManageRace(c, race),
+    run: (c) => canCreateRace(c, CLUB),
     manager: true,
     rosteredManager: true,
     raceMember: false,
@@ -281,7 +289,8 @@ const raceMatrix: RaceRow[] = [
   {
     action: 'Approve/deny requests, add or remove roster members',
     run: (c) => canManageRace(c, race),
-    manager: true,
+    // Roster-gated since 2026-08-12: you run the races you are in.
+    manager: false,
     rosteredManager: true,
     raceMember: false,
     clubMemberOffRoster: false,
@@ -308,9 +317,10 @@ const raceMatrix: RaceRow[] = [
     outsider: false,
   },
   {
+    // Readable by every club member (above), editable only from inside the race.
     action: 'Edit Meet Information',
     run: (c) => canManageRace(c, race),
-    manager: true,
+    manager: false,
     rosteredManager: true,
     raceMember: false,
     clubMemberOffRoster: false,
@@ -319,7 +329,7 @@ const raceMatrix: RaceRow[] = [
   {
     action: 'Create/delete car groups, assign members, set Incharge',
     run: (c) => canManageCarGroups(c, race),
-    manager: true,
+    manager: false,
     rosteredManager: true,
     raceMember: false,
     clubMemberOffRoster: false,
@@ -405,14 +415,24 @@ describe('PRD/02 matrix: Race', () => {
   });
 });
 
-describe('authority is not access', () => {
+describe('you run the races you are in', () => {
   /**
-   * The property behind the five places v1 got this wrong, asserted once rather than
-   * row by row: for every capability requiring race ACCESS, a club admin off the roster is
-   * denied while the same admin on the roster is allowed. The only difference between the
-   * two contexts is a roster row.
+   * **This block asserted the opposite property until 2026-08-12**, and the inversion is the
+   * point rather than a rename.
+   *
+   * The old rule: a club admin managed every race in the club from outside it, and only *access*
+   * needed a roster row. `PRD/02` called that the most-misunderstood part of the model. The new
+   * rule is simply that management needs a roster row too - an admin outside a race gets what any
+   * club member gets.
+   *
+   * What survives unchanged is the half that mattered: an admin is still not silently on thirty
+   * rosters, because joining is still by request. What goes is authority reaching into a space its
+   * holder is not part of.
+   *
+   * Asserted as a property here rather than row by row, because the five places v1 got the old
+   * rule wrong were all places somebody reached for the predicate that looked close.
    */
-  it('every access-gated race capability is denied to a manager off the roster', () => {
+  it('every roster-gated race capability is denied to an admin off the roster', () => {
     const accessGated: Array<[string, (c: AccessContext) => boolean]> = [
       ['read/post in race chat', (c) => canPostInRace(c, race)],
       ['pin in race chat', (c) => canPinInRace(c, race)],
@@ -432,25 +452,64 @@ describe('authority is not access', () => {
           }),
       ],
       ['post in the race channel', (c) => canPostInChannel(c, raceChannel)],
+      // The four that moved under this rule on 2026-08-12.
+      ['manage the race', (c) => canManageRace(c, race)],
+      ['manage car groups', (c) => canManageCarGroups(c, race)],
+      ['approve a join request', (c) => canManageRace(c, race)],
+      ['edit Meet Information', (c) => canManageRace(c, race)],
     ];
 
     for (const [label, run] of accessGated) {
-      expect(run(raceActors.manager), `manager off roster was allowed to ${label}`).toBe(false);
-      expect(run(raceActors.rosteredManager), `rostered manager was denied ${label}`).toBe(true);
+      expect(run(raceActors.manager), `admin off roster was allowed to ${label}`).toBe(false);
+      expect(run(raceActors.rosteredManager), `rostered admin was denied ${label}`).toBe(true);
     }
   });
 
-  it('every authority-gated race capability is allowed to a manager off the roster', () => {
-    // The converse: losing chat access must not cost them the management they legitimately
-    // hold, which is what a naive "just require a roster row for everything" would do.
-    const authorityGated: Array<[string, (c: AccessContext) => boolean]> = [
-      ['manage the race', (c) => canManageRace(c, race)],
-      ['manage car groups', (c) => canManageCarGroups(c, race)],
+  it('an admin off the roster keeps exactly the club-level capabilities, and no more', () => {
+    /*
+     * The converse, and it is what stops this becoming "an off-roster admin can do nothing".
+     * Each of these is a club act rather than a race act, and each was decided deliberately:
+     *
+     * - seeing a race and reading its Meet Information is how somebody decides whether to ask
+     *   to go, so hiding it would make the request uninformed (PRD/09 rule 13);
+     * - reading the ROSTER is the founder's explicit call - an admin fielding "who is driving
+     *   to Cougars" can answer without joining a race they are not going to;
+     * - creating a race cannot need a roster row on a race that does not exist yet;
+     * - pinning is personal and was never admin-gated at all.
+     */
+    const keeps: Array<[string, (c: AccessContext) => boolean]> = [
+      ['see the race exists', (c) => canSeeRace(c, race)],
       ['read Meet Information', (c) => canReadMeetInformation(c, race)],
+      ['read the roster', (c) => canReadRaceRoster(c, race)],
+      ['request to join', (c) => canRequestRaceAccess(c, race)],
+      ['create a race', (c) => canCreateRace(c, CLUB)],
+      ['pin the race to their own hub', (c) => canPinRace(c, race)],
     ];
-    for (const [label, run] of authorityGated) {
-      expect(run(raceActors.manager), `manager was denied ${label}`).toBe(true);
+    for (const [label, run] of keeps) {
+      expect(run(raceActors.manager), `admin off roster was denied ${label}`).toBe(true);
     }
+  });
+
+  it('reading the roster does not leak the pending queue', () => {
+    // canReadRaceRoster is deliberately wider than canManageRace: an off-roster admin sees who
+    // is going and not who is waiting, because they have no decision to make about either.
+    expect(canReadRaceRoster(raceActors.manager, race)).toBe(true);
+    expect(canManageRace(raceActors.manager, race)).toBe(false);
+  });
+
+  it('the Owner has no authority over a race from outside it either', () => {
+    /*
+     * The rule has no rank exemption: the Owner's route in is `canJoinRaceDirectly`, which is
+     * theirs alone and is the escape hatch for a roster with no admin left on it. Managing from
+     * outside would have kept the old model alive for one person and left the spec describing
+     * two rules.
+     */
+    const owner = accessContextOf({ userId: 'u-owner', clubRole: [[CLUB, 'owner']] });
+    expect(canManageRace(owner, race)).toBe(false);
+    expect(canManageCarGroups(owner, race)).toBe(false);
+    // But they can walk straight onto the roster, which nobody else can.
+    expect(canJoinRaceDirectly(owner, race)).toBe(true);
+    expect(canJoinRaceDirectly(raceActors.manager, race)).toBe(false);
   });
 
   it('a race member is not thereby a club admin', () => {
@@ -625,16 +684,19 @@ describe('PRD/02 matrix: Eboard and Council', () => {
   });
 
   it('how Eboard differs from Race, stated as a test', () => {
-    // Both are mini-clubs nested under a club, and their membership models are opposites.
-    // For a race, authority and access are separate. For the Eboard they are the same
-    // thing - which is why an admin's promotion auto-joins the space while it grants nothing
-    // for a race.
+    /*
+     * Both are mini-clubs nested under a club, and **since 2026-08-12 they agree about
+     * authority**: in neither can an admin outside the space manage it. This test used to assert
+     * the opposite for a race, which was the whole distinction between the two.
+     *
+     * What still differs is how you get IN, and that is now the only difference: Eboard
+     * membership follows the admin tier automatically, while a race roster is joined by request.
+     * So an admin is inside every Eboard by construction and inside only the races they asked to
+     * be in - which is why the same rule produces very different reach in the two spaces.
+     */
     const adminNoRoster = accessContextOf({ userId: ADMIN, clubRole: [[CLUB, 'admin']] });
-    // Race: manages but cannot enter.
-    expect(canManageRace(adminNoRoster, race)).toBe(true);
+    expect(canManageRace(adminNoRoster, race)).toBe(false);
     expect(isRaceMember(adminNoRoster, race)).toBe(false);
-    // Eboard: an admin outside the space cannot manage it either - there is no
-    // manage-without-access position at all.
     expect(canManageEboardMembers(adminNoRoster, EBOARD)).toBe(false);
   });
 });

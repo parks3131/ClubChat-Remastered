@@ -188,13 +188,16 @@ Chats  (every club chat and DM, newest first; chips: Unread | DMs | Clubs)
 
 ```
 Race preview            (club member without access: name, date, Meet Info, Request to join)
-Race hub                (manager without a roster row: request + Manage roster)
+Race hub                (anybody off the roster, admin or not: preview + Request to join,
+                         plus the roster read-only for an admin)
 Race chat               ← a real race member is redirected straight here
 ├─ Highlights
 ├─ Gallery
-├─ Race profile → Edit race (manager)
-├─ Roster               (approve/deny/add/remove; manager)
-├─ Meet Information     (five fields, one form; edit = manager)
+├─ Race profile → Edit race (admin ON the roster)
+├─ Roster               (read: any race member or club admin;
+                         approve/deny/add/remove: admin ON the roster)
+├─ Meet Information     (five fields, one form; read = any club member,
+                         edit = admin ON the roster)
 ├─ Car Assignments and Groups
 └─ Polls
 ```

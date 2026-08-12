@@ -32,7 +32,7 @@ import {
   canRequestRaceAccess,
   canSeeRace,
   canViewCarGroups,
-  isClubAdmin,
+  canCreateRace,
   isClubMember,
   isRaceManager,
   isRaceMember,
@@ -77,7 +77,7 @@ export async function createRace(
   ctx: AccessContext,
   input: { clubId: string; name: string; raceDate?: string | null | undefined },
 ): Promise<Result<{ raceId: string; channelId: string }>> {
-  if (!isClubAdmin(ctx, input.clubId)) return { ok: false, code: 'forbidden' };
+  if (!canCreateRace(ctx, input.clubId)) return { ok: false, code: 'forbidden' };
 
   return db.transaction(async (tx) => {
     const raceRows = await tx

@@ -18,12 +18,19 @@ Run through this for **any** new resource, endpoint, or scope. Derived from the 
       silently excludes a club whose only admin-tier member is the Owner - which is every
       brand-new club. This shipped four separate times in v1.
 
-## Authority versus access
+## Membership, not rank
 
-- [ ] Does this confuse **management authority** with **access**? A club admin may manage every
-      race in the club and still have no right to read its chat. Substituting an admin check for
-      a roster row was wrong in five separate places in v1.
-- [ ] Is the membership row the sole source of truth for access, with no shortcut?
+- [ ] Does this reach a nested space from a **club** role rather than from a membership row?
+      Substituting an admin check for a roster row was wrong in five separate places in v1, and
+      **since 2026-08-12 it is wrong in a second way**: it no longer even grants management. A
+      club admin outside a race manages nothing in it. See
+      [ADR-0027](../decisions/0027-race-management-requires-a-roster-row.md).
+- [ ] Is the membership row the sole source of truth, for **authority as well as access**? This
+      checklist asked only about access until that ADR, on the reasoning that authority
+      legitimately came from the club - which is exactly the assumption that changed.
+- [ ] Does the capability belong to the **club** or to the **space**? The two legitimate club acts
+      over a race are creating one, which cannot need a roster row on something that does not
+      exist, and reading its roster. Anything else is a space act and needs the row.
 
 ## Per scope
 

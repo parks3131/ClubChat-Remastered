@@ -37,7 +37,9 @@ const isClubMember  = (ctx, club) => ctx.clubRole.has(club)
 const isClubAdmin   = (ctx, club) => ['owner','admin'].includes(ctx.clubRole.get(club))
 const isClubOwner   = (ctx, club) => ctx.clubRole.get(club) === 'owner'
 const isRaceMember  = (ctx, race) => ctx.raceRoster.has(race)          // roster row ONLY
-const isRaceManager = (ctx, race) => isClubAdmin(ctx, race.clubId)     // authority ≠ access
+// You run the races you are in. Was isClubAdmin alone until 2026-08-12; see below.
+const isRaceManager = (ctx, race) => isRaceMember(ctx, race) && isClubAdmin(ctx, race.clubId)
+const canCreateRace = (ctx, clubId) => isClubAdmin(ctx, clubId)        // a CLUB act, takes a club
 const canPostInRace = (ctx, race) => isRaceMember(ctx, race)
 const canPinInRace  = (ctx, race) => isRaceMember(ctx, race) && isClubAdmin(ctx, race.clubId)
 const isEboardMember= (ctx, eb)   => ctx.eboardMember.has(eb)
@@ -204,20 +206,33 @@ The most-misunderstood rule in the product ([Roles and permissions](../PRD/02-ro
 named, documented predicates so the distinction cannot be accidentally collapsed:
 
 ```
-isRaceManager     - may approve, add, remove, edit Meet Info, delete the race
-isRaceMember      - may read/post chat, vote in race polls, be assigned to a car group
-canReadRaceRoster - EITHER of the above. The one race read authority does grant
+isRaceMember      - a roster row. May read/post chat, vote in race polls, be in a car group
+isRaceManager     - a roster row AND club admin. May approve, add, remove, edit Meet Info,
+                    manage car groups, delete the race
+canCreateRace     - club admin. Takes a CLUB id, because the race does not exist yet
+canReadRaceRoster - a roster row OR club admin. Sees the members, never the pending queue
 ```
 
-Nothing in the codebase is allowed to write `isClubAdmin(ctx, race.clubId)` where race *access*
-is meant. Lint rule candidate; test coverage minimum.
+> **`isRaceManager` gained its `isRaceMember` term on 2026-08-12, and that inverted this whole
+> section.** It used to be `isClubAdmin` alone, and this document's heading - "where authority
+> stops" - described a boundary between *authority* and *access*: an admin ran every race in the
+> club and could not read any of their chats. The rule is now simply **you run the races you are
+> in**, so authority and access have the same gate and there is no boundary left to misplace.
+>
+> Nothing in the codebase may still write `isClubAdmin(ctx, race.clubId)` where a race capability
+> is meant - the substitution that was wrong in five places in v1 is now wrong in a *second* way,
+> because it no longer even grants management. The two places `isClubAdmin` is legitimately asked
+> about a race are the two club acts: `canCreateRace` and the second arm of `canReadRaceRoster`.
 
-`canReadRaceRoster` is the only union of the two in the module, and it exists because
-[Races and Meets](../PRD/09-races-and-meets.md) rule 5 gives a manager with no roster row exactly
-one thing: a way into the roster to manage others. Its neighbour is the counter-example worth
-keeping in view - the roster's **pending requests** go through `canManageRace` instead, because
-who is waiting to be let in is decision-making data and a plain race member has no decision to
-make.
+`canReadRaceRoster` is the one race read an off-roster admin keeps, and **it is no longer the union
+of its two neighbours**: writing it as `isRaceMember || isRaceManager` would silently delete it,
+since the second term now implies the first. It has to spell `isClubAdmin` out. Its neighbour is the
+counter-example worth keeping in view - the roster's **pending requests** go through
+`canManageRace` instead, because who is waiting to be let in is decision-making data, and neither a
+plain race member nor an off-roster admin has a decision to make.
+
+`canPinInRace` now has a body identical to `isRaceManager` and keeps its own name regardless, per
+failure mode 10: an alias is a claim that two capabilities will never diverge.
 
 ### Revocation is a per-request question
 

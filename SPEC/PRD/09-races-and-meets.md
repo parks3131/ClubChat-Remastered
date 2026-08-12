@@ -19,9 +19,11 @@ logistics - replacing the throwaway group chat spun up per race.
 2a. **The list is ordered by when each was created, newest first**, with the viewer's pinned
    races above everything. Not by date - an undated group has none - and not alphabetical, which
    would reshuffle on every addition and never show the newest thing.
-3. **Access is always by request.** There is no "open" race policy. A club member requests;
-   any club admin approves, denies, or adds them directly. An admin may not add *themselves* -
-   adding yourself is joining, and joining is by request.
+3. **Access is always by request.** There is no "open" race policy. A club member requests; **an
+   admin on that race's roster** approves, denies, or adds them directly. An admin may not add
+   *themselves* - adding yourself is joining, and joining is by request. *(Until 2026-08-12 this
+   read "any club admin", which was wider than the notification that told them about it - the
+   request has always been sent to the roster's admins alone. The permission now matches the page.)*
 
    3a. **The Owner, and only the Owner, may join a race outright**, with no request and nobody
    to approve it. It exists for the roster with no admin left on it: a race join request goes
@@ -30,6 +32,12 @@ logistics - replacing the throwaway group chat spun up per race.
    could walk onto any roster would make rule 4 true only until they chose otherwise. Once on
    the roster the Owner is an ordinary race member who also manages the club.
 
+   **Since 2026-08-12 this is the Owner's only route to a race**, and it carries more weight than
+   it did. Management is roster-gated, so a race whose roster loses its last admin is unmanaged
+   until somebody joins it - and the Owner walking on is the one move that needs nobody's approval.
+   The alternative, letting requests fall back to the whole admin tier, was rejected: it would put
+   a hole in the rule the moment the rule was most likely to be tested.
+
    3b. **Adding people is a pick list, not a search box.** The race form and the race roster
    both show the club's members straight away, to be scrolled and tapped; a selected person is
    tinted with the accent so the answer to "who have I chosen" is the list already on screen.
@@ -37,11 +45,27 @@ logistics - replacing the throwaway group chat spun up per race.
    selection is added in one act. **The club roster is deliberately the exception** and stays
    type-to-search: its pool is everybody you share *any* club with, which is not a list anybody
    reads down. The Eboard roster picks, like a race.
-4. **A club admin is a "manager" of every race in their club** - full management authority -
-   but **management authority is not access**. Chat, polls, and car-group assignment all
-   require a real roster row, for admins too.
-5. **A manager not on the roster** sees a request-to-join screen plus a way into the roster to
-   manage others, not the race itself.
+4. **You run the races you are in.** A club admin manages a race when they are **on its roster**,
+   and not otherwise - approve, add, remove, edit Meet Information, manage car groups, edit its
+   identity, delete it. An admin outside the race has a club member's powers over it.
+
+   *(Changed 2026-08-12. This rule used to read "a club admin is a manager of every race in their
+   club - full management authority - but management authority is not access", and it was the
+   most-cited rule in the spec. What survives is the half that mattered: an admin is not silently
+   on thirty rosters, because joining is still by request and auto-join stays reversed. What goes
+   is authority reaching into a space its holder is not part of.)*
+
+   4a. **The creator is put on the roster when the race is created**, so whoever makes a race can
+   run it. This was already true and is now load-bearing rather than a convenience.
+
+   4b. **Two things an admin outside the race keeps**, and both are club acts rather than race
+   acts: **creating** a race - which cannot require a roster row on a race that does not exist -
+   and **reading the roster**, so somebody fielding "who is driving to Cougars" can answer without
+   joining a race they are not going to. They do **not** see who is waiting to join: that is
+   decision-making data and they have no decision to make.
+5. **An admin not on the roster sees the same preview any club member sees** - name, date, Meet
+   Information, and the request action - plus the roster, read-only. There is no manage-from-outside
+   screen any more.
 6. **A club member with no access who taps a race gets a preview**: name, its date if it has
    one, Meet Information, and the request action. Nothing member-only is exposed.
 7. **A race member is redirected straight into race chat** on entering the race. Chat is the
@@ -73,7 +97,8 @@ logistics - replacing the throwaway group chat spun up per race.
 
 10. **Five fields, edited together as one form**: description, race/event location link,
     hotel link, photos link, results link.
-11. **Any manager can edit all five** - not restricted to whoever created the race.
+11. **Any admin on the roster can edit all five** - not restricted to whoever created the race. An
+    admin who is not on the roster reads them like any club member and cannot write them (rule 4).
 12. **Empty-state behaviour differs per field, deliberately:** description, location, and
     hotel are **hidden entirely** when empty; photos and results **always show a "stay tuned"
     placeholder**. (Photos and results are expected later; a missing hotel link usually means
