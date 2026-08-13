@@ -185,9 +185,23 @@ export function formatClock(iso: string): string {
  *
  * Split rather than formatted into one string because the two render at different sizes, and
  * building it here keeps the date-only parsing rule in one place.
+ *
+ * **`allDay` is required, and it is the entire correctness of this function.** The two inputs need
+ * opposite handling and look identical at the call site:
+ *
+ * - A **date-only** `YYYY-MM-DD` is a day, and `new Date()` would read it as UTC midnight - which
+ *   is the day before, anywhere west of Greenwich. It is built from split components instead.
+ * - An **instant** already carries a zone, so its day is whatever the reader's clock says. Slicing
+ *   the first ten characters off it takes the UTC day, which is the *next* one for anything after
+ *   early evening in a negative offset.
+ *
+ * > It shipped as the second of those. `EventRow` passed `FeedItem.at` - a field whose own
+ * > docstring says never to parse it without checking the flag beside it - straight in, so a 9pm
+ * > event was chipped with tomorrow's date on the calendar feed. The parameter is required rather
+ * > than defaulted so that a caller has to say which of the two it holds.
  */
-export function bibParts(iso: string): { day: number; month: string } {
-  const date = fromDateKey(iso.slice(0, 10));
+export function bibParts(iso: string, allDay: boolean): { day: number; month: string } {
+  const date = allDay ? fromDateKey(iso.slice(0, 10)) : new Date(iso);
   return {
     day: date.getDate(),
     month: date.toLocaleDateString(undefined, { month: 'short' }).toUpperCase(),

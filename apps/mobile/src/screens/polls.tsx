@@ -18,18 +18,32 @@
  *  3. **Only the creator closes, reopens or deletes** - including an admin who did not create it.
  *     `isCreator` is the flag, never a role.
  *
- * The look is v1's: a status pill and countdown on top, the vote tally, the question at headline
- * weight, and a single full-width call to action whose wording changes with the state.
+ * **Two surfaces, two references, and neither is v1's any more.** A poll being *read* is a
+ * [content card](../content-card.tsx) - the eyebrow, the question, and option rows that are
+ * themselves the tally bars. A poll being *made* is the composer below, built from
+ * [the composer kit](../composer-kit.tsx): small type, sections separated by air, and the action
+ * in the header. Both came from founder references on 2026-08-13.
  */
 
 import type { ReactNode } from 'react';
 import { useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { pollApi, type PollScope } from '../api.ts';
 import type { PollSummary, PollView } from '../api-types.ts';
-import { formatCountdown, formatInstant } from '../dates.ts';
+import { formatCountdown, formatInstant, fromDateKey, toDateKey } from '../dates.ts';
+import { CardEyebrow, CardMeta, CardTitle, ContentCard } from '../content-card.tsx';
+import {
+  AddRow,
+  ComposerField,
+  HeaderAction,
+  SectionLabel,
+  SettingNote,
+  SettingRow,
+  SettingValue,
+  Wheel,
+} from '../composer-kit.tsx';
 import { useReturnTo } from '../nav.tsx';
 import { color, radius, space, type } from '../theme.ts';
 import {
@@ -51,6 +65,16 @@ import { useLoad } from '../use-load.ts';
 
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 10;
+
+/**
+ * The gutter the eye sits in, at the right end of an option row.
+ *
+ * A shared number because two styles have to agree about it: the eye is absolutely positioned in
+ * it, and the vote target reserves exactly this much padding so the count never slides under the
+ * glyph. Written twice, the two drift and the collision reappears at some option count nobody
+ * tested.
+ */
+const EYE_GUTTER = 40;
 
 /**
  * The status pill, and the countdown beside it.
@@ -299,51 +323,64 @@ function NewPollPrompt({ onPress }: { onPress: () => void }) {
     </View>
   );
 }
-
 /**
- * The Ends chips, and the units behind Custom. Both are v1's, verbatim.
+ * How long from now the deadline is, given the moment the composer is showing.
  *
- * Everything is expressed in **minutes** because the server takes `closesInMinutes` and computes
- * the instant itself. v1 sent an absolute `closesAt` computed on the device, which makes the
- * deadline depend on the phone's clock agreeing with the server's - a handset an hour fast
- * silently creates a poll that closes an hour early. The duration crosses the wire instead, and
- * the only clock that matters is the one that writes the row.
+ * **The wire still carries a duration, and that has not changed.** The server takes
+ * `closesInMinutes` and computes the instant itself, so the only clock that decides when a poll
+ * shuts is the one that writes the row. v1 sent an absolute `closesAt` from the device, which
+ * makes the deadline depend on the handset agreeing with the server - a phone an hour fast
+ * silently created a poll that closed an hour early.
  *
- * > v1's own note on why this section exists at all is worth keeping: the Stitch create-poll
- * > mockup had no deadline field, and relative duration chips rather than an absolute date and
- * > time picker was a decision confirmed with the founder before it was designed.
+ * > **The picker in front of it went the other way on 2026-08-13.** Relative chips rather than a
+ * > date and time picker had been "a decision confirmed with the founder before it was designed";
+ * > he sent a reference with an absolute wheel and chose it over keeping the chips. So the screen
+ * > now asks for a moment and this function turns it back into a duration.
+ *
+ * Both sides of the subtraction read the same clock, so a skewed phone still produces the right
+ * *elapsed* time - the poll runs for as long as the member meant it to. What skew now costs is
+ * that the wall-clock moment it closes at can differ from the label they picked, by however wrong
+ * their phone is. That is the better of the two failures and worth stating plainly: the previous
+ * one silently truncated the poll, this one lands it a little off a time nobody but the picker
+ * ever sees.
+ *
+ * **Whole minutes, so the stored instant sits within 30 seconds of the one that was picked.**
+ * Measured: a poll set for 10:15 was written as 10:15:15. The wheel's own granularity is five
+ * minutes, so this is well inside what the control can express - but it is why the deadline is
+ * not exactly the second on the label, and why nothing here should ever start displaying seconds.
  */
-const ENDS_CHIPS = [
-  { key: 'none', label: 'No deadline', minutes: null },
-  { key: '1d', label: '1 Day', minutes: 24 * 60 },
-  { key: '3d', label: '3 Days', minutes: 3 * 24 * 60 },
-  { key: '1w', label: '1 Week', minutes: 7 * 24 * 60 },
-  { key: 'custom', label: 'Custom', minutes: null },
-] as const;
+function minutesUntil(target: Date, now: number): number | null {
+  const minutes = Math.round((target.getTime() - now) / 60_000);
+  return minutes >= 1 ? minutes : null;
+}
 
-type EndsChoice = (typeof ENDS_CHIPS)[number]['key'];
+/** Minute granularity on the wheel. Five is v1's, and 60 rows of minutes is not a picker. */
+const MINUTE_STEP = 5;
+/** How far ahead a deadline can be set. A club decides things inside a season. */
+const DAYS_AHEAD = 365;
 
-const CUSTOM_UNITS = [
-  { key: 'minutes', label: 'Min', minutes: 1 },
-  { key: 'hours', label: 'Hrs', minutes: 60 },
-  { key: 'days', label: 'Days', minutes: 24 * 60 },
-] as const;
-
-type CustomUnit = (typeof CUSTOM_UNITS)[number]['key'];
+/** The moment a `{ day, hour, minute }` selection names, built from components rather than parsed. */
+function momentFrom(dateKey: string, hour: number, minute: number): Date {
+  const date = fromDateKey(dateKey);
+  date.setHours(hour, minute, 0, 0);
+  return date;
+}
 
 /**
- * The composer, in v1's shape: four cards, then the call to action.
+ * The composer.
  *
  * **Every control here maps to a column that already existed.** `allowMultiple`, `isPrivate` and
  * `closesAt` were in the schema and on the wire before this screen drew them, so the whole of
  * this is a client change - no migration, no new route.
  *
- * Two deliberate departures from v1's file, both for reasons that outlive the look:
+ * The shape is the founder's 2026-08-13 reference, in this app's tokens: small type, sections
+ * separated by air rather than by cards, and the primary action in the header. That last one is
+ * not only a look - the deadline wheel expands in place, and a trailing button would be pushed
+ * off screen exactly when somebody is finishing the form.
  *
- *  1. **The deadline goes over the wire as a duration, not a date.** See `ENDS_CHIPS`.
- *  2. **The back control lives in the screen.** v1 had a create route of its own and leaned on the
- *     navigation header; here the composer replaces the list inside one route, so a header back
- *     button would leave polls entirely rather than return to them.
+ * The back control lives in the screen rather than in a navigation header, because the composer
+ * replaces the list inside one route - a header back button would leave polls entirely rather
+ * than return to them.
  */
 function CreatePoll({
   scope,
@@ -358,9 +395,9 @@ function CreatePoll({
 }) {
   const [question, setQuestion] = useState('');
   const [options, setOptions] = useState<string[]>(['', '']);
-  const [ends, setEnds] = useState<EndsChoice>('none');
-  const [customAmount, setCustomAmount] = useState('');
-  const [customUnit, setCustomUnit] = useState<CustomUnit>('hours');
+  /** Null is "no deadline", which `PRD/11` rule 8 says a poll is allowed to have. */
+  const [endsAt, setEndsAt] = useState<Date | null>(null);
+  const [pickingEnd, setPickingEnd] = useState(false);
   const [multiple, setMultiple] = useState(false);
   const [isPrivate, setPrivate] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
@@ -369,21 +406,58 @@ function CreatePoll({
   const filled = options.map((o) => o.trim()).filter((o) => o.length > 0);
 
   /*
-   * Parsed once and used for both the enabled state and the payload, so what the button says is
-   * possible and what actually gets sent can never disagree.
+   * The wheel's day column: today, then a year of days.
+   *
+   * Built once per render from `toDateKey`, which is the local-date rule this app already holds -
+   * a day column assembled by adding 86,400,000 milliseconds a hundred times drifts across a
+   * daylight-saving boundary and starts naming the wrong weekdays.
    */
-  const amount = Number(customAmount);
-  const customValid = Number.isInteger(amount) && amount >= 1;
+  const today = new Date();
+  const days = Array.from({ length: DAYS_AHEAD }, (_, offset) => {
+    const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset);
+    return {
+      key: toDateKey(date),
+      label:
+        offset === 0
+          ? 'Today'
+          : date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }),
+    };
+  });
+  const hours = Array.from({ length: 24 }, (_, hour) => ({
+    key: String(hour),
+    label: String(hour).padStart(2, '0'),
+  }));
+  const minutes = Array.from({ length: 60 / MINUTE_STEP }, (_, index) => ({
+    key: String(index * MINUTE_STEP),
+    label: String(index * MINUTE_STEP).padStart(2, '0'),
+  }));
 
-  const valid =
-    question.trim().length > 0 && filled.length >= MIN_OPTIONS && (ends !== 'custom' || customValid);
+  /*
+   * What the wheel shows while it is open but nothing has been chosen: tomorrow, at this hour.
+   *
+   * A wheel that opens on "now" is a deadline that has already passed by the time anybody scrolls
+   * it, and one that opens on nothing has no rows lit at all.
+   */
+  const shown = endsAt ?? momentFrom(days[1]?.key ?? days[0]!.key, today.getHours(), 0);
 
-  const closesInMinutes =
-    ends === 'custom'
-      ? customValid
-        ? amount * (CUSTOM_UNITS.find((u) => u.key === customUnit)?.minutes ?? 60)
-        : null
-      : (ENDS_CHIPS.find((c) => c.key === ends)?.minutes ?? null);
+  const setPart = (part: { dateKey?: string; hour?: number; minute?: number }) => {
+    setEndsAt(
+      momentFrom(
+        part.dateKey ?? toDateKey(shown),
+        part.hour ?? shown.getHours(),
+        part.minute ?? Math.floor(shown.getMinutes() / MINUTE_STEP) * MINUTE_STEP,
+      ),
+    );
+  };
+
+  /*
+   * Parsed once and used for both the enabled state and the payload, so what the button offers
+   * and what actually gets sent can never disagree.
+   */
+  const closesInMinutes = endsAt === null ? null : minutesUntil(endsAt, Date.now());
+  /* A deadline in the past is the one way this form can be filled in and still be wrong. */
+  const endHasPassed = endsAt !== null && closesInMinutes === null;
+  const valid = question.trim().length > 0 && filled.length >= MIN_OPTIONS && !endHasPassed;
 
   const submit = async () => {
     setBusy(true);
@@ -395,7 +469,9 @@ function CreatePoll({
         options: filled,
         allowMultiple: multiple,
         isPrivate,
-        closesInMinutes,
+        // Recomputed at the moment of sending rather than reused from the render that drew the
+        // button, so a form left open for ten minutes does not shorten the poll by ten minutes.
+        closesInMinutes: endsAt === null ? null : minutesUntil(endsAt, Date.now()),
       });
       onCreated();
     } catch {
@@ -411,6 +487,16 @@ function CreatePoll({
         title="New poll"
         discardLabel="Discard this poll and go back"
         onCancel={onCancel}
+        dismiss="close"
+        action={
+          <HeaderAction
+            label="Create"
+            busyLabel="Creating"
+            busy={busy}
+            disabled={!valid}
+            onPress={() => void submit()}
+          />
+        }
       />
 
       <ScrollView
@@ -418,178 +504,163 @@ function CreatePoll({
         contentContainerStyle={styles.composerBody}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.composerCard}>
-          <Text style={styles.composerLabel}>Question</Text>
-          <TextInput
-            style={styles.questionInput}
-            value={question}
-            onChangeText={setQuestion}
-            placeholder="What should we do for the team social?"
-            placeholderTextColor={color.textSecondary}
-            multiline
-            accessibilityLabel="Poll question"
-          />
-        </View>
+        {/* No label above it. The placeholder says what it is, and a form whose first field is
+            labelled "Question" above a box reading "What's your question?" says it twice. */}
+        <ComposerField
+          value={question}
+          onChangeText={setQuestion}
+          placeholder="What's your question?"
+          accessibilityLabel="Poll question"
+          filled
+          multiline
+        />
 
-        <View style={styles.composerCard}>
-          <View style={styles.composerCardHead}>
-            <Text style={styles.composerCardTitle}>Options</Text>
-            {/* Counts what would actually be sent, so a blank row never inflates it. */}
-            <Text style={styles.optionsCount}>{filled.length} Options Added</Text>
-          </View>
-
+        <SectionLabel>Choices</SectionLabel>
+        <View style={styles.choices}>
           {options.map((option, index) => (
-            <View key={index} style={styles.optionRow}>
-              <TextInput
-                style={styles.optionInput}
-                value={option}
-                onChangeText={(next) =>
-                  setOptions((current) => current.map((o, i) => (i === index ? next : o)))
-                }
-                placeholder={`Option ${index + 1}`}
-                placeholderTextColor={color.textSecondary}
-                accessibilityLabel={`Option ${index + 1}`}
-              />
-              {/* Only past the minimum: removing down to one answer is not a poll. */}
-              {options.length > MIN_OPTIONS && (
-                <Pressable
-                  style={styles.removeOption}
-                  onPress={() => setOptions((current) => current.filter((_, i) => i !== index))}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Remove option ${index + 1}`}
-                >
-                  <MaterialIcons name="close" size={16} color={color.onErrorContainer} />
-                </Pressable>
-              )}
-            </View>
+            <ComposerField
+              key={index}
+              value={option}
+              onChangeText={(next) =>
+                setOptions((current) => current.map((o, i) => (i === index ? next : o)))
+              }
+              placeholder={`Choice ${index + 1}`}
+              accessibilityLabel={`Option ${index + 1}`}
+              trailing={
+                /* Only past the minimum: removing down to one answer is not a poll. */
+                options.length > MIN_OPTIONS ? (
+                  <Pressable
+                    onPress={() => setOptions((current) => current.filter((_, i) => i !== index))}
+                    hitSlop={space.sm}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove option ${index + 1}`}
+                  >
+                    <MaterialIcons name="close" size={18} color={color.textSecondary} />
+                  </Pressable>
+                ) : null
+              }
+            />
           ))}
 
           {/* Two minimum, ten maximum. An eleventh cannot be added rather than being rejected later. */}
           {options.length < MAX_OPTIONS && (
+            <AddRow label="Add more" onPress={() => setOptions((current) => [...current, ''])} />
+          )}
+        </View>
+
+        <SectionLabel>Settings</SectionLabel>
+
+        <SettingRow
+          label="Ends"
+          /*
+            Opening COMMITS the default the wheel is showing.
+
+            Without it the row read "No deadline" while the wheel underneath highlighted tomorrow
+            at ten - the control contradicting its own value, which is the reading somebody would
+            report as "it will not save the time". The way back out is the clear directly beneath
+            the wheel, not a state where nothing is chosen and something looks chosen.
+          */
+          onPress={() => {
+            if (pickingEnd) {
+              setPickingEnd(false);
+              return;
+            }
+            if (endsAt === null) setEndsAt(shown);
+            setPickingEnd(true);
+          }}
+          accessibilityLabel={
+            endsAt === null ? 'Ends: no deadline. Set one' : `Ends ${formatInstant(endsAt.toISOString())}. Change`
+          }
+        >
+          <SettingValue muted={endsAt === null}>
+            {endsAt === null ? 'No deadline' : formatInstant(endsAt.toISOString())}
+          </SettingValue>
+        </SettingRow>
+
+        {/*
+          In place, between the row it belongs to and the next one - the reference's arrangement,
+          and the reason the Create action had to leave the foot of the form.
+        */}
+        {pickingEnd && (
+          <>
+            <Wheel
+              columns={[
+                {
+                  key: 'day',
+                  items: days,
+                  selectedKey: toDateKey(shown),
+                  onSelect: (key) => setPart({ dateKey: key }),
+                  accessibilityLabel: 'Day the poll closes',
+                  flex: 3,
+                },
+                {
+                  key: 'hour',
+                  items: hours,
+                  selectedKey: String(shown.getHours()),
+                  onSelect: (key) => setPart({ hour: Number(key) }),
+                  accessibilityLabel: 'Hour the poll closes',
+                  flex: 1,
+                },
+                {
+                  key: 'minute',
+                  items: minutes,
+                  selectedKey: String(Math.floor(shown.getMinutes() / MINUTE_STEP) * MINUTE_STEP),
+                  onSelect: (key) => setPart({ minute: Number(key) }),
+                  accessibilityLabel: 'Minute the poll closes',
+                  flex: 1,
+                },
+              ]}
+            />
+            {/* The way back to open-ended, which the reference has no need for and this app does. */}
             <Pressable
-              onPress={() => setOptions((current) => [...current, ''])}
-              style={styles.addOption}
+              style={styles.clearEnd}
+              onPress={() => {
+                setEndsAt(null);
+                setPickingEnd(false);
+              }}
               accessibilityRole="button"
-              accessibilityLabel="Add another option"
+              accessibilityLabel="Leave this poll open with no deadline"
             >
-              <Text style={styles.addOptionLabel}>+ ADD OPTION</Text>
+              <Text style={styles.clearEndLabel}>No deadline</Text>
             </Pressable>
-          )}
-        </View>
+          </>
+        )}
 
-        <View style={styles.composerCard}>
-          <Text style={styles.composerCardTitle}>Ends</Text>
-          <View style={styles.chipRow}>
-            {ENDS_CHIPS.map((chip) => {
-              const on = ends === chip.key;
-              return (
-                <Pressable
-                  key={chip.key}
-                  onPress={() => setEnds(chip.key)}
-                  style={[styles.chip, on && styles.chipOn]}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected: on }}
-                  accessibilityLabel={`Ends: ${chip.label}`}
-                >
-                  <Text style={[styles.chipLabel, on && styles.chipLabelOn]}>{chip.label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
+        {endHasPassed && (
+          <Text style={styles.composerError}>
+            That time has already passed. Pick a later one, or clear the deadline.
+          </Text>
+        )}
 
-          {/*
-            Revealed rather than always present: a field that only matters under one chip is
-            noise under the other four.
-          */}
-          {ends === 'custom' && (
-            <View style={styles.customRow}>
-              <TextInput
-                style={styles.customInput}
-                value={customAmount}
-                onChangeText={setCustomAmount}
-                placeholder="30"
-                placeholderTextColor={color.textSecondary}
-                keyboardType="number-pad"
-                accessibilityLabel="How long until this poll closes"
-              />
-              <View style={styles.unitRow}>
-                {CUSTOM_UNITS.map((unit) => {
-                  const on = customUnit === unit.key;
-                  return (
-                    <Pressable
-                      key={unit.key}
-                      onPress={() => setCustomUnit(unit.key)}
-                      style={[styles.unitChip, on && styles.chipOn]}
-                      accessibilityRole="radio"
-                      accessibilityState={{ selected: on }}
-                      accessibilityLabel={unit.label}
-                    >
-                      <Text style={[styles.chipLabel, on && styles.chipLabelOn]}>{unit.label}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.composerCard}>
-          <Text style={styles.composerCardTitle}>Poll Settings</Text>
-          <Setting
-            title="Allow selecting multiple options"
-            body="Voters can pick more than one choice"
-            on={multiple}
-            onChange={setMultiple}
+        <SettingRow label="Multiple answers">
+          <ThemedSwitch
+            value={multiple}
+            onValueChange={setMultiple}
+            accessibilityLabel="Allow selecting multiple options"
           />
-          <View style={styles.settingDivider} />
-          {/*
-            "Only you" is literally true: counts stay public on a private poll, and its creator is
-            the only person who may see identities. See the read rules at the top of this file.
-          */}
-          <Setting
-            title="Private vote"
-            body="Only you can see who voted for each option"
-            on={isPrivate}
-            onChange={setPrivate}
+        </SettingRow>
+
+        <SettingRow label="Private vote">
+          <ThemedSwitch
+            value={isPrivate}
+            onValueChange={setPrivate}
+            accessibilityLabel="Private vote"
           />
-        </View>
+        </SettingRow>
+
+        {/*
+          One note for the section rather than a line under each row.
+
+          "Only you" is literally true, and the second sentence is the half people get wrong:
+          counts are public on every poll, including this one. See the read rules at the top of
+          this file.
+        */}
+        <SettingNote>
+          On a private poll only you can see who chose what. Vote counts are public either way.
+        </SettingNote>
 
         {failed !== null && <Text style={styles.composerError}>{failed}</Text>}
-
-        <Pressable
-          style={[styles.createButton, (!valid || busy) && styles.createButtonOff]}
-          disabled={!valid || busy}
-          onPress={() => void submit()}
-          accessibilityRole="button"
-          accessibilityLabel="Create poll"
-          accessibilityState={{ disabled: !valid || busy }}
-        >
-          <Text style={styles.createButtonLabel}>{busy ? 'CREATING' : 'CREATE POLL'}</Text>
-        </Pressable>
       </ScrollView>
-    </View>
-  );
-}
-
-/** One settings row: what it does, what that means, and the switch. */
-function Setting({
-  title,
-  body,
-  on,
-  onChange,
-}: {
-  title: string;
-  body: string;
-  on: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  return (
-    <View style={styles.setting}>
-      <View style={styles.settingText}>
-        <Text style={styles.settingTitle}>{title}</Text>
-        <Text style={styles.settingBody}>{body}</Text>
-      </View>
-      <ThemedSwitch value={on} onValueChange={onChange} accessibilityLabel={title} />
     </View>
   );
 }
@@ -610,101 +681,128 @@ function PollBody({
   poll,
   busy,
   onVote,
-  byline,
   onSeeVoters,
 }: {
   poll: PollView;
   busy: boolean;
   onVote: (optionId: string) => void;
-  /** "Created by X", on the chat card. The detail screen has the header for that job. */
-  byline?: string | null;
   /** Present on the chat card, where each option carries its own eye rather than one button. */
   onSeeVoters?: (optionId: string) => void;
 }) {
   const total = poll.options.reduce((sum, option) => sum + option.voteCount, 0);
+  /*
+    Whether this poll shows voters AT ALL, asked once for the whole card rather than per row.
+    The eye's gutter is then reserved on every row, so the counts sit in a column instead of
+    stepping in and out as options cross their first vote.
+  */
+  const showsVoters =
+    onSeeVoters !== undefined && poll.options.some((option) => option.voters !== null);
 
   return (
     <>
-      <StatusRow closed={poll.closed} closesAt={poll.closesAt} />
-      <Text style={styles.detailQuestion}>{poll.question}</Text>
-      <Text style={styles.meta}>
-        {byline != null && byline.length > 0 ? `Created by ${byline}  ·  ` : ''}
-        {poll.allowMultiple ? 'Multiple choice' : 'Single choice'}
-        {poll.isPrivate ? '  ·  Private vote' : ''}
-        {poll.closesAt !== null
-          ? `  ·  ${poll.closed ? 'Closed' : 'Closes'} ${formatInstant(poll.closesAt)}`
-          : ''}
-      </Text>
+      <CardEyebrow label="POLL" chip={poll.closed ? 'CLOSED' : null} />
+      <CardTitle>{poll.question}</CardTitle>
 
       <View style={styles.options}>
-        {poll.options.map((option) => (
+        {poll.options.map((option) => {
           /*
-            A View wrapping two SIBLING pressables, never one inside the other.
-            Voting and opening the voter list are different actions on the same row, and
-            nesting their controls is failure mode 17: invalid on web, and on native the outer
-            one swallows the inner. So the row owns the border and the two targets sit in it.
+            Share of the votes CAST, which is what the number beside it counts. On a multiple-
+            choice poll the shares therefore still sum to 100 while exceeding the number of
+            people who voted, and that is the honest reading of "12 of the 20 votes".
           */
-          <View
-            key={option.id}
-            style={[styles.option, option.votedByMe && styles.optionChosen]}
-          >
-            <Pressable
-              style={styles.optionTap}
-              disabled={poll.closed || busy}
-              onPress={() => onVote(option.id)}
-              accessibilityRole="button"
-              accessibilityState={{ selected: option.votedByMe, disabled: poll.closed }}
-              accessibilityLabel={
-                poll.closed
-                  ? `${option.label}, ${option.voteCount} votes, poll closed`
-                  : option.votedByMe
-                    ? `Withdraw your vote for ${option.label}`
-                    : `Vote for ${option.label}`
-              }
+          const share = total === 0 ? 0 : (option.voteCount / total) * 100;
+          /*
+            The eye, only where identities may be seen. `voters === null` is "not allowed to
+            see", which is a different thing from nobody having voted - so the control is
+            absent rather than opening an empty sheet.
+          */
+          const canSeeVoters =
+            onSeeVoters !== undefined && option.voters !== null && option.voteCount > 0;
+
+          return (
+            /*
+              A View wrapping two SIBLING pressables, never one inside the other.
+              Voting and opening the voter list are different actions on the same row, and
+              nesting their controls is failure mode 17: invalid on web, and on native the outer
+              one swallows the inner. So the row owns the track and the two targets sit in it.
+            */
+            <View
+              key={option.id}
+              style={[
+                styles.option,
+                option.votedByMe && (poll.closed ? styles.optionChosenClosed : styles.optionChosen),
+              ]}
             >
-              <View style={styles.optionHead}>
-                <Text style={styles.optionLabel}>
-                  {option.votedByMe ? '✓  ' : ''}
+              <View
+                style={[
+                  styles.optionFill,
+                  { width: `${share}%` },
+                  poll.closed
+                    ? styles.optionFillClosed
+                    : option.votedByMe
+                      ? styles.optionFillChosen
+                      : null,
+                ]}
+              />
+              <Pressable
+                style={[styles.optionTap, showsVoters && styles.optionTapReserved]}
+                disabled={poll.closed || busy}
+                onPress={() => onVote(option.id)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: option.votedByMe, disabled: poll.closed }}
+                accessibilityLabel={
+                  poll.closed
+                    ? `${option.label}, ${option.voteCount} votes, poll closed`
+                    : option.votedByMe
+                      ? `Withdraw your vote for ${option.label}`
+                      : `Vote for ${option.label}`
+                }
+              >
+                {/* No tick beside the label: the accent ring around the row is what says "yours",
+                    and a glyph that shifts the text as it appears is a second signal doing the
+                    first one's job. The selected state still reaches a screen reader above. */}
+                <Text style={styles.optionLabel} numberOfLines={2}>
                   {option.label}
                 </Text>
                 {/* Public on every poll, including one whose voters are hidden. */}
                 <Text style={styles.optionCount}>{option.voteCount}</Text>
-              </View>
-              <View style={styles.barTrack}>
-                <View
-                  style={[
-                    styles.barFill,
-                    { width: total === 0 ? 0 : `${(option.voteCount / total) * 100}%` },
-                  ]}
-                />
-              </View>
-            </Pressable>
-
-            {/*
-              The eye, only where identities may be seen. `voters === null` is "not allowed to
-              see", which is a different thing from nobody having voted - so the control is
-              absent rather than opening an empty sheet.
-            */}
-            {onSeeVoters !== undefined && option.voters !== null && option.voteCount > 0 && (
-              <Pressable
-                style={styles.optionEye}
-                onPress={() => onSeeVoters(option.id)}
-                /*
-                  A 16pt glyph in `xs` padding is a ~24pt target, well under the 44pt minimum, and
-                  it sits directly beside the option row - so a miss does not do nothing, it casts
-                  or withdraws a vote. Slop rather than padding, because widening the control
-                  itself would push the vote bar in.
-                */
-                hitSlop={space.md}
-                accessibilityRole="button"
-                accessibilityLabel={`See who voted for ${option.label}`}
-              >
-                <MaterialIcons name="visibility" size={16} color={color.textSecondary} />
               </Pressable>
-            )}
-          </View>
-        ))}
+
+              {canSeeVoters && (
+                <Pressable
+                  style={styles.optionEye}
+                  onPress={() => onSeeVoters(option.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`See who voted for ${option.label}`}
+                >
+                  <MaterialIcons name="visibility" size={18} color={color.textSecondary} />
+                </Pressable>
+              )}
+            </View>
+          );
+        })}
       </View>
+
+      {/*
+        Everything about the poll that is not the question, on one quiet line under it.
+
+        Only what is remarkable: single choice is the assumption a reader already holds, so saying
+        it costs a line and adds nothing, while "multiple choice" and "private" change how the
+        thing works. The parts go in unjoined so an absent one leaves no stranded separator.
+
+        **No creator here.** Who asked the question is said once, by the avatar and name above the
+        card, and a card that repeats it is saying the same thing twice in one glance.
+      */}
+      <CardMeta
+        parts={[
+          `${total} ${total === 1 ? 'vote' : 'votes'}`,
+          poll.allowMultiple ? 'multiple choice' : null,
+          poll.isPrivate ? 'private' : null,
+          poll.closesAt === null
+            ? null
+            : `${poll.closed ? 'closed' : 'closes'} ${formatInstant(poll.closesAt)}`,
+        ]}
+      />
     </>
   );
 }
@@ -722,11 +820,9 @@ function PollBody({
  */
 export function ChatPollCard({
   pollId,
-  authorName,
   fallback = null,
 }: {
   pollId: string;
-  authorName: string | null;
   /**
    * What to draw when the poll cannot be drawn - the message's own sentence.
    *
@@ -772,12 +868,11 @@ export function ChatPollCard({
    * anyway: voting in place is the whole point of it, and the sentence above it is the link.
    */
   return (
-    <View style={styles.chatPollCard}>
+    <ContentCard>
       <PollBody
         poll={poll}
         busy={busy}
         onVote={(id) => void vote(id)}
-        byline={authorName}
         onSeeVoters={setVotersFor}
       />
 
@@ -822,7 +917,7 @@ export function ChatPollCard({
           onDismiss={() => setVotersFor(null)}
         />
       )}
-    </View>
+    </ContentCard>
   );
 }
 
@@ -857,19 +952,28 @@ export function PollDetail({ pollId }: { pollId: string }) {
         return (
           <View style={styles.flex}>
             <Body>
-              <PollBody poll={poll} busy={busy} onVote={(id) => void vote(id)} />
+              {/*
+                `onSeeVoters` on the screen too, so the eye is per OPTION in both places.
+
+                > It used to be a single "See who voted" button under the card, which opened the
+                > sheet on whichever option happened to be first and left the reader to change it
+                > inside. `PRD/11` rule 5 asks for a control on the option, and the card already
+                > had one - so the screen was the odd one out, and the two renderings of one read
+                > disagreed about how you reach the same list.
+              */}
+              <PollBody
+                poll={poll}
+                busy={busy}
+                onVote={(id) => void vote(id)}
+                onSeeVoters={setVotersFor}
+              />
 
               {/*
                 Null is "you may not see this", which is a different thing from nobody having
-                voted - so the control is absent rather than opening an empty sheet.
+                voted - so the eyes are absent and the screen says why, rather than leaving a
+                reader to wonder whether the poll simply has no votes yet.
               */}
-              {poll.options.some((option) => option.voters !== null) ? (
-                <Action
-                  label="See who voted"
-                  variant="secondary"
-                  onPress={() => setVotersFor(poll.options[0]?.id ?? null)}
-                />
-              ) : (
+              {!poll.options.some((option) => option.voters !== null) && (
                 <Text style={styles.meta}>
                   This is a private vote. Only its creator can see who chose what.
                 </Text>
@@ -1082,129 +1186,54 @@ const styles = StyleSheet.create({
   actionButton: { flex: 1 },
 
   // -------------------------------------------------------------------------
-  // The composer. v1's PollCreateScreen, expressed in this app's tokens.
+  // The composer. The founder's 2026-08-13 reference, in this app's tokens.
   // -------------------------------------------------------------------------
-  /* The trailing space clears the tab bar: without it CREATE POLL sits under it and is half a button. */
-  composerBody: { padding: space.md, paddingBottom: space.xl, gap: space.md },
-  composerCard: {
-    backgroundColor: color.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.divider,
-    padding: space.md,
-    gap: space.sm,
-  },
+  /*
+    No `gap`, deliberately. The spacing here is the design: a section label carries its own air
+    above it, and one uniform gap between every element is what made the old composer read as a
+    stack of cards rather than as a form with sections.
+  */
+  composerBody: { padding: space.md, paddingBottom: space.xl },
+  choices: { gap: space.sm },
+  clearEnd: { alignSelf: 'center', paddingVertical: space.sm, paddingHorizontal: space.md },
+  clearEndLabel: { ...type.label, color: color.accent },
   /* Uppercased in style rather than in the string, so the label stays readable to a screen reader. */
-  composerLabel: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
-  composerCardTitle: { ...type.headerTitle, fontSize: 18, lineHeight: 24, color: color.textPrimary },
-  composerCardHead: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
   composerError: { ...type.bodySmall, color: color.error, textAlign: 'center' },
 
-  questionInput: {
-    ...type.body,
-    backgroundColor: color.cardSunken,
-    borderRadius: radius.md,
-    padding: space.md,
-    color: color.textPrimary,
-    minHeight: 72,
-    textAlignVertical: 'top',
-  },
 
-  optionsCount: {
-    ...type.label,
-    fontSize: 11,
-    color: color.textSecondary,
-    backgroundColor: color.cardRaised,
-    borderRadius: radius.sm,
-    paddingHorizontal: space.sm,
-    paddingVertical: 2,
-    letterSpacing: 0,
-  },
-  optionRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  optionInput: {
-    ...type.body,
-    flex: 1,
-    backgroundColor: color.cardSunken,
-    borderRadius: radius.md,
+
+
+
+
+  optionTap: {
+    /*
+      **`zIndex` is load-bearing, and only on web.** An absolutely positioned sibling paints above
+      a statically positioned one in CSS regardless of source order, so without this the fill
+      covers the label in a browser and nowhere else - the shape of failure mode 6, where the
+      whole suite and the device both pass.
+    */
+    zIndex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.sm,
     paddingHorizontal: space.md,
-    paddingVertical: space.sm + 2,
-    color: color.textPrimary,
+    paddingVertical: space.sm,
+    // Comfortably over the 44pt minimum, since the row is now the whole target.
+    minHeight: 44,
   },
-  removeOption: {
-    width: 32,
-    height: 32,
-    borderRadius: radius.pill,
-    backgroundColor: color.errorContainer,
+  /* Reserved for every row of a poll that shows voters at all, so the counts stay in a column. */
+  optionTapReserved: { paddingRight: EYE_GUTTER },
+  optionEye: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: EYE_GUTTER,
+    zIndex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  addOption: { alignSelf: 'flex-start' },
-  addOptionLabel: { ...type.label, color: color.accent },
-
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
-  chip: {
-    borderWidth: 1,
-    borderColor: color.divider,
-    borderRadius: radius.pill,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    backgroundColor: color.cardSunken,
-  },
-  chipOn: { backgroundColor: color.accent, borderColor: color.accent },
-  chipLabel: { ...type.label, color: color.textSecondary, letterSpacing: 0 },
-  chipLabelOn: { color: color.onAccent },
-  customRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: space.sm,
-    marginTop: space.sm,
-  },
-  customInput: {
-    ...type.body,
-    width: 64,
-    textAlign: 'center',
-    backgroundColor: color.cardSunken,
-    borderRadius: radius.md,
-    paddingVertical: space.sm + 2,
-    color: color.textPrimary,
-  },
-  unitRow: { flexDirection: 'row', gap: 6 },
-  unitChip: {
-    borderWidth: 1,
-    borderColor: color.divider,
-    borderRadius: radius.md,
-    paddingHorizontal: space.sm + 2,
-    paddingVertical: space.sm,
-    backgroundColor: color.cardSunken,
-  },
-
-  setting: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: space.md,
-  },
-  settingText: { flex: 1 },
-  settingTitle: { ...type.headline, fontSize: 15, color: color.textPrimary },
-  settingBody: { ...type.label, fontSize: 11, color: color.textSecondary, letterSpacing: 0 },
-  settingDivider: { height: 1, backgroundColor: color.divider },
-
-  createButton: {
-    backgroundColor: color.accent,
-    borderRadius: radius.pill,
-    paddingVertical: space.md,
-    alignItems: 'center',
-  },
-  createButtonOff: { opacity: 0.6 },
-  createButtonLabel: { ...type.headerTitle, fontSize: 16, color: color.onAccent },
-
-  optionTap: { flex: 1, gap: space.sm },
-  optionEye: { paddingLeft: space.sm, paddingVertical: space.xs },
   chatPollActions: { flexDirection: 'row', gap: space.sm },
   chatPollAction: { flex: 1 },
   dropdownHead: {
@@ -1234,16 +1263,6 @@ const styles = StyleSheet.create({
   },
   dropdownItemLabel: { ...type.body, color: color.textPrimary },
   dropdownItemCount: { ...type.bodySmall, color: color.accent },
-
-  /* The poll bubble in chat. Full width, so the options are votable targets rather than a teaser. */
-  chatPollCard: {
-    backgroundColor: color.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.divider,
-    padding: space.md,
-    gap: space.sm,
-  },
 
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   activePill: {
@@ -1342,29 +1361,36 @@ const styles = StyleSheet.create({
 
   detailQuestion: { ...type.title, color: color.textPrimary },
   options: { gap: space.sm },
+  /*
+    **The row IS the bar.** A track holding a proportional fill, with the label and the count
+    sitting on top of it - rather than a label line with a thin 6pt bar underneath, which is what
+    this was until 2026-08-13. One object per option instead of two, and the tally is readable at
+    a glance down the card because every row is the same shape.
+  */
   option: {
-    // A row: the vote target takes the width and the eye sits beside it on the same line,
-    // rather than wrapping under the bar where it reads as a separate control.
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: color.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.hairline,
-    padding: space.md,
-    gap: space.sm,
-  },
-  optionChosen: { backgroundColor: color.accentSoft, borderColor: color.accent },
-  optionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  optionLabel: { ...type.headline, color: color.textPrimary, flexShrink: 1 },
-  optionCount: { ...type.numeric, fontSize: 15, color: color.accentPressed },
-  barTrack: {
-    height: 6,
-    borderRadius: radius.pill,
-    backgroundColor: color.fallback,
+    position: 'relative',
+    justifyContent: 'center',
+    backgroundColor: color.cardRaised,
+    borderRadius: radius.md,
+    // Clips the fill to the rounded corners. Without it the fill squares off the row's left edge.
     overflow: 'hidden',
+    /*
+      Present and track-coloured rather than absent, so choosing an option changes a colour and
+      never a height. A border that appears on selection moves every row below it by 4pt.
+    */
+    borderWidth: 2,
+    borderColor: color.cardRaised,
   },
-  barFill: { height: 6, borderRadius: radius.pill, backgroundColor: color.accent },
+  optionChosen: { borderColor: color.accent },
+  /* Still legible as your vote once the poll is closed, but no longer the loudest thing on it. */
+  optionChosenClosed: { borderColor: color.accentSoftBorder },
+  optionFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: color.accentSoft },
+  optionFillChosen: { backgroundColor: color.accentSoftBorder },
+  /* Muted, per `PRD/11` rule 14. The tally is still the point of a closed poll, so it greys rather
+     than disappears. */
+  optionFillClosed: { backgroundColor: color.fallback },
+  optionLabel: { ...type.body, color: color.textPrimary, flexShrink: 1 },
+  optionCount: { ...type.body, color: color.textSecondary },
 
   sheetBackdrop: {
     position: 'absolute',

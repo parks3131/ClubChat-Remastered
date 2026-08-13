@@ -10,24 +10,32 @@
  * message carries a sentence, and the time this card exists to show was never on the wire. The
  * read is membership-gated, so a card in a conversation somebody should not see renders as
  * nothing rather than leaking the board's schedule.
+ *
+ * > **"Twin" was a claim the code did not keep.** Both cards were written to the same sketch and
+ * > then maintained apart, so they had separately chosen their own border token and their own
+ * > glyph. They now share `content-card.tsx`, which is what makes the twinning a fact rather than
+ * > an intention.
  */
 
 import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
+import { StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { contentApi } from '../api.ts';
-import { formatInstant } from '../dates.ts';
-import { color, radius, space, type } from '../theme.ts';
+import { bibParts, formatInstant, formatTimeOfDay } from '../dates.ts';
+import { CardEyebrow, CardMeta, CardTitle, ContentCard, DateChip } from '../content-card.tsx';
+import { space } from '../theme.ts';
 import { useLoad } from '../use-load.ts';
 
 export function ChatMeetingCard({
   meetingId,
   fallback = null,
+  onLongPress,
 }: {
   meetingId: string;
   /** The message's own sentence, drawn when the meeting cannot be. See `ChatPollCard`. */
   fallback?: ReactNode;
+  /** React or report, on the card's own pressable rather than the row's. See `ChatEventCard`. */
+  onLongPress?: () => void;
 }) {
   const router = useRouter();
   const load = useLoad(() => contentApi.meeting(meetingId), [meetingId]);
@@ -36,70 +44,35 @@ export function ChatMeetingCard({
   // sentence, because the chat screen has already suppressed it for any card-carrying message.
   if (load.data === null) return <>{fallback}</>;
   const meeting = load.data.meeting;
+  // An instant, never a date-only value - so its day is the reader's, not UTC's. See `bibParts`.
+  const bib = bibParts(meeting.startsAt, false);
+  const hasLink = meeting.link !== null && meeting.link.trim().length > 0;
 
   return (
-    <Pressable
-      style={styles.card}
+    <ContentCard
       onPress={() => router.push(`/meetings/${meetingId}`)}
-      accessibilityRole="button"
+      onLongPress={onLongPress}
       accessibilityLabel={`${meeting.title}, ${formatInstant(meeting.startsAt)}. View this meeting`}
     >
-      <View style={styles.cardHead}>
-        <MaterialIcons name="groups" size={18} color={color.accent} />
-        <Text style={styles.cardTitle} numberOfLines={2}>
-          {meeting.title}
-        </Text>
-      </View>
+      <View style={styles.cardRow}>
+        <DateChip day={bib.day} month={bib.month} />
+        <View style={styles.cardText}>
+          <CardEyebrow label="MEETING" />
+          <CardTitle>{meeting.title}</CardTitle>
+          {/* The joining link, shown as "there is one" rather than as a URL. A raw meeting link is
+              forty unreadable characters and the card is not where anybody types it out.
 
-      <View style={styles.cardLine}>
-        <MaterialIcons name="schedule" size={14} color={color.textSecondary} />
-        <Text style={styles.cardMeta} numberOfLines={1}>
-          {formatInstant(meeting.startsAt)}
-        </Text>
-      </View>
-
-      {/* The joining link, shown as "there is one" rather than as a URL. A raw meeting link is
-          forty unreadable characters and the card is not where anybody types it out. */}
-      {meeting.link !== null && meeting.link.trim().length > 0 && (
-        <View style={styles.cardLine}>
-          <MaterialIcons name="videocam" size={14} color={color.textSecondary} />
-          <Text style={styles.cardMeta} numberOfLines={1}>
-            Joining link attached
-          </Text>
+              No creator, as on the event card: the avatar and name above the card say it. */}
+          <CardMeta
+            parts={[formatTimeOfDay(meeting.startsAt), hasLink ? 'Joining link attached' : null]}
+          />
         </View>
-      )}
-
-      <View style={styles.cardCta}>
-        <Text style={styles.cardCtaLabel}>VIEW MEETING</Text>
-        <MaterialIcons name="arrow-forward" size={14} color={color.onAccent} />
       </View>
-    </Pressable>
+    </ContentCard>
   );
 }
 
 const styles = StyleSheet.create({
-  /* Its own surface, because the creator's bubble behind it is accent-filled. */
-  card: {
-    backgroundColor: color.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.divider,
-    padding: space.md,
-    gap: space.sm,
-  },
-  cardHead: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  cardTitle: { ...type.headline, color: color.textPrimary, flex: 1 },
-  cardLine: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
-  cardMeta: { ...type.bodySmall, color: color.textSecondary, flex: 1 },
-  cardCta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: space.xs,
-    backgroundColor: color.accent,
-    borderRadius: radius.pill,
-    paddingVertical: space.sm,
-    marginTop: space.xs,
-  },
-  cardCtaLabel: { ...type.label, fontSize: 11, color: color.onAccent },
+  cardRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  cardText: { flex: 1, gap: space.xs },
 });

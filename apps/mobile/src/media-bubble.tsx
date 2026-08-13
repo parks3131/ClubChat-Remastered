@@ -27,6 +27,12 @@ import {
 } from 'react-native';
 import { formatBytes } from '@clubchat/shared';
 import { resolveMediaUrl, type MediaVariant } from './api.ts';
+import {
+  PHOTO_MAX_WIDTH,
+  photoSize,
+  rememberRatio,
+  rememberedRatio,
+} from './photo-size.ts';
 import { color, radius, space, type } from './theme.ts';
 
 
@@ -120,6 +126,15 @@ export function PhotoBubble({ mediaId, localUri, variant = 'display', mine }: Ph
   // show a photo the sender just picked off their own device.
   const [uri, setUri] = useState<string | null>(localUri ?? null);
   const [failed, setFailed] = useState(false);
+  /*
+   * What this photo is shaped like, remembered across mounts.
+   *
+   * Keyed by media id rather than by url: the signed url rotates every hour, so a url key would
+   * miss on the very reappearances this exists to cover. A lazy initialiser, so a photo that has
+   * been on screen before opens at its final size and never resizes at all.
+   */
+  const ratioKey = mediaId ?? localUri ?? null;
+  const [ratio, setRatio] = useState<number | null>(() => rememberedRatio(ratioKey));
 
   useEffect(() => {
     if (localUri || !mediaId) return;
@@ -138,9 +153,43 @@ export function PhotoBubble({ mediaId, localUri, variant = 'display', mine }: Ph
     };
   }, [mediaId, localUri, variant]);
 
+  /*
+   * Ask the image how tall it is.
+   *
+   * > **`onLoad` was tried first and silently did nothing on web.** Its `nativeEvent.source` is a
+   * > native-only shape, so the handler ran, found no dimensions and left every photo square - the
+   * > exact class this repo already knows as "a check against a field the library does not return
+   * > reads undefined forever", and it presents as the feature simply not working.
+   *
+   * `Image.getSize` is the documented cross-platform call. Its failure path leaves `ratio` null,
+   * which is not a hang: the photo falls back to a square box with `contain`, so an unmeasured
+   * picture is letterboxed against a transparent background rather than cropped.
+   */
+  useEffect(() => {
+    if (uri === null || ratio !== null) return;
+    let cancelled = false;
+    Image.getSize(
+      uri,
+      (width, height) => {
+        if (width <= 0 || height <= 0) return;
+        rememberRatio(ratioKey, width / height);
+        if (!cancelled) setRatio(width / height);
+      },
+      () => {
+        // Not `setFailed`: the bytes may still render perfectly. Only the measurement is lost.
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+    // `ratio` is read as a guard, not as an input: re-running when it lands would measure a photo
+    // twice. `ratioKey` is derived from props that are already in this list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uri]);
+
   if (failed) {
     return (
-      <View style={[styles.photoFrame, styles.photoUnavailable]}>
+      <View style={[styles.photoPlaceholder, styles.photoUnavailable]}>
         <Text style={styles.unavailableText}>Photo unavailable</Text>
       </View>
     );
@@ -148,25 +197,40 @@ export function PhotoBubble({ mediaId, localUri, variant = 'display', mine }: Ph
 
   if (!uri) {
     return (
-      <View style={[styles.photoFrame, styles.photoLoading]}>
+      <View style={[styles.photoPlaceholder, styles.photoLoading]}>
         <ActivityIndicator color={color.accent} />
       </View>
     );
   }
 
+  /*
+   * The photo is the shape of the photo.
+   *
+   * > **It used to be a fixed 220 square with `contain` over a grey fill**, so any picture that
+   * > was not square arrived matted in two grey bands - which read as part of the message rather
+   * > than as an absence, and stacked with the bubble's own fill behind it into three nested
+   * > rectangles around one image. The founder's word for it was "boundary shades".
+   *
+   * Sizing the LONG edge rather than the width keeps a portrait from towering over the
+   * conversation while a landscape stays comfortably wide, and means no photo is ever cropped or
+   * padded to fit a frame it does not have.
+   */
+  const size = photoSize(ratio);
+
   return (
-    <View style={styles.photoFrame}>
-      <Image
-        source={{ uri }}
-        style={styles.photo}
-        // `contain` rather than `cover`: cropping somebody's photo to fit a bubble hides the
-        // part they were pointing at.
-        resizeMode="contain"
-        onError={() => setFailed(true)}
-        accessibilityLabel={mine ? 'Photo you sent' : 'Photo'}
-        accessibilityIgnoresInvertColors
-      />
-    </View>
+    <Image
+      source={{ uri }}
+      style={[styles.photo, size]}
+      /*
+        `cover` once the box IS the image's own ratio - there is nothing left to crop. Until then
+        `contain`, so an unmeasured photo is letterboxed against a transparent background rather
+        than having its edges taken off to fill a square it never matched.
+      */
+      resizeMode={ratio === null ? 'contain' : 'cover'}
+      onError={() => setFailed(true)}
+      accessibilityLabel={mine ? 'Photo you sent' : 'Photo'}
+      accessibilityIgnoresInvertColors
+    />
   );
 }
 
@@ -212,14 +276,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  photoFrame: {
-    width: 220,
-    height: 220,
+  /*
+    The square stand-in, for the moments a photo is not there to be measured: still resolving, or
+    gone. It keeps its grey, because THAT grey is honest - it is the absence of an image rather
+    than a frame around one.
+  */
+  photoPlaceholder: {
+    width: PHOTO_MAX_WIDTH,
+    height: PHOTO_MAX_WIDTH,
     borderRadius: radius.md,
     overflow: 'hidden',
     backgroundColor: color.fallback,
   },
-  photo: { width: '100%', height: '100%' },
+  /* No fill and no border. The rounded image is the whole object. */
+  photo: { borderRadius: radius.md },
   photoLoading: { alignItems: 'center', justifyContent: 'center' },
   photoUnavailable: { alignItems: 'center', justifyContent: 'center', padding: space.md },
   unavailableText: { ...type.bodySmall, color: color.textSecondary, textAlign: 'center' },

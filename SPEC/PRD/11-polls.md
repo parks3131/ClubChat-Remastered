@@ -19,8 +19,21 @@ coming".
    first. A closed poll cannot be voted in.
 7. **Only the creator can close, reopen, or delete a poll** - in every scope, including a club
    poll created by another admin.
-8. A deadline is optional, chosen from presets (1 day / 3 days / 1 week) or a custom amount in
-   minutes, hours, or days, computed from the moment of creation.
+8. **A deadline is optional, and is chosen as a moment**: a day, an hour and a minute, picked from
+   a wheel that opens in place on the composer. It defaults to tomorrow at the current hour, and
+   there is always a way back to no deadline at all.
+
+   **It still crosses the wire as a duration.** The client turns the chosen moment into minutes
+   from now and the server computes the instant, so the only clock deciding when a poll shuts is
+   the one that writes the row - a handset an hour fast would otherwise create a poll that closed
+   an hour early. The cost is that the stored instant sits within 30 seconds of the moment picked,
+   which is why nothing about a deadline ever displays seconds.
+
+   > **This replaced relative presets (1 day / 3 days / 1 week / custom) on 2026-08-13.** Those
+   > were themselves a founder decision taken before the composer was designed; he sent a
+   > reference with an absolute picker and chose it over keeping them. A duration is fewer taps
+   > for "about a day"; a moment is the thing a member can actually check a poll against, and it
+   > says the same thing the card and the calendar say.
 9. **Ten minutes before a poll's deadline, everyone who can access it is reminded - including
    the creator.** This fires **once per poll, ever**.
 10. **Creating a poll notifies everyone who can access it except the creator**, and posts a

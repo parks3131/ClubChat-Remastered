@@ -52,8 +52,11 @@ Two views over **one merged feed**: a month grid for "what is happening when", a
    feature rather than a gap.
 9. Only an admin can create, edit, or delete an event. Creating one notifies every other club
    member.
-10. **A created event posts a card into club chat** with its title, date, and location, and
-    **View Event** on it opens the event's detail screen.
+10. **A created event posts a card into club chat** carrying its date, title, time, location and
+    who added it. **The card itself opens the event's detail screen**, and holds no separate
+    button - a card that is entirely a link does not also need to contain one. See
+    [`DESIGN/05`](../DESIGN/05-content-card.md) rule 3, which is the same rule for all three kinds
+    of card.
 11. An event carries a type, a title, a date and time, an optional location, and an optional
     description.
 12. **Creating an event from chat's "+" returns to chat afterwards**, not to the new event's

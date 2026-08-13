@@ -564,8 +564,26 @@ function QuotedMessage({
   const label = quoteLabel(quote);
   const jump = () => onJump(quote.seq);
 
+  /*
+   * The WHOLE quote jumps, not two of the words in it.
+   *
+   * > **The thumbnail was not a target**, and it is the biggest thing in the quote - so replying
+   * > to a photo produced a quote whose picture did nothing while its name and its label both
+   * > worked. Reported as "the reply for chat is perfect... but picture is not doing it", which is
+   * > exactly right: the gesture was hung on two `Text` nodes rather than on the object.
+   *
+   * `link` rather than `button`, deliberately: this sits inside the bubble's own pressable, which
+   * react-native-web renders as a real `<button>`, and a nested button is failure mode 17. A link
+   * is what the two Texts already declared, so this is one interactive element where there were
+   * two rather than a new kind of nesting.
+   */
   return (
-    <View style={[styles.quote, mine ? styles.quoteMine : styles.quoteTheirs]}>
+    <Pressable
+      style={[styles.quote, mine ? styles.quoteMine : styles.quoteTheirs]}
+      onPress={jump}
+      accessibilityRole="link"
+      accessibilityLabel={`Replying to ${quote.senderName ?? "a deleted member"}: ${label}. Go to that message`}
+    >
       {/* The accent rule down the left edge, which is what makes this read as quoted rather
           than as a first line of the message. */}
       <View style={[styles.quoteBar, mine && styles.quoteBarMine]} />
@@ -591,13 +609,11 @@ function QuotedMessage({
           />
         </View>
       )}
+      {/* Plain text now. The press belongs to the quote, not to the words inside it. */}
       <View style={styles.quoteColumn}>
         <Text
           style={[styles.quoteSender, mine && styles.quoteSenderMine]}
           numberOfLines={1}
-          onPress={jump}
-          accessibilityRole="link"
-          accessibilityLabel={`Replying to ${quote.senderName ?? "a deleted member"}. Go to that message`}
         >
           {quote.senderName ?? "Deleted member"}
         </Text>
@@ -608,14 +624,11 @@ function QuotedMessage({
             quote.deleted && styles.quoteDeleted,
           ]}
           numberOfLines={2}
-          onPress={jump}
-          accessibilityRole="link"
-          accessibilityLabel={`${label}. Go to that message`}
         >
           {label}
         </Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -638,22 +651,78 @@ function QuotedMessage({
 function BubbleContainer({
   mine,
   pending,
+  bare = false,
   children,
 }: {
   mine: boolean;
   pending?: boolean;
+  /**
+   * No fill, no padding - the content is the whole object.
+   *
+   * For a photo sent without a caption. A picture already has an edge of its own, and a tinted
+   * frame around it is a second one saying nothing: the founder's "boundary shades", stacked with
+   * the grey matte the photo used to be letterboxed onto. A photo WITH a caption keeps its bubble,
+   * because the words need a surface to sit on.
+   */
+  bare?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <View
       style={[
         styles.bubble,
-        mine ? styles.sent : styles.received,
+        !bare && (mine ? styles.sent : styles.received),
+        bare && styles.bubbleBare,
         mine && pending === true && styles.pending,
       ]}
     >
       {children}
     </View>
+  );
+}
+
+/**
+ * Who posted this, above whatever they posted.
+ *
+ * **One component for messages AND cards**, which is the point of it: the two were drawn
+ * separately for a few hours on 2026-08-13 and had already disagreed about the name's colour by
+ * the time anybody looked at them side by side. A card is introduced exactly the way a message is.
+ *
+ * > **The avatar moved out from beside the bubble.** v1 put it in a column to the left, on both
+ * > sides, and the founder asked for the face and the name together above the content instead.
+ *
+ * **The line follows its own bubble, and mirrors when it does.** On a received message the avatar
+ * hangs in the left gutter with the name beside it; on your own it hangs in the right gutter with
+ * the name to ITS left. Either way the name's outer edge lines up with the edge of the box
+ * beneath it and the face hangs past both.
+ *
+ * The mirroring is the part that had to be chosen rather than derived - an author line pinned to
+ * the left above a right-aligned bubble leaves the name introducing nothing, with a column of
+ * empty space between them. `AVATAR_SIZE` plus the gap is what the bubble is inset by on its own
+ * side, which is why `authorIndent` reads them from here rather than restating the number.
+ */
+function AuthorLine({
+  name,
+  image,
+  mine = false,
+  onPress,
+}: {
+  name: string;
+  image: string | null;
+  mine?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      style={[styles.authorLine, mine && styles.authorLineMine]}
+      onPress={onPress}
+      hitSlop={space.xs}
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${name}'s profile`}
+    >
+      <Avatar name={name} image={image} size={AVATAR_SIZE} />
+      <Text style={styles.authorName}>{name}</Text>
+    </Pressable>
   );
 }
 
@@ -676,10 +745,10 @@ const PendingRow = memo(function PendingRow({
   return (
     <View style={[styles.messageRow, styles.messageRowMine]}>
       {/*
-        A spacer the exact width of an avatar, not an avatar. The client knows its own
-        user id but not its own name, so there is no initial to draw; leaving the slot
-        empty instead would let the bubble jump 40px left the moment the ack arrives
-        and the real avatar takes the space.
+        A spacer the exact height of an author line, not an author line. The client knows its own
+        user id but not its own name, so there is no name to write and no initial to draw; leaving
+        the slot empty instead would let the bubble jump upward by a whole avatar the moment the
+        ack arrives and the real line takes the space.
       */}
       <View style={styles.avatarSpacer} />
       <View style={styles.bubbleWrapMine}>
@@ -860,6 +929,131 @@ const MessageRow = memo(function MessageRow({
 
   const summary = reactionSummary(message.reactions, userId);
 
+  /*
+   * A card, drawn full width with no bubble and no avatar.
+   *
+   * > **It used to sit inside its creator's bubble**, at 82% width and on a tinted fill. The
+   * > founder's 2026-08-13 mockup takes all three cards out of the bubble layout, and it is the
+   * > same reasoning the announcement branch above already runs on: a poll is put to the room
+   * > rather than said to it. The practical half is that a poll's option bars are meant to be
+   * > compared by length, and 82% of the column minus an avatar is not much to compare in.
+   *
+   * Attribution is not lost - it moved into the card's own meta line, which is where the mockup
+   * puts it and where a poll's "Coach Dana" now lives.
+   *
+   * Everything the bubble was carrying for a card is carried here instead: the long press that
+   * opens the react/report sheet on native, the dots that stand in for it on web, the pin marker,
+   * the jump highlight and the reaction row. The one thing deliberately dropped is the timestamp,
+   * per the mockup - a card is a thing that exists, not a thing said at a moment.
+   */
+  if (cardId !== null) {
+    /*
+     * The hold, handed to whichever element can actually receive it.
+     *
+     * > **An event card could never be held, and it took a founder on a phone to find it.** The
+     * > row wraps every card in a pressable to catch the gesture, which works for a poll - its
+     * > card is a plain View with non-pressable space to grab. The event and meeting cards ARE
+     * > pressables, so on native they become the responder and the wrapper never sees the hold.
+     * > Nothing was nested illegally and nothing threw; the gesture simply had nowhere to land.
+     *
+     * So it goes to both: the wrapper still catches it for the poll card, and the two navigating
+     * cards take it on their own pressable. Native only, exactly as before - on web it is not
+     * attached and the dots below stand in for it, both keyed off the one constant.
+     */
+    const holdToSelect = CARDS_ARE_LONG_PRESSABLE
+      ? () => {
+          longPressFeedback();
+          onSelect(message.seq);
+        }
+      : undefined;
+
+    return (
+      <View style={[styles.cardRow, isJumpTarget && styles.jumpTarget]}>
+        {/*
+          Null when the message was cached before this column existed. It renders unattributed
+          rather than blank-labelled, and the next sync fills it in.
+        */}
+        {message.senderName !== null && (
+          <AuthorLine
+            name={message.senderName}
+            image={message.senderImage}
+            onPress={() => onOpenProfile(message.senderId)}
+          />
+        )}
+        <Pressable
+          onLongPress={holdToSelect}
+          delayLongPress={400}
+          /*
+            `none`, and it is what keeps the nesting legal: react-native-web renders a Pressable
+            as a real <button> only when its role says so, and the event and meeting cards inside
+            are buttons themselves. `disabled` was tried once and was worse than the bug - it
+            disables descendants, so every poll option went dead.
+          */
+          accessibilityRole="none"
+        >
+          {/* A property of the message rather than of who sent it, so it travels with the card. */}
+          {message.pinned && (
+            <View style={styles.cardPin}>
+              <MaterialIcons name="push-pin" size={12} color={color.accent} />
+            </View>
+          )}
+          {message.linkedPollId !== null ? (
+            <ChatPollCard pollId={message.linkedPollId} fallback={cardFallback} />
+          ) : message.linkedEventId !== null ? (
+            <ChatEventCard
+              eventId={message.linkedEventId}
+              fallback={cardFallback}
+              onLongPress={holdToSelect}
+            />
+          ) : (
+            /* A meeting card. The event card's twin, and navigates the same way. */
+            <ChatMeetingCard
+              meetingId={cardId}
+              fallback={cardFallback}
+              onLongPress={holdToSelect}
+            />
+          )}
+          {!CARDS_ARE_LONG_PRESSABLE && (
+            <Pressable
+              style={styles.cardMenu}
+              onPress={() => onSelect(message.seq)}
+              hitSlop={space.sm}
+              accessibilityRole="button"
+              accessibilityLabel={
+                mine ? "React to your card" : "React to or report this card"
+              }
+            >
+              <MaterialIcons name="more-vert" size={18} color={color.textSecondary} />
+            </Pressable>
+          )}
+        </Pressable>
+
+        {summary.length > 0 && (
+          <View style={[styles.metaRow, styles.metaRowTheirs]}>
+            {summary.map((entry) => (
+              <Pressable
+                key={entry.emoji}
+                style={[styles.pill, entry.mine && styles.pillMine]}
+                onPress={() => onReact(message.seq, entry.emoji)}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  entry.mine
+                    ? `Remove your ${entry.emoji} reaction, ${entry.count} total`
+                    : `React with ${entry.emoji}, ${entry.count} total`
+                }
+              >
+                <Text style={styles.pillEmoji}>{entry.emoji}</Text>
+                <Text style={[styles.pillCount, entry.mine && styles.pillCountMine]}>
+                  {entry.count}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
+      </View>
+    );
+  }
+
   return (
     <View
       style={[
@@ -869,42 +1063,35 @@ const MessageRow = memo(function MessageRow({
       ]}
     >
       {/*
-        v1's arrangement: the avatar sits beside the bubble on BOTH sides, and the row
-        right-aligns for your own messages rather than mirroring - so the avatar stays
-        on the left of the bubble either way. Tappable, because a name in a busy channel
-        is only useful if you can get from it to the person.
+        The face and the name together, above the bubble - the same line a card gets, from the
+        same component, so the two cannot drift again.
+
+        Null when the message was cached before this column existed. It renders unattributed
+        rather than blank-labelled, and the next sync fills it in. Shown on BOTH sides:
+        attribution on your own messages is not redundant, or an own bubble would be the only
+        unlabelled thing on screen.
       */}
-      <Pressable
-        onPress={() => onOpenProfile(message.senderId)}
-        accessibilityRole="button"
-        accessibilityLabel={`Open ${message.senderName ?? "this member"}'s profile`}
-        hitSlop={space.xs}
-      >
-        <Avatar
-          name={message.senderName ?? "?"}
+      {message.senderName !== null && (
+        <AuthorLine
+          name={message.senderName}
           image={message.senderImage}
-          size={AVATAR_SIZE}
+          mine={mine}
+          onPress={() => onOpenProfile(message.senderId)}
         />
-      </Pressable>
+      )}
       <Pressable
         // Long press, not a visible button: reporting is rare and a tap target on
         // every bubble would be noise. Own messages are excluded because nobody can
         // report themselves.
         //
-        // A card bubble is long-pressable on native and deliberately not on web - the
-        // honest reading of failure mode 17 rather than a workaround. See
-        // `CARDS_ARE_LONG_PRESSABLE` for why the two platforms differ, and note that the
-        // dots below key off the same constant so the two can never disagree.
-        onLongPress={
-          cardId !== null && !CARDS_ARE_LONG_PRESSABLE
-            ? undefined
-            : () => {
-                // A tap you can feel, before anything appears on screen. Shared with the two
-                // list screens so one gesture has one feel - see `longPressFeedback`.
-                longPressFeedback();
-                onSelect(message.seq);
-              }
-        }
+        // Unconditional here. The platform split lives in the card branch above, which is
+        // the only place that ever needed it.
+        onLongPress={() => {
+          // A tap you can feel, before anything appears on screen. Shared with the two
+          // list screens so one gesture has one feel - see `longPressFeedback`.
+          longPressFeedback();
+          onSelect(message.seq);
+        }}
         /*
           A tap opens the photo, and ONLY on a photo message.
 
@@ -920,12 +1107,9 @@ const MessageRow = memo(function MessageRow({
             : undefined
         }
         delayLongPress={400}
-        // `none` for a card, and that is what keeps the nesting legal: react-native-web
-        // renders a Pressable as a real <button> ONLY when its role says so, and a plain
-        // <div> wrapper can hold the card's controls legally. `disabled` was the first
-        // attempt and was worse than the bug - a disabled button disables its descendants,
-        // so every option inside went dead and the card could not be voted on at all.
-        accessibilityRole={cardId !== null ? "none" : "button"}
+        // Always a button now that cards do not come through here. The `none` role that
+        // kept a card's own controls legal moved with them, into the branch above.
+        accessibilityRole="button"
         accessibilityLabel={
           mine
             ? "Press and hold to react to your message"
@@ -934,31 +1118,29 @@ const MessageRow = memo(function MessageRow({
         // The gesture stays on the OUTERMOST element and the fill sits inside it, so the
         // bubble can be styled freely without the pressable becoming the styled thing -
         // and without nesting a second pressable (failure mode 16).
-        style={mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs}
+        /*
+          Inset from its OWN side, so the bubble's outer edge lines up with the name above it and
+          the avatar hangs past both. Mirrored for your own messages, like the line itself.
+        */
+        style={
+          mine
+            ? [styles.bubbleWrapMine, styles.authorIndentMine]
+            : [styles.bubbleWrapTheirs, styles.authorIndent]
+        }
       >
-        {/*
-          The sender's name, ABOVE the bubble rather than the first line inside it.
-
-          > **It was v1's bubble header**, sharing a row with the pin marker. Moved out
-          > 2026-08-12 at the founder's request, which puts it and the time on the same
-          > footing: the name and the time are both *about* the message, and the bubble
-          > holds only what was actually said. That is why it now takes the time's colour
-          > rather than the accent - they are one pair bracketing the bubble, not two
-          > unrelated labels.
-
-          On BOTH sides. Attribution on your own messages is not redundant here - the
-          avatar sits on the left of every bubble, so a nameless own bubble would be the
-          only unlabelled thing on screen.
-
-          Null when the message was cached before this column existed. It renders
-          unattributed rather than blank-labelled, and the next sync fills it in.
-        */}
-        {message.senderName !== null && (
-          <Text style={[styles.senderName, mine && styles.senderNameMine]}>
-            {message.senderName}
-          </Text>
-        )}
-        <BubbleContainer mine={mine}>
+        <BubbleContainer
+          mine={mine}
+          /*
+            A photo with nothing said alongside it wears no bubble. The caption is the test rather
+            than the type: with words there is something that needs a surface, without them the
+            picture is the message and a tinted frame is just an outline around an outline.
+          */
+          bare={
+            message.type === "photo" &&
+            message.mediaId !== null &&
+            (message.body === null || message.body.length === 0)
+          }
+        >
           {/*
             The pin marker stays INSIDE. It is a property of the message rather than of
             who sent it, so it travels with the words and not with the attribution.
@@ -990,86 +1172,20 @@ const MessageRow = memo(function MessageRow({
             />
           )}
           {/*
-            A poll card, drawn inside the bubble of the person who made it - which is
-            what it is. v1 does the same, on an explicit founder request that the
-            bubble look and behave like the full poll rather than a link out of the
-            conversation, so it votes, closes and deletes in place.
+            A photo may carry a caption, and usually does not.
 
-            The body sentence is suppressed alongside it: the card already says who
-            asked what, and repeating it above is the same line twice.
+            No card branch here: a card message returns above, full width and outside the
+            bubble layout entirely. See the block over `styles.cardRow`.
           */}
-          {cardId !== null ? (
-            <>
-              {message.linkedPollId !== null ? (
-                <ChatPollCard
-                  pollId={message.linkedPollId}
-                  authorName={message.senderName}
-                  fallback={cardFallback}
-                />
-              ) : message.linkedEventId !== null ? (
-                /*
-                  An event card, drawn in its creator's bubble exactly as a poll is -
-                  v1's card, with the calendar glyph, the date, the location and View
-                  Event out to the event's own screen.
-
-                  It carries no controls of its own, so unlike the poll card it is a
-                  single press target: the whole card navigates. That is legal inside
-                  this bubble only because the bubble declares `accessibilityRole="none"`
-                  above, which is what stops react-native-web rendering it as a <button>.
-                */
-                <ChatEventCard
-                  eventId={message.linkedEventId}
-                  fallback={cardFallback}
-                />
-              ) : (
-                /* A meeting card. The event card's twin, and navigates the same way. */
-                <ChatMeetingCard meetingId={cardId} fallback={cardFallback} />
-              )}
-              {/*
-                The dots, ONLY where the long press is not available - which today means
-                web alone.
-
-                > **They were on every card and are now on almost none**, at the founder's
-                > request once holding a card was confirmed working on the phone: a visible
-                > control doing what the gesture already does is clutter on the one surface
-                > that is actually the product, and it sits in the corner of a card whose
-                > own controls are what the card is for.
-
-                Web keeps them because it has nothing else: the gesture is deliberately not
-                attached there, and without these a card would be the one message in the log
-                nobody could react to, report or reply to.
-              */}
-              {!CARDS_ARE_LONG_PRESSABLE && (
-                <Pressable
-                  style={styles.cardMenu}
-                  onPress={() => onSelect(message.seq)}
-                  hitSlop={space.sm}
-                  accessibilityRole="button"
-                  accessibilityLabel={
-                    mine ? "React to your card" : "React to or report this card"
-                  }
-                >
-                  <MaterialIcons
-                    name="more-vert"
-                    size={18}
-                    color={color.textSecondary}
-                  />
-                </Pressable>
-              )}
-            </>
-          ) : (
-            /* A photo may carry a caption, and usually does not. */
-            message.body !== null &&
-            message.body.length > 0 && (
-              <Text style={mine ? styles.sentText : styles.receivedText}>
-                <MentionedBody
-                  body={message.body}
-                  mentions={message.mentions}
-                  mine={mine}
-                  onOpenProfile={onOpenProfile}
-                />
-              </Text>
-            )
+          {message.body !== null && message.body.length > 0 && (
+            <Text style={mine ? styles.sentText : styles.receivedText}>
+              <MentionedBody
+                body={message.body}
+                mentions={message.mentions}
+                mine={mine}
+                onOpenProfile={onOpenProfile}
+              />
+            </Text>
           )}
           {/*
             The time, in the bubble's bottom-right corner.
@@ -1111,7 +1227,14 @@ const MessageRow = memo(function MessageRow({
         the row does not reshuffle as counts change.
       */}
       {summary.length > 0 && (
-        <View style={[styles.metaRow, mine ? styles.metaRowMine : styles.metaRowTheirs]}>
+        <View
+          style={[
+            styles.metaRow,
+            mine ? styles.metaRowMine : styles.metaRowTheirs,
+            /* Under the bubble it belongs to, inset past the hanging avatar on the same side. */
+            mine ? styles.authorIndentMine : styles.authorIndent,
+          ]}
+        >
           {summary.map((entry) => (
             <Pressable
               key={entry.emoji}
@@ -2741,6 +2864,25 @@ export default function ChatScreen() {
           keyExtractor={keyExtractor}
           contentContainerStyle={styles.list}
           /*
+            **What the reader is looking at stays where it is, whatever resizes around it.**
+
+            > Reported as "for the last 40 or 50 messages it is smooth, and as we reach poll event
+            > pics old messages it is bugging" - which is the diagnosis, not just the symptom. The
+            > recent tail is plain text: measured once, never changes. Older history is where the
+            > cards and the photos are, and **every one of those changes height after it renders**.
+            > A poll card draws its fallback sentence, fetches the poll, and becomes three hundred
+            > points of options; a photo draws a square and then becomes its true shape, because
+            > nothing on the wire says how tall a picture is. Each of those resizes shifts
+            > everything after it, and the list lurches under the finger.
+
+            This prop is the standing answer to that: it anchors the first visible cell and lets
+            layout changes above it push content the other way, rather than moving the viewport.
+            It is not a tuning value - without it, ANY asynchronous height in a scrollback is felt
+            by the reader, so this stays even if today's particular offenders are made to settle
+            faster.
+          */
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+          /*
             The ONLY thing that reacts to the content growing, and it is bounded three ways: it
             runs only while an arrival placement is outstanding, only a handful of times, and
             never once the reader has touched the list. The unbounded version of this - scroll to
@@ -3438,6 +3580,8 @@ const styles = StyleSheet.create({
     moves back out, this padding should come back up rather than staying tight by inertia.
   */
   bubble: { padding: space.sm, gap: 2 },
+  /* Cancels the padding too: a frame of empty space is as much a frame as a tinted one. */
+  bubbleBare: { padding: 0, backgroundColor: "transparent" },
   /*
    * v1's announcement card, which is deliberately not a bubble.
    *
@@ -3523,6 +3667,24 @@ const styles = StyleSheet.create({
      * that is simply short. Stretching costs nothing and is what every messenger does.
      */
     alignSelf: "stretch",
+    /*
+     * **A floor, because a quote cannot widen the bubble it is inside.**
+     *
+     * A short reply - "Yay", "Haaan" - gives the bubble a tiny content width, and the quote is
+     * stretched to whatever that turns out to be. Its text column then has nothing to work with
+     * and the quoted name wraps a word at a time: "Par... / Parks / RP...". Measured on web at
+     * 79pt of column for a 158pt bubble.
+     *
+     * The reason it cannot push back was checked rather than assumed: both Texts inside carry
+     * `numberOfLines`, which react-native-web implements as `overflow: hidden` plus
+     * `max-width: 100%`, and a subtree of those contributes no intrinsic width to an auto-sized
+     * ancestor. Forcing a definite width on the wrapper in the browser expanded the column from
+     * 79 to 221, which is what identified the sizing rather than the styling as the cause.
+     *
+     * So the quote states a minimum instead. It stays under the bubble's own 82% cap on the
+     * narrowest phone this targets, which is the relationship to preserve if the number moves.
+     */
+    minWidth: 200,
   },
   quoteTheirs: { backgroundColor: color.appBackground },
   /*
@@ -3560,7 +3722,21 @@ const styles = StyleSheet.create({
   // `flex: 1` with `minWidth: 0`: the column takes whatever is left after the rule and any
   // thumbnail, and the zero minimum is what lets a long preview wrap and ellipsize inside it
   // rather than forcing the row wider than the bubble.
-  quoteColumn: { flex: 1, minWidth: 0, gap: 1 },
+  /*
+    `flexGrow` and `flexShrink`, never the `flex: 1` shorthand.
+
+    > **`flex: 1` is `flexBasis: 0%`, which is the column telling the layout its natural width is
+    > nothing.** That was survivable while the message row was a horizontal flex - a bubble measured
+    > along the MAIN axis takes its content's max width, and the quote inherited a definite width to
+    > divide up. The row became a column when the avatar moved above the bubble, so the bubble's
+    > width is now a CROSS-axis fit-content measurement, and a zero-basis child contributes zero to
+    > it. Every reply collapsed to the width of its own body text and wrapped the quoted name one
+    > letter at a time: "Par... / Parks / RP...".
+
+    Growing and shrinking with an `auto` basis is what was always meant: contribute your content's
+    width to the bubble, then be willing to give it back so `numberOfLines` truncates.
+  */
+  quoteColumn: { flexGrow: 1, flexShrink: 1, minWidth: 0, gap: 1 },
   quoteSender: { ...type.label, fontSize: 10, color: color.accent },
   quoteSenderMine: { color: color.accent },
   quotePreview: { ...type.bodySmall, fontSize: 12, color: color.textSecondary },
@@ -3710,63 +3886,28 @@ const styles = StyleSheet.create({
   dialogButtonLabel: { ...type.headline, color: color.textPrimary },
 
   /**
-   * v1's message row: avatar and bubble side by side, bottom-aligned so the avatar sits level
-   * with the last line of a multi-line bubble rather than floating beside its first.
+   * The message row: an author line, then the bubble, then any reactions.
    *
-   * `messageRowMine` only sets `justifyContent`. It deliberately does NOT reverse the direction,
-   * so your own avatar stays to the left of your own bubble and the pair moves right as a unit -
-   * v1's arrangement, and the reason the bubble wrappers below no longer need `alignSelf`.
+   * > **It was a horizontal flex of avatar-then-bubble**, v1's arrangement, wrapping so the
+   * > reaction pills fell underneath rather than becoming a third column. The founder moved the
+   * > avatar up beside the name on 2026-08-13, which leaves nothing to sit beside - so this is a
+   * > plain column and the wrap it needed is gone with the layout that needed it.
+   *
+   * `alignItems` is what sides a message now. It has to be stated in BOTH directions: the default
+   * is `stretch`, which would pull every bubble out to its 82% maximum and make a one-word message
+   * as wide as a paragraph.
    */
-  messageRow: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: space.sm,
-    marginBottom: space.xs,
-    /*
-     * Wraps, so the reaction row drops BELOW the bubble instead of beside it.
-     *
-     * This row is a horizontal flex of avatar-then-bubble, and the pill row is its third child -
-     * so without wrapping it became a third column and the pills sat out to the side of the
-     * message, which reads as unrelated to it. Giving the pill row a full-width basis pushes it
-     * onto its own line under both.
-     */
-    flexWrap: "wrap",
-  },
-  messageRowMine: { justifyContent: "flex-end" },
-  avatarSpacer: { width: AVATAR_SIZE, height: AVATAR_SIZE },
+  messageRow: { alignItems: "flex-start", marginBottom: space.xs },
+  messageRowMine: { alignItems: "flex-end" },
   /*
-    The sender's name above the bubble.
+    A spacer the height of an author line, for a row that has none yet.
 
-    > **It was 10px Inter**, v1's treatment, which is a caption rather than a name - at that size it
-    > read as metadata attached to the bubble instead of as the person saying the thing. Enlarged
-    > 2026-08-12 at the founder's request.
-
-    `type.bodySmall` spread whole rather than `label` with a bigger `fontSize` on it, per `TECH/13`
-    rule 3: the old declaration was a label role with its size overridden, which is the half-applied
-    role that rule exists to stop. The relationship to hold is that **the name sits just under the
-    message it introduces** - readable as a name, still quieter than the words themselves.
+    > **It was the width of an avatar**, holding the bubble's left edge still while the avatar sat
+    > in a column beside it. The jump it exists to prevent is vertical now: an optimistic row gains
+    > its author line the moment the ack lands, and without this the bubble slides up by the height
+    > of a face as it does.
   */
-  senderName: {
-    ...type.bodySmallStrong,
-    /*
-      The primary text colour, at the founder's request.
-
-      It briefly took the time's `textSecondary` on the reasoning that the name and the time were
-      a matched pair bracketing the bubble. That was true while the time sat outside; the time is
-      back in the corner now, so the name is the only thing above the bubble and is the darkest
-      thing in the row rather than half of a pair.
-    */
-    color: color.textPrimary,
-    marginBottom: space.xs,
-  },
-  /*
-   * Your own name sits over a right-aligned bubble, so it right-aligns with it.
-   *
-   * `textAlign` rather than `alignSelf`: the wrapper is a column sized to its widest child, so a
-   * name shorter than the bubble has room to move inside its own full-width line, and one longer
-   * than the bubble is what sets the width in the first place.
-   */
-  senderNameMine: { textAlign: "right" },
+  avatarSpacer: { height: AVATAR_SIZE + space.sm },
   /** Was `bubbleHeader`, when the name shared this row. It holds the pin marker alone now. */
   pinRow: {
     flexDirection: "row",
@@ -3850,6 +3991,69 @@ const styles = StyleSheet.create({
   /* Full width under the sentence, so the options are real targets rather than a preview. */
   cardWrap: { alignSelf: "stretch", paddingHorizontal: space.md, paddingTop: space.sm },
   cardMenu: { alignSelf: "flex-end", paddingTop: space.xs, paddingHorizontal: space.xs },
+  /*
+    A card row: full width, no bubble, no avatar.
+
+    > **Cards used to be drawn inside their creator's bubble**, which is what they are - a thing
+    > somebody posted. The founder's 2026-08-13 mockup takes them out of it, and the reason holds:
+    > a poll is addressed to the room rather than said to it, exactly like an announcement, and
+    > the 82% bubble width was squeezing option bars whose whole job is to be comparable lengths.
+    > Attribution did not go anywhere - it moved into the card's own meta line, which is where the
+    > mockup puts it.
+
+    A plain column, unlike `messageRow` - which is a horizontal flex of avatar-then-bubble and
+    needs `flexWrap` to stop the reaction pills becoming a third column. With no avatar there is
+    nothing to sit beside, so the pills stack underneath on their own.
+  */
+  cardRow: { marginBottom: space.xs },
+  /*
+    Who posted it, above the card rather than inside it.
+
+    > **Attribution started in the card's own meta line** when cards left the bubble on
+    > 2026-08-13, and came back out the same day at the founder's request: a card should be
+    > introduced the way a message is. The difference from `messageRow` is that the avatar sits
+    > ABOVE the card beside the name rather than to the left of it - a card is full width, so
+    > there is no column beside it for a face to stand in.
+
+    The card no longer says who made it, so this row is the only attribution and cannot be
+    dropped for space.
+  */
+  authorLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    paddingBottom: space.sm,
+    alignSelf: "flex-start",
+  },
+  /*
+    Mirrored, not merely moved: `row-reverse` puts the face in the right-hand gutter with the name
+    inboard of it, so your own attribution is the reflection of everybody else's rather than the
+    same arrangement shunted across.
+  */
+  authorLineMine: { alignSelf: "flex-end", flexDirection: "row-reverse" },
+  /*
+    How far the content sits in from its own edge: exactly past the hanging avatar.
+
+    Two styles, one number, because the bubble and the reaction row beneath it have to agree with
+    each other and with the name above them. Restating it is how the reaction row ended up 48pt
+    off the bubble it belonged to once already.
+  */
+  authorIndent: { marginLeft: AVATAR_SIZE + space.sm },
+  authorIndentMine: { marginRight: AVATAR_SIZE + space.sm },
+  authorName: {
+    ...type.bodySmallStrong,
+    /*
+      The primary text colour, at the founder's request.
+
+      > It briefly took the time's `textSecondary` on the reasoning that the name and the time were
+      > a matched pair bracketing the bubble. That was true while the time sat outside; the time is
+      > back in the corner now, so the name is the darkest thing above the content rather than half
+      > of a pair. The card's copy of this line was written in `textSecondary` and had to be
+      > corrected, which is why there is now one line rather than two.
+    */
+    color: color.textPrimary,
+  },
+  cardPin: { flexDirection: "row", alignItems: "center", paddingBottom: space.xs },
   systemText: {
     ...type.bodySmall,
     color: color.textSecondary,
@@ -4178,11 +4382,13 @@ const styles = StyleSheet.create({
   /*
    * Aligned under the bubble it belongs to, on whichever side that sits. `justifyContent` rather
    * than `alignSelf`, because at full width there is no free space for `alignSelf` to move into.
-   * Theirs is inset past the avatar so the row lines up with the bubble's left edge, not the
-   * avatar's - which is why it reads `AVATAR_SIZE` rather than repeating the number.
+   *
+   * > **Theirs used to be inset past the avatar**, back when one stood in a column to the left of
+   * > the bubble. With the avatar above the message there is no column to clear, and the inset
+   * > that survived the move would have pushed every reaction row 48pt off its own bubble's edge.
    */
   metaRowMine: { justifyContent: "flex-end" },
-  metaRowTheirs: { justifyContent: "flex-start", paddingLeft: AVATAR_SIZE + space.sm },
+  metaRowTheirs: { justifyContent: "flex-start" },
   /*
     The time, in the bubble's bottom-right corner. Same token on both fills, since both are light.
 

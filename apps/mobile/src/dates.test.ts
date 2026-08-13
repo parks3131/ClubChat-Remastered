@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { formatConversationTimestamp, formatDaySeparator, toDateKey } from './dates.ts';
+import { bibParts, formatConversationTimestamp, formatDaySeparator, toDateKey } from './dates.ts';
 
 /** A local date, built from components - never parsed, for the reason at the top of `dates.ts`. */
 const localDate = (year: number, month: number, day: number, hour = 12) =>
@@ -109,5 +109,27 @@ describe('the conversation row timestamp', () => {
     // across the list. Empty is honest; "Invalid Date" is a bug report shown to a member.
     expect(formatConversationTimestamp('', now)).toBe('');
     expect(formatConversationTimestamp('not-a-date', now)).toBe('');
+  });
+});
+
+/**
+ * The chip on a calendar row and on an event's chat card.
+ *
+ * **Both cases are asserted with an hour that puts UTC on a different DAY**, in each direction, so
+ * the pair discriminates in every zone rather than only in the tester's. The one machine these
+ * cannot fail on is a machine actually running UTC, where there is no boundary to get wrong.
+ */
+describe('the calendar bib', () => {
+  it('reads an instant in the zone the reader is in, never in UTC', () => {
+    // Half past eleven at night: the UTC day is already the 13th anywhere west of Greenwich.
+    expect(bibParts(new Date(2026, 7, 12, 23, 30).toISOString(), false).day).toBe(12);
+    // Half past midnight: the UTC day is still the 11th anywhere east of it.
+    expect(bibParts(new Date(2026, 7, 12, 0, 30).toISOString(), false).day).toBe(12);
+  });
+
+  it('reads a date-only value as a day, not as UTC midnight', () => {
+    // The opposite handling, and the reason the flag is a required parameter: this string has no
+    // zone to honour, so parsing it as an instant would chip the 11th west of Greenwich.
+    expect(bibParts('2026-08-12', true).day).toBe(12);
   });
 });

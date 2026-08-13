@@ -616,3 +616,39 @@ that records how to recognise the class._
     define in the next edit. Ask whether the file runs *as saved*; if not, it is one write. Note
     that typecheck cannot see this - each individual state is a type error at worst, and the thing
     that actually breaks is a runtime lookup in a process that reloaded in between.
+
+    **Two more on 2026-08-13, both while the rule above was being written**, which is the reason
+    this now names the two directions rather than the one case. `ReferenceError: authorName is not
+    defined` came from deleting a prop from a signature while a use of it remained lower in the
+    file; `ReferenceError: PHOTO_LONG_EDGE is not defined` came from extracting a constant and
+    placing it *after* the `StyleSheet.create` that reads it - which runs at module load, so the
+    whole screen died rather than one component.
+
+    **The rule, stated as an ordering rather than as a count:**
+
+    | Doing this | Do it in this order |
+    |---|---|
+    | Adding a name | Declare it, then use it |
+    | Removing a name | Remove every use, then remove the declaration |
+    | Extracting a constant | Above everything that reads it, module-scope `StyleSheet.create` included |
+
+    Each of those keeps the file runnable at every save, which is what "one write" was really
+    asking for. And note which failure is worse: a bad ordering inside a function is a broken
+    component, while a bad ordering at module scope is a red screen over the entire app.
+
+27. **A child that handles a press becomes the responder, so a gesture aimed at its ancestor never
+    arrives.** Symptom: holding an event card in chat did nothing, on the device, for the entire
+    life of the card - reported by the founder on 2026-08-13 with "i couldnt long press the
+    event". Root cause: the chat row wraps every card in a `Pressable` to catch the react-and-
+    report hold, and that works for a poll card, which is a plain `View` with non-pressable space
+    to grab. The event and meeting cards **are** pressables, so on native they take the touch
+    responder and the wrapper's `onLongPress` is unreachable everywhere on the card. **Rule: the
+    element that owns the tap must own the hold** - pass the handler down to it rather than
+    wrapping it in an ancestor that will never see the gesture.
+
+    How to recognise the class, and why it is not entry 17: nothing is nested illegally, nothing
+    throws, no warning appears, and the web console is clean because web deliberately does not
+    attach the gesture at all. 17 is about a nesting that is *invalid*; this is a nesting that is
+    perfectly valid and merely silent. The tell is a gesture handler on a parent whose child has
+    any press handler of its own, and the only way to see it is to make the gesture on a device -
+    which is why "verify on each platform separately" is section 2.3 rule 6 rather than advice.

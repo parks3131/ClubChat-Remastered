@@ -34,6 +34,7 @@
 | ~~**Muting**~~ | **Done in Phase 3.5.** Per-conversation, every scope: no push, unread count still accrues. Per-**type** and per-club preferences are still open, and are now one check inside the audience function rather than something with nowhere to live |
 | ~~**Block or mute between members**~~ | **No longer deferrable.** Promoted out of this list on 2026-07-28: with direct messages in scope, blocking, conversation mute, and a report destination ship in the same release as DMs. A private one-to-one channel with no admin party to it, no block, and nowhere for a report to go, is a materially different risk class in a product that will include minors. See [Direct messages](14-direct-messages.md) |
 | **Over-the-air updates** | Every fix currently needs a full store release |
+| **Image dimensions are not on the wire** | `media_objects` stores a mime type, a byte count and its variant keys, and nothing about shape - so a client cannot size a photo until it has fetched and measured it, and the first render of any unseen photo corrects itself. Mitigated on the client (the list anchors its visible position, and each aspect is remembered per session), which is why this is not blocking. Fixed properly by recording width and height when the worker derives the variants, and carrying them on the message envelope |
 
 ### Architectural debt worth designing away
 

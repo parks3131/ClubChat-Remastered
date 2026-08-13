@@ -165,7 +165,7 @@ function tintFor(kind: FeedItem['kind']): { background: string; text: string } {
 function EventRow({ item, faded }: { item: FeedItem; faded: boolean }) {
   const router = useRouter();
   const tint = tintFor(item.kind);
-  const bib = item.kind === 'poll' || item.at === null ? null : bibParts(item.at);
+  const bib = item.kind === 'poll' || item.at === null ? null : bibParts(item.at, item.allDay);
   // Every kind on this merged feed has a screen now, events included - so every row opens.
   const target =
     item.kind === 'poll'

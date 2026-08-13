@@ -1432,11 +1432,30 @@ export function ComposerHeader({
   title,
   discardLabel,
   onCancel,
+  dismiss = 'back',
+  action,
 }: {
   title: string;
   /** What backing out throws away, said plainly. Required, per this module's own rule. */
   discardLabel: string;
   onCancel: () => void;
+  /**
+   * Which way out this is.
+   *
+   * `back` returns to where you came from and is the default every other composer wants. `close`
+   * says the form is a thing you are inside and are dismissing, which is what a header carrying
+   * its own primary action implies - you are not going back a step, you are done with it.
+   */
+  dismiss?: 'back' | 'close';
+  /**
+   * The primary action, in the header rather than at the foot of the form.
+   *
+   * Optional because it changes the shape of the screen: with one here the form has no trailing
+   * button, and the action stays reachable however far the content grows. Added for the poll
+   * composer on 2026-08-13, whose deadline picker expands in place and would otherwise push a
+   * trailing button off screen.
+   */
+  action?: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
 
@@ -1449,9 +1468,15 @@ export function ComposerHeader({
         accessibilityRole="button"
         accessibilityLabel={discardLabel}
       >
-        <MaterialIcons name="arrow-back" size={22} color={color.accent} />
+        <MaterialIcons
+          name={dismiss === 'close' ? 'close' : 'arrow-back'}
+          size={22}
+          color={color.accent}
+        />
       </Pressable>
+      {/* Takes the slack, so the action sits hard against the right edge on any width. */}
       <Text style={styles.composerTitle}>{title}</Text>
+      {action !== undefined && <View style={styles.composerAction}>{action}</View>}
     </View>
   );
 }
@@ -1476,7 +1501,9 @@ const styles = StyleSheet.create({
     borderBottomColor: color.divider,
   },
   composerBack: { padding: space.xs },
-  composerTitle: { ...type.headerTitle, color: color.textPrimary },
+  /* `flex: 1` so the title takes the slack and any header action is pushed to the right edge. */
+  composerTitle: { ...type.headerTitle, color: color.textPrimary, flex: 1 },
+  composerAction: { flexShrink: 0 },
 
   pickerField: {
     flexDirection: 'row',

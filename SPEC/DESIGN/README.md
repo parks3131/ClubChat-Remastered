@@ -67,6 +67,8 @@ restating it wrongly.
 | 02 | [Avatar](02-avatar.md) | Every face in the product: the shape that says person or group, the fallback, the tint |
 | 03 | [Pinned strip](03-pinned-strip.md) | The notices above a conversation: what makes them appear, and the measurement trap that made a working one invisible |
 | 04 | [Share sheet](04-share-sheet.md) | Handing a club to somebody: the preview, the ways the link travels, and the code |
+| 05 | [Content card](05-content-card.md) | What a poll, an event or a meeting becomes in a conversation: one shell, three payloads, and the votable bar |
+| 06 | [Composer](06-composer.md) | The form you fill in to make a thing: sections separated by air, the action in the header, and the wheel |
 
 **Written as surfaces are worked on, not backfilled in a pass.** A spec written by reading code
 rather than by looking at a device starts out wrong, and a directory of unverified documents is

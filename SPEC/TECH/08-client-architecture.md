@@ -77,3 +77,32 @@ the client silently believes it is caught up when it is not.
 [Cross-cutting UX](../PRD/16-cross-cutting-ux.md) rule 4 stands: every screen also loads its data over REST, so a dropped socket
 degrades to stale-until-refresh rather than broken. The socket is an accelerator, never a
 dependency.
+
+### 5. A message row has three shapes, and two of them are not bubbles
+
+The chat row branches before it builds a bubble, and each branch owns **everything** a message
+needs rather than inheriting it:
+
+| Shape | What it is |
+|---|---|
+| Bubble | Ordinary messages, photos, documents. Sided, avatared, timestamped. |
+| Announcement | Full width, addressed to the room. No avatar, no side. |
+| Card | Full width, a poll / event / meeting. No avatar, no side, no timestamp. |
+
+**The obligation, promoted here from [`DESIGN/05`](../DESIGN/05-content-card.md) rule 4 because
+this is where somebody adding a per-message feature will look:** anything hung on the bubble has
+to be hung on the other two branches as well, or it silently stops existing for a third of the
+conversation. Today that list is the long press that opens the react-and-report sheet, the visible
+dots that stand in for that gesture on web, the pin marker, the jump-target highlight, and the
+reaction row.
+
+**Attribution is one component across the branches that have it**, `AuthorLine`: the avatar and
+the name together above the content, hanging in the gutter on the sender's own side with the box
+beneath inset to line up with the name. Bubbles mirror it for your own messages; a card never
+does, being full width and unsided. Written twice for a few hours and the two copies had already
+disagreed about the name's colour, which is the whole argument for it being one.
+
+**A card's outer wrapper declares `accessibilityRole="none"`, and that is load-bearing.**
+react-native-web renders a `Pressable` as a real `<button>` only when its role says so, and the
+event and meeting cards are buttons themselves. `disabled` is not the alternative - it was tried,
+and it disables descendants, so every option inside a poll card went dead.

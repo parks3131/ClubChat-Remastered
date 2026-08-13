@@ -13,6 +13,357 @@ Newest first.
 
 ---
 
+## 2026-08-13 - Three cards that claimed to be one, and a date that was tomorrow
+
+A mockup of the chat screen with an event card and a poll card in it. The cards were already
+built, so this looked like a styling pass. It was mostly a de-duplication, and it turned up a
+wrong date on the calendar on the way in.
+
+### The bug found before writing any of it
+
+The mockup's event card opens with a day-over-month chip, so the first question was where the day
+comes from. `bibParts` - and its one existing caller passed `FeedItem.at` straight in, a field
+whose own docstring says **"an ISO instant, or a date-only `YYYY-MM-DD` when `allDay`. Never parse
+it without checking which - that is the whole point of the flag beside it."**
+
+The two cases need opposite handling and look identical at the call site. `bibParts` sliced the
+first ten characters off and built a local date from the components, which is right for a bare
+date and takes the **UTC** day for an instant. So every event from early evening onwards was
+chipped with tomorrow's date, on the calendar feed, for everybody west of Greenwich - which is
+everybody testing this. Measured on the founder's machine at UTC-4: a 23:30 event on the 12th
+chipped as the 13th.
+
+The flag is now a **required** parameter rather than a default, so a caller has to say which of
+the two it holds, and the test asserts both directions with an hour that puts UTC on a different
+day each way - so the pair discriminates in any zone rather than only in the tester's. Proved
+live afterwards: a 9:30 PM event on 15 August now reads 15 AUG on the feed and on its card.
+
+Worth noting the shape, because it is a new one for this log. Not a rule copied and drifted
+(failure mode 9), and not a rule with no implementation (failure mode 19) - here the correct rule
+was **written down in the exact place the caller would have to read to make the call**, and the
+call was made anyway. A docstring is not a check.
+
+### What the mockup actually asked for
+
+Four things, and only the first is a style:
+
+1. Both cards get a white surface, a hairline outline, an accent uppercase eyebrow naming the kind,
+   a body-bold title and one quiet meta line. The event card gains a filled date chip.
+2. **The poll's option row becomes the bar.** A track holding a proportional fill, the label
+   sitting on the fill, the count at its right - rather than a label line with a separate 6pt
+   progress bar underneath it. Two objects became one.
+3. **The cards come out of the bubble.** They had been drawn inside their creator's bubble at 82%
+   width with an avatar beside them. Full width now, no avatar, no bubble - the same treatment the
+   announcement card already had, and for the same reason: a poll is put to the room rather than
+   said to it. Attribution moved into the meta line, which is where the mockup puts it.
+4. The founder's one addition to the mockup: **keep the eye.** The mockup has no per-option voter
+   control and `PRD/11` rule 5 requires one.
+
+### The de-duplication underneath it
+
+Three cards, written to one sketch and maintained apart. The poll card outlined itself in
+`divider`, the event card in `divider`, the poll *list* card in `hairline`; the event and meeting
+cards ended in a full-width accent pill and the poll card did not; the meeting card's module
+opened by calling itself "the event card's twin". Nothing was wrong enough to report, which is how
+three copies of one surface stay subtly different forever.
+
+They now share `content-card.tsx` and a design spec, [`DESIGN/05`](SPEC/DESIGN/05-content-card.md).
+The twinning is a fact rather than an intention.
+
+**Two rules of the new surface are worth citing rather than restating.** The card is *either* the
+link *or* it holds controls, never both - which is why dropping VIEW EVENT was not a simplification
+but the resolution of a latent nesting bug, and why `PRD/07` rule 10 was rewritten rather than
+honoured. And selection changes a colour and never a height: the option border is always present
+and track-coloured, and the tick that used to prefix a chosen label is gone because it shifted the
+text as it appeared.
+
+### Three things that had to be carried by hand
+
+- **The label sits on the fill, and on web the fill would have covered it.** An absolutely
+  positioned sibling paints above a static one in CSS regardless of source order. `zIndex` on the
+  content, and the browser smoke test is what would have caught it - the same shape as failure
+  mode 6, invisible to every automated check.
+- **Taking cards out of the bubble takes everything the bubble was carrying for them.** The long
+  press that opens the react-and-report sheet, the dots that stand in for it on web, the pin
+  marker, the jump highlight and the reaction row all had to move into the card branch. Promoted
+  into [`TECH/08`](SPEC/TECH/08-client-architecture.md) as a numbered rule, because a per-surface
+  design file is not where somebody adding a per-message feature will look.
+- **The eye had to get inside the row without becoming a button in a button.** It is absolutely
+  positioned in a gutter at the row's right end, a sibling of the vote target rather than a child,
+  and the gutter is reserved on every row of a poll that shows voters at all - reserving per row
+  steps the counts in and out as options cross their first vote.
+
+### The detail screen was the odd one out
+
+`PollBody` is shared by the card and the poll's own screen specifically so the two cannot disagree,
+and they disagreed anyway: the card had a per-option eye and the screen had a single "See who
+voted" button that opened the sheet on whichever option happened to be first. `PRD/11` rule 5 asks
+for a control on the option. The screen now takes the same `onSeeVoters` the card does.
+
+### Verified live
+
+Typecheck, 1,151 tests, the em-dash check and `check:runtime` all green, then the web client with
+Postgres, Redis, the API, the gateway and the worker running:
+
+- An event created from chat's "+" posting a card whose chip reads **15 AUG** for a 9:30 PM event -
+  the date fix, end to end.
+- A poll created from chat's "+", voted in place: the fill appears, the ring marks the vote, the
+  count increments, and the label stays readable on top of the fill in a browser.
+- **The eye opens the voter list and casts nothing** - the count behind the sheet still read 1.
+- Closing the poll from the card: the eyebrow mutes, the CLOSED chip appears, the fills grey, and
+  the ring on the voted option survives in the softer tone.
+- The event card pressing through to its screen with no VIEW EVENT button, and the poll's screen
+  reached by direct URL entry.
+- **Zero console errors and no nested-`<button>` warning**, which is the check that matters for a
+  card holding controls.
+
+### A photo, with nothing around it
+
+A reference of another app's photo message next to a photograph of ours, and the ask was "without
+any boundry shades and nice and small". Ours had **three** rectangles around one picture: the
+bubble's peach fill, the padding inside it, and a grey matte the image was letterboxed onto.
+
+The matte was the interesting one. `photoFrame` was a fixed 220 square filled with `color.fallback`
+and the image drawn `contain` inside it - so every photo that was not square arrived with two grey
+bands, and the comment above it explained that `contain` was chosen because "cropping somebody's
+photo to fit a bubble hides the part they were pointing at". That reasoning was right and its
+conclusion was wrong: the answer to a photo not fitting the box is not to pad it, it is to stop
+having a box. The frame is now the image's own shape, measured from the image, and `cover` is safe
+because there is nothing left to crop.
+
+**Sizing the LONG edge rather than the width**, so a portrait and a landscape take comparable room
+and a tall photo cannot dominate the log. And the bubble is dropped entirely for a photo sent
+without a caption - with a caption it stays, because the words need a surface.
+
+**`onLoad` was the first attempt and it silently did nothing on web.** Its `nativeEvent.source` is
+a native-only shape, so the handler ran, found no dimensions, and left every photo square - failure
+mode 12's class exactly, a check against a field the library does not return. `Image.getSize` is
+the cross-platform call, and its own failure path leaves the ratio unknown, which falls back to
+`contain` in a square rather than cropping.
+
+### "For the last 50 messages it is smooth, and as we reach poll event pics it is bugging"
+
+A second recording, and the founder's own sentence is the diagnosis. It is not the age of the data
+and it is not that club - it is **what kind of rows live back there**.
+
+The recent tail is plain text: measured once at layout, never changes again. Older history is where
+the cards and the photos are, and **every one of those changes height after it has already been
+laid out**. A poll card draws the message's fallback sentence, fetches the poll, and becomes three
+hundred points of options. A photo draws a square and then becomes its true shape, because nothing
+on the wire says how tall a picture is - `media_objects` stores a mime type, a byte count and its
+variant keys, and no dimensions. Each of those resizes shifts everything after it, and the list
+moves under the finger. Frame by frame the recording shows the same poll and the same photo
+appearing, vanishing and reappearing at different offsets.
+
+Two fixes, at different levels.
+
+**`maintainVisibleContentPosition={{ minIndexForVisible: 0 }}` on the list**, which anchors the
+first visible cell so a layout change above it pushes content the other way instead of moving the
+viewport. This is the general answer and it stays regardless of what else is done: without it, any
+asynchronous height anywhere in a scrollback is felt by whoever is reading.
+
+**A module-level memory of each photo's aspect**, keyed by media id. A list unmounts the cells that
+scroll out of view, so a photo was re-measuring and re-resizing every single time it came back -
+one jump per photo per pass, in both directions. It now resizes at most once ever, and a photo
+already seen opens at its final size. Keyed by id rather than by url on purpose: the signed url
+rotates hourly, so a url key would miss on exactly the reappearances this exists to cover.
+
+The honest remaining gap: a photo nobody has seen still corrects itself once, because the server
+cannot say how tall it is. Storing dimensions on `media_objects` when the worker derives the
+variants would remove the last of it, and is the right fix rather than a further client trick.
+
+### "Do you know the glitch there, is it because the messages are old?"
+
+A screen recording, and no - nothing to do with the age of the messages, or with the day's layout
+work either. A reply quote could not widen the bubble it sits in, so a short reply produced a quote
+squeezed to the width of its own body text and the quoted name wrapped a word at a time:
+"Par... / Parks / RP...".
+
+**Two hypotheses were checked and both were wrong**, which is the part worth recording, because
+either would have been a plausible thing to "fix". The message row had become a column earlier the
+same day, so the obvious suspect was the cross-axis measurement that change introduced - flipping
+`flexDirection` back to `row` on the live DOM produced an identical 79pt column. The second was
+that moving the sender's name out of the bubble wrapper had removed the widest thing propping the
+bubble open - re-inserting a name of the right width into the old position also changed nothing.
+The weakness predates all of it.
+
+What it actually is: both Texts in the quote carry `numberOfLines`, which react-native-web
+implements as `overflow: hidden` plus `max-width: 100%`, and a subtree of those contributes no
+intrinsic width to an auto-sized ancestor. Established by forcing a definite width onto the
+wrapper in the browser, which expanded the column from 79 to 221 - that is what identified sizing
+rather than styling as the cause. `flex: 1` on the text column made it worse for the same reason
+(`flex: 1` is `flexBasis: 0`, the column declaring its natural width to be nothing); it is now
+`flexGrow`/`flexShrink` with an `auto` basis.
+
+The fix is a minimum width on the quote, since it cannot push its own container. Stated with the
+relationship it has to keep - under the bubble's own 82% cap on the narrowest phone this targets -
+rather than as a bare number.
+
+**The lesson is about the diagnosis, not the bug.** Three explanations were available and the
+convincing one was wrong twice; each was ruled out in about a minute by manipulating the running
+page rather than by reasoning about flexbox. `AGENTS.md` rule 4 says reproduce before fixing, and
+this is the same instinct one level in: measure before explaining.
+
+### Bigger, and a quote whose picture did nothing
+
+Two follow-ups on the photo work, from a GroupMe screenshot placed next to ours.
+
+**The size rule was wrong in a way the first version hid.** Capping the LONG edge gives a portrait
+its width from its *height*, so a 3:4 photo came out 150 wide where a landscape got the full 200 -
+consistently smaller for exactly the orientation people photograph in. GroupMe gives a portrait the
+same width as anything else and lets it be tall. Width leads now, at 240, with a height cap at 320
+so a panorama cannot run down the screen.
+
+The arithmetic moved into `photo-size.ts` **because its test could not import it**: vitest cannot
+parse React Native's own sources, so anything reaching `react-native` is untestable, which is why
+every tested module in this app (`dates`, `mentions`, `chat-rows`) is a plain `.ts` beside the
+component. The test earns its place on one case - a photo tall enough to hit the height cap has to
+give width back, and leaving the width at its maximum renders the right height in the wrong shape,
+which reads as "a bit narrow" rather than as a bug.
+
+**And the reported one: "the reply for chat is perfect... but picture is not doing it."** Exactly
+right. `QuotedMessage` hung `onJump` on two `Text` nodes - the sender's name and the preview label
+- and the thumbnail beside them, which is the biggest thing in the quote and the obvious target,
+had no handler at all. Reproduced in the browser by walking the DOM up from the thumbnail: its
+nearest interactive ancestor was the *bubble's* own button, whose press handler is undefined on a
+text message, so the tap landed on something that did nothing.
+
+The whole quote is one `Pressable` now, and `link` rather than `button` on purpose - it sits inside
+the bubble's pressable, which react-native-web renders as a real `<button>`, so a button here would
+be failure mode 17. A link is what the two Texts already declared, which makes this one interactive
+element where there were two rather than a new kind of nesting.
+
+**The class is worth naming: a gesture attached to the labels of an object rather than to the
+object.** It works, it tests fine by tapping the words, and it fails only for whoever aims at the
+picture - which is everybody.
+
+### Two red screens on the founder's phone, both mine
+
+Worth writing down because the rule against them was written earlier the same day and I broke it
+twice anyway, in the direction it did not name. `ReferenceError: authorName is not defined`, from
+deleting a prop from a signature while a use of it survived lower in the file. `ReferenceError:
+PHOTO_LONG_EDGE is not defined`, from extracting a constant and placing it *below* the
+`StyleSheet.create` that reads it - which runs at module load, so that one blanked the whole app
+rather than one component.
+
+Failure mode 26 said "a declaration and its first use go in ONE write", which is about **adding**
+things. Both of these were removals and extractions. It now states an ordering instead: declare
+then use, remove every use then the declaration, and extract upward - each of which keeps the file
+runnable at every save. Found by reading the Metro log rather than by being told, which is the
+other half of the lesson.
+
+### And then every message got the same treatment
+
+Having asked for the author row on cards, the founder asked for it on ordinary messages too - and
+for the avatar to come out of the column it had lived in since v1. Three passes, because the first
+description under-determined it and I built the wrong thing twice before asking:
+
+1. **Avatar and name together, above the content.** Straightforward.
+2. **"The profile should be hanging, and then the name should start from the box."** The avatar
+   hangs in the gutter and the box is inset to line up with the name above it - so the face is
+   outside the column the conversation is read down.
+3. **"The left corner"** turned out not to mean own messages too. Pinning the line left above a
+   right-aligned bubble leaves the name introducing nothing across a gap of empty space; asked,
+   and the answer was that the line follows its bubble and **mirrors** when it does - avatar on
+   the right, name inboard of it. Which is what the third pass built.
+
+Worth recording that I asked rather than picked. Two readings of "the left corner" were live -
+every face in one column, or every name against its own box - and they produce different-looking
+products. The screenshot of the wrong one was what made the question answerable in a sentence.
+
+`AuthorLine` is one component for messages and cards, which it had to become: the two were written
+separately in the morning and had **already** disagreed about the name's colour by the afternoon -
+the card's copy was `textSecondary` against the message's `textPrimary`, which is precisely what
+the founder noticed and reported. One component, one colour, and `TECH/08` now says so.
+
+Two things went with the avatar when it left its column, and both are the kind that survive a
+layout change and quietly break it. `messageRow` stopped being a horizontal flex, so its
+`flexWrap` - which existed only to push the reaction pills off the avatar-and-bubble line - went
+too, and `alignItems` had to be stated in **both** directions, because the default `stretch` pulls
+every bubble out to its 82% maximum and makes a one-word message as wide as a paragraph. And the
+reaction row's `paddingLeft: AVATAR_SIZE + space.sm`, which had lined it up past the avatar, now
+had to become an inset on the sender's own side - left it alone and it would have shoved every
+received message's reactions 48pt off the bubble they belong to.
+
+### And attribution went back above the card
+
+Cards left the bubble in the morning and took their author line into the card's own meta with them.
+By the afternoon the founder wanted it introduced the way a message is: the avatar and the name
+side by side above the card, the card below, and **the name out of the card entirely** - all three
+kinds.
+
+Worth recording as a correction rather than a preference, because the version that shipped first
+was defensible and still wrong. Attribution in a meta line reads as a property of the object -
+"this poll's creator is Coach Dana", filed alongside its deadline and its vote count. Attribution
+above it reads as an act: Coach Dana put this here. A conversation is a list of acts, so a card
+that files its author among its metadata is quietly claiming to be a document instead of a
+message.
+
+The detail screens are untouched. They have no author row, so the event's screen still says "Added
+by" - which is the same rule, not an exception to it: said once, wherever there is a place to say
+it. `DESIGN/05` rule 4 now states it that way, having previously stated the opposite.
+
+### Then a second reference: the poll composer
+
+Two photographs of another app's New poll screen, with "in our theme and font small and spacious".
+Four things in it were decisions rather than styling, and the founder settled them:
+
+- **The deadline becomes a moment, not a duration.** This reverses an earlier call of his own -
+  relative chips over an absolute picker had been "a decision confirmed with the founder before it
+  was designed". The reversal is recorded in `PRD/11` rule 8 rather than quietly applied.
+- **"Private vote" stays as it is**, rather than flipping to the reference's "Public poll". The
+  labels are opposites, so adopting the reference's wording would have inverted the default and
+  made every poll created without touching the switch private, where today it is public. A wording
+  change that silently changes what unattended polls do is not a wording change.
+- **Create moves into the header**, with the close control becoming an X.
+- **The kit gets extracted now, applied to the other composers later.**
+
+**The wire did not change, and that was the constraint worth keeping.** The server still takes
+`closesInMinutes` and computes the instant, because a device-computed `closesAt` makes the deadline
+depend on the handset agreeing with the server - v1's bug, where a phone an hour fast created a
+poll that closed an hour early. So the screen asks for a moment and converts it back to a duration
+at the moment of sending. Skew now costs a wall-clock offset rather than a truncated poll, which is
+the better failure. Measured: a poll set for 10:15 was stored at 10:15:15, the whole-minute
+rounding, well inside the wheel's own five-minute granularity.
+
+**One defect found by looking at it.** Opening the picker left the row reading "No deadline" while
+the wheel underneath highlighted tomorrow at ten - the control contradicting its own value, which
+would have been reported as "it will not save the time". Opening now commits the default it is
+showing, and the way back out is the clear beneath the wheel.
+
+**The wheel is tappable as well as scrollable, deliberately.** Snapping is scroll behaviour, and
+scroll behaviour is the thing that differs most between iOS, Android and a browser - so selection
+does not depend on it. Every row is a button; the snapping is what makes it feel like a wheel.
+Written up as [`DESIGN/06`](SPEC/DESIGN/06-composer.md) with the padding rule that makes the first
+and last item reachable, since getting that wrong presents as "it will not go to today".
+
+Verified live in the browser: the wheel selecting by tap and dragging its column to the band, the
+row and the wheel agreeing, Create enabling only on a valid form, and the poll landing in Postgres
+with `closes_at` at the picked minute and reading back on its chat card as "closes Sun, Aug 16,
+10:15 AM".
+
+### Then the founder picked up the phone: "i couldnt long press the event"
+
+Everything above was verified in a browser, and a browser is exactly where this one cannot appear.
+
+The chat row wraps every card in a pressable to catch the react-and-report hold. That works for a
+poll card, which is a plain `View` with non-pressable space to grab. The event and meeting cards
+**are** pressables - so on native they take the touch responder, and the wrapper's `onLongPress`
+is unreachable at every point on the card.
+
+**Not a regression from the redesign.** The old event card was a `Pressable` inside the bubble's
+`Pressable` in exactly the same way, which is checkable in one line of `git show`: holding an
+event card has never done anything on a device. The redesign only moved the wrapper.
+
+Fixed by giving the handler to the element that can actually receive it - `ContentCard` takes an
+`onLongPress` and puts it on the same pressable as the tap, and the row passes one handler to both
+itself and the two navigating cards. Recorded as failure mode 27, because the interesting part is
+how quiet it is: nothing is nested illegally, nothing throws, no warning appears, and web is clean
+because web deliberately never attaches the gesture. It is the inverse of failure mode 17 - there
+the nesting is invalid and loud, here it is valid and silent - and only a hand on a phone finds it.
+
+---
+
 ## 2026-08-12 (last) - A code you can hold up, and one you can point at
 
 A mockup of the share screen, and it turned out to contain a feature, a correctness bug and three

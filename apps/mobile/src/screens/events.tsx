@@ -3,7 +3,7 @@
  *
  * Both live here for the same reason polls do - they are two renderings of one read, and keeping
  * them side by side is what stops the card and the screen drifting into disagreeing about what an
- * event is.
+ * event is. The shell both wear is `content-card.tsx`, shared with polls and meetings.
  *
  * > **An event used to have no screen at all.** Creating one already notified every member of the
  * > club and already posted a card into club chat, and both of those led nowhere: the notification
@@ -13,13 +13,13 @@
 
 import type { ReactNode } from 'react';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
+import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { contentApi } from '../api.ts';
 import type { EventDetail } from '../api-types.ts';
-import { formatInstant, formatTimeOfDay } from '../dates.ts';
-import { color, radius, space, type } from '../theme.ts';
+import { bibParts, formatInstant, formatTimeOfDay } from '../dates.ts';
+import { CardEyebrow, CardMeta, CardTitle, ContentCard, DateChip } from '../content-card.tsx';
+import { color, space, type } from '../theme.ts';
 import { Action, Body, Card, ConfirmDialog, DataScreen, DetailLine } from '../ui.tsx';
 import { useLoad } from '../use-load.ts';
 
@@ -33,6 +33,21 @@ import { useLoad } from '../use-load.ts';
  */
 export function eventWhen(startsAt: string, endsAt: string | null): string {
   const start = formatInstant(startsAt);
+  if (endsAt === null) return start;
+
+  const sameDay = new Date(startsAt).toDateString() === new Date(endsAt).toDateString();
+  return sameDay ? `${start} - ${formatTimeOfDay(endsAt)}` : `${start} - ${formatInstant(endsAt)}`;
+}
+
+/**
+ * The same, for a card whose date chip has already said the day.
+ *
+ * The clock alone, so the meta line reads "6:00 AM · Rec Center track" rather than repeating the
+ * date the chip is holding two inches to its left. A multi-day event is the one case that still
+ * has to name a second date, because there the second day IS the information.
+ */
+export function eventClock(startsAt: string, endsAt: string | null): string {
+  const start = formatTimeOfDay(startsAt);
   if (endsAt === null) return start;
 
   const sameDay = new Date(startsAt).toDateString() === new Date(endsAt).toDateString();
@@ -58,12 +73,26 @@ export function EventView({ eventId }: { eventId: string }) {
     <DataScreen load={load} errorMessage="Couldn't load this event.">
       {(data) => {
         const event = data.event;
+        /*
+          `false`, always: an event's `startsAt` is an instant, so its day is whatever the reader's
+          clock says. See `bibParts` - the flag is required precisely because the wrong answer here
+          is a confidently wrong date rather than an error.
+        */
+        const bib = bibParts(event.startsAt, false);
 
         return (
           <Body>
-            <View style={styles.headline}>
-              <MaterialIcons name="event" size={22} color={color.accent} />
-              <Text style={styles.title}>{event.title}</Text>
+            {/*
+              The hero says the same thing the chat card does, in the same arrangement, because a
+              member arriving from the card should recognise where they landed. It is the card
+              without its border - the screen is already the surface.
+            */}
+            <View style={styles.hero}>
+              <DateChip day={bib.day} month={bib.month} />
+              <View style={styles.heroText}>
+                <CardEyebrow label="EVENT" />
+                <Text style={styles.title}>{event.title}</Text>
+              </View>
             </View>
             <Text style={styles.when}>{eventWhen(event.startsAt, event.endsAt)}</Text>
 
@@ -122,25 +151,32 @@ export function EventView({ eventId }: { eventId: string }) {
 /**
  * The event card that sits in chat, for a `card` message carrying a `linkedEventId`.
  *
- * v1's card, and the shape is its: a calendar glyph beside the title, the date, the location, and
- * **View Event** out to the screen above.
+ * A filled date chip, the kind, the title, and one quiet line of time, place and who added it.
  *
  * Fetched by id rather than read off the message, because the message carries only a sentence -
  * the date and the location the card is supposed to show were never on the wire. The read being
  * authorized is the other half: a viewer who may not see the club gets nothing back and the card
  * renders as its sentence alone, rather than leaking a club's schedule through a chat log.
  *
- * Unlike the poll card, this one **is** a single press target. Nothing inside it is a control, so
- * there is no button to nest inside a button - it navigates, and `accessibilityRole="button"` is
- * legal here precisely because the bubble around it declares `none`.
+ * **The whole card navigates, and there is no VIEW EVENT button.** Nothing inside it is a control,
+ * so there is no button to nest inside a button - and a card that is entirely a link does not need
+ * to also contain one. `PRD/07` rule 10 was rewritten to match on 2026-08-13.
  */
 export function ChatEventCard({
   eventId,
   fallback = null,
+  onLongPress,
 }: {
   eventId: string;
   /** The message's own sentence, drawn when the event cannot be. See `ChatPollCard`. */
   fallback?: ReactNode;
+  /**
+   * React or report, taken by the card's OWN pressable.
+   *
+   * It cannot be left to the row around it: this card is a press target, so on native it becomes
+   * the responder and an enclosing pressable never sees the hold. See `ContentCard`.
+   */
+  onLongPress?: () => void;
 }) {
   const router = useRouter();
   const load = useLoad(() => contentApi.event(eventId), [eventId]);
@@ -149,81 +185,44 @@ export function ChatEventCard({
   // sentence, because the chat screen has already suppressed it for any card-carrying message.
   if (load.data === null) return <>{fallback}</>;
   const event: EventDetail = load.data.event;
+  const bib = bibParts(event.startsAt, false);
 
   return (
-    <Pressable
-      style={styles.card}
+    <ContentCard
       onPress={() => router.push(`/events/${eventId}`)}
-      accessibilityRole="button"
+      onLongPress={onLongPress}
       accessibilityLabel={`${event.title}, ${eventWhen(event.startsAt, event.endsAt)}. View this event`}
     >
-      <View style={styles.cardHead}>
-        <MaterialIcons name="event" size={18} color={color.accent} />
-        <Text style={styles.cardTitle} numberOfLines={2}>
-          {event.title}
-        </Text>
-      </View>
+      <View style={styles.cardRow}>
+        <DateChip day={bib.day} month={bib.month} />
+        <View style={styles.cardText}>
+          <CardEyebrow label="EVENT" />
+          <CardTitle>{event.title}</CardTitle>
+          {/*
+            The parts go in unjoined rather than pre-joined: an event with no location must not
+            leave a stranded separator behind. See `CardMeta`.
 
-      <View style={styles.cardLine}>
-        <MaterialIcons name="schedule" size={14} color={color.textSecondary} />
-        <Text style={styles.cardMeta} numberOfLines={1}>
-          {eventWhen(event.startsAt, event.endsAt)}
-        </Text>
-      </View>
-
-      {/* Absent rather than blank when there is no location. A row reading "Location -" tells
-          the reader nothing they did not already know from its absence. */}
-      {event.location !== null && event.location.trim().length > 0 && (
-        <View style={styles.cardLine}>
-          <MaterialIcons name="place" size={14} color={color.textSecondary} />
-          <Text style={styles.cardMeta} numberOfLines={1}>
-            {event.location}
-          </Text>
+            **No creator here.** Who added it is said by the avatar and name above the card. The
+            event's own screen still says "Added by", because there is no author row there.
+          */}
+          <CardMeta parts={[eventClock(event.startsAt, event.endsAt), event.location]} />
         </View>
-      )}
-
-      <View style={styles.cardCta}>
-        <Text style={styles.cardCtaLabel}>VIEW EVENT</Text>
-        <MaterialIcons name="arrow-forward" size={14} color={color.onAccent} />
       </View>
-    </Pressable>
+    </ContentCard>
   );
 }
 
 const styles = StyleSheet.create({
-  headline: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  title: { ...type.title, color: color.textPrimary, flex: 1 },
+  hero: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  heroText: { flex: 1, gap: space.xs },
+  title: { ...type.title, color: color.textPrimary },
   when: { ...type.label, color: color.textSecondary, textTransform: 'none' },
   error: { ...type.bodySmall, color: color.error },
 
   /*
-    The card in chat. Its own surface, so it reads as a card on either bubble fill rather than
-    inheriting one - which is what lets the same component sit in a sent and a received message.
-
-    > It used to say "because the creator's bubble behind it is accent-filled". That stopped being
-    > true on 2026-08-12 when both fills went light; the conclusion survives the reason changing.
+    Chip beside text, vertically centred on it. `flex: 1` on the text column is what keeps a long
+    title wrapping inside the card instead of pushing the chip off its left edge.
   */
-  card: {
-    backgroundColor: color.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.divider,
-    padding: space.md,
-    gap: space.sm,
-  },
-  cardHead: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  cardTitle: { ...type.headline, color: color.textPrimary, flex: 1 },
-  cardLine: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
-  cardMeta: { ...type.bodySmall, color: color.textSecondary, flex: 1 },
-  cardCta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: space.xs,
-    backgroundColor: color.accent,
-    borderRadius: radius.pill,
-    paddingVertical: space.sm,
-    marginTop: space.xs,
-  },
-  cardCtaLabel: { ...type.label, fontSize: 11, color: color.onAccent },
+  cardRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  cardText: { flex: 1, gap: space.xs },
 });
