@@ -13,6 +13,37 @@ Newest first.
 
 ---
 
+## 2026-08-13 (end) - The menu opens where the message is
+
+The last piece of the long-press work, deliberately left out of the compact-panels change so that
+one could be seen on a device before this touched `MessageRow`.
+
+The pressed row is measured **at the moment it is held**, never at layout - the list scrolls, so a
+position captured when the row mounted is stale by the time anybody presses it. One ref serves both
+branches because exactly one renders per row, and the selection happens inside the measurement
+callback with a fallback: a menu that failed to open because a measurement did not come back would
+be far worse than a menu that opens in the middle of the screen. The web dots go through the same
+path, so they anchor too.
+
+Placing it needs the group's height, which is not known until it has drawn. It renders invisible
+for that one frame rather than drawing centred and then jumping - imperceptible one way, obviously
+broken the other. The message lands on the anchor, which is why the reaction bar's height is a
+stated constant: the message sits one bar plus one gap below the group's top, and that is
+arithmetic rather than a second layout pass.
+
+Then clamped into the safe area, which is the half worth testing. Verified both ways on the
+simulator: a message in the upper half opens with its menu directly beneath it, and one near the
+composer pushes the whole group up so Delete stays on screen instead of running off the bottom.
+
+### Maestro was offered on a false premise
+
+It was described as a one-command install that would let the simulator be driven by visible text
+rather than screen coordinates. It needs a Java runtime, and this machine has none - so the real
+cost is a JDK plus Maestro, not one command. Raised rather than installed: the founder approved
+what was described, and what was described was wrong.
+
+---
+
 ## 2026-08-13 (last, again) - Any emoji, from a table
 
 Reactions were six emoji in a constant. They are the whole catalog now: 1,914 rows seeded from a

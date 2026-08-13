@@ -108,6 +108,10 @@ they are a bib-and-title row built for scanning a column, and they are deliberat
 - **A card that navigates must take the long press itself.** Its own pressable becomes the touch
   responder on native, so a hold aimed at the row around it never lands. See `AGENTS.md` failure
   mode 27 - this was silently broken for the entire life of the event card.
+- **Whatever takes the hold must be measurable.** The long-press menu opens beside the message it
+  belongs to, which means the pressed element is measured at the moment it is held - not at layout,
+  because the list scrolls. A press target that cannot be measured falls back to a centred menu
+  rather than to no menu.
 - **Anything drawn over a fill needs an explicit stacking order on web.** An absolutely positioned
   sibling paints above a static one in CSS regardless of source order, so the option label needs
   `zIndex` or it is covered in a browser and nowhere else.

@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
+  Dimensions,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -146,6 +147,18 @@ const CARDS_ARE_LONG_PRESSABLE = Platform.OS !== 'web';
  * every render is a new value crossing the bridge every render, for a setting that never changes.
  */
 const KEEP_VISIBLE_ANCHOR = { minIndexForVisible: 0 } as const;
+
+/** Where a pressed message sits on screen, so the menu can open beside it. */
+type MessageAnchor = { y: number; height: number };
+
+/**
+ * The reaction bar's height, which the overlay has to know before it has drawn anything.
+ *
+ * A 44pt button in `space.sm` of padding, top and bottom. Stated because positioning the group
+ * means placing the MESSAGE at the anchor, and the message sits one bar plus one gap below the
+ * group's top - a measurement that would otherwise need a second layout pass to discover.
+ */
+const REACTION_BAR_HEIGHT = 44 + space.sm * 2;
 
 /**
  * The sender's face beside a message.
@@ -395,6 +408,7 @@ function MessageActions({
   canReport,
   canDelete,
   poll,
+  anchor,
   onDismiss,
   onReact,
   onPickMore,
@@ -420,6 +434,8 @@ function MessageActions({
    * who did not create it. So the flag is `isCreator` from the server and never a role.
    */
   poll: { closed: boolean } | null;
+  /** Where the pressed message is on screen. Null means centre it, as it always did. */
+  anchor: MessageAnchor | null;
   onDismiss: () => void;
   onReact: (emoji: ReactionEmoji) => void;
   /** Opens the full catalog. See `EmojiPicker`. */
@@ -497,6 +513,30 @@ function MessageActions({
       : []),
   ];
 
+  /*
+   * Where the group sits, so it opens beside the message rather than in the middle of the screen.
+   *
+   * The MESSAGE is what should land on the anchor, and the message sits one reaction bar plus one
+   * gap below the group's top - hence the subtraction. Then clamped into the safe area, because a
+   * message near either edge would otherwise push the menu off screen.
+   *
+   * `height` is measured on the first layout and the group is invisible until it is: positioning
+   * needs to know how tall the thing is, and one invisible frame is imperceptible where a jump
+   * from centred to anchored would not be. With no anchor - the web dots, or a measurement that
+   * did not come back - it stays centred, which is what it always did.
+   */
+  const insets = useSafeAreaInsets();
+  const [contentHeight, setContentHeight] = useState<number | null>(null);
+  const screenHeight = Dimensions.get('window').height;
+
+  const anchoredTop =
+    anchor === null || contentHeight === null
+      ? null
+      : Math.min(
+          Math.max(anchor.y - REACTION_BAR_HEIGHT - space.sm, insets.top + space.sm),
+          screenHeight - contentHeight - insets.bottom - space.sm,
+        );
+
   return (
     <View style={styles.overlay}>
       {/*
@@ -512,7 +552,20 @@ function MessageActions({
       />
       <BlurView intensity={24} tint="light" style={StyleSheet.absoluteFill} pointerEvents="none" />
 
-      <View style={styles.overlayContent} pointerEvents="box-none">
+      <View
+        style={[
+          styles.overlayContent,
+          anchor !== null && styles.overlayContentAnchored,
+          anchoredTop !== null && { top: anchoredTop },
+          // Invisible for the one frame between rendering and knowing how tall it is.
+          anchor !== null && contentHeight === null && styles.overlayContentMeasuring,
+        ]}
+        onLayout={(event) => {
+          const measured = event.nativeEvent.layout.height;
+          setContentHeight((held) => (held === measured ? held : measured));
+        }}
+        pointerEvents="box-none"
+      >
         <View style={[styles.overlayEmojiBar, mine && styles.overlaySideMine]}>
           {quickReactions.map((emoji) => (
             <Pressable
@@ -1022,8 +1075,14 @@ const MessageRow = memo(function MessageRow({
   userId: string | null;
   mine: boolean;
   isJumpTarget: boolean;
-  /** Open the long-press menu for this message. The card's own dots call it too. */
-  onSelect: (seq: number) => void;
+  /**
+   * Open the long-press menu for this message. The card's own dots call it too.
+   *
+   * `anchor` is where the pressed row sits on screen, so the menu can appear beside it rather
+   * than in the middle of the conversation. Null when it could not be measured, and from the
+   * web dots, where there is no press location to speak of - the overlay centres itself then.
+   */
+  onSelect: (seq: number, anchor: MessageAnchor | null) => void;
   onReact: (seq: number, emoji: ReactionEmoji) => void;
   /** Open the sheet listing every reaction and who made it. The `+N` chip calls it. */
   onShowReactors: (seq: number) => void;
@@ -1032,6 +1091,29 @@ const MessageRow = memo(function MessageRow({
   /** Open the full-screen viewer. Only ever reached from a photo message. */
   onOpenPhoto: (message: MessageEnvelope) => void;
 }) {
+  /*
+   * Where this row is on screen, measured at the moment it is held.
+   *
+   * Measured rather than remembered: the list scrolls, so a position captured at layout is stale
+   * by the time anybody presses anything. One ref serves both branches because exactly one of
+   * them renders per row.
+   *
+   * **The selection happens inside the callback, and falls back if there is nothing to measure.**
+   * A menu that fails to open because a measurement did not come back would be a far worse bug
+   * than a menu that opens in the middle of the screen.
+   */
+  const holdRef = useRef<View>(null);
+  const measureThenSelect = () => {
+    const node = holdRef.current;
+    if (node === null) {
+      onSelect(message.seq, null);
+      return;
+    }
+    node.measureInWindow((_x, y, _width, height) => {
+      onSelect(message.seq, Number.isFinite(y) ? { y, height } : null);
+    });
+  };
+
   // A system message is centred and unattributed, not a bubble.
   if (message.senderId === SYSTEM_ACTOR_ID) {
     return (
@@ -1167,7 +1249,7 @@ const MessageRow = memo(function MessageRow({
     const holdToSelect = CARDS_ARE_LONG_PRESSABLE
       ? () => {
           longPressFeedback();
-          onSelect(message.seq);
+          measureThenSelect();
         }
       : undefined;
 
@@ -1185,6 +1267,7 @@ const MessageRow = memo(function MessageRow({
           />
         )}
         <Pressable
+          ref={holdRef}
           onLongPress={holdToSelect}
           delayLongPress={400}
           /*
@@ -1220,7 +1303,9 @@ const MessageRow = memo(function MessageRow({
           {!CARDS_ARE_LONG_PRESSABLE && (
             <Pressable
               style={styles.cardMenu}
-              onPress={() => onSelect(message.seq)}
+              // The dots go through the same measurement, so the menu opens beside the card here
+              // too rather than only when the gesture is a hold.
+              onPress={measureThenSelect}
               hitSlop={space.sm}
               accessibilityRole="button"
               accessibilityLabel={
@@ -1271,6 +1356,7 @@ const MessageRow = memo(function MessageRow({
         />
       )}
       <Pressable
+        ref={holdRef}
         // Long press, not a visible button: reporting is rare and a tap target on
         // every bubble would be noise. Own messages are excluded because nobody can
         // report themselves.
@@ -1281,7 +1367,7 @@ const MessageRow = memo(function MessageRow({
           // A tap you can feel, before anything appears on screen. Shared with the two
           // list screens so one gesture has one feel - see `longPressFeedback`.
           longPressFeedback();
-          onSelect(message.seq);
+          measureThenSelect();
         }}
         /*
           A tap opens the photo, and ONLY on a photo message.
@@ -1543,6 +1629,8 @@ export default function ChatScreen() {
   const [showingReactorsFor, setShowingReactorsFor] = useState<number | null>(null);
   /** True while the full emoji catalog is open over the long-press menu. */
   const [pickingEmoji, setPickingEmoji] = useState(false);
+  /** Where the held message sat when it was held, so the menu opens beside it. */
+  const [selectedAnchor, setSelectedAnchor] = useState<MessageAnchor | null>(null);
   /**
    * Whether the next send goes out as an announcement.
    *
@@ -2199,8 +2287,9 @@ export default function ChatScreen() {
   );
 
   /** Open the long-press menu on a message, from the bubble or from a card's dots. */
-  const selectMessage = useCallback((seq: number) => {
+  const selectMessage = useCallback((seq: number, anchor: MessageAnchor | null) => {
     setSelected(seq);
+    setSelectedAnchor(anchor);
     setConfirmingReport(null);
   }, []);
 
@@ -3329,6 +3418,7 @@ export default function ChatScreen() {
               the picker returns you to where you were instead of back to the conversation.
             */
             onPickMore={() => setPickingEmoji(true)}
+            anchor={selectedAnchor}
             poll={pollControls}
             onSetPollClosed={(closed) => {
               const pollId = selectedMessage.linkedPollId;
@@ -4126,6 +4216,9 @@ const styles = StyleSheet.create({
     Children pick their side with `alignSelf`, which is why this stretches rather than centring.
   */
   overlayContent: { padding: space.md, gap: space.sm },
+  /* Absolute once anchored, so `top` can place it against the message it belongs to. */
+  overlayContentAnchored: { position: "absolute", left: 0, right: 0 },
+  overlayContentMeasuring: { opacity: 0 },
   overlayEmojiBar: {
     flexDirection: "row",
     alignItems: "center",
