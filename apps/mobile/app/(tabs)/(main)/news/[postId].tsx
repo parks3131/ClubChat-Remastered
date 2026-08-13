@@ -7,7 +7,7 @@
 
 import { StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
-import { reactionEmoji, type ReactionEmoji } from '@clubchat/shared';
+import { quickReactions, type ReactionEmoji } from '@clubchat/shared';
 import { contentApi } from '../../../../src/api.ts';
 import { color, space, type } from '../../../../src/theme.ts';
 import { Action, Avatar, Body, Card, DataScreen } from '../../../../src/ui.tsx';
@@ -43,7 +43,7 @@ export default function NewsPostScreen() {
 
             {/* Every club member can react - not only admins. The same six as chat. */}
             <View style={styles.reactions}>
-              {reactionEmoji.map((emoji) => {
+              {quickReactions.map((emoji) => {
                 const held = post.reactions.find((entry) => entry.emoji === emoji);
                 return (
                   <Action

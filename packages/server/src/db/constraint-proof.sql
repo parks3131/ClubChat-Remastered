@@ -578,22 +578,38 @@ SELECT pg_temp.assert_accepted(
     VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             '11111111-1111-4111-8111-111111111111', 'We won.')$$);
 
--- PRD/06 rule 4: news reactions use the same emoji set as chat. Constrained from Phase 3.75a,
--- when the route that can write to this column was built - until then the rule held only
--- because nothing could reach it. Same reasoning as message_reactions below: the column
--- renders directly into every client, and a second write path must not be able to widen it.
-SELECT pg_temp.assert_rejected(
-  'news reactions - an emoji outside the fixed set',
-  $$INSERT INTO news_reactions (post_id, user_id, emoji)
-    SELECT id, '11111111-1111-4111-8111-111111111111', '🦄' FROM news_posts LIMIT 1$$);
-
+-- PRD/06 rule 4: news reactions use the same emoji set as chat. The set became the whole
+-- catalog on 2026-08-13 (ADR-0028) and the rule survives, because both tables key into the
+-- SAME table - which is the point of it being a table. The property being proved is unchanged
+-- from when this was a six-value check: the column renders directly into every client, and no
+-- write path may widen it.
 SELECT pg_temp.assert_rejected(
   'news reactions - arbitrary text in the emoji column',
   $$INSERT INTO news_reactions (post_id, user_id, emoji)
     SELECT id, '11111111-1111-4111-8111-111111111111', 'nice one' FROM news_posts LIMIT 1$$);
 
+-- The normalisation half, and the reason the catalog is worth having. These two strings are
+-- the same emoji to a reader and different bytes to the primary key. Exactly one is canonical,
+-- so a client sending the other is refused at the boundary rather than creating a second pill
+-- with a count of one - which is the failure PRD/05 recorded and this dissolves.
+SELECT pg_temp.assert_rejected(
+  'news reactions - a thumbs up WITHOUT the variation selector the catalog carries',
+  $$INSERT INTO news_reactions (post_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '👍' FROM news_posts LIMIT 1$$);
+
 SELECT pg_temp.assert_accepted(
-  'news reactions - one of the six is allowed',
+  'news reactions - the canonical thumbs up',
+  $$INSERT INTO news_reactions (post_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '👍️' FROM news_posts LIMIT 1$$);
+
+SELECT pg_temp.assert_accepted(
+  'news reactions - an emoji that was NOT one of the six',
+  $$INSERT INTO news_reactions (post_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🦄' FROM news_posts LIMIT 1$$);
+
+-- The duplicate assertion below needs a row to duplicate, so this one earns its place twice.
+SELECT pg_temp.assert_accepted(
+  'news reactions - one of the six still works',
   $$INSERT INTO news_reactions (post_id, user_id, emoji)
     SELECT id, '11111111-1111-4111-8111-111111111111', '🔥' FROM news_posts LIMIT 1$$);
 
@@ -624,24 +640,47 @@ SELECT pg_temp.assert_rejected(
     ('11110000-1111-4111-8111-111111111111', '11111111-1111-4111-8111-111111111111')$$);
 
 -- ---------------------------------------------------------------------------
--- Reactions: the fixed emoji set, enforced by the database
+-- Reactions: the emoji catalog, enforced by the database
 -- ---------------------------------------------------------------------------
 
--- The whole point of the check constraint. A handler that forgot to validate, or a second
--- write path that never knew it had to, cannot put arbitrary text in this column - which
--- matters because the column renders directly into every client.
-SELECT pg_temp.assert_rejected(
-  'reactions - an emoji outside the fixed set',
-  $$INSERT INTO message_reactions (message_id, user_id, emoji)
-    SELECT id, '11111111-1111-4111-8111-111111111111', '🦄' FROM messages LIMIT 1$$);
-
+-- The whole point of the foreign key, and it is the same point the check constraint made
+-- before the set was opened on 2026-08-13 (ADR-0028). A handler that forgot to validate, or a
+-- second write path that never knew it had to, cannot put arbitrary text in this column -
+-- which matters because the column renders directly into every client.
 SELECT pg_temp.assert_rejected(
   'reactions - arbitrary text in the emoji column',
   $$INSERT INTO message_reactions (message_id, user_id, emoji)
     SELECT id, '11111111-1111-4111-8111-111111111111', 'lgtm' FROM messages LIMIT 1$$);
 
+-- Text with an emoji in front of it, which is the shape a naive "starts with an emoji" check
+-- admits. The catalog has no opinion to be fooled: the whole string either is a row or is not.
+SELECT pg_temp.assert_rejected(
+  'reactions - an emoji followed by a sentence',
+  $$INSERT INTO message_reactions (message_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🔥 and here is my opinion'
+    FROM messages LIMIT 1$$);
+
+-- Normalisation, which is the reason this is a catalog rather than a validator. These are the
+-- same emoji to a reader and different bytes to the primary key; exactly one is canonical, so
+-- the other cannot become a second pill with a count of one.
+SELECT pg_temp.assert_rejected(
+  'reactions - a thumbs up WITHOUT the variation selector the catalog carries',
+  $$INSERT INTO message_reactions (message_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '👍' FROM messages LIMIT 1$$);
+
 SELECT pg_temp.assert_accepted(
-  'reactions - one of the six is allowed',
+  'reactions - the canonical thumbs up',
+  $$INSERT INTO message_reactions (message_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '👍️' FROM messages LIMIT 1$$);
+
+-- What the change is FOR: an emoji that was not one of the six is now a reaction.
+SELECT pg_temp.assert_accepted(
+  'reactions - an emoji outside the old fixed six',
+  $$INSERT INTO message_reactions (message_id, user_id, emoji)
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🦄' FROM messages LIMIT 1$$);
+
+SELECT pg_temp.assert_accepted(
+  'reactions - one of the six still works',
   $$INSERT INTO message_reactions (message_id, user_id, emoji)
     SELECT id, '11111111-1111-4111-8111-111111111111', '🔥' FROM messages LIMIT 1$$);
 

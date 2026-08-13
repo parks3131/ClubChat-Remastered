@@ -529,7 +529,16 @@ describe('msg.update, the frame that had no producer until reactions', () => {
     // blank its body, which is why the handler builds the patch from keys actually present.
     socket.deliver({
       t: 'msg.update',
-      d: { channelId: CHANNEL, seq: 1, reactions: [{ emoji: '\u{1F44D}', userIds: [REACTOR_A] }] },
+      /*
+        `\u{FE0F}` is not decoration. The catalog's thumbs up carries the variation selector, and
+        a frame without it is refused by the shared schema this handler parses against - which is
+        the wire half of the normalisation ADR-0028 exists for, and worth one test knowing about.
+      */
+      d: {
+        channelId: CHANNEL,
+        seq: 1,
+        reactions: [{ emoji: '\u{1F44D}\u{FE0F}', userIds: [REACTOR_A] }],
+      },
     });
 
     await vi.waitFor(async () => {

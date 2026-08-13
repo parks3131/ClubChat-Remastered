@@ -533,14 +533,36 @@ describe('news', () => {
     const created = await as(owner, 'POST', `/clubs/${clubId}/news`, { body: 'Race recap' });
     const postId = created.body.postId;
 
-    // PRD/06 rule 4: the same set as chat. A unicorn is not in it, and the column now has a
-    // check constraint saying so even if a route forgets.
+    /*
+     * PRD/06 rule 4: the same set as chat. That set became the whole catalog on 2026-08-13
+     * (ADR-0028) and the rule still holds, because both surfaces key into the same table - so a
+     * unicorn is now a reaction here exactly as it is in chat.
+     *
+     * What must still be refused is anything that is not a catalog emoji at all, and the route
+     * answers 400 rather than letting it reach the foreign key. The non-canonical thumbs up is
+     * the interesting case: it is a real emoji to a reader and not the one the catalog holds.
+     */
     expect((await as(member, 'POST', `/news/${postId}/reactions`, { emoji: '🦄' })).status).toBe(
-      400,
+      200,
     );
     expect((await as(member, 'POST', `/news/${postId}/reactions`, { emoji: 'lgtm' })).status).toBe(
       400,
     );
+    expect(
+      (await as(member, 'POST', `/news/${postId}/reactions`, { emoji: '🔥 nice work' })).status,
+    ).toBe(400);
+    expect((await as(member, 'POST', `/news/${postId}/reactions`, { emoji: '👍' })).status).toBe(
+      400,
+    );
+    expect((await as(member, 'POST', `/news/${postId}/reactions`, { emoji: '👍️' })).status).toBe(
+      200,
+    );
+
+    // Toggled back off, so the accepted pair above does not leak into the assertions below -
+    // this is the same gesture the last lines of the test exercise.
+    await as(member, 'POST', `/news/${postId}/reactions`, { emoji: '🦄' });
+    await as(member, 'POST', `/news/${postId}/reactions`, { emoji: '👍️' });
+    expect((await as(member, 'GET', `/news/${postId}`)).body.post.reactions).toEqual([]);
 
     // Every club member reacts, not only admins.
     const on = await as(member, 'POST', `/news/${postId}/reactions`, { emoji: '🔥' });

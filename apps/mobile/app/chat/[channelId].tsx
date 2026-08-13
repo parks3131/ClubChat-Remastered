@@ -16,7 +16,7 @@ import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
 import { useDeclareSpace } from "../../src/current-space.tsx";
 import {
   quoteOf,
-  reactionEmoji,
+  quickReactions,
   reactionSummary,
   SYSTEM_ACTOR_ID,
   type MessageEnvelope,
@@ -506,7 +506,7 @@ function MessageActions({
 
       <View style={styles.overlayContent} pointerEvents="box-none">
         <View style={[styles.overlayEmojiBar, mine && styles.overlaySideMine]}>
-          {reactionEmoji.map((emoji) => (
+          {quickReactions.map((emoji) => (
             <Pressable
               key={emoji}
               style={styles.overlayEmojiButton}

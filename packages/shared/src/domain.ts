@@ -7,6 +7,7 @@
  */
 
 import { z } from 'zod';
+import { emojiCatalog } from './emoji-catalog.generated.ts';
 
 /**
  * The reserved system actor.
@@ -79,22 +80,54 @@ export type Platform = z.infer<typeof Platform>;
 export const Uuid = z.string().uuid();
 
 /**
- * The reaction emoji set. Six, fixed, in this order.
+ * The set of emoji a reaction may be.
  *
- * > **Deliberately not a full emoji picker.** SPEC/PRD/05 rejected one on the grounds
- * > that fast tap targets beat completeness: six large buttons are one tap, and a
- * > searchable grid of two thousand is a shopping trip. The order is part of the
- * > contract - it is the order they render in, so it must not be sorted at a call site.
+ * **The catalog, not a constant.** Six fixed emoji shipped first and were widened to the whole
+ * catalog on 2026-08-13; see ADR-0028 for why the set is a database table. This validator and
+ * that table are generated from the same pinned dataset, so the API and the foreign key cannot
+ * disagree about what exists - and a client sending a byte-different encoding of the right emoji
+ * is refused here with a clean 400 rather than reaching a constraint violation.
  *
- * A full picker was requested on 2026-07-30 and is recorded as an open question in
- * SPEC/PRD/05 rather than half-built here. The `messages_reactions_emoji_valid` check
- * constraint is what makes this list the truth rather than a suggestion, and dropping it
- * is the first task of any change that widens the set - which forces whoever does it to
- * confront validating arbitrary Unicode at exactly the right moment.
+ * A `Set` rather than `z.enum`: an enum of 1,914 members produces a type union of 1,914 string
+ * literals, which is a real cost in every file that touches a reaction and buys nothing - the
+ * value is checked at runtime either way, and no call site can usefully switch on it.
  */
-export const reactionEmoji = ['👍', '❤️', '😂', '🔥', '🎉', '😮'] as const;
-export const ReactionEmoji = z.enum(reactionEmoji);
-export type ReactionEmoji = z.infer<typeof ReactionEmoji>;
+const catalogEmoji = new Set<string>(emojiCatalog.map((e) => e.emoji));
+
+export const ReactionEmoji = z
+  .string()
+  .refine((value) => catalogEmoji.has(value), { message: 'not a known emoji' });
+export type ReactionEmoji = string;
+
+/** Is this string an emoji anybody may react with? The one place that question is answered. */
+export function isReactionEmoji(value: string): boolean {
+  return catalogEmoji.has(value);
+}
+
+/**
+ * Where an emoji sits in the catalog's own order.
+ *
+ * Used to break ties in the pill row so two emoji on equal counts hold their positions rather
+ * than swapping about - SPEC/PRD/05 rule R3. Unknown emoji sort last, which cannot happen through
+ * the API and can happen from a cache written before a dataset upgrade.
+ */
+const catalogOrdinal = new Map(emojiCatalog.map((e) => [e.emoji, e.order]));
+
+/**
+ * How many reaction pills a message shows before collapsing into a `+N` chip.
+ *
+ * SPEC/PRD/05 rule R2. Four, because the row sits under a bubble and has to stay a row.
+ */
+export const VISIBLE_REACTION_PILLS = 4;
+
+/**
+ * The most distinct emoji one message may carry.
+ *
+ * SPEC/PRD/05 rule R4, and the reason is ADR-0017: every update carries the full reaction set, so
+ * an unbounded set of distinct emoji is an unbounded frame. The twenty-first is refused rather
+ * than silently dropped.
+ */
+export const MAX_DISTINCT_REACTIONS = 20;
 
 /**
  * Everyone who reacted with one emoji.
@@ -365,25 +398,34 @@ export function formatBytes(bytes: number): string {
  * per-recipient payload. That is the whole reason `userIds` travels instead of a count:
  * one publish serves every viewer.
  *
- * Returns emoji in `reactionEmoji` order, skipping any with no reactors, so the row does
- * not reshuffle as counts change.
+ * **Most reacted first, ties broken by catalog order** - SPEC/PRD/05 rule R3.
+ *
+ * > **This used to iterate the fixed six**, which gave a stable row for free and silently
+ * > dropped anything outside the list. With the set open that would hide real reactions with no
+ * > error anywhere, so the order is now computed. Ordering by count means the row CAN reshuffle
+ * > as people tap, which was chosen deliberately over a stable order; the catalog tie-break is
+ * > what keeps it to the smallest version of that cost, since equal counts never swap.
+ *
+ * Returns every emoji with reactors. Deciding how many to *show* is the caller's job -
+ * `VISIBLE_REACTION_PILLS` and the `+N` chip.
  */
 export function reactionSummary(
   reactions: readonly MessageReaction[],
   viewerId: string | null,
 ): Array<{ emoji: ReactionEmoji; count: number; mine: boolean }> {
-  const byEmoji = new Map(reactions.map((r) => [r.emoji, r.userIds]));
-  const summary: Array<{ emoji: ReactionEmoji; count: number; mine: boolean }> = [];
-  for (const emoji of reactionEmoji) {
-    const userIds = byEmoji.get(emoji);
-    if (!userIds || userIds.length === 0) continue;
-    summary.push({
-      emoji,
-      count: userIds.length,
-      mine: viewerId !== null && userIds.includes(viewerId),
-    });
-  }
-  return summary;
+  return reactions
+    .filter((r) => r.userIds.length > 0)
+    .map((r) => ({
+      emoji: r.emoji,
+      count: r.userIds.length,
+      mine: viewerId !== null && r.userIds.includes(viewerId),
+    }))
+    .sort(
+      (a, b) =>
+        b.count - a.count ||
+        (catalogOrdinal.get(a.emoji) ?? Number.MAX_SAFE_INTEGER) -
+          (catalogOrdinal.get(b.emoji) ?? Number.MAX_SAFE_INTEGER),
+    );
 }
 
 /** Per-channel sync state, as handed to the client on `auth.ok`. */

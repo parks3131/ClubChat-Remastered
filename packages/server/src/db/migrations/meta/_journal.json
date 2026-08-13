@@ -183,6 +183,13 @@
       "when": 1786635860991,
       "tag": "0025_media_dimensions",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1786640829956,
+      "tag": "0026_emoji_catalog",
+      "breakpoints": true
     }
   ]
 }

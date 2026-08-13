@@ -13,7 +13,7 @@ import { useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
-import { reactionEmoji, type ReactionEmoji } from '@clubchat/shared';
+import { quickReactions, type ReactionEmoji } from '@clubchat/shared';
 import { clubApi, contentApi } from '../../../../../src/api.ts';
 import type { NewsPost } from '../../../../../src/api-types.ts';
 import { RemoteImage } from '../../../../../src/media-bubble.tsx';
@@ -127,7 +127,7 @@ function PostCard({
 
       {/* The same six as chat. A check constraint on the column enforces it too. */}
       <View style={styles.reactions}>
-        {reactionEmoji.map((emoji) => {
+        {quickReactions.map((emoji) => {
           const held = post.reactions.find((entry) => entry.emoji === emoji);
           return (
             <Action

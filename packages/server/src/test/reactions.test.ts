@@ -16,7 +16,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { reactionEmoji, reactionSummary } from '@clubchat/shared';
+import { MAX_DISTINCT_REACTIONS, emojiCatalog, reactionSummary } from '@clubchat/shared';
 import { createClub } from '../domain/create-club.ts';
 import { addMember } from '../domain/membership.ts';
 import { sendMessage, softDeleteMessage } from '../domain/send-message.ts';
@@ -134,27 +134,114 @@ describe('toggling a reaction', () => {
     await toggleReaction(h.db, ctx, f.channel, message.seq, '🎉');
     const third = await toggleReaction(h.db, ctx, f.channel, message.seq, '❤️');
 
-    expect(third.ok && third.reactions.map((r) => r.emoji)).toEqual(['❤️', '🔥', '🎉']);
+    // Sorted, because the server no longer imposes an order - it returns every emoji with
+    // reactors and `reactionSummary` decides the row. What this test is about is that all three
+    // are kept and none is a duplicate, which is the primary key's job.
+    expect(third.ok && third.reactions.map((r) => r.emoji).sort()).toEqual(
+      ['❤️', '🔥', '🎉'].sort(),
+    );
     const rows = await h.db.execute<{ n: number }>(
       sql`SELECT COUNT(*)::int AS n FROM message_reactions`,
     );
     expect(rows.rows[0]?.n).toBe(3);
   });
 
-  it('returns emoji in the canonical order, not the order they were added', async () => {
+  /*
+   * Ordering moved from the server to `reactionSummary` on 2026-08-13.
+   *
+   * It used to be the fixed six-emoji order, applied server-side, which ordered the list and
+   * silently dropped anything outside the six. With the set open (ADR-0028) that filter would
+   * hide real reactions, so the server returns every emoji with reactors and the client sorts -
+   * by count, ties broken by catalog order. PRD/05 rules R2 and R3.
+   */
+  it('returns every emoji that has reactors, whatever it is', async () => {
     const f = await setup();
     const message = await say(f.ownerId, f.channel, 'we won');
 
-    // Added last-first, so insertion order and canonical order disagree. A row that
-    // reshuffles as counts change is the failure this prevents.
-    await toggleReaction(h.db, await ctxFor(f.memberId), f.channel, message.seq, '😮');
-    await toggleReaction(h.db, await ctxFor(f.ownerId), f.channel, message.seq, '👍');
+    // A unicorn was NOT one of the six. Before the catalog it could not be stored, and had it
+    // been, the server's filter would have dropped it from every client with no error anywhere.
+    await toggleReaction(h.db, await ctxFor(f.memberId), f.channel, message.seq, '🦄');
+    await toggleReaction(h.db, await ctxFor(f.ownerId), f.channel, message.seq, '👍️');
 
     const read = await readReactions(h.db, f.channel, message.seq);
-    expect(read.ok && read.reactions.map((r) => r.emoji)).toEqual(['👍', '😮']);
-    // And that order is the shared constant's, not this test's opinion.
-    const canonical = [...reactionEmoji].filter((e) => e === '👍' || e === '😮');
-    expect(read.ok && read.reactions.map((r) => r.emoji)).toEqual(canonical);
+    expect(read.ok && read.reactions.map((r) => r.emoji).sort()).toEqual(['👍️', '🦄'].sort());
+  });
+
+  it('refuses the twenty-first distinct emoji rather than dropping it', async () => {
+    /*
+     * PRD/05 rule R4, and the reason is ADR-0017: every update carries the FULL reaction set, so
+     * an unbounded number of distinct emoji is an unbounded frame. Twenty is chosen to be far
+     * above any real conversation and still a bound.
+     *
+     * Refused, not silently dropped. A tap that appears to do nothing is the failure this
+     * codebase keeps finding, and `refusalStatus` turns this code into a clean 409.
+     */
+    const f = await setup();
+    const message = await say(f.ownerId, f.channel, 'we won');
+    const some = emojiCatalog.slice(0, MAX_DISTINCT_REACTIONS + 1).map((e) => e.emoji);
+
+    for (const emoji of some.slice(0, MAX_DISTINCT_REACTIONS)) {
+      const result = await toggleReaction(
+        h.db,
+        await ctxFor(f.memberId),
+        f.channel,
+        message.seq,
+        emoji,
+      );
+      expect(result.ok, `${emoji} should have been accepted`).toBe(true);
+    }
+
+    const overflow = await toggleReaction(
+      h.db,
+      await ctxFor(f.ownerId),
+      f.channel,
+      message.seq,
+      some[MAX_DISTINCT_REACTIONS]!,
+    );
+    expect(overflow).toEqual({ ok: false, code: 'too_many_reactions' });
+
+    // And the cap never blocks a SECOND person joining an emoji that is already there, which
+    // would be the obvious way to write this wrongly - the limit is distinct emoji, not reactors.
+    const joining = await toggleReaction(
+      h.db,
+      await ctxFor(f.ownerId),
+      f.channel,
+      message.seq,
+      some[0]!,
+    );
+    expect(joining.ok).toBe(true);
+  });
+
+  it('orders the pills by count, and breaks ties by catalog order', async () => {
+    const f = await setup();
+    const message = await say(f.ownerId, f.channel, 'we won');
+
+    // 🔥 gets two, 🦄 gets one. Added 🦄 first, so insertion order disagrees with the result.
+    await toggleReaction(h.db, await ctxFor(f.memberId), f.channel, message.seq, '🦄');
+    await toggleReaction(h.db, await ctxFor(f.memberId), f.channel, message.seq, '🔥');
+    const last = await toggleReaction(h.db, await ctxFor(f.ownerId), f.channel, message.seq, '🔥');
+
+    const summary = reactionSummary(last.ok ? last.reactions : [], f.ownerId);
+    expect(summary.map((s) => s.emoji)).toEqual(['🔥', '🦄']);
+    expect(summary.map((s) => s.count)).toEqual([2, 1]);
+  });
+
+  it('holds position when counts are equal, so a tie cannot shuffle', async () => {
+    /*
+     * The half that keeps rule R3 honest. Ordering by count alone leaves ties to whatever order
+     * the rows arrived in, which changes between reads - so the row would rearrange itself
+     * under somebody's finger for no visible reason.
+     */
+    const f = await setup();
+    const message = await say(f.ownerId, f.channel, 'we won');
+
+    await toggleReaction(h.db, await ctxFor(f.memberId), f.channel, message.seq, '🦄');
+    const both = await toggleReaction(h.db, await ctxFor(f.ownerId), f.channel, message.seq, '🔥');
+
+    const order = reactionSummary(both.ok ? both.reactions : [], f.ownerId).map((s) => s.emoji);
+    // Both on one. The catalog puts the unicorn at 582 and fire at 1066, so the unicorn leads -
+    // whichever order they were inserted in, and on every read.
+    expect(order).toEqual(['🦄', '🔥']);
   });
 
   it('accumulates one emoji across members', async () => {
@@ -232,7 +319,7 @@ describe('reactions travel with the messages they belong to', () => {
     const f = await setup();
     for (let i = 0; i < 12; i += 1) {
       const message = await say(f.ownerId, f.channel, `message ${i}`);
-      await toggleReaction(h.db, await ctxFor(f.memberId), f.channel, message.seq, '👍');
+      await toggleReaction(h.db, await ctxFor(f.memberId), f.channel, message.seq, '👍️');
     }
     // Asserted by outcome rather than by counting queries: every one of the twelve comes back
     // populated from a single batched load.
@@ -285,7 +372,7 @@ describe('a soft delete clears reactions', () => {
 
     // A reaction on "This message was deleted" is a verdict on nothing.
     expect(
-      await toggleReaction(h.db, await ctxFor(f.memberId), f.channel, message.seq, '👍'),
+      await toggleReaction(h.db, await ctxFor(f.memberId), f.channel, message.seq, '👍️'),
     ).toEqual({ ok: false, code: 'not_found' });
   });
 });
@@ -299,7 +386,7 @@ describe('reacting takes the posting gate rather than the reading one', () => {
     const f = await setup();
     const message = await say(f.ownerId, f.channel, 'club business');
     expect(
-      await toggleReaction(h.db, await ctxFor(f.outsiderId), f.channel, message.seq, '👍'),
+      await toggleReaction(h.db, await ctxFor(f.outsiderId), f.channel, message.seq, '👍️'),
     ).toEqual({ ok: false, code: 'forbidden' });
   });
 
@@ -323,14 +410,14 @@ describe('reacting takes the posting gate rather than the reading one', () => {
     expect(isChannelMember(bobCtx, dmChannel)).toBe(true);
     expect(canPostInChannel(bobCtx, dmChannel)).toBe(false);
     expect(canReactInChannel(bobCtx, dmChannel)).toBe(false);
-    expect(await toggleReaction(h.db, bobCtx, dmChannel, message.seq, '👍')).toEqual({
+    expect(await toggleReaction(h.db, bobCtx, dmChannel, message.seq, '👍️')).toEqual({
       ok: false,
       code: 'forbidden',
     });
 
     // The blocker is refused too, in the same direction as sending.
     expect(
-      await toggleReaction(h.db, await ctxFor(aliceId), dmChannel, message.seq, '👍'),
+      await toggleReaction(h.db, await ctxFor(aliceId), dmChannel, message.seq, '👍️'),
     ).toEqual({ ok: false, code: 'forbidden' });
   });
 

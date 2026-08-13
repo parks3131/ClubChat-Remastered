@@ -12,23 +12,27 @@
  */
 
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { reactionEmoji, type MessageReaction, type ReactionEmoji } from '@clubchat/shared';
+import { MAX_DISTINCT_REACTIONS, type MessageReaction, type ReactionEmoji } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { messageReactions, outbox } from '../db/schema.ts';
 import { touchMessage } from './revisions.ts';
 import type { AccessContext } from '../policy/context.ts';
 import { canReactInChannel, type ChannelRef } from '../policy/predicates.ts';
 
-export type ReactionRefusal = { ok: false; code: 'forbidden' | 'not_found' };
+export type ReactionRefusal = {
+  ok: false;
+  /** `too_many_reactions` is `PRD/05` rule R4 - twenty distinct emoji is the ceiling. */
+  code: 'forbidden' | 'not_found' | 'too_many_reactions';
+};
 export type ReactionResult<T> = ({ ok: true } & T) | ReactionRefusal;
 
 /**
  * Load reactions for a set of messages, in one query.
  *
- * Returns a map from message id to its reaction list, ordered by `reactionEmoji` so the
- * pill row renders in a stable order rather than reshuffling as counts change. An empty
- * input returns an empty map without touching the database, because the common case -
- * a page of history with no reactions at all - should cost nothing.
+ * Returns a map from message id to its reaction list. Ordering is the client's, via
+ * `reactionSummary` - see the note where the list is built. An empty input returns an empty map
+ * without touching the database, because the common case - a page of history with no reactions
+ * at all - should cost nothing.
  */
 export async function reactionsForMessages(
   db: Db,
@@ -62,10 +66,21 @@ export async function reactionsForMessages(
   }
 
   for (const [messageId, perMessage] of staging) {
+    /*
+     * Every emoji that has reactors, in no particular order.
+     *
+     * > **This used to iterate the fixed six**, which both ordered the list and silently dropped
+     * > anything outside it. With the catalog open, filtering by a known list here would hide
+     * > real reactions from every client with no error anywhere - the exact class this repo
+     * > already knows as a check that never matches.
+     *
+     * Order is the client's business now: `reactionSummary` sorts by count with the catalog
+     * breaking ties (`PRD/05` rule R3), and it has to, because the count is what the order
+     * depends on and only the client is rendering.
+     */
     const list: MessageReaction[] = [];
-    for (const emoji of reactionEmoji) {
-      const userIds = perMessage.get(emoji);
-      if (userIds && userIds.length > 0) list.push({ emoji, userIds });
+    for (const [emoji, userIds] of perMessage) {
+      if (userIds.length > 0) list.push({ emoji, userIds });
     }
     byMessage.set(messageId, list);
   }
@@ -129,6 +144,24 @@ export async function toggleReaction(
 
     const added = removed.length === 0;
     if (added) {
+      /*
+       * `PRD/05` rule R4: at most twenty DISTINCT emoji on one message.
+       *
+       * The reason is ADR-0017 rather than taste - every update carries the full reaction set,
+       * so an unbounded number of distinct emoji is an unbounded frame. Counted inside the
+       * transaction and only when adding, so removing a reaction always works and two people
+       * adding the twenty-first at once cannot both get through.
+       *
+       * Refused rather than silently dropped: a tap that appears to do nothing is the failure
+       * this codebase keeps finding, and the caller turns this into a clean refusal.
+       */
+      const distinct = await tx.execute<{ n: number }>(sql`
+        SELECT count(DISTINCT emoji)::int AS n
+          FROM ${messageReactions}
+         WHERE message_id = ${message.id} AND emoji <> ${emoji}
+      `);
+      if ((distinct.rows[0]?.n ?? 0) >= MAX_DISTINCT_REACTIONS) return null;
+
       await tx
         .insert(messageReactions)
         .values({ messageId: message.id, userId: ctx.userId, emoji })
@@ -158,6 +191,10 @@ export async function toggleReaction(
 
     return { added };
   });
+
+  // `null` is the cap being hit, which is a refusal rather than a failure - the message is fine
+  // and this particular reaction is not going on it.
+  if (result === null) return { ok: false, code: 'too_many_reactions' };
 
   const reactions = (await reactionsForMessages(db, [message.id])).get(message.id) ?? [];
 
