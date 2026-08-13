@@ -13,7 +13,7 @@ unless it names an exception, and the exceptions a DM carries are listed in
 | Quote replies | A flat quote of one earlier message, tappable to jump to it. **Not threads** - see the out-of-scope note |
 | Photo attachments | Library or camera |
 | Document attachments | Any file type, shown with filename and size |
-| Emoji reactions | Fixed set: 👍 ❤️ 😂 🔥 🎉 😮. **A full picker is requested and not built - see the open question below.** |
+| Emoji reactions | Any emoji in the catalog, from a quick row of six plus a searchable picker. At most four pills show under a message, most-reacted first, with a `+N` chip for the rest. See the reaction rules below |
 | Announcements | Admin-only, visually distinct |
 | Pinning | Admin-only, with a floating dismissible pinned strip |
 | Highlights | Pinned / Announcements / Reports tabs over the same conversation |
@@ -324,28 +324,38 @@ the bottom means hunting upward for what you missed). A full emoji picker **inst
 tap targets (see the open question - the ask is now for one *in addition to* them, which is a
 different proposal). Link-only poll cards (voting should be one tap from the conversation).
 
-**Open question: the full emoji picker.**
+**Reaction rules.**
 
-Requested explicitly on 2026-07-30: reactions should offer the whole emoji list from a popup,
-"like WhatsApp". Recorded here rather than half-built, and the fixed set shipped meanwhile.
+Settled 2026-08-13, resolving the open question recorded on 2026-07-30. It was never a
+re-litigation of the rejected alternative above: that one was a full picker *replacing* the quick
+row, and the objection - fast tap targets beat completeness - still stands. This is both, as
+WhatsApp does it. The quick row is unaffected.
 
-Note first that this is **not** a re-litigation of the rejected alternative above. That one was
-a full picker *replacing* the quick row, and the objection - fast tap targets beat completeness -
-still stands. WhatsApp does both: six quick taps, plus a "+" that opens the full grid. The ask is
-for the second thing, and the first is unaffected.
+R1. **Any emoji in the catalog may be used**, from a quick row of six plus a `+` that opens a
+    searchable picker. The catalog is a table, which is what makes the set closeable, validation a
+    lookup and normalisation a non-issue - see
+    [ADR-0028](../decisions/0028-reactions-come-from-a-catalog-table.md).
 
-What it costs, so the decision is made with the bill in hand:
+R2. **At most four pills show under a message**, ordered most-reacted first, followed by a `+N`
+    chip when there are more. Tapping the chip opens the full list with who reacted to each.
+    Nothing is ever hidden without the row saying so.
 
-| | |
-|---|---|
-| **The set stops being closeable** | The emoji column carries a check constraint listing the six. Widening means dropping it, and that constraint is currently the only thing stopping arbitrary text reaching a column that renders directly into every client. Its replacement has to be real validation, not nothing. |
-| **Validating "is this an emoji" is genuinely hard** | Not a character class. Grapheme clusters, zero-width joiner sequences, skin-tone and gender modifiers, regional indicator pairs, variation selectors. Length in code points is not a bound, and a naive check either rejects legitimate emoji or admits arbitrary text with one emoji in front of it. |
-| **Normalisation becomes a correctness issue** | Two byte-different encodings of the same emoji must be one reaction, or the same emoji appears twice in a row with a count of one each. The primary key compares bytes. |
-| **The pill row stops being bounded** | Six emoji means at most six pills. Arbitrary emoji means a message can carry dozens, and the row needs collapsing, an overflow affordance, and a decision about which win the visible slots. |
-| **The picker itself is a real component** | Categories, search, recents, skin-tone selection, and a keyboard on a phone. It is the largest single piece of UI in the product so far. |
+R3. **Ties hold their position.** Equal counts are broken by the catalog's own order, so a pill
+    only ever moves when a count actually changes. Ordering by count means the row can reshuffle -
+    that is accepted deliberately, and this is the smallest version of the cost.
 
-None of that is an argument against it. It is an argument for it being its own change with its own
-tests, rather than a widened constant. The current shape is deliberately friendly to it: the emoji
-travels as a string end to end, one reaction per emoji per member per message needs no revisiting,
-and `reactionSummary` already renders an arbitrary set in a fixed order - so the fixed order is
-the only thing that has to become a different rule.
+R4. **A message carries at most twenty distinct emoji.** The twenty-first is refused rather than
+    silently dropped. Every update carries the full reaction set
+    ([ADR-0017](../decisions/0017-reactions-travel-on-the-message-envelope.md)), so an unbounded
+    set of distinct emoji is an unbounded frame.
+
+R5. **Skin tone variants are not offered yet**, so a reaction is the default-tone emoji. The
+    catalog can gain them later without a contract change.
+
+R6. **News reactions use the same catalog as chat**, which keeps
+    [News and Highlights](06-news-and-highlights.md) rule 4 true rather than making it an
+    exception to explain.
+
+Two of the five recorded costs remain real and are answered above rather than elsewhere: the pill
+row stops being bounded, which R2 and R4 bound, and the picker is a substantial component. The
+other three were dissolved by the catalog rather than managed.

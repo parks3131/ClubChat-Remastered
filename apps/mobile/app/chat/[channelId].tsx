@@ -505,7 +505,7 @@ function MessageActions({
       <BlurView intensity={24} tint="light" style={StyleSheet.absoluteFill} pointerEvents="none" />
 
       <View style={styles.overlayContent} pointerEvents="box-none">
-        <View style={styles.overlayEmojiBar}>
+        <View style={[styles.overlayEmojiBar, mine && styles.overlaySideMine]}>
           {reactionEmoji.map((emoji) => (
             <Pressable
               key={emoji}
@@ -529,15 +529,21 @@ function MessageActions({
           </Text>
         </View>
 
-        <View style={styles.overlayMenu}>
-          {items.map((item, index) => (
+        {/* Icon then label, and no dividers: at this size the rows read as a list without them. */}
+        <View style={[styles.overlayMenu, mine && styles.overlaySideMine]}>
+          {items.map((item) => (
             <Pressable
               key={item.label}
-              style={[styles.overlayMenuItem, index > 0 && styles.overlayMenuItemDivided]}
+              style={styles.overlayMenuItem}
               onPress={item.onPress}
               accessibilityRole="button"
               accessibilityLabel={item.label}
             >
+              <MaterialIcons
+                name={item.icon}
+                size={19}
+                color={item.destructive === true ? color.error : color.textPrimary}
+              />
               <Text
                 style={[
                   styles.overlayMenuLabel,
@@ -546,11 +552,6 @@ function MessageActions({
               >
                 {item.label}
               </Text>
-              <MaterialIcons
-                name={item.icon}
-                size={20}
-                color={item.destructive === true ? color.error : color.textPrimary}
-              />
             </Pressable>
           ))}
         </View>
@@ -3952,10 +3953,22 @@ const styles = StyleSheet.create({
     zIndex: 50,
     justifyContent: "center",
   },
-  overlayContent: { padding: space.md, gap: space.sm, alignItems: "center" },
+  /*
+    Not `alignItems: center`.
+
+    > **Everything used to be centred and the menu was full width**, which made a menu of four
+    > short words occupy the middle of the screen and read as a modal page rather than as
+    > something attached to the message you are holding. The founder's reference is WhatsApp's:
+    > each panel sized to its own content and sitting on the message's own side.
+
+    Children pick their side with `alignSelf`, which is why this stretches rather than centring.
+  */
+  overlayContent: { padding: space.md, gap: space.sm },
   overlayEmojiBar: {
     flexDirection: "row",
     alignItems: "center",
+    /* Sized to the emoji, on the message's side. */
+    alignSelf: "flex-start",
     gap: space.xs,
     backgroundColor: color.card,
     borderRadius: radius.pill,
@@ -3986,9 +3999,16 @@ const styles = StyleSheet.create({
   overlayBubbleMine: { alignSelf: "flex-end", backgroundColor: color.bubbleSent },
   overlayBubbleSender: { ...type.label, color: color.textSecondary, textTransform: "none" },
   overlayBubbleBody: { ...type.body, color: color.textPrimary },
+  /*
+    Sized to its longest label rather than to the screen.
+
+    `minWidth` so a two-item menu is still a menu rather than a pair of chips, and `maxWidth` so a
+    long label wraps instead of reaching the far edge. No `width`, which is the whole change.
+  */
   overlayMenu: {
-    width: "100%",
-    maxWidth: 340,
+    alignSelf: "flex-start",
+    minWidth: 190,
+    maxWidth: 260,
     backgroundColor: color.card,
     borderRadius: radius.lg,
     overflow: "hidden",
@@ -3998,14 +4018,16 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 4,
   },
+  /* Icon then label, reading order, as the reference has it - and tighter than a form row. */
   overlayMenuItem: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: space.sm + 4,
     paddingHorizontal: space.md,
-    paddingVertical: space.md,
+    paddingVertical: space.sm + 4,
   },
-  overlayMenuItemDivided: { borderTopWidth: 1, borderTopColor: color.cardSunken },
+  /* On its own side, so the menu hangs under the bubble it belongs to rather than mid-screen. */
+  overlaySideMine: { alignSelf: "flex-end" },
   overlayMenuLabel: { ...type.body, color: color.textPrimary },
 
   /* A centred confirmation, for the one action in chat that cannot be undone. */

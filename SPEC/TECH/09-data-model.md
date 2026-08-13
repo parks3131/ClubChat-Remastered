@@ -119,19 +119,30 @@ messages              id, channel_id, seq, sender_id NOT NULL, type, body, media
                       INDEX (channel_id, reply_to_seq) WHERE reply_to_seq IS NOT NULL
                       -- for the cascade: without it, deleting a channel scans this table
                       -- once per message it holds
+emoji_catalog         emoji, name, group, ordinal
+                      PK (emoji)
+                      -- Static reference data, seeded from a pinned emojibase-data release
+                      -- and NOT authored here. It exists so a foreign key can be the
+                      -- validator: "the emoji is a real emoji" is an invariant, and an
+                      -- invariant belongs in a constraint rather than a handler. It also
+                      -- defines the canonical encoding, which is what stops ❤️ and ❤
+                      -- becoming two pills with a count of one each.
+                      -- `ordinal` is the dataset's own order, used to break ties in the
+                      -- pill row so equal counts do not shuffle. See ADR-0028.
 message_reactions     message_id, user_id, emoji, created_at
                       PK (message_id, user_id, emoji)
-                      CHECK (emoji IN ('👍','❤️','😂','🔥','🎉','😮'))
+                      FK emoji -> emoji_catalog(emoji)
                       INDEX (message_id)
                       -- The PK is the behaviour: several DIFFERENT emoji from one member,
                       -- never the same one twice. "Reactions toggle on and off" is then a
                       -- keyed delete-or-insert rather than a read-then-write, so two fast
                       -- taps cannot leave a double row.
-                      -- The CHECK is what makes the fixed six-emoji set a fact about the
-                      -- data rather than a rule a handler remembers - the column renders
-                      -- directly into every client. If the set ever widens to a full
-                      -- picker, dropping this is the first task of that migration, which
-                      -- forces whoever does it to confront validating arbitrary Unicode.
+                      -- The FK replaced a CHECK listing six emoji on 2026-08-13. The CHECK
+                      -- made the fixed set a fact about the data rather than a rule a
+                      -- handler remembers, and the FK keeps that property while letting the
+                      -- set be 1,914 rows instead of six - which a CHECK could express only
+                      -- illegibly. The column renders directly into every client, so it has
+                      -- never been allowed to hold arbitrary text and still is not.
                       -- NO maintained count column, unlike poll_options.vote_count: that
                       -- one exists because vote counts are public while voter identity is
                       -- gated. Reactions are public both ways, so a count is derivable.
@@ -269,6 +280,10 @@ news_posts            id, club_id, author_id, body, media_id, created_at, update
                       -- today rather than being retrofitted over historical rows.
                       -- author_id is audit only: any club admin edits any post.
 news_reactions        post_id, user_id, emoji
+                      FK emoji -> emoji_catalog(emoji)
+                      -- The same catalog chat uses, which is what keeps PRD/06 rule 4
+                      -- ("reactions use the same emoji set as chat") true rather than
+                      -- turning it into an exception somebody has to explain.
 ```
 
 ### Direct messages and member safety
