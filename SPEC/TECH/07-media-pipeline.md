@@ -119,6 +119,44 @@ GET /media/:id                     ← authenticated, authorized (same membershi
 | No image resizing; full-resolution originals served | Worker derives `thumb` (400px) and `display` (1600px) variants; chat renders `display`, gallery grid renders `thumb` |
 | Gallery signs an entire photo history in one unpaginated call | Gallery pages like anything else; URLs are stable so there is nothing to "sign in batches" |
 
+### Which way up, and how big
+
+A camera does not rotate pixels. It writes them in sensor order and adds an EXIF orientation tag,
+so a portrait photograph arrives as landscape pixels plus "turn this". Two consequences, both of
+which shipped wrong until 2026-08-13:
+
+1. **Derivation applies the orientation before resizing.** The derived variants are WebP, which
+   carries no orientation tag, so a derive that does not rotate flattens a portrait photo into
+   landscape pixels *permanently* - and the tag that would have explained them is gone. `width`
+   in `VARIANTS` means the width of the picture as somebody sees it, which is why the rotation
+   has to happen first.
+2. **`media_objects.width` and `.height` are the DISPLAYED size**, swapped for the quarter-turn
+   orientations. They are measured at complete-upload, inside the decode the probe already pays
+   for, and handed to the client on the same authorized hop that returns the URL - so a photo can
+   be laid out before a byte of it arrives. Null for a document, and null for every row uploaded
+   before the columns existed; a client reads null as "measure it yourself", which is what every
+   client did until then.
+
+**These are one fact, not two.** A stored dimension that disagrees with the derived pixels is
+worse than no dimension at all, so the rotation and the measurement are asserted together.
+
+**Every kind of image, on every surface.** Neither `completeUpload` nor `deriveVariants` branches
+on kind, owner type or bucket - both ask only whether the mime is an image - so a chat photo, a
+news post image and an avatar are corrected identically, despite an avatar taking a different
+upload branch into the public bucket. And **every render site draws a derived variant**: `display`
+for chat, news, the viewers and the club, race, Eboard and member profiles; `thumb` for the avatar
+component, the gallery grid and the reply-quote thumbnail. Nothing on screen renders the original,
+which is the reason correcting derivation corrects the product. The one caller that asks for
+`original` is the viewer's save-to-Photos, where the untouched bytes carry their EXIF tag and the
+operating system turns the picture, as it does for any camera file.
+
+An avatar is the hardest case to *see* wrong and so has its own assertion: the well is square, so
+a sideways face is the only symptom and there is no wrong-shaped box to notice.
+
+**Existing objects were not backfilled.** Anything already derived keeps its variants, so a photo
+uploaded before this stays as it was - sideways if its camera said so - rather than silently
+changing under people. Re-deriving is a decision with a cost, not a migration.
+
 ---
 
 ## Who signs a download URL

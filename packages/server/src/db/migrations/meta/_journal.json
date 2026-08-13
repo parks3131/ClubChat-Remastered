@@ -176,6 +176,13 @@
       "when": 1786544564338,
       "tag": "0024_race_date_optional",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1786635860991,
+      "tag": "0025_media_dimensions",
+      "breakpoints": true
     }
   ]
 }

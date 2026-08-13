@@ -907,12 +907,27 @@ export const channelApi = {
  * Keyed by media id and variant. Dropped once past its expiry, so a client that stays open
  * across the hour boundary re-resolves rather than rendering a broken image.
  */
-const mediaUrlMemo = new Map<string, { url: string; mime: string; expiresAt: number }>();
+const mediaUrlMemo = new Map<
+  string,
+  { url: string; mime: string; width: number | null; height: number | null; expiresAt: number }
+>();
 
 export type MediaVariant = 'original' | 'display' | 'thumb';
 
-/** A resolved URL and what is at the end of it. */
-export type ResolvedMedia = { url: string; mime: string };
+/**
+ * A resolved URL and what is at the end of it.
+ *
+ * `width` and `height` are the picture's DISPLAYED size, already corrected for the camera's
+ * orientation tag, so a caller can reserve the right space before a byte arrives. Null for a
+ * document, and null for anything uploaded before the server recorded them - in which case the
+ * caller measures the image itself, which is what every caller did until 2026-08-13.
+ */
+export type ResolvedMedia = {
+  url: string;
+  mime: string;
+  width: number | null;
+  height: number | null;
+};
 
 /**
  * Turn a media id into a fetchable URL, through the authorized hop.
@@ -943,15 +958,29 @@ export async function resolveMedia(
   const held = mediaUrlMemo.get(key);
   // A minute of headroom, so a URL is never handed out with less life left than the request
   // that uses it might take.
-  if (held && held.expiresAt - Date.now() > 60_000) return { url: held.url, mime: held.mime };
+  if (held && held.expiresAt - Date.now() > 60_000) {
+    return { url: held.url, mime: held.mime, width: held.width, height: held.height };
+  }
 
-  const resolved = await apiFetch<{ url: string; expiresAt: string; mime: string }>(
+  const resolved = await apiFetch<{
+    url: string;
+    expiresAt: string;
+    mime: string;
+    width?: number | null;
+    height?: number | null;
+  }>(
     `/media/${mediaId}/url?variant=${variant}`,
   );
+  // `?? null`, never bare: an older server omits these entirely, and `undefined` reaching a
+  // caller that checks for null is the shape of failure mode 12.
+  const width = resolved.width ?? null;
+  const height = resolved.height ?? null;
   mediaUrlMemo.set(key, {
     url: resolved.url,
     mime: resolved.mime,
+    width,
+    height,
     expiresAt: new Date(resolved.expiresAt).getTime(),
   });
-  return { url: resolved.url, mime: resolved.mime };
+  return { url: resolved.url, mime: resolved.mime, width, height };
 }

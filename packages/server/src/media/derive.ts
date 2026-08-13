@@ -78,6 +78,19 @@ export async function deriveVariants(
     let resized: Buffer;
     try {
       resized = await sharp(original, DECODE_OPTIONS)
+        /*
+         * **Apply the camera's orientation before anything else, or the photo ships sideways.**
+         *
+         * A phone writes a portrait photograph as landscape pixels plus an EXIF tag saying to
+         * turn it. Sharp does not honour that tag unless asked, and the WebP written below
+         * carries no metadata - so the tag was being dropped and the pixels left in sensor
+         * order, permanently. Measured: a 400x300 original tagged orientation 6 derived as
+         * 200x150 with no orientation at all, where it should be 200x267.
+         *
+         * Before `resize`, because `width` means the width of the picture as somebody sees it.
+         * Rotating afterwards would size the wrong edge.
+         */
+        .rotate()
         // `withoutEnlargement` so a small original is not upscaled into a larger file than it
         // started as, which would make the "thumbnail" bigger than the photo.
         .resize({ width, withoutEnlargement: true })

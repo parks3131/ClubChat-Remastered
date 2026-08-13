@@ -221,6 +221,14 @@ export async function completeUpload(
    * photo, the send succeeds, and what appears in the conversation is a permanently broken
    * image with no error anywhere the member can see.
    */
+  /*
+   * How large the picture is, taken from the decode that was already happening.
+   *
+   * Null for a document, and null for an image whose header would not give them up - both of
+   * which a client already handles, because it handled every row that predates the columns.
+   */
+  let dimensions: { width: number | null; height: number | null } = { width: null, height: null };
+
   if (media.mime.startsWith('image/')) {
     const bytes = await store.get({ bucket: media.bucket, objectKey: media.objectKey });
     const probe = await probeImage(bytes);
@@ -228,12 +236,13 @@ export async function completeUpload(
     // does for an upload the client abandoned. Nothing references the row: `ready` is what a
     // message may be attached to.
     if (!probe.ok) return { ok: false, code: 'undecodable' };
+    dimensions = { width: probe.width, height: probe.height };
   }
 
   await db.transaction(async (tx) => {
     await tx
       .update(mediaObjects)
-      .set({ status: 'ready', completedAt: new Date() })
+      .set({ status: 'ready', completedAt: new Date(), ...dimensions })
       .where(eq(mediaObjects.id, mediaId));
 
     // Derivation is an effect, not part of the request. Uploading should not wait on
@@ -345,6 +354,14 @@ export type MediaRedirect = {
    * from the extension. So the type travels with the URL rather than being inferred from it.
    */
   mime: string;
+  /**
+   * The picture's displayed size in pixels, or null where it was never recorded.
+   *
+   * Post-EXIF, per `displayDimensions` - these describe what a viewer sees, not what the file's
+   * header says, and the two differ for every portrait photograph taken on a phone.
+   */
+  width: number | null;
+  height: number | null;
 };
 
 /**
@@ -403,7 +420,25 @@ export async function resolveMediaRedirect(
         })()
       : signedMediaUrl(config, objectKey, nowMs);
 
-  return { ok: true, url, mime, cacheControl: 'private, max-age=600' };
+  /*
+   * The shape of the picture, so a client can lay out the space before the bytes arrive.
+   *
+   * **The same numbers for every variant, and that is correct rather than sloppy.** A thumbnail
+   * is the display image resized by width, so it has the same aspect - and aspect is the only
+   * thing a caller uses these for. Sending the thumbnail's literal pixel size would be a second
+   * fact to keep in step with `VARIANTS` for no gain.
+   *
+   * Null for anything uploaded before the columns existed, which every caller already handles:
+   * that was the only case for the life of the product until now.
+   */
+  return {
+    ok: true,
+    url,
+    mime,
+    width: media.width,
+    height: media.height,
+    cacheControl: 'private, max-age=600',
+  };
 }
 
 // ---------------------------------------------------------------------------

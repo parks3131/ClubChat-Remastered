@@ -29,7 +29,33 @@
  */
 export const DECODE_OPTIONS = { failOn: 'error' } as const;
 
-export type ImageProbe = { ok: true } | { ok: false; reason: string };
+export type ImageProbe =
+  | { ok: true; width: number | null; height: number | null }
+  | { ok: false; reason: string };
+
+/**
+ * The size a picture will be SEEN at, from the header's numbers and its orientation tag.
+ *
+ * **A camera does not rotate pixels.** It writes them in sensor order and adds an EXIF tag
+ * saying which way up the result goes, so a portrait photograph from a phone is stored as
+ * landscape plus "turn this 90 degrees". Orientations 5 to 8 are the quarter turns; 1 to 4 are
+ * the identity and the mirrors, which do not change the shape.
+ *
+ * Storing the header numbers unswapped would therefore describe a picture nobody will ever see,
+ * and every client sizing from them would draw a portrait photo in a landscape box.
+ */
+export function displayDimensions(metadata: {
+  width?: number | undefined;
+  height?: number | undefined;
+  orientation?: number | undefined;
+}): { width: number | null; height: number | null } {
+  const { width, height, orientation } = metadata;
+  if (width === undefined || height === undefined || width <= 0 || height <= 0) {
+    return { width: null, height: null };
+  }
+  const quarterTurned = orientation !== undefined && orientation >= 5 && orientation <= 8;
+  return quarterTurned ? { width: height, height: width } : { width, height };
+}
 
 /**
  * Decode the bytes and throw away the result.
@@ -50,8 +76,19 @@ export async function probeImage(bytes: Uint8Array): Promise<ImageProbe> {
   // worker processes that never complete an upload should not pay to load it.
   const sharp = (await import('sharp')).default;
   try {
-    await sharp(bytes, DECODE_OPTIONS).stats();
-    return { ok: true };
+    const image = sharp(bytes, DECODE_OPTIONS);
+    /*
+     * The header first, then the pixels.
+     *
+     * `metadata()` is the cheap parse this module's header warns is not sufficient - it answers
+     * 4x4 quite happily for a truncated file. It is read anyway because the dimensions are
+     * wanted and this decode is already being paid for; `stats()` below is still the gate, and
+     * nothing returns before it has passed. Reading the header first also means a file so
+     * broken that even the header fails is refused here rather than one line later.
+     */
+    const metadata = await image.metadata();
+    await image.stats();
+    return { ok: true, ...displayDimensions(metadata) };
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }

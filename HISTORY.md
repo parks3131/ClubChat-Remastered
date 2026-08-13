@@ -13,6 +13,55 @@ Newest first.
 
 ---
 
+## 2026-08-13 (later) - The picture says how big it is, and which way up
+
+Closing the gap the morning's work left open: nothing on the wire said how tall a photo was, so
+every client downloaded the bytes to find out and every photo resized itself on screen after it
+had already appeared. Two client mitigations were in place - the list anchors its visible position,
+and each aspect is remembered for the session - and a third would have been a bad sign. The
+information was already being computed and thrown away: `probeImage` decodes every upload at
+complete, and `metadata()` is right there.
+
+**Then the obvious question turned up a shipped defect.** Storing dimensions means deciding whose
+dimensions, and a camera does not rotate pixels - it writes them in sensor order and adds an EXIF
+tag saying which way up the result goes. `deriveVariants` never applied that tag, and the WebP it
+writes cannot carry one. Measured before touching anything: a 400x300 original tagged orientation
+6 derived as **200x150 with no orientation at all**, where it should be 200x267. So a portrait
+photograph from a phone was being flattened into landscape pixels, permanently, with the tag that
+would have explained them discarded - which is the sideways photo sitting in the founder's own
+screenshot from earlier in the day, and which I had read past as a photo taken that way.
+
+The two are one fact and are asserted together: a stored dimension that disagrees with the derived
+pixels is worse than no dimension. `.rotate()` before `.resize()`, because `width` in `VARIANTS`
+means the width of the picture as somebody sees it; `displayDimensions` swaps the header's numbers
+for the quarter-turn orientations; and both were mutation-tested, each mutation failing exactly its
+own test and nothing else.
+
+Proved end to end against the running stack rather than only in the suite: a 900x600 JPEG tagged
+orientation 6, uploaded through the real client, stored as **600x900**, derived as a **600x900**
+WebP, and drawn portrait at full size on the first frame.
+
+**The founder then asked whether profile pictures were covered, saying he had seen it there too.**
+They are, and the reasoning is that neither `completeUpload` nor `deriveVariants` branches on kind,
+owner type or bucket - but "by construction" is exactly what I had said about the quote's jump
+target earlier the same day, and that was wrong. So it is asserted instead: an avatar takes a
+different branch of `createUploadIntent`, a different owner type and the public bucket, and its own
+test uploads one tagged orientation 6 and checks both the recorded dimensions and the **`thumb`**
+variant, which is the one every avatar in the product is actually drawn from. Mutation-tested with
+the rest.
+
+While there, every render site was enumerated rather than assumed: chat, news, both viewers and the
+four profile screens draw `display`; the avatar component, the gallery grid and the reply-quote
+thumbnail draw `thumb`. Nothing on screen draws the original, which is why correcting derivation
+corrects the whole product. The one `original` caller is save-to-Photos, where the untouched bytes
+keep their EXIF tag and the operating system turns the picture.
+
+Deliberately not backfilled. Anything already derived keeps its variants, so a photo uploaded
+before today stays exactly as it was rather than silently changing under people; re-deriving is a
+decision with a re-encoding cost, and it is logged in `PRD/17` as one.
+
+---
+
 ## 2026-08-13 - Three cards that claimed to be one, and a date that was tomorrow
 
 A mockup of the chat screen with an event card and a poll card in it. The cards were already

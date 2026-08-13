@@ -26,7 +26,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { formatBytes } from '@clubchat/shared';
-import { resolveMediaUrl, type MediaVariant } from './api.ts';
+import { resolveMedia, resolveMediaUrl, type MediaVariant } from './api.ts';
 import {
   PHOTO_MAX_WIDTH,
   photoSize,
@@ -139,9 +139,25 @@ export function PhotoBubble({ mediaId, localUri, variant = 'display', mine }: Ph
   useEffect(() => {
     if (localUri || !mediaId) return;
     let cancelled = false;
-    void resolveMediaUrl(mediaId, variant)
+    /*
+     * `resolveMedia`, not `resolveMediaUrl`: the same authorized hop, keeping the shape it also
+     * returns.
+     *
+     * **This is what makes a photo render at its final size on the first frame.** The server
+     * measured it once, at upload, during a decode it was already paying for - so a client that
+     * asks for the URL is told the aspect in the same breath and never has to download the bytes
+     * to find out. The measure-and-remember path below is now the FALLBACK, for photos uploaded
+     * before the server recorded this.
+     */
+    void resolveMedia(mediaId, variant)
       .then((resolved) => {
-        if (!cancelled) setUri(resolved);
+        if (cancelled) return;
+        if (resolved.width !== null && resolved.height !== null && resolved.height > 0) {
+          const known = resolved.width / resolved.height;
+          rememberRatio(ratioKey, known);
+          setRatio(known);
+        }
+        setUri(resolved.url);
       })
       .catch(() => {
         // Losing access is a legitimate reason to fail, so this is not necessarily an error -

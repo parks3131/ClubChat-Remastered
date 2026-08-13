@@ -155,6 +155,14 @@ export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
       expiresAt: new Date(hourAlignedExpiry(Date.now()) * 1000).toISOString(),
       // So a client saving or sharing the file can name it correctly - the key has no extension.
       mime: result.mime,
+      /*
+       * So a client can reserve the right space BEFORE the bytes arrive.
+       *
+       * Null for anything uploaded before these were recorded, and for a document. A client
+       * that gets null measures the image itself, which is what every client did until now.
+       */
+      width: result.width,
+      height: result.height,
     });
   });
 

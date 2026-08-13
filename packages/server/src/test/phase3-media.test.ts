@@ -125,10 +125,29 @@ async function encodedImage(mime: string): Promise<Buffer> {
   return encoded;
 }
 
+/**
+ * A NON-square image, optionally tagged the way a camera tags a portrait photograph.
+ *
+ * Square is useless for anything about shape - it survives every wrong answer - which is why the
+ * shared 64x64 helper above cannot be used for the orientation cases.
+ */
+async function orientedImage(orientation?: number): Promise<Buffer> {
+  const sharp = (await import('sharp')).default;
+  const landscape = sharp({
+    create: { width: 80, height: 60, channels: 3, background: '#3355aa' },
+  });
+  const withTag = orientation === undefined ? landscape : landscape.withMetadata({ orientation });
+  return withTag.jpeg().toBuffer();
+}
+
 /** The whole upload flow: intent, the client's direct PUT, then complete. */
-async function uploadPhoto(userId: string, channelId: string, opts: { mime?: string } = {}) {
+async function uploadPhoto(
+  userId: string,
+  channelId: string,
+  opts: { mime?: string; bytes?: Buffer } = {},
+) {
   const mime = opts.mime ?? 'image/jpeg';
-  const image = await encodedImage(mime);
+  const image = opts.bytes ?? (await encodedImage(mime));
   // The declared count is the real one. `completeUpload` compares with no tolerance.
   const intent = await createUploadIntent(h.db, store, config, await ctxFor(userId), {
     kind: 'photo',
@@ -992,6 +1011,156 @@ describe('thumbnail derivation', () => {
     });
     if (!display.ok) return;
     expect(display.mime).toBe('image/webp');
+  });
+});
+
+/**
+ * How big the picture is, and which way up.
+ *
+ * > **Both halves shipped wrong, and one of them was visible in the product for months.** Nothing
+ * > recorded an image's dimensions, so every client downloaded the bytes to find out and every
+ * > photo resized itself on screen after it appeared. And `deriveVariants` never applied the
+ * > camera's orientation tag while writing a WebP that cannot carry one - so a portrait
+ * > photograph was flattened into landscape pixels, permanently, with the tag that would have
+ * > explained them thrown away.
+ *
+ * They are tested together because they are one fact: a stored dimension that disagrees with the
+ * derived pixels is worse than no dimension at all.
+ */
+describe('an image knows its own shape', () => {
+  it('records the size a viewer will see, and hands it back with the URL', async () => {
+    const f = await setup();
+    const { media } = await uploadPhoto(f.ownerId, f.mainChannelId, {
+      bytes: await orientedImage(),
+    });
+
+    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, media!));
+    expect(row[0]!.width).toBe(80);
+    expect(row[0]!.height).toBe(60);
+
+    // And the client is told, in the same authorized hop that hands it the URL - which is what
+    // lets a photo be laid out before a byte of it has arrived.
+    const resolved = await resolveMediaRedirect(
+      h.db, store, config, await ctxFor(f.ownerId), media!, { variant: 'display' },
+    );
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.width).toBe(80);
+    expect(resolved.height).toBe(60);
+  });
+
+  it('stores a portrait photo as a portrait, not as the landscape pixels it arrived in', async () => {
+    /*
+     * Orientation 6 is what a phone writes when it is held upright: the file is 80x60 and the
+     * picture is 60x80. Storing the header numbers would tell every client to draw a portrait
+     * photograph in a landscape box.
+     */
+    const f = await setup();
+    const { media } = await uploadPhoto(f.ownerId, f.mainChannelId, {
+      bytes: await orientedImage(6),
+    });
+
+    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, media!));
+    expect(row[0]!.width).toBe(60);
+    expect(row[0]!.height).toBe(80);
+  });
+
+  it('derives the pixels the right way up, since a WebP cannot carry the tag', async () => {
+    /*
+     * The half that was visible in the product: a portrait photo appearing on its side in chat.
+     * The derived variant has to BE rotated, because the format it is written in has nowhere to
+     * record that it should be - and because the dimensions asserted above would otherwise
+     * describe a picture that does not match its own bytes.
+     */
+    const f = await setup();
+    const { media } = await uploadPhoto(f.ownerId, f.mainChannelId, {
+      bytes: await orientedImage(6),
+    });
+
+    const derived = await deriveVariants(h.db, store, media!);
+    expect(derived.derived).toContain('display');
+
+    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, media!));
+    const key = (row[0]!.variants as Record<string, string>)['display']!;
+    const sharp = (await import('sharp')).default;
+    const bytes = await store.get({ bucket: row[0]!.bucket, objectKey: key });
+    const meta = await sharp(bytes).metadata();
+
+    // Taller than it is wide, which is the entire assertion: before the fix this was 80x60.
+    expect(meta.height).toBeGreaterThan(meta.width!);
+    // And in the same proportion the row claims, so the two can never disagree.
+    expect(meta.width! / meta.height!).toBeCloseTo(60 / 80, 2);
+  });
+
+  it('turns a PROFILE PICTURE the right way up too, on its own upload path', async () => {
+    /*
+     * The founder's question, and it is a fair one: an avatar takes a different branch of
+     * `createUploadIntent` - a different kind, a different owner type, and the PUBLIC bucket
+     * rather than the private one - so "photos are fixed" does not by itself say avatars are.
+     *
+     * They are, because neither `completeUpload` nor `deriveVariants` branches on any of that;
+     * both ask only whether the mime is an image. This asserts that rather than trusting it,
+     * because a profile picture is the one place a rotation is hardest to SEE: the well is
+     * square, so a sideways face is the only symptom and there is no wrong-shaped box to notice.
+     */
+    const f = await setup();
+    const intent = await createUploadIntent(h.db, store, config, await ctxFor(f.ownerId), {
+      kind: 'avatar',
+      mime: 'image/jpeg',
+      bytes: (await orientedImage(6)).byteLength,
+    });
+    if (!intent.ok) throw new Error('avatar intent failed');
+
+    const row = await h.db
+      .select()
+      .from(mediaObjects)
+      .where(eq(mediaObjects.id, intent.mediaId))
+      .limit(1);
+    store.simulateUpload(
+      row[0]!.bucket,
+      row[0]!.objectKey,
+      new Uint8Array(await orientedImage(6)),
+      'image/jpeg',
+    );
+    expect((await completeUpload(h.db, store, await ctxFor(f.ownerId), intent.mediaId)).ok).toBe(
+      true,
+    );
+
+    // Measured post-EXIF, exactly as a chat photo is.
+    const stored = await h.db
+      .select()
+      .from(mediaObjects)
+      .where(eq(mediaObjects.id, intent.mediaId));
+    expect(stored[0]!.width).toBe(60);
+    expect(stored[0]!.height).toBe(80);
+
+    /*
+     * And the variant an avatar is actually DRAWN from is rotated. Every avatar in the product
+     * renders `thumb` - rows, headers, the author line above a message - so that is the one
+     * this has to check rather than `display`.
+     */
+    await deriveVariants(h.db, store, intent.mediaId);
+    const derivedRow = await h.db
+      .select()
+      .from(mediaObjects)
+      .where(eq(mediaObjects.id, intent.mediaId));
+    const thumbKey = (derivedRow[0]!.variants as Record<string, string>)['thumb']!;
+    const sharp = (await import('sharp')).default;
+    const meta = await sharp(
+      await store.get({ bucket: derivedRow[0]!.bucket, objectKey: thumbKey }),
+    ).metadata();
+    expect(meta.height).toBeGreaterThan(meta.width!);
+  });
+
+  it('leaves a document with no dimensions rather than inventing any', async () => {
+    const f = await setup();
+    const intent = await createUploadIntent(h.db, store, config, await ctxFor(f.ownerId), {
+      kind: 'document', mime: 'application/pdf', bytes: 512, channelId: f.mainChannelId,
+    });
+    if (!intent.ok) throw new Error('intent failed');
+    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, intent.mediaId));
+    expect(row[0]!.width).toBeNull();
+    expect(row[0]!.height).toBeNull();
   });
 });
 

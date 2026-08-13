@@ -1671,6 +1671,23 @@ export const mediaObjects = pgTable(
     mime: text('mime').notNull(),
     /** Declared at intent, then RE-VERIFIED against the actual object at complete. */
     bytes: integer('bytes').notNull(),
+    /**
+     * How large the image is **as it will be displayed**, in pixels.
+     *
+     * Nullable for three honest reasons: a document has no dimensions, an object that has not
+     * completed has not been measured, and every row that predates this column never was. A
+     * client treats null as "measure it yourself", which is what it did for all of them before.
+     *
+     * **These are post-EXIF.** A camera writes a portrait photo as landscape pixels plus an
+     * orientation tag, and storing the raw header numbers would describe a picture nobody will
+     * ever see - so the swap is applied where they are read. See `displayDimensions`.
+     *
+     * Why store them at all: the decode that produces them is already paid for at upload, and
+     * without them every client on every device re-derives the same two numbers by downloading
+     * the bytes and measuring - once per cold start, per photo, forever.
+     */
+    width: integer('width'),
+    height: integer('height'),
     status: text('status').notNull().default('pending'),
     /** Derived sizes: { thumb: key, display: key }. Empty until the worker derives them. */
     variants: jsonb('variants').notNull().default({}),
