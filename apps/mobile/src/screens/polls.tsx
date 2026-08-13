@@ -1229,8 +1229,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  chatPollActions: { flexDirection: 'row', gap: space.sm },
-  chatPollAction: { flex: 1 },
   dropdownHead: {
     flexDirection: 'row',
     alignItems: 'center',

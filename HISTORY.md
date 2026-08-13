@@ -51,8 +51,27 @@ the regression either. It was a no-op in both directions, and I reported a green
 where the change had not happened. Failure mode 28.
 
 The anchor is now suspended while a jump is in flight, `jumpedTo` being exactly that condition and
-already self-clearing. **Unverified by me**: it is device-only by construction, so the founder has
-to confirm it, and saying that is better than a second green check measuring nothing.
+already self-clearing.
+
+### Which is why the simulator now gets used
+
+Written as unverified, because it is device-only by construction and saying so beats a second green
+check measuring nothing. The founder's answer was to offer the iOS Simulator - and it closes
+exactly this hole, because it runs the real native runtime.
+
+Verified there within the hour: tapping a reply's thumbnail jumped from the 12:15 message to the
+quoted photo, landing it mid-screen as `viewPosition: 0.5` intends. The same session also confirmed
+on a real device runtime what the browser could only suggest - the quote's minimum width holds, the
+author line sits above each message, photos carry no frame, and a photo uploaded before today is
+still sideways, which is the un-backfilled state described honestly rather than a surprise.
+
+**The working split, recorded because it is a standing decision rather than today's tactic:** web
+for iteration and diagnosis - instant reload, computed styles, targeting by accessibility label,
+which is what solved the quote-width bug by forcing a width onto a wrapper - and **the simulator
+before claiming anything native works.** Two gotchas worth the minutes they cost: a click on an
+unfocused macOS window is spent focusing it and reads exactly like a tap that missed, and
+`DELETE ACCOUNT` sits about thirty points under `Sign out` on a profile screen holding real test
+data, so switching accounts that way is not worth the aim.
 
 ---
 
