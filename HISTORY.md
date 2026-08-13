@@ -13,6 +13,54 @@ Newest first.
 
 ---
 
+## 2026-08-13 (last, again) - Any emoji, from a table
+
+Reactions were six emoji in a constant. They are the whole catalog now: 1,914 rows seeded from a
+pinned `emojibase-data`, with `message_reactions` and `news_reactions` holding foreign keys into
+it. [ADR-0028](SPEC/decisions/0028-reactions-come-from-a-catalog-table.md) has the reasoning, and
+the short version is that the table IS the validator - "the emoji is a real emoji" is an invariant,
+and an invariant belongs in a constraint because a handler races and a constraint does not.
+
+**Three of the five costs `PRD/05` recorded against a full picker dissolved rather than being
+managed.** The set is closeable because the catalog closes it. Validation stopped being a hard
+Unicode problem - there is no need to decide whether a string is an emoji, only whether it is one
+of ours. And normalisation stopped being a correctness issue, which was not academic: our stored
+thumbs up is U+1F44D and the dataset's is U+1F44D U+FE0F, so a naive foreign key would have refused
+every existing one, and a client sending the dataset's form would have made a second pill with a
+count of one beside the old. Checked against both tables before a line of the migration was
+written. The migration normalises before it constrains, spells its own ordering out because drizzle
+generated the version that fails, and stops rather than deleting anything it cannot match.
+
+Ordering moved to the client, which it had to: the server used to iterate the fixed six, ordering
+the list AND silently dropping anything outside it. `reactionSummary` sorts by count with the
+catalog breaking ties, four pills show, and a `+N` chip opens a sheet naming everyone. That sheet
+takes names as a lookup beside the set rather than a name under each emoji, so somebody who used
+four emoji appears once and the sheet can be ordered by the same function the row is.
+
+### What the device found that nothing else would have
+
+Three things, all reported from the phone within minutes of each other, and all invisible to the
+suite:
+
+**A single emoji in a full-width square.** Cells were `flex: 1` with `aspectRatio: 1`. With eight
+per row it looks perfect; with ONE recent emoji that cell takes the whole row and becomes as tall
+as the screen is wide. Searching "dino" put two dinosaurs at opposite ends of an enormous gap. A
+fixed fraction fixes it, and the lesson is that a flexible cell is only tested by a partial row.
+
+**A category strip that was navigation competing with content.** First version used emoji as the
+category buttons, which puts a row of colourful glyphs under a grid of colourful glyphs. The
+founder pointed at the system keyboard: monochrome line icons, a clock for recents, a circle under
+the active one. Monochrome recedes, which is what a control under a wall of emoji has to do.
+
+**Ten buttons that did not fit.** Lifting the strip clear of the home indicator meant bigger
+padding, ten buttons came to 400pt on a 402pt phone, and the flag fell off the edge. The padding is
+now bounded by that arithmetic rather than by taste, with `hitSlop` buying back the touch area.
+
+Also seven emoji per row rather than eight, founder-set - it is the number that decides how big
+each emoji is, since a cell is one seventh of the sheet.
+
+---
+
 ## 2026-08-13 (last) - A card that is only the poll, and an anchor that fought a jump
 
 Two loose ends, and a regression found while closing them.

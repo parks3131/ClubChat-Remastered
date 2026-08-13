@@ -201,26 +201,49 @@ export async function toggleReaction(
   return { ok: true, messageId: message.id, seq, added: result.added, reactions };
 }
 
+/** A reactor, for the who-reacted sheet. */
+export type Reactor = { userId: string; name: string; image: string | null };
+
 /**
  * Who reacted, by emoji, for one message.
  *
  * Reactions are visible to everyone with access, so this needs no gate beyond reading the
  * channel - which the caller has already established. Exposed separately from the envelope
  * only so the client can show a who-reacted sheet without holding the whole page.
+ *
+ * **`reactions` keeps its envelope shape and the names come alongside as a lookup**, rather than
+ * a name being repeated under every emoji that person used. Two reasons, and the second is the
+ * important one: a member who reacted with four emoji appears once instead of four times, and
+ * the client can order this sheet with the very same `reactionSummary` the pill row uses. A
+ * second shape here would mean a second ordering rule, and those drift.
  */
 export async function readReactions(
   db: Db,
   channel: ChannelRef,
   seq: number,
-): Promise<ReactionResult<{ reactions: MessageReaction[] }>> {
+): Promise<ReactionResult<{ reactions: MessageReaction[]; people: Reactor[] }>> {
   const found = await db.execute<{ id: string }>(sql`
     SELECT id::text AS id FROM messages WHERE channel_id = ${channel.id} AND seq = ${seq}
   `);
   const message = found.rows[0];
   if (!message) return { ok: false, code: 'not_found' };
 
+  const reactions = (await reactionsForMessages(db, [message.id])).get(message.id) ?? [];
+
+  const people = await db.execute<{ user_id: string; full_name: string; image: string | null }>(sql`
+    SELECT DISTINCT u.id::text AS user_id, u.full_name, u.image
+      FROM message_reactions r
+      JOIN users u ON u.id = r.user_id
+     WHERE r.message_id = ${message.id}
+  `);
+
   return {
     ok: true,
-    reactions: (await reactionsForMessages(db, [message.id])).get(message.id) ?? [],
+    reactions,
+    people: people.rows.map((p) => ({
+      userId: p.user_id,
+      name: p.full_name,
+      image: p.image,
+    })),
   };
 }

@@ -225,11 +225,18 @@ export const dmApi = {
       { method: 'POST', body: { emoji } },
     ),
 
-  /** Who reacted, for a who-reacted sheet. Reactions are visible to everyone with access. */
+  /**
+   * Everyone who reacted to one message, for the `+N` sheet. Visible to everyone with access.
+   *
+   * `people` is a lookup rather than a name under each emoji, so somebody who used four emoji
+   * appears once - and so this sheet can be ordered by the same `reactionSummary` the pill row
+   * uses instead of growing a second ordering rule.
+   */
   reactionsFor: (channelId: string, seq: number) =>
-    apiFetch<{ reactions: MessageReaction[] }>(
-      `/channels/${channelId}/messages/${seq}/reactions`,
-    ),
+    apiFetch<{
+      reactions: MessageReaction[];
+      people: Array<{ userId: string; name: string; image: string | null }>;
+    }>(`/channels/${channelId}/messages/${seq}/reactions`),
 };
 
 // ---------------------------------------------------------------------------

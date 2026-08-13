@@ -6,11 +6,14 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
+  type StyleProp,
+  type ViewStyle,
 } from "react-native";
 import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
 import { useDeclareSpace } from "../../src/current-space.tsx";
@@ -18,6 +21,7 @@ import {
   quoteOf,
   quickReactions,
   reactionSummary,
+  VISIBLE_REACTION_PILLS,
   SYSTEM_ACTOR_ID,
   type MessageEnvelope,
   type MessageReplyRef,
@@ -61,6 +65,7 @@ import { Avatar } from "../../src/ui.tsx";
 import { ChatEventCard } from "../../src/screens/events.tsx";
 import { ChatMeetingCard } from "../../src/screens/meetings.tsx";
 import { ChatPollCard } from "../../src/screens/polls.tsx";
+import { EmojiPicker } from "../../src/emoji-picker.tsx";
 import { QuickNav, spaceProfileHref, useGoBack } from "../../src/nav.tsx";
 import { useLoad } from "../../src/use-load.ts";
 import { hrefForCard } from "../../src/notification-href.ts";
@@ -392,6 +397,7 @@ function MessageActions({
   poll,
   onDismiss,
   onReact,
+  onPickMore,
   onReply,
   onCopy,
   onPin,
@@ -416,6 +422,8 @@ function MessageActions({
   poll: { closed: boolean } | null;
   onDismiss: () => void;
   onReact: (emoji: ReactionEmoji) => void;
+  /** Opens the full catalog. See `EmojiPicker`. */
+  onPickMore: () => void;
   onReply: () => void;
   onCopy: () => void;
   onPin: () => void;
@@ -517,6 +525,18 @@ function MessageActions({
               <Text style={styles.emojiGlyph}>{emoji}</Text>
             </Pressable>
           ))}
+          {/*
+            The rest of the catalog. Six quick taps plus a way to everything is what `PRD/05`
+            settled on - the quick row is not a shortlist to be replaced, it is the common case.
+          */}
+          <Pressable
+            style={[styles.overlayEmojiButton, styles.overlayEmojiMore]}
+            onPress={onPickMore}
+            accessibilityRole="button"
+            accessibilityLabel="More emoji"
+          >
+            <MaterialIcons name="add" size={22} color={color.textPrimary} />
+          </Pressable>
         </View>
 
         {/* The pressed message, redrawn plainly so it is unmistakable which one this is about. */}
@@ -728,6 +748,141 @@ function BubbleContainer({
 }
 
 /**
+ * Everyone who reacted to one message, behind the `+N` chip.
+ *
+ * Fetched on open rather than held: the envelope carries `userIds` but not names, and putting a
+ * name under every emoji somebody used would repeat that person once per reaction on every
+ * message in a page of history. The lookup arrives beside the set - see `readReactions`.
+ *
+ * Ordered by the same `reactionSummary` the pill row uses, so the sheet reads in the order the
+ * row does. A second ordering rule here would drift from the first.
+ */
+function ReactorSheet({
+  channelId,
+  seq,
+  viewerId,
+  onDismiss,
+}: {
+  channelId: string;
+  seq: number;
+  viewerId: string | null;
+  onDismiss: () => void;
+}) {
+  const load = useLoad(() => dmApi.reactionsFor(channelId, seq), [channelId, seq]);
+
+  const named = new Map((load.data?.people ?? []).map((p) => [p.userId, p]));
+  const rows = reactionSummary(load.data?.reactions ?? [], viewerId).map((entry) => ({
+    ...entry,
+    who: (load.data?.reactions.find((r) => r.emoji === entry.emoji)?.userIds ?? [])
+      .map((id) => named.get(id)?.name)
+      .filter((name): name is string => name !== undefined),
+  }));
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onDismiss}>
+      <View style={styles.dialogBackdrop}>
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={onDismiss}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+        />
+        <View style={styles.reactorSheet}>
+          <View style={styles.reactorHead}>
+            <Text style={styles.dialogTitle}>Reactions</Text>
+            <Pressable
+              onPress={onDismiss}
+              hitSlop={space.sm}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+            >
+              <MaterialIcons name="close" size={22} color={color.textPrimary} />
+            </Pressable>
+          </View>
+
+          <ScrollView>
+            {rows.length === 0 ? (
+              <Text style={styles.dialogBody}>Nobody has reacted to this yet.</Text>
+            ) : (
+              rows.map((row) => (
+                <View key={row.emoji} style={styles.reactorRow}>
+                  <Text style={styles.pillEmoji}>{row.emoji}</Text>
+                  <Text style={styles.reactorCount}>{row.count}</Text>
+                  {/* Names, not avatars: this answers "who", and a row of faces makes that a
+                      guessing game for anybody without a photo. */}
+                  <Text style={styles.reactorNames} numberOfLines={2}>
+                    {row.who.join(', ')}
+                  </Text>
+                </View>
+              ))
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+/**
+ * The reaction pills under a message.
+ *
+ * **One component for both branches**, the bubble's and the card's, which drew the identical row
+ * twice until this existed - the shape of failure mode 9, where the second copy of a thing is
+ * where a rule quietly stops applying to half the product.
+ *
+ * `PRD/05` rule R2: at most four, most-reacted first, then a `+N` chip for the rest. The chip is
+ * what makes the cap honest - a row that just stopped at four would hide somebody's reaction with
+ * no way to know it was there, including your own.
+ */
+function ReactionRow({
+  summary,
+  seq,
+  style,
+  onReact,
+  onShowAll,
+}: {
+  summary: ReturnType<typeof reactionSummary>;
+  seq: number;
+  style: StyleProp<ViewStyle>;
+  onReact: (seq: number, emoji: ReactionEmoji) => void;
+  onShowAll: (seq: number) => void;
+}) {
+  const visible = summary.slice(0, VISIBLE_REACTION_PILLS);
+  const hidden = summary.length - visible.length;
+
+  return (
+    <View style={style}>
+      {visible.map((entry) => (
+        <Pressable
+          key={entry.emoji}
+          style={[styles.pill, entry.mine && styles.pillMine]}
+          onPress={() => onReact(seq, entry.emoji)}
+          accessibilityRole="button"
+          accessibilityLabel={
+            entry.mine
+              ? `Remove your ${entry.emoji} reaction, ${entry.count} total`
+              : `React with ${entry.emoji}, ${entry.count} total`
+          }
+        >
+          <Text style={styles.pillEmoji}>{entry.emoji}</Text>
+          <Text style={[styles.pillCount, entry.mine && styles.pillCountMine]}>{entry.count}</Text>
+        </Pressable>
+      ))}
+      {hidden > 0 && (
+        <Pressable
+          style={styles.pill}
+          onPress={() => onShowAll(seq)}
+          accessibilityRole="button"
+          accessibilityLabel={`${hidden} more ${hidden === 1 ? 'reaction' : 'reactions'}. See everyone who reacted`}
+        >
+          <Text style={styles.pillCount}>{`+${hidden}`}</Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
+/**
  * Who posted this, above whatever they posted.
  *
  * **One component for messages AND cards**, which is the point of it: the two were drawn
@@ -857,6 +1012,7 @@ const MessageRow = memo(function MessageRow({
   isJumpTarget,
   onSelect,
   onReact,
+  onShowReactors,
   onOpenProfile,
   onJumpToQuote,
   onOpenPhoto,
@@ -869,6 +1025,8 @@ const MessageRow = memo(function MessageRow({
   /** Open the long-press menu for this message. The card's own dots call it too. */
   onSelect: (seq: number) => void;
   onReact: (seq: number, emoji: ReactionEmoji) => void;
+  /** Open the sheet listing every reaction and who made it. The `+N` chip calls it. */
+  onShowReactors: (seq: number) => void;
   onOpenProfile: (userId: string) => void;
   onJumpToQuote: (seq: number) => void;
   /** Open the full-screen viewer. Only ever reached from a photo message. */
@@ -1075,26 +1233,13 @@ const MessageRow = memo(function MessageRow({
         </Pressable>
 
         {summary.length > 0 && (
-          <View style={[styles.metaRow, styles.metaRowTheirs]}>
-            {summary.map((entry) => (
-              <Pressable
-                key={entry.emoji}
-                style={[styles.pill, entry.mine && styles.pillMine]}
-                onPress={() => onReact(message.seq, entry.emoji)}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  entry.mine
-                    ? `Remove your ${entry.emoji} reaction, ${entry.count} total`
-                    : `React with ${entry.emoji}, ${entry.count} total`
-                }
-              >
-                <Text style={styles.pillEmoji}>{entry.emoji}</Text>
-                <Text style={[styles.pillCount, entry.mine && styles.pillCountMine]}>
-                  {entry.count}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          <ReactionRow
+            summary={summary}
+            seq={message.seq}
+            style={[styles.metaRow, styles.metaRowTheirs]}
+            onReact={onReact}
+            onShowAll={onShowReactors}
+          />
         )}
       </View>
     );
@@ -1269,37 +1414,22 @@ const MessageRow = memo(function MessageRow({
         > message has to read that way, which is why the row takes a full-width basis and
         > the wrap above breaks before it.
 
-        Only emoji anyone actually used, in the fixed order from the shared constant so
-        the row does not reshuffle as counts change.
+        Only emoji anyone actually used, most-reacted first, at most four with a `+N` chip for
+        the rest - `PRD/05` rules R2 and R3, drawn by the one `ReactionRow` the card branch uses.
       */}
       {summary.length > 0 && (
-        <View
+        <ReactionRow
           style={[
             styles.metaRow,
             mine ? styles.metaRowMine : styles.metaRowTheirs,
             /* Under the bubble it belongs to, inset past the hanging avatar on the same side. */
             mine ? styles.authorIndentMine : styles.authorIndent,
           ]}
-        >
-          {summary.map((entry) => (
-            <Pressable
-              key={entry.emoji}
-              style={[styles.pill, entry.mine && styles.pillMine]}
-              onPress={() => onReact(message.seq, entry.emoji)}
-              accessibilityRole="button"
-              accessibilityLabel={
-                entry.mine
-                  ? `Remove your ${entry.emoji} reaction, ${entry.count} total`
-                  : `React with ${entry.emoji}, ${entry.count} total`
-              }
-            >
-              <Text style={styles.pillEmoji}>{entry.emoji}</Text>
-              <Text style={[styles.pillCount, entry.mine && styles.pillCountMine]}>
-                {entry.count}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+          seq={message.seq}
+          summary={summary}
+          onReact={onReact}
+          onShowAll={onShowReactors}
+        />
       )}
     </View>
   );
@@ -1409,6 +1539,10 @@ export default function ChatScreen() {
    * conversation entirely.
    */
   const [confirmingPollDelete, setConfirmingPollDelete] = useState<string | null>(null);
+  /** The message whose reactions are being listed in full, by seq. The `+N` chip sets it. */
+  const [showingReactorsFor, setShowingReactorsFor] = useState<number | null>(null);
+  /** True while the full emoji catalog is open over the long-press menu. */
+  const [pickingEmoji, setPickingEmoji] = useState(false);
   /**
    * Whether the next send goes out as an announcement.
    *
@@ -2141,6 +2275,7 @@ export default function ChatScreen() {
           isJumpTarget={jumpedTo === item.message.seq}
           onSelect={selectMessage}
           onReact={react}
+          onShowReactors={setShowingReactorsFor}
           onOpenProfile={openProfile}
           onJumpToQuote={jumpToQuote}
           onOpenPhoto={openPhoto}
@@ -3189,6 +3324,11 @@ export default function ChatScreen() {
             }}
             onReport={() => setConfirmingReport(selectedMessage.seq)}
             onDelete={() => setConfirmingDelete(selectedMessage.seq)}
+            /*
+              The menu stays open behind the picker rather than being dismissed, so cancelling
+              the picker returns you to where you were instead of back to the conversation.
+            */
+            onPickMore={() => setPickingEmoji(true)}
             poll={pollControls}
             onSetPollClosed={(closed) => {
               const pollId = selectedMessage.linkedPollId;
@@ -3204,6 +3344,28 @@ export default function ChatScreen() {
             onDeletePoll={() => setConfirmingPollDelete(selectedMessage.linkedPollId)}
           />
         )}
+
+      {/* The whole catalog, over the menu. `PRD/05` rule R1. */}
+      {pickingEmoji && selectedMessage !== null && (
+        <EmojiPicker
+          onDismiss={() => setPickingEmoji(false)}
+          onPick={(emoji) => {
+            setPickingEmoji(false);
+            setSelected(null);
+            void react(selectedMessage.seq, emoji);
+          }}
+        />
+      )}
+
+      {/* Everyone who reacted, behind the `+N` chip. `PRD/05` rule R2. */}
+      {showingReactorsFor !== null && (
+        <ReactorSheet
+          channelId={channelId}
+          seq={showingReactorsFor}
+          viewerId={userId}
+          onDismiss={() => setShowingReactorsFor(null)}
+        />
+      )}
 
       {/*
         Delete, as a centred dialog rather than a row in the conversation.
@@ -3987,6 +4149,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderRadius: radius.pill,
   },
+  /* Filled, so the way to everything else reads as a control rather than a seventh emoji. */
+  overlayEmojiMore: { backgroundColor: color.cardSunken },
   overlayBubble: {
     alignSelf: "flex-start",
     maxWidth: "88%",
@@ -4062,6 +4226,24 @@ const styles = StyleSheet.create({
     backgroundColor: color.cardSunken,
   },
   dialogButtonLabel: { ...type.headline, color: color.textPrimary },
+  reactorSheet: {
+    width: "100%",
+    maxWidth: 360,
+    maxHeight: "70%",
+    backgroundColor: color.card,
+    borderRadius: radius.xl,
+    padding: space.md,
+    gap: space.sm,
+  },
+  reactorHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  reactorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm + 4,
+    paddingVertical: space.sm,
+  },
+  reactorCount: { ...type.bodySmallStrong, color: color.textSecondary, minWidth: 20 },
+  reactorNames: { ...type.bodySmall, color: color.textPrimary, flex: 1 },
 
   /**
    * The message row: an author line, then the bubble, then any reactions.
