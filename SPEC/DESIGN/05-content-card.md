@@ -41,6 +41,11 @@ they are a bib-and-title row built for scanning a column, and they are deliberat
    option is a control, so the card itself presses nowhere - and putting a button on it would nest
    a control inside a control, which is invalid on web and swallows the gesture on native.
 
+   **A card holds only what acts on its own content.** Voting and opening the voter list are about
+   the poll; closing, reopening and deleting it are about *managing* it, and those live in the hold
+   menu with the other management actions a message has. The test is not permission - it is whether
+   the control belongs to the thing being shown or to the person who owns it.
+
    > **`PRD/07` rule 10 used to require a VIEW EVENT pill** and it was rewritten on 2026-08-13 to
    > match this. A card that is entirely a link does not also need to contain one.
 

@@ -32,6 +32,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { pollApi, type PollScope } from '../api.ts';
 import type { PollSummary, PollView } from '../api-types.ts';
+import { useSession } from '../chat-provider.tsx';
 import { formatCountdown, formatInstant, fromDateKey, toDateKey } from '../dates.ts';
 import { CardEyebrow, CardMeta, CardTitle, ContentCard } from '../content-card.tsx';
 import {
@@ -840,8 +841,21 @@ export function ChatPollCard({
 }) {
   const [busy, setBusy] = useState(false);
   const [votersFor, setVotersFor] = useState<string | null>(null);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const load = useLoad(() => pollApi.detail(pollId), [pollId]);
+  /*
+   * Re-read whenever anything in the session changes, which is what makes this card current.
+   *
+   * The creator's Close and Delete moved into the hold sheet on 2026-08-13, and the sheet has no
+   * way to reach into this component - so it calls `notifyChanged` after its write lands and this
+   * follows, exactly as the badge does. `revision` is the door `chat-provider` documents for
+   * writes the socket raises no frame for.
+   *
+   * It also bumps on every socket event, which means a tally now moves when SOMEBODY ELSE votes
+   * rather than only when you do. That is a gain rather than a cost of the arrangement, and the
+   * traffic it implies is one small authorized read per visible poll card - and a conversation
+   * rarely has more than one.
+   */
+  const { revision } = useSession();
+  const load = useLoad(() => pollApi.detail(pollId), [pollId, revision]);
 
   const vote = async (optionId: string) => {
     setBusy(true);
@@ -876,39 +890,20 @@ export function ChatPollCard({
         onSeeVoters={setVotersFor}
       />
 
-      {/* Creator only, and inline: leaving the conversation to close your own poll is a detour. */}
-      {poll.isCreator && (
-        <View style={styles.chatPollActions}>
-          <Action
-            label={poll.closed ? 'Reopen Poll' : 'Close Poll'}
-            style={styles.chatPollAction}
-            onPress={() => {
-              void pollApi.setClosed(pollId, !poll.closed).then(load.reload, load.reload);
-            }}
-          />
-          {/* Asks first. Deleting takes every vote with it and cannot be undone. */}
-          <Action
-            label="Delete"
-            variant="danger"
-            style={styles.chatPollAction}
-            onPress={() => setConfirmingDelete(true)}
-          />
-        </View>
-      )}
+      {/*
+        No creator controls here.
 
-      {confirmingDelete && (
-        <ConfirmDialog
-          title="Delete this poll?"
-          body={`"${poll.question}" and every vote cast in it go with it, and its card disappears from this conversation. This cannot be undone.`}
-          confirmLabel="Delete poll"
-          onCancel={() => setConfirmingDelete(false)}
-          onConfirm={() => {
-            setConfirmingDelete(false);
-            void pollApi.remove(pollId).then(load.reload, load.reload);
-          }}
-        />
-      )}
+        > **They were two filled buttons at the foot of the card** - Close Poll in the accent and
+        > Delete in the danger colour - which made a member's own poll the loudest object in the
+        > conversation, under content that is deliberately quiet grey bars. They moved into the
+        > hold sheet on 2026-08-13: holding a card already opens the react-and-report menu, so the
+        > same gesture that reports somebody else's card manages your own.
 
+        This is what `PRD/11` rule 11 asked for all along - the card holds what it can act on
+        inline, and the creator's close, reopen and delete are reached another way. The rule named
+        a "View Poll" link because the hold sheet did not exist when it was written; it now names
+        the sheet, and the card is purely the poll.
+      */}
       {votersFor !== null && (
         <VoterSheet
           poll={poll}

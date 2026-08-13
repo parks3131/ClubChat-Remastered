@@ -636,6 +636,29 @@ that records how to recognise the class._
     asking for. And note which failure is worse: a bad ordering inside a function is a broken
     component, while a bad ordering at module scope is a red screen over the entire app.
 
+28. **A prop that exists on only one platform makes a smoke test on the other platform evidence of
+    nothing - including evidence that the prop did no harm.** Symptom:
+    `maintainVisibleContentPosition` was added to the chat list to stop it lurching while cards
+    and photos settled, verified in a browser, and broke tap-a-reply-to-reach-the-original on the
+    device that same afternoon. Root cause: **react-native-web does not implement the prop at
+    all.** So the browser could not show the fix working, and could not show the regression
+    either - it was a no-op there in both directions, and the check that "nothing else broke" was
+    reading a page where the change had not happened. On the device it is real, and it fights
+    `scrollToIndex`: the jump lands, the cells around the target settle, and the anchor
+    compensates the offset straight back.
+
+    **Rule: before smoke testing a platform-specific prop, confirm the platform you are testing on
+    implements it** - `grep` the web runtime for the prop name, which takes one command and either
+    validates the test or explains why it cannot exist. Where only one platform implements it, the
+    verification has to happen there, and if that is not possible, say so rather than reporting a
+    green check that was measuring nothing.
+
+    How to recognise the class: the change is a single prop on a cross-platform component, the
+    prop's documentation mentions iOS or Android specifically, and the verification plan is "open
+    it in the browser". Compare failure mode 27, which is also a device-only truth - the pattern
+    across both is that **web is where this project's fastest feedback lives, and it is exactly
+    where a native-only behaviour is invisible.**
+
 27. **A child that handles a press becomes the responder, so a gesture aimed at its ancestor never
     arrives.** Symptom: holding an event card in chat did nothing, on the device, for the entire
     life of the card - reported by the founder on 2026-08-13 with "i couldnt long press the

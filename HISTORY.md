@@ -13,6 +13,49 @@ Newest first.
 
 ---
 
+## 2026-08-13 (last) - A card that is only the poll, and an anchor that fought a jump
+
+Two loose ends, and a regression found while closing them.
+
+**The creator's Close and Delete came off the poll card.** They were two filled buttons at its
+foot - accent and danger - which made a member's own poll the loudest object in the conversation,
+under content that is deliberately quiet grey bars. They are in the hold menu now, beside Reply
+and Pin: the same gesture that reports somebody else's card manages your own. `PRD/11` rule 11 had
+said all along that the creator's actions are reached another way; it named a "View Poll" link,
+because neither the eye nor the hold sheet existed when it was written. The rule now describes
+what there is.
+
+The wiring is the interesting part. The sheet knows a `seq` and nothing else, so whether to offer
+Close cannot be answered from the message - it needs `isCreator`, which lives on the poll. It
+loads the poll on demand while the sheet is open rather than every card publishing its state up
+into a screen with no other reason to know what a poll is. And the card has to notice: it now
+re-reads on the session `revision`, which `chat-provider` documents as "the door for the things
+the socket does not [raise]", with `notifyChanged` called after the write lands rather than beside
+it. A side effect worth having: a tally now moves when **somebody else** votes, where before it
+only moved when you did.
+
+The poll question stays at 17pt on its own screen. Card and screen share one body so they cannot
+drift, and the founder chose to keep that over a larger question.
+
+### The regression: "again for the image reply something is broken"
+
+Tapping a reply's photo to reach the original had been fixed hours earlier and had stopped working.
+Cause: `maintainVisibleContentPosition`, added the same afternoon to stop the list lurching. It
+anchors the visible cell and compensates when content around it resizes - so `scrollToIndex` lands
+the jump, the cells around the target settle, and the anchor moves the offset straight back.
+
+**And the reason it got through is worth more than the fix.** I verified the anchor in a browser.
+`maintainVisibleContentPosition` does not exist in react-native-web *at all* - one `grep` of the
+web runtime says so - so that check could not have shown the fix working and could not have shown
+the regression either. It was a no-op in both directions, and I reported a green result from a page
+where the change had not happened. Failure mode 28.
+
+The anchor is now suspended while a jump is in flight, `jumpedTo` being exactly that condition and
+already self-clearing. **Unverified by me**: it is device-only by construction, so the founder has
+to confirm it, and saying that is better than a second green check measuring nothing.
+
+---
+
 ## 2026-08-13 (later) - The picture says how big it is, and which way up
 
 Closing the gap the morning's work left open: nothing on the wire said how tall a photo was, so

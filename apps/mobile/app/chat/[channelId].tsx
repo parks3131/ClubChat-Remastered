@@ -31,7 +31,7 @@ import {
   type Row,
 } from "../../src/chat-rows.ts";
 import { formatDaySeparator } from "../../src/dates.ts";
-import { channelApi, dmApi, type ChannelMeta } from "../../src/api.ts";
+import { channelApi, dmApi, pollApi, type ChannelMeta } from "../../src/api.ts";
 import { DocumentBubble, PhotoBubble, RemoteImage } from "../../src/media-bubble.tsx";
 import { PhotoViewer } from "../../src/photo-viewer.tsx";
 import {
@@ -62,6 +62,7 @@ import { ChatEventCard } from "../../src/screens/events.tsx";
 import { ChatMeetingCard } from "../../src/screens/meetings.tsx";
 import { ChatPollCard } from "../../src/screens/polls.tsx";
 import { QuickNav, spaceProfileHref, useGoBack } from "../../src/nav.tsx";
+import { useLoad } from "../../src/use-load.ts";
 import { hrefForCard } from "../../src/notification-href.ts";
 import { color, fontFamily, radius, space, type } from "../../src/theme.ts";
 
@@ -132,6 +133,14 @@ const JUMP_HIGHLIGHT_MS = 2200;
  * Verified on both: long press confirmed working on a physical iPhone on 2026-08-01.
  */
 const CARDS_ARE_LONG_PRESSABLE = Platform.OS !== 'web';
+
+/**
+ * Keep the visible content where it is when something above it resizes.
+ *
+ * A module constant rather than an inline object because this is a NATIVE prop: a fresh literal
+ * every render is a new value crossing the bridge every render, for a setting that never changes.
+ */
+const KEEP_VISIBLE_ANCHOR = { minIndexForVisible: 0 } as const;
 
 /**
  * The sender's face beside a message.
@@ -380,6 +389,7 @@ function MessageActions({
   canPin,
   canReport,
   canDelete,
+  poll,
   onDismiss,
   onReact,
   onReply,
@@ -387,6 +397,8 @@ function MessageActions({
   onPin,
   onReport,
   onDelete,
+  onSetPollClosed,
+  onDeletePoll,
 }: {
   message: MessageEnvelope;
   mine: boolean;
@@ -394,6 +406,14 @@ function MessageActions({
   /** Whether this conversation has reporting at all. False for the whole Eboard scope. */
   canReport: boolean;
   canDelete: boolean;
+  /**
+   * The poll this card is about, when the viewer is the one who asked it.
+   *
+   * Null for every other message, and null for a poll somebody else created - `PRD/11` rule 7
+   * gives close, reopen and delete to the creator alone, in every scope, including a club admin
+   * who did not create it. So the flag is `isCreator` from the server and never a role.
+   */
+  poll: { closed: boolean } | null;
   onDismiss: () => void;
   onReact: (emoji: ReactionEmoji) => void;
   onReply: () => void;
@@ -401,6 +421,8 @@ function MessageActions({
   onPin: () => void;
   onReport: () => void;
   onDelete: () => void;
+  onSetPollClosed: (closed: boolean) => void;
+  onDeletePoll: () => void;
 }) {
   const hasText = message.body !== null && message.body.length > 0;
 
@@ -436,6 +458,29 @@ function MessageActions({
             label: "Report a concern",
             icon: "shield" as const,
             onPress: onReport,
+            destructive: true,
+          },
+        ]),
+    /*
+      The creator's poll controls, which used to be two filled buttons on the card itself.
+
+      Above `Delete` rather than below it, because "Delete" here means the MESSAGE and
+      "Delete poll" means the poll and every vote in it - two destructive items that read
+      similarly, so the more specific one is named in full and they are never adjacent by
+      accident. A creator who is not an admin sees only the poll pair.
+    */
+    ...(poll === null
+      ? []
+      : [
+          {
+            label: poll.closed ? "Reopen poll" : "Close poll",
+            icon: poll.closed ? ("lock-open" as const) : ("lock" as const),
+            onPress: () => onSetPollClosed(!poll.closed),
+          },
+          {
+            label: "Delete poll",
+            icon: "delete-forever" as const,
+            onPress: onDeletePoll,
             destructive: true,
           },
         ]),
@@ -1264,7 +1309,7 @@ export default function ChatScreen() {
     channelId: string;
     around?: string;
   }>();
-  const { authState, client, userId, revision, offline } = useSession();
+  const { authState, client, userId, revision, offline, notifyChanged } = useSession();
   const router = useRouter();
   // The status bar's height, for the header below. Zero on web, ~59pt on a Dynamic Island phone.
   const insets = useSafeAreaInsets();
@@ -1354,6 +1399,15 @@ export default function ChatScreen() {
    * gets the same second deliberate step reporting does rather than firing off a long press.
    */
   const [confirmingDelete, setConfirmingDelete] = useState<number | null>(null);
+  /**
+   * The poll being deleted, by id.
+   *
+   * A separate piece of state from `confirmingDelete` although both are "are you sure" - they ask
+   * about different objects and one is not a special case of the other. Deleting the MESSAGE
+   * leaves a tombstone; deleting the POLL takes every vote with it and its card leaves the
+   * conversation entirely.
+   */
+  const [confirmingPollDelete, setConfirmingPollDelete] = useState<string | null>(null);
   /**
    * Whether the next send goes out as an announcement.
    *
@@ -1922,6 +1976,25 @@ export default function ChatScreen() {
           )?.message ?? null),
     [rows, selected],
   );
+
+  /*
+   * The poll behind a selected card, loaded only while its sheet is open.
+   *
+   * **The sheet knows a `seq` and nothing else**, so whether to offer Close and Delete cannot be
+   * answered from the message: it needs `isCreator`, which is the server's answer and lives on
+   * the poll. Fetched on demand rather than held, because this is one small read behind a long
+   * press and the alternative is every card publishing its state upward into a screen that has
+   * no other reason to know about polls.
+   *
+   * Null unless the viewer created it, so the sheet's own logic stays a null check.
+   */
+  const selectedPollId = selectedMessage?.linkedPollId ?? null;
+  const selectedPoll = useLoad(
+    async () => (selectedPollId === null ? null : await pollApi.detail(selectedPollId)),
+    [selectedPollId],
+  );
+  const pollControls =
+    selectedPoll.data?.poll.isCreator === true ? { closed: selectedPoll.data.poll.closed } : null;
 
   /** The message the composer is answering, resolved the same way and for the same reasons. */
   const replyingTo = useMemo(
@@ -2864,6 +2937,19 @@ export default function ChatScreen() {
           keyExtractor={keyExtractor}
           contentContainerStyle={styles.list}
           /*
+            **Suspended while a jump is in flight**, because the two want opposite things.
+
+            > **This broke tapping a reply's photo to reach the original**, reported the same
+            > afternoon it was added, and it broke ONLY on the device. `scrollToIndex` puts the
+            > viewport somewhere deliberately; the anchor then sees the cells around the target
+            > settling - a poll card loading, a photo measuring - and compensates by moving the
+            > offset back, so the jump lands and is then quietly undone.
+
+            `jumpedTo` is exactly "a jump is in flight" and clears itself when the highlight does,
+            so the anchor is off for that half second and on for everything else.
+          */
+          maintainVisibleContentPosition={jumpedTo === null ? KEEP_VISIBLE_ANCHOR : undefined}
+          /*
             **What the reader is looking at stays where it is, whatever resizes around it.**
 
             > Reported as "for the last 40 or 50 messages it is smooth, and as we reach poll event
@@ -2880,8 +2966,10 @@ export default function ChatScreen() {
             It is not a tuning value - without it, ANY asynchronous height in a scrollback is felt
             by the reader, so this stays even if today's particular offenders are made to settle
             faster.
+
+            **It does not exist in react-native-web**, so nothing about it can be checked in a
+            browser - the prop is silently ignored there. See failure mode 28.
           */
-          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
           /*
             The ONLY thing that reacts to the content growing, and it is bounded three ways: it
             runs only while an arrival placement is outstanding, only a handful of times, and
@@ -3100,6 +3188,19 @@ export default function ChatScreen() {
             }}
             onReport={() => setConfirmingReport(selectedMessage.seq)}
             onDelete={() => setConfirmingDelete(selectedMessage.seq)}
+            poll={pollControls}
+            onSetPollClosed={(closed) => {
+              const pollId = selectedMessage.linkedPollId;
+              setSelected(null);
+              if (pollId === null) return;
+              /*
+                `notifyChanged` AFTER the write lands, never beside it - the provider's own rule,
+                and the reason it exists. The card watching this poll re-reads on the bump; bumping
+                first would race the write and re-read the state being replaced.
+              */
+              void pollApi.setClosed(pollId, closed).then(notifyChanged, notifyChanged);
+            }}
+            onDeletePoll={() => setConfirmingPollDelete(selectedMessage.linkedPollId)}
           />
         )}
 
@@ -3146,6 +3247,61 @@ export default function ChatScreen() {
                 onPress={() => void removeMessage(confirmingDelete)}
                 accessibilityRole="button"
                 accessibilityLabel="Yes, delete this message"
+              >
+                <Text style={[styles.dialogButtonLabel, styles.destructive]}>Yes</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {/*
+        Deleting the poll, which is a bigger thing than deleting the message that announced it.
+
+        The same centred dialog, and deliberately so: two destructive confirmations that look
+        alike are safer than two that do not, because the words are what the reader is meant to
+        be reading rather than the shape.
+      */}
+      {confirmingPollDelete !== null && (
+        <View style={styles.dialogBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => {
+              setConfirmingPollDelete(null);
+              setSelected(null);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Keep this poll"
+          />
+          <View style={styles.dialog}>
+            <Text style={styles.dialogTitle}>Delete Poll</Text>
+            <Text style={styles.dialogBody}>
+              The poll and every vote cast in it go with it, and its card disappears from this
+              conversation. This cannot be undone.
+            </Text>
+            <View style={styles.dialogActions}>
+              <Pressable
+                style={styles.dialogButton}
+                onPress={() => {
+                  setConfirmingPollDelete(null);
+                  setSelected(null);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="No, keep this poll"
+              >
+                <Text style={styles.dialogButtonLabel}>No</Text>
+              </Pressable>
+              <Pressable
+                style={styles.dialogButton}
+                onPress={() => {
+                  const pollId = confirmingPollDelete;
+                  setConfirmingPollDelete(null);
+                  setSelected(null);
+                  // After the write lands, as with closing. See `onSetPollClosed`.
+                  void pollApi.remove(pollId).then(notifyChanged, notifyChanged);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Yes, delete this poll"
               >
                 <Text style={[styles.dialogButtonLabel, styles.destructive]}>Yes</Text>
               </Pressable>

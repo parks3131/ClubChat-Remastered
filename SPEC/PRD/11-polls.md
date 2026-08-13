@@ -39,8 +39,16 @@ coming".
 10. **Creating a poll notifies everyone who can access it except the creator**, and posts a
     votable card into the corresponding chat.
 11. **A poll card in chat is fully votable inline**, identical to the full screen for
-    multi-select, privacy, deadlines, and closed state. Actions the card cannot hold (the
-    voter list, and the creator's close/reopen/delete) are reached via a "View Poll" link.
+    multi-select, privacy, deadlines, and closed state. **The voter list opens from the card**,
+    per rule 5 - the eye is on the option, wherever the poll is drawn.
+
+    **The creator's close, reopen and delete are reached by holding the card**, in the same menu
+    that reports or deletes any other message. They are deliberately not ON it: a poll's own
+    content is quiet, and two filled buttons under it made a member's own poll the loudest object
+    in the conversation.
+
+    > This rule said "reached via a View Poll link" until 2026-08-13, which described neither the
+    > eye nor the hold sheet - both of which postdate it. The card is now purely the poll.
 12. **Scope determines both audience and creation rights:**
     - **Club poll** - any club member votes; any club admin creates.
     - **Race poll** - only race roster members see or vote; creating requires being **both** a
