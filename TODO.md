@@ -22,14 +22,11 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
 
 ## Known broken, or quietly wrong
 
-- [ ] **Nothing runs the surface gate, so it rots silently.** On 2026-08-14 it reported three
-      failures that were two weeks stale: two from
-      [ADR-0027](SPEC/decisions/0027-race-management-requires-a-roster-row.md) (2026-08-12) and one
-      from [ADR-0028](SPEC/decisions/0028-reactions-come-from-a-catalog-table.md) (2026-08-13).
-      **Each ADR changed behaviour correctly and left the gate asserting the old behaviour**, and
-      because nothing runs it, nobody saw. There is no CI in this repo at all - no
-      `.github/workflows`. Until there is, a behaviour change means running
-      `npm run gate:surface` by hand in the same session.
+- [ ] **Watch the first few CI runs for testcontainer flake.** `test/harness.ts` records a
+      10-second ceiling on binding a container's port, and the suite starts one Postgres per file
+      on a runner that is smaller and busier than a laptop. If it flakes, the standing fix is
+      already written down in [`PRD/17`](SPEC/PRD/17-roadmap-and-open-questions.md): one container
+      for the suite instead of one per file. Do that rather than raising the timeout.
 - [ ] **A club must still declare a `sport`, and nothing reads it.** Required on create, free
       text, validated by nothing, displayed on the club profile - and it now asks a chess club
       what sport it plays.

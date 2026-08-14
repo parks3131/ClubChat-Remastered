@@ -1,0 +1,110 @@
+# The gate that stops a correct change rotting a check nobody runs.
+#
+# This exists because of a specific failure. On 2026-08-14 `npm run gate:surface` reported three
+# failures that were a fortnight old: two from ADR-0027 and one from ADR-0028. Both ADRs changed
+# behaviour correctly and left the gate asserting the old behaviour, and because nothing ran it,
+# nobody saw. Every check below already existed and could be run by hand - what was missing was
+# anything that insisted.
+#
+# Node 24, not the newer version a laptop may have: SPEC/TECH/15 pins the server to Node 24, so
+# CI runs the version that is meant to ship rather than the one that happens to be installed.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push supersedes the first. The suite starts two dozen containers, so leaving
+# superseded runs going costs real minutes for a result nobody will read.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, lint, tests
+    runs-on: ubuntu-latest
+    # The server suite starts a throwaway Postgres per file and runs them serially
+    # (fileParallelism: false), so this is minutes rather than seconds by design.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # The same four commands as `npm run verify`, listed separately so a failure names
+      # itself in the job summary instead of being one red step called "verify".
+      - name: Typecheck every workspace
+        run: npm run typecheck
+
+      - name: Node can actually run the TypeScript
+        run: npm run check:runtime
+
+      - name: No em dashes
+        run: npm run lint:emdash
+
+      - name: Tests
+        run: npm test
+
+  gate:
+    name: Migrations, constraints, surface gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Every value in the template is a local development placeholder and none are real
+      # (AGENTS.md non-negotiable 5). The compose services below use exactly these ports
+      # and credentials, so the template is the CI configuration with nothing to add.
+      - name: Local development environment
+        run: cp .env.example .env
+
+      - name: Start Postgres, Redis and MinIO
+        run: npm run db:up
+
+      # Replayed from zero against an empty database, which is the migration checklist's
+      # first proof and the one a developer with an existing database never performs.
+      - name: Migrate from zero
+        run: npm run db:migrate
+
+      # Attempts to violate each invariant and watches it be rejected. Reading the DDL and
+      # concluding it looks right is not verification.
+      - name: Prove the invariants are constraints
+        run: npm run db:prove
+
+      - name: Start the API
+        run: |
+          cd packages/server
+          node --env-file=../../.env src/api/main.ts > /tmp/api.log 2>&1 &
+          # Poll rather than sleep. A fixed sleep is either flaky or slow, and the gate's own
+          # header warns that testing whatever process owns the port is how 46 checks "failed".
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:3000/health; then
+              echo "API up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "API never became healthy"; cat /tmp/api.log; exit 1
+
+      - name: Surface gate
+        run: npm run gate:surface
+
+      # The gate prints the response body on a failure, but the reason usually lives here.
+      - name: API log
+        if: failure()
+        run: cat /tmp/api.log || true
