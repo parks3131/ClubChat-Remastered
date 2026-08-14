@@ -44,15 +44,29 @@ below therefore describes a destination, not a stored string.
 | **Car-group Incharge left** | A group's Incharge leaves or is removed | Every Owner and Admin **on that race's roster** | That race's car groups | Inbox is opened |
 | **Chat caught up** | A member opens a chat that had unread messages | That member only | That chat | Recorded already-read, as history |
 | *(push only)* **Direct message** | Somebody sends a direct message | The other participant | That conversation | **Never a row.** Its inbox representation is the chat-unread row below |
+| *(push only)* **Chat message** | Somebody sends an ordinary message in club, race or Eboard chat | Everyone else with access to that chat | That conversation | **Never a row.** Its inbox representation is the chat-unread row below |
 | *(live)* **Chat unread** | Unread messages exist in an accessible chat | That member | That chat | **Only by opening that chat** |
 
-**The direct-message row is the one exception to the two-kinds table above**, and it is worth
-being precise about. In club, race and Eboard chat an ordinary message notifies nobody: it is
-addressed to a room, and the room's unread count is the right granularity. A DM is the one scope
-where an ordinary message is inherently addressed to **one person**, so it buzzes - and muting a
-conversation would otherwise be a control over nothing. It still writes no row, because a row per
-message would flood the feed with exactly the per-message noise rule 8 rejects. See
-[ADR-0015](../decisions/0015-a-direct-message-pushes-without-an-inbox-row.md).
+**The two push-only rows are the exception to the two-kinds table above**, and they are worth
+being precise about. Both buzz a phone and neither becomes a row, because a row per message would
+flood the feed with exactly the per-message noise rule 8 rejects - the inbox representation of
+unread chat is the computed per-channel row, for a DM and for a club alike. See
+[ADR-0015](../decisions/0015-a-direct-message-pushes-without-an-inbox-row.md) and
+[ADR-0032](../decisions/0032-every-chat-message-pushes.md).
+
+> **Group chat used to be silent, and that was a decision rather than a gap.** Until 2026-08-14
+> an ordinary message in club, race or Eboard chat notified nobody, on the reasoning that a
+> message is addressed to a *room* and the room's unread count is the right granularity - only a
+> DM, inherently addressed to one person, was allowed to buzz. It was reversed by the founder
+> after testing push on a real phone, sending a club message and receiving nothing: it is the
+> behaviour every product ClubChat replaces already has, and a chat app that does not buzz when
+> somebody talks to your club is not doing its job. ADR-0032 records what it costs and the two
+> suppressions that make it survivable.
+
+**A member is buzzed at most once per message.** A message that mentions somebody sends them the
+mention and not also the ordinary chat push, since "X mentioned you" is the better of the two
+lines. *(An announcement that also mentions somebody is the one remaining case that buzzes twice
+- see [PRD/17](17-roadmap-and-open-questions.md).)*
 
 **Behaviour rules**
 

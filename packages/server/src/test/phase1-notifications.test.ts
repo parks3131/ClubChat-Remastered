@@ -16,7 +16,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { notificationTarget, type NotificationTarget } from '@clubchat/shared';
+import { appendMessage } from '../domain/append-message.ts';
 import { createClub } from '../domain/create-club.ts';
+import { addRaceMember, createRace } from '../domain/races.ts';
 import { sendMessage, setPinned, softDeleteMessage } from '../domain/send-message.ts';
 import { advanceReadCursor, getChannelRef } from '../domain/reads.ts';
 import { loadAccessContext } from '../policy/context.ts';
@@ -696,11 +698,199 @@ describe('column-level authority', () => {
 });
 
 // ===========================================================================
+// ORDINARY CHAT MESSAGES
+// ===========================================================================
+
+/**
+ * The push that fires on every message, added 2026-08-14. See ADR-0032.
+ *
+ * These are the tests that would have caught the thing being reversed: club chat was silent by
+ * design, the design was written down in three places, and the only way to notice was to hold a
+ * phone and wait for it. What is asserted here is the pair of facts that make per-message push
+ * survivable - it never writes a row, and both suppressions still work - because without those
+ * this is just "buzz everybody, always".
+ */
+describe('an ordinary message in group chat', () => {
+  /** Register a phone per user and return the tokens, keyed by user id. */
+  async function phonesFor(userIds: readonly string[]): Promise<Map<string, string>> {
+    const tokens = new Map<string, string>();
+    for (const userId of userIds) {
+      const token = `ExponentPushToken[c-${userId.slice(0, 8)}]`;
+      await registerDevice(h.db, { userId, pushToken: token, platform: 'ios' });
+      tokens.set(userId, token);
+    }
+    return tokens;
+  }
+
+  async function say(f: Fixture, actorId: string, body: string) {
+    const ctx = await loadAccessContext(h.db, actorId);
+    const channel = await getChannelRef(h.db, f.channelId);
+    if (!channel) throw new Error('no channel');
+    return sendMessage(h.db, ctx, channel, {
+      channelId: f.channelId,
+      clientMsgId: crypto.randomUUID(),
+      body,
+    });
+  }
+
+  it('buzzes everyone else in the room and writes nothing to the inbox', async () => {
+    const f = await setupClub();
+    const tokens = await phonesFor([f.ownerId, f.adminId, f.memberId]);
+
+    await say(f, f.adminId, 'are we still on for six');
+    await drainAndDeliver();
+
+    // Everyone but the sender. The admin said it, so the admin's own phone stays quiet.
+    expect(push.sent.map((m) => m.token).sort()).toEqual(
+      [tokens.get(f.ownerId)!, tokens.get(f.memberId)!].sort(),
+    );
+
+    /*
+     * **No rows, at all.** This is the half that keeps PRD/12 rule 8 intact: the badge and the
+     * feed are still one entry per channel, computed from the log. A row per message is the
+     * flood the rule rejects, and it is what a careless version of this change would ship.
+     */
+    expect(await h.db.select().from(notifications)).toHaveLength(0);
+  });
+
+  it('reads as the room, then the speaker, then what they said', async () => {
+    const f = await setupClub();
+    await phonesFor([f.memberId]);
+
+    await say(f, f.adminId, 'bus leaves from the car park');
+    await drainAndDeliver();
+
+    // The club is the title, because it is what tells you whether this matters before you have
+    // read a word. A DM is deliberately the other way round - there the sender IS the room.
+    expect(push.sent[0]?.title).toBe('Hillside Running Club');
+    expect(push.sent[0]?.body).toBe('Admin: bus leaves from the car park');
+  });
+
+  it('lands on the conversation rather than on this one message', async () => {
+    const f = await setupClub();
+    await phonesFor([f.memberId]);
+
+    await say(f, f.adminId, 'first');
+    await drainAndDeliver();
+
+    /*
+     * No `seq`, unlike an announcement or a mention. Those are about one specific message; this
+     * fires on every message, so by the time somebody taps it the interesting place is the first
+     * thing they have not read - which is where chat opens on its own.
+     */
+    expect(push.sent[0]?.data['target']).toEqual({ kind: 'chat', channelId: f.channelId });
+  });
+
+  it('stays silent for somebody who has already read past it', async () => {
+    const f = await setupClub();
+    await phonesFor([f.memberId]);
+
+    const sent = await say(f, f.adminId, 'anyone bringing cones');
+    if (!sent.ok) throw new Error('send failed');
+
+    // Read before the deferral elapses, which is exactly the race the eight seconds exist to
+    // lose. The cursor is re-read at evaluation time, so this suppresses.
+    await advanceReadCursor(h.db, f.memberId, f.channelId, sent.message.seq);
+    await drainAndDeliver();
+
+    expect(push.sent, 'buzzed a phone that was already looking at the message').toHaveLength(0);
+  });
+
+  it('is silenced by a mute, which is the control that makes a loud club bearable', async () => {
+    const f = await setupClub();
+    await phonesFor([f.memberId]);
+    await h.db.insert(channelMutes).values({ userId: f.memberId, channelId: f.channelId });
+
+    await say(f, f.adminId, 'seven messages about parking');
+    await drainAndDeliver();
+
+    expect(push.sent, 'pushed into a muted conversation').toHaveLength(0);
+  });
+
+  it('describes a photo that arrives without a caption', async () => {
+    const f = await setupClub();
+    await phonesFor([f.memberId]);
+
+    // Straight through appendMessage: the point is a message whose body is genuinely null, which
+    // is every photo sent without a caption.
+    await appendMessage(h.db, {
+      channelId: f.channelId,
+      senderId: f.adminId,
+      clientMsgId: crypto.randomUUID(),
+      type: 'photo',
+      body: null,
+    });
+    await drainAndDeliver();
+
+    // Untreated, the renderer interpolates an empty preview and this reads "Admin: " - a name,
+    // a colon, and nothing, on a lock screen.
+    expect(push.sent[0]?.body).toBe('Admin: sent a photo');
+  });
+
+  it('buzzes a race roster and not the whole club', async () => {
+    const f = await setupClub();
+    const tokens = await phonesFor([f.ownerId, f.adminId, f.memberId]);
+
+    // Owner creates the race and walks onto its roster; the admin joins. The MEMBER stays off it.
+    const race = await createRace(h.db, await loadAccessContext(h.db, f.ownerId), {
+      clubId: f.clubId,
+      name: 'Spring Half',
+      raceDate: '2026-04-12',
+    });
+    if (!race.ok) throw new Error('race creation failed');
+    await addRaceMember(h.db, await loadAccessContext(h.db, f.ownerId), race.raceId, f.adminId);
+    await drainAndDeliver();
+    push.reset();
+
+    const ctx = await loadAccessContext(h.db, f.adminId);
+    const channel = await getChannelRef(h.db, race.channelId);
+    await sendMessage(h.db, ctx, channel!, {
+      channelId: race.channelId,
+      clientMsgId: crypto.randomUUID(),
+      body: 'bring your own cones',
+    });
+    await drainAndDeliver();
+
+    /*
+     * > **The roster, never the roster union the club's admins.** This is rule 2 at the top of
+     * > `audience.ts`, which shipped wrong four separate times in v1 - and it is the reason
+     * > `chat_message` resolves through `channelAudienceById` rather than sitting with the
+     * > club-wide types. Getting it wrong here would buzz every member of the club about a
+     * > conversation they cannot open.
+     *
+     * The member is in the club and not on this roster, so their phone stays silent. The admin
+     * sent it, so theirs does too.
+     */
+    expect(push.sent.map((m) => m.token)).toEqual([tokens.get(f.ownerId)!]);
+  });
+
+  it('never buzzes for a system message, which nobody said', async () => {
+    const f = await setupClub();
+    await phonesFor([f.ownerId, f.memberId]);
+
+    await appendMessage(h.db, {
+      channelId: f.channelId,
+      senderId: f.adminId,
+      clientMsgId: crypto.randomUUID(),
+      type: 'system',
+      body: 'Member was removed by Owner',
+    });
+    await drainAndDeliver();
+
+    /*
+     * The worker writes these itself. Letting them buzz would turn one bulk membership change
+     * into a notification per line, from an author who does not exist.
+     */
+    expect(push.sent, 'a system line buzzed a phone').toHaveLength(0);
+  });
+});
+
+// ===========================================================================
 // MENTIONS
 // ===========================================================================
 
 describe('mentions', () => {
-  it('notifies the mentioned member and nobody else', async () => {
+  it('writes a row only for the mentioned member, and buzzes each phone exactly once', async () => {
     const f = await setupClub();
     for (const userId of [f.ownerId, f.memberId]) {
       await registerDevice(h.db, {
@@ -722,14 +912,28 @@ describe('mentions', () => {
     });
     await drainAndDeliver();
 
+    // Only a mention writes a ROW. `chat_message` is push-only, so the owner's buzz below
+    // leaves nothing in anybody's inbox - ADR-0032.
     const rows = await h.db.select().from(notifications);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.recipientId).toBe(f.memberId);
     expect(rows[0]?.type).toBe('mentioned');
-    // An ordinary message notifies nobody, so the owner gets nothing.
-    expect(push.sent.map((m) => m.token)).toEqual([
-      `ExponentPushToken[m-${f.memberId.slice(0, 8)}]`,
-    ]);
+
+    /*
+     * > **Both phones buzz, and neither buzzes twice.** Until 2026-08-14 the owner got nothing,
+     * > because an ordinary message notified nobody; they now get the ordinary chat push. The
+     * > mentioned member must NOT get both - "Admin mentioned you" is the better of the two
+     * > lines, and receiving it alongside a plain "Admin: ..." is one message ringing a phone
+     * > twice. That is why the group-chat audience subtracts the mentioned.
+     */
+    const memberToken = `ExponentPushToken[m-${f.memberId.slice(0, 8)}]`;
+    const ownerToken = `ExponentPushToken[m-${f.ownerId.slice(0, 8)}]`;
+    expect(push.sent).toHaveLength(2);
+    expect(push.sent.filter((m) => m.token === memberToken)).toHaveLength(1);
+
+    const byToken = new Map(push.sent.map((m) => [m.token, m]));
+    expect(byToken.get(memberToken)?.data['type']).toBe('mentioned');
+    expect(byToken.get(ownerToken)?.data['type']).toBe('chat_message');
   });
 
   it('drops a mention of someone who cannot access the chat', async () => {

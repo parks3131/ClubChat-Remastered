@@ -76,12 +76,22 @@ async function gather(db: Db, request: AudienceRequest): Promise<string[]> {
   if (request.explicitRecipients) return [...request.explicitRecipients];
 
   switch (request.type) {
-    // Everyone who can read the channel. For a dm that is exactly two people, and the actor
-    // is removed above - so a dm_message resolves to the single recipient without needing a
-    // scope-specific branch.
+    /*
+     * Everyone who can read the channel. For a dm that is exactly two people, and the actor
+     * is removed above - so a dm_message resolves to the single recipient without needing a
+     * scope-specific branch.
+     *
+     * `chat_message` sits here rather than with the club-wide types, and the distinction is
+     * load-bearing for the two non-club scopes: a race channel's audience is its ROSTER and the
+     * Eboard's is its members, neither of which is "the club". Resolving a race chat message
+     * against `clubMembers` would buzz every member of the club about a conversation they
+     * cannot open - which is rule 2 at the top of this file, and the reason that rule is
+     * enforced by which function a case calls rather than by remembering it.
+     */
     case 'announcement':
     case 'chat_caught_up':
     case 'dm_message':
+    case 'chat_message':
       if (!request.channelId) return [];
       return channelAudienceById(db, request.channelId);
 

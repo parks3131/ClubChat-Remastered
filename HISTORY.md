@@ -13,6 +13,83 @@ Newest first.
 
 ---
 
+## 2026-08-14 (last) - The club chat learns to buzz, and a worker that was only pretending
+
+The founder tested push the honest way: signed in as a second person on the web, joined a club his
+phone was in, sent a message, and waited. Nothing arrived. "I'm pretty sure we tested those things,
+and I don't know why it's not working or what broke."
+
+**Nothing had broken, and that was the finding.** Outbox event 1736 was his test - `message.created`,
+`"type": "text"`, no mentions - and it drained in 210ms having correctly scheduled no push at all.
+`PRD/12` said so in as many words: *"In club, race and Eboard chat an ordinary message notifies
+nobody: it is addressed to a room, and the room's unread count is the right granularity."* The
+worker was one line implementing exactly that. Only three things could reach a phone from a
+conversation: an announcement, a mention, and a DM.
+
+The pipeline was provably alive the whole time. The single row in `push_deliveries` was event id
+`6880`, which decodes as `1720 * 4 + slot 0` - the Nudge he had proved on the same device five
+hours earlier. So the report was true, the code was right, and the product was wrong.
+
+### The worker that looked alive
+
+Two workers were running: a `--watch` one from the previous day, and a bare-`node` one started at
+03:44. Killing "the stale duplicate" stopped the outbox dead, and the announcement sent to prove
+push sat unprocessed for eighty seconds. **The `--watch` one was a husk** - the process existed and
+`lsof` showed no TCP connections at all, so it held neither Postgres nor Redis. All the real
+draining had been done by the bare one. A dead-but-resident Node process burns almost no CPU, so
+`ps` shows a completely plausible row; the only reliable health check is an outbox row with
+`processed_at` still NULL. Folded into the stale-dev-server note, because "the process is alive" had
+been treated as evidence and is not.
+
+### Reversing a decision that was written down three times
+
+His answer to what the product should do was immediate: notify for club chat messages too. That is
+ADR-0032, and it is worth being clear that the old behaviour was a *position* rather than an
+oversight - argued in `PRD/12`, restated in `TECH/06`, and implemented deliberately. The reasoning
+(a group message is addressed to a room, not a person) is coherent, and it is invisible to whoever
+is holding the phone. Every product this replaces buzzes when somebody talks to your club.
+
+Two choices were put to him rather than assumed. **Volume**: per message, like GroupMe, against a
+coalescing alternative - he took per message, so thirty messages is thirty buzzes and the answer if
+that ever stings is coalescing rather than silence. **Scope**: all three group scopes rather than
+club only, so there is one rule instead of a difference nobody can see in the app.
+
+`chat_message` is the twenty-second notification type and the second push-only one, joining
+`dm_message` under ADR-0015's reasoning applied unchanged: it buzzes and **writes no row**, because
+the inbox representation of unread chat is the computed per-channel row and a row per message is the
+flood rule 8 rejects. Rule 8 itself is untouched - it governs the badge, which is still one per
+channel. It took **slot 3**, which the key banding had been holding since the day the slots were
+invented; adding a fourth kind really was a constant rather than a re-keying, which is what that
+work bought.
+
+Three details carry more weight than their size. **Which types buzz is a list, not a condition** -
+`text`, `photo`, `document` - so the poll, event and meeting cards cannot ring a second time on top
+of their own `poll_created` push, and a `system` line the worker wrote itself never buzzes at all.
+**The group audience subtracts the mentioned**, so one message rings one phone once and the person
+named gets the better of the two lines. And **the deep link carries no `seq`**, unlike an
+announcement: this fires on every message, so by the time it is tapped the useful destination is the
+first unread, not this one.
+
+**A photo with no caption would have read "Alice: " on a lock screen** - a name, a colon and
+nothing - since every renderer interpolates `preview` and a captionless photo has none. Fixed in the
+worker rather than the renderer, so `renderNotification` stays pure over its params.
+
+### What the tests said, and one that had to change
+
+The existing mention test asserted the old world in a comment: *"An ordinary message notifies
+nobody, so the owner gets nothing."* It now asserts what replaced it, and asserts the part that
+actually matters - the mentioned member is pushed exactly **once**. Six new cases cover the buzz,
+the absence of rows, the cursor, mute, the captionless photo and the silence of system lines. Full
+suite green: 1017 server, 154 mobile, 40 shared, 36 client-core, plus the runtime-import and
+em-dash gates.
+
+Then it was proved on the device rather than in a test: an ordinary message through the real
+gateway, `pushed: 1`, ledger row `7019 = 1754 * 4 + 3`, and zero notification rows written.
+
+**A stale comment came out of it too.** The catalogue's header had said "The 19 types" since Phase 1
+while the test beside it asserted 21. A number in prose next to a list that grows is a comment that
+is wrong and cannot fail, so it now says where the real count is checked.
+
 ## 2026-08-14 (later) - The roster stops navigating, and a person becomes a card
 
 The founder sent a GroupMe recording and a mockup: tapping somebody in the member list should

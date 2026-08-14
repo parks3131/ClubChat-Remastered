@@ -16,13 +16,26 @@ the three pending join-request types are **not** cleared by opening the inbox. (
 "the founder lost real join requests this way".)
 
 **A third row kind arrived with Phase 3.5, and it is the exception to the table above: a
-direct message pushes and writes no row at all.** In club, race and Eboard chat an ordinary
-message notifies nobody, because it is addressed to a room and the room's unread count is the
-right granularity. A DM is the one scope where an ordinary message is addressed to one person, so
-it buzzes - and [Direct messages](../PRD/14-direct-messages.md) rule 8 ("muted: no push,
-unread still accrues") is a control over nothing unless it does. The inbox representation of an
-unread DM stays the computed chat-unread row. See
-[ADR-0015](../decisions/0015-a-direct-message-pushes-without-an-inbox-row.md).
+message in a conversation pushes and writes no row at all.** It began as a DM-only rule, on the
+reasoning that a group message is addressed to a *room* and the room's unread count is the right
+granularity, while a DM is inherently addressed to one person - and
+[Direct messages](../PRD/14-direct-messages.md) rule 8 ("muted: no push, unread still accrues")
+is a control over nothing unless it buzzes.
+
+**Since 2026-08-14 it covers every chat scope**: an ordinary message in club, race or Eboard chat
+pushes everyone else who can read that channel, and still writes no row. The inbox representation
+of unread chat stays the computed chat-unread row in every scope, which is what keeps
+[Notifications](../PRD/12-notifications.md) rule 8 true - the badge is one per channel, never a
+per-message sum, and only the buzz is per message. See
+[ADR-0015](../decisions/0015-a-direct-message-pushes-without-an-inbox-row.md) and
+[ADR-0032](../decisions/0032-every-chat-message-pushes.md).
+
+**Two consequences worth carrying into any change here.** Mute stopped being close to decorative
+and is now the control that makes a loud club bearable, so anything that weakens it is a
+regression a member feels immediately. And **the read cursor is what stops this being "buzz
+everybody, always"** - it is re-read at evaluation time, eight seconds after the event, so an
+open conversation never buzzes. Capturing the cursor when the event is enqueued would defeat the
+whole design; see [ADR-0008](../decisions/0008-push-suppression-by-read-cursor.md).
 
 ### Push pipeline
 
@@ -64,6 +77,13 @@ version that cannot be got wrong by adding a fourth kind later. Synthetic keys -
 closing-soon reminder and the chat-caught-up row - stay negative and unbanded, since real outbox
 ids are a positive bigserial and the two spaces cannot meet.
 
+**The fourth kind arrived on 2026-08-14 and took slot 3**, which the banding had been holding for
+exactly this. It is the ordinary chat message push ([ADR-0032](../decisions/0032-every-chat-message-pushes.md)),
+and adding it was a constant rather than a re-keying - which is what the band was bought for. All
+four slots are now spoken for, so a fifth kind means raising `NOTIFICATION_SLOTS`; note that
+changing it **renumbers every future key** and must not be done while unprocessed events with old
+keys are in flight.
+
 ```sql
 CREATE TABLE devices (
   id            uuid PRIMARY KEY,
@@ -86,6 +106,11 @@ Rules carried from [Notifications](../PRD/12-notifications.md) and enforced in t
 - Admin-tier filters match **both** `admin` and `owner` ([Server event catalogue](12-server-event-catalogue.md) invariant 1).
 - Creation notifications exclude the actor - except poll closing-soon, which includes them.
 - Pinning notifies nobody; announcing notifies everyone in that chat.
+- An ordinary message pushes everyone else who can read that channel, and writes no row. Which
+  message types count is a list (`text`, `photo`, `document`) rather than a condition, so the
+  cards - which have already pushed as `poll_created` and friends - cannot ring a second time.
+- A member is buzzed at most once per message: the ordinary-message audience subtracts anybody
+  mentioned, who gets the more specific "X mentioned you" instead.
 - An approval suppresses the "you were added" notification for the same transaction.
 
 New capability this unlocks (formerly [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) "important, not blocking"): **per-user mute

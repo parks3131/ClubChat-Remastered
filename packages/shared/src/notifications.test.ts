@@ -180,10 +180,18 @@ const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
     preview: 'can you pick me up on the way',
     actorName: 'Riley',
   },
+  chat_message: {
+    clubId: CLUB,
+    channelId: CHANNEL,
+    channelName: 'Hillside',
+    seq: 44,
+    preview: 'are we still on for six',
+    actorName: 'Riley',
+  },
 };
 
 describe('the catalogue is complete', () => {
-  it('declares 20 types: the PRD table, the push-only dm_message, and the report', () => {
+  it('declares 22 types: the PRD table, two push-only kinds, the report and the nudge', () => {
     // PRD/12's catalogue lists 18. dm_message is the nineteenth and never appears in that
     // table because it never becomes an inbox row - it exists so a direct message can buzz a
     // phone, which is what makes muting a conversation mean anything. See ADR-0015.
@@ -192,7 +200,9 @@ describe('the catalogue is complete', () => {
     // meetup_nudged is the twenty-first, added on 2026-08-14 with Nudge - the one deliberate
     // exception to Weekly Meetups notifying nobody, and the only type a person sends on purpose
     // about something that already existed.
-    expect(notificationTypes).toHaveLength(21);
+    // chat_message is the twenty-second, added later the same day: the second push-only type,
+    // and the one that reversed group chat's deliberate silence. See ADR-0032.
+    expect(notificationTypes).toHaveLength(22);
   });
 
   it('has a params schema for every type', () => {

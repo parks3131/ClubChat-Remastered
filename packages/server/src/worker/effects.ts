@@ -197,12 +197,53 @@ const onClubCreated: EffectHandler = async (event, deps) => {
 };
 
 /**
+ * Message types whose arrival is itself the news, and so buzz a phone on their own.
+ *
+ * The exclusions are the interesting half, and each is a message that would otherwise buzz
+ * twice or buzz wrongly:
+ *
+ *  - **`announcement`** has its own louder path a few lines below, which reaches the same people.
+ *  - **`system`** is the worker's own writing ("X joined the club"). Nobody said it, so nobody is
+ *    told about it - and letting the worker's writes buzz phones is how a bulk membership change
+ *    becomes a hundred notifications.
+ *  - **`poll`, `event`, `meeting`** are cards, and the object they stand for has already sent its
+ *    own `poll_created` / `event_created` / `meeting_created` push from `makeCreationHandler`.
+ *    Pushing the card as well would ring twice for one thing somebody made.
+ */
+const CONVERSATIONAL: readonly string[] = ['text', 'photo', 'document'];
+
+/**
+ * What a push shows on a lock screen when the message has no words of its own.
+ *
+ * A photo or a document sent without a caption has an empty `preview`, and every renderer in the
+ * catalogue interpolates it - so the untreated version reads as "Alice: " with nothing after the
+ * colon. Substituting a description here rather than in `renderNotification` keeps that function
+ * pure over its params, which is what lets a second locale be another implementation of it rather
+ * than a migration (see its own note).
+ */
+function previewForPush(payload: Record<string, unknown>, type: string): string {
+  const body = String(payload['preview'] ?? '').slice(0, 140);
+  if (body.length > 0) return body;
+  return type === 'photo' ? 'sent a photo' : type === 'document' ? 'sent a document' : '';
+}
+
+/**
  * A message was created.
  *
- * Three kinds of notification can come out of one message, and each is gated separately:
- * announcements (everyone in the space), mentions (the named people), and direct messages (the
- * other participant). A message can be more than one of them, which is why each carries its
- * own idempotency slot.
+ * Four kinds of notification can come out of one message, and each is gated separately:
+ * announcements (everyone in the space), mentions (the named people), direct messages (the
+ * other participant), and an ordinary message in a group chat (everyone else in the room). A
+ * message can be more than one of them, which is why each carries its own idempotency slot.
+ *
+ * > **The fourth arrived on 2026-08-14 and reversed a deliberate silence.** Club, race and Eboard
+ * > chat pushed nothing for an ordinary message on the reasoning that a message is addressed to a
+ * > room and the room's unread count is the right granularity. It is the behaviour every product
+ * > this replaces does not have, and the founder found it by testing push on a real phone and
+ * > receiving nothing. ADR-0032 records the reversal and what it costs.
+ *
+ * **A member is buzzed at most once per message**, which is why the group-chat branch subtracts
+ * the mentioned: they get the more specific "mentioned you" push instead, and two buzzes for one
+ * message is the failure this ordering exists to avoid.
  */
 const onMessageCreated: EffectHandler = async (event, deps) => {
   const channelId = String(event.payload['channelId'] ?? event.partitionKey);
@@ -231,10 +272,18 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
   // never be able to buzz a phone.
   const isDirectMessage = context.scope === 'dm' && type !== 'system';
 
-  if (!isAnnouncement && !isDirectMessage && mentioned.length === 0) return;
+  /*
+   * An ordinary message in a room with more than two people in it.
+   *
+   * `announcement` is excluded by `CONVERSATIONAL` rather than by a second condition here, so
+   * there is one list of which message types buzz and no chance of the two disagreeing.
+   */
+  const isGroupChat = context.scope !== 'dm' && CONVERSATIONAL.includes(type);
+
+  if (!isAnnouncement && !isDirectMessage && !isGroupChat && mentioned.length === 0) return;
 
   const actorName = await displayName(deps.db, senderId);
-  const preview = String(event.payload['preview'] ?? '').slice(0, 140);
+  const preview = previewForPush(event.payload, type);
 
   if (isAnnouncement) {
     const recipients = await resolveAudience(deps.db, {
@@ -371,6 +420,59 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
         seq,
       });
       deps.log('info', 'mention push dispatched', { eventId: event.id, ...outcome });
+    });
+  }
+
+  if (isGroupChat) {
+    /*
+     * Everyone in the room except the sender, and except anybody already being told by name.
+     *
+     * The mention push says "Alice mentioned you" and this one says "Alice: ...", so somebody
+     * named in a message would otherwise feel one phone buzz twice for one sentence and read
+     * the weaker of the two lines second.
+     */
+    const named = new Set(mentioned);
+    const recipients = (
+      await resolveAudience(deps.db, {
+        type: 'chat_message',
+        actorId: senderId,
+        clubId: context.clubId,
+        channelId,
+      })
+    ).filter((userId) => !named.has(userId));
+
+    const params = {
+      clubId: context.clubId,
+      channelId,
+      channelName: context.name,
+      seq,
+      preview,
+      actorName,
+    };
+
+    /*
+     * **No notification row**, exactly like a direct message and for the same reason: the inbox
+     * representation of unread chat is the computed per-channel row, so one row per message
+     * would flood the feed with the per-message noise PRD/12 rule 8 rejects. Only the buzz is
+     * per message. Slot 3, which `NOTIFICATION_SLOTS` has been holding for the next kind since
+     * the keys were banded.
+     */
+    schedule(deps, async () => {
+      const outcome = await dispatchPush(deps.db, deps.push, {
+        outboxEventId: notificationKey(event.id, 3),
+        type: 'chat_message',
+        params,
+        recipients,
+        /*
+         * Both suppressions matter more here than anywhere else in the catalogue, because this
+         * is the only push that fires on every single message. The cursor means an open
+         * conversation never buzzes at all, and mute means a member can switch a loud club off
+         * without losing its unread count.
+         */
+        channelId,
+        seq,
+      });
+      deps.log('info', 'chat message push dispatched', { eventId: event.id, ...outcome });
     });
   }
 };

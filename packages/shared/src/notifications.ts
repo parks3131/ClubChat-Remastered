@@ -15,14 +15,19 @@ import { z } from 'zod';
 import { ChannelScope, ClubRole, Uuid } from './domain.ts';
 
 /**
- * The 19 types.
+ * The 22 types.
  *
  * Phase 1 emits the subset whose triggering feature exists. The rest are declared now
  * because the renderer is exhaustive over this union - adding a type is then a compile
  * error everywhere it must be handled, rather than a silently unrendered row.
  *
- * PRD/12's table lists 18. The nineteenth, `dm_message`, is **push-only** and is the one type
- * that never becomes a row in anybody's inbox - see its entry below and ADR-0015.
+ * PRD/12's table lists 18. Two of the rest are **push-only** - `dm_message` and
+ * `chat_message` buzz a phone and never become a row in anybody's inbox (ADR-0015, ADR-0032);
+ * the others are `message_reported` and `meetup_nudged`.
+ *
+ * **The count above is asserted by `notifications.test.ts`, which is the only reason to trust
+ * it.** It read "19" from Phase 1 until 2026-08-14, by which point there were 21 - a number in
+ * prose beside a list that grows is a comment that is wrong and cannot fail.
  */
 export const notificationTypes = [
   // Join requests. These three are special: they never clear by opening the inbox.
@@ -46,6 +51,26 @@ export const notificationTypes = [
   // Chat.
   'announcement',
   'mentioned',
+  /**
+   * An ordinary message arrived in a group chat. **Push only - never written to the inbox.**
+   *
+   * > **This is what a member means by "notify me".** Until 2026-08-14 club, race and Eboard
+   * > chat were silent on purpose: a message is addressed to a room, and the room's unread
+   * > count was held to be the right granularity. The founder's answer, testing push on a real
+   * > phone and getting nothing, was that a chat app which does not buzz when somebody talks to
+   * > your club is not doing its job - which is what every product this replaces does. See
+   * > ADR-0032.
+   *
+   * It writes no row, exactly like `dm_message` and for the identical reason: the inbox
+   * representation of unread chat is the computed per-channel row, and one row per message
+   * would flood the feed. **PRD/12 rule 8 is untouched** - it governs the BADGE, which still
+   * counts one per channel and never a per-message sum. Only the buzz became per message.
+   *
+   * The two suppressions carry the whole design. A reader whose cursor has passed the message
+   * gets nothing, so an open conversation never buzzes; and mute silences the buzz while the
+   * unread count keeps climbing, which is what makes mute worth having on a busy club.
+   */
+  'chat_message',
   /**
    * Somebody reported a message, and this is the work landing on whoever reviews it.
    *
@@ -276,6 +301,30 @@ export const notificationParams = {
     .merge(actor),
 
   /**
+   * The same shape as `announcement`, because it is the same fact at a lower volume: somebody
+   * said something in a room you are in.
+   *
+   * `clubId` is nullable rather than fixed, unlike `dm_message` below - a race and the Eboard
+   * space both belong to a club, and this type covers all three group scopes.
+   */
+  chat_message: z
+    .object({
+      clubId: Uuid.nullable(),
+      channelId: Uuid,
+      channelName: z.string(),
+      seq: z.number().int().positive(),
+      /**
+       * What to show on a lock screen.
+       *
+       * Never empty: a photo or a document with no caption has no words of its own, and the
+       * worker substitutes a description rather than letting the push render as a name, a
+       * colon and nothing. See `previewForPush`.
+       */
+      preview: z.string(),
+    })
+    .merge(actor),
+
+  /**
    * `clubId` is fixed at null rather than nullable, and that is the type-level statement of
    * the rule: a DM belongs to no club, ever, because two people who share two clubs must get
    * one thread. `channelName` is the sender's name - a conversation has no name of its own,
@@ -445,10 +494,18 @@ export function notificationTarget(n: {
     case 'mentioned':
       return { kind: 'chat', channelId: p['channelId']!, seq: p['seq']! };
 
-    // Deliberately WITHOUT a seq. Tapping a DM push should open the conversation on the first
-    // unread message, which is what chat already does on its own; pinning the deep link to one
-    // seq would land past anything that arrived after the push was built.
+    /*
+     * Both deliberately WITHOUT a seq, unlike the two above.
+     *
+     * Tapping one of these should open the conversation on the first UNREAD message, which is
+     * what chat already does on its own. Pinning the deep link to this message's seq would land
+     * you past everything that arrived while the phone was in your pocket - and for an ordinary
+     * chat message that is the normal case rather than the edge one, since the whole point of
+     * the type is that it fires on every message. An announcement or a mention is about one
+     * specific message, so those two keep their seq.
+     */
     case 'dm_message':
+    case 'chat_message':
       return { kind: 'chat', channelId: p['channelId']! };
 
     /*
@@ -575,6 +632,7 @@ export function notificationSubject(n: {
     case 'mentioned':
     case 'chat_caught_up':
     case 'dm_message':
+    case 'chat_message':
       return { kind: 'channel', channelId: p['channelId']! };
 
     /*
@@ -712,7 +770,17 @@ export function renderNotification(n: {
         title: p['clubName']!,
         body: `${p['actorName']} nudged: ${p['meetupTime']} at ${p['location']}`,
       };
+    /*
+     * The room is the title and the speaker is in the body, which is the opposite of `dm_message`
+     * below and is the right way round for each.
+     *
+     * In a one-to-one conversation the sender IS the room, so naming them twice reads as a bug.
+     * In a group the room is what tells you whether this matters before you have read a word, and
+     * the speaker is the first thing you want after that - "Binghamton Running Club / Alice: are
+     * we still on for six".
+     */
     case 'announcement':
+    case 'chat_message':
       return { title: p['channelName']!, body: `${p['actorName']}: ${p['preview']}` };
     case 'mentioned':
       return {

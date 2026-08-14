@@ -32,6 +32,13 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       device closes it - open a roster, tap somebody, use the "..." and the club faces - and then
       the surface spec's table can say so.
 
+- [ ] **Per-message push wants a second pair of eyes on volume, not on correctness.** Shipped
+      2026-08-14 ([ADR-0032](SPEC/decisions/0032-every-chat-message-pushes.md)) and proved on the
+      device. The open question is lived rather than technical: a genuinely busy club buzzes once
+      per message, and the agreed answer if that stings is **coalescing**, never going back to
+      silence. Point anybody who complains at per-conversation mute first - it is the control that
+      exists for this and it is now load-bearing rather than decorative.
+
 ## Known broken, or quietly wrong
 
 - [ ] **Watch the first few CI runs for testcontainer flake.** `test/harness.ts` records a
