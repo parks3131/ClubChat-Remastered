@@ -80,6 +80,19 @@ composition rather than a second rewrite.
     reported as "it will not save the time". The way back out is a clear control, not a state
     where nothing is chosen and something looks chosen.
 
+12. **A picker needs a visible way to close, even when there is nothing to confirm.** Rule 11
+    means the value is already committed, so the control is only a dismissal - but a wheel with
+    no way out reads as unfinished, and tapping the row again to collapse it is not something
+    anybody discovers. A poll's way out is its **No deadline** clear; where the value is required
+    and there is nothing to clear, it is a plain **Done**. *(Reported from the device on
+    2026-08-14 as not being able to set the time at all.)*
+
+13. **Dismiss the keyboard before opening a picker.** They both want the bottom of the screen,
+    and the keys win: they cover the wheel and whatever field follows it, so the day column
+    cannot be reached and the last field cannot be typed into. **And the form must sit inside
+    `KeyboardAvoider`** - a composer whose last field is below the fold is a field that can be
+    focused and not seen. Both were reported together from the device on 2026-08-14.
+
 ## Obligations this creates elsewhere
 
 - **`ComposerHeader`'s `action` and `dismiss` are optional and default to the old behaviour**, so

@@ -33,8 +33,9 @@
  * > this too.
  */
 
-import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { clubApi, contentApi } from '../../../../../src/api.ts';
@@ -56,8 +57,17 @@ import {
   SettingValue,
   Wheel,
 } from '../../../../../src/composer-kit.tsx';
+import { KeyboardAvoider } from '../../../../../src/keyboard-avoider.tsx';
+import { longPressFeedback } from '../../../../../src/haptics.ts';
 import { color, space, type } from '../../../../../src/theme.ts';
-import { Action, ComposerHeader, DataScreen } from '../../../../../src/ui.tsx';
+import {
+  Action,
+  ComposerHeader,
+  ContextMenu,
+  DataScreen,
+  measureRow,
+  type PressAnchor,
+} from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
 /** Minute granularity on the wheel. Five is the poll composer's, and 60 rows is not a picker. */
@@ -101,6 +111,17 @@ export default function WeeklyMeetupsScreen() {
   const [editing, setEditing] = useState<Editing | null>(null);
   const [nudgeNote, setNudgeNote] = useState<string | null>(null);
   const [nudging, setNudging] = useState(false);
+  /*
+   * Edit and Remove live behind a long press, not as text under every row.
+   *
+   * They were inline links, and at two meetups a day the week became a wall of "Edit Remove
+   * Nudge at 3:52 AM" repeated down the screen - reported from the device as clumsy, and it was.
+   * A long press is the gesture this app already uses for row actions on the club list and on a
+   * race (`PRD/09` rule 23), so the week stops being the one place that does it differently.
+   */
+  const [menuFor, setMenuFor] = useState<{ day: string; meetup: Meetup; anchor: PressAnchor } | null>(
+    null,
+  );
 
   const week = useLoad(() => contentApi.meetups(clubId, monday), [clubId, monday]);
   const club = useLoad(() => clubApi.detail(clubId), [clubId]);
@@ -154,7 +175,17 @@ export default function WeeklyMeetupsScreen() {
         <Action label="Next" variant="secondary" onPress={() => setMonday(shift(monday, 1))} />
       </View>
 
+      {/*
+        One line for the whole screen, not one per meetup.
+        The bell's unavailability is a fact about the CLUB, so repeating "Nudge at 3:52 AM" beside
+        every meetup said the same thing five times and was the bulk of what read as clutter.
+      */}
       {nudgeNote !== null && <Text style={styles.note}>{nudgeNote}</Text>}
+      {nudgeNote === null && !bellLive && blockedUntil !== null && (
+        <Text style={styles.note}>
+          Already nudged. You can nudge again at {formatTimeOfDay(blockedUntil)}.
+        </Text>
+      )}
 
       <DataScreen load={week}>
         {(data) => (
@@ -171,45 +202,19 @@ export default function WeeklyMeetupsScreen() {
                 {day.empty && <Text style={styles.empty}>Nothing planned</Text>}
 
                 {day.meetups.map((meetup) => (
-                  <View key={meetup.id} style={styles.meetup}>
-                    {/* Where and when are the headline; what they are doing sits under it. */}
-                    <Text style={styles.headline}>
-                      {formatWallClock(meetup.time)} · {meetup.location}
-                    </Text>
-                    {meetup.description !== null && (
-                      <Text style={styles.description}>{meetup.description}</Text>
-                    )}
-
-                    {/* Any admin edits any meetup, not only its author. */}
-                    {isAdmin && (
-                      <View style={styles.rowActions}>
-                        <RowAction
-                          label="Edit"
-                          onPress={() => setEditing({ mode: 'edit', date: day.date, meetup })}
-                          accessibilityLabel={`Edit the meetup at ${meetup.location}`}
-                        />
-                        <RowAction
-                          label="Remove"
-                          onPress={() => {
-                            void contentApi.deleteMeetup(meetup.id).then(week.reload, week.reload);
-                          }}
-                          accessibilityLabel={`Remove the meetup at ${meetup.location}`}
-                        />
-                        {/* One bell per club. Disabled rather than hidden while cooling down, so
-                            an admin can see it exists and when it comes back. */}
-                        <RowAction
-                          label={bellLive ? 'Nudge' : `Nudge at ${formatTimeOfDay(blockedUntil!)}`}
-                          disabled={!bellLive || nudging}
-                          onPress={() => void nudge(meetup.id)}
-                          accessibilityLabel={
-                            bellLive
-                              ? `Nudge the club about the meetup at ${meetup.location}`
-                              : `Nudging is unavailable until ${formatTimeOfDay(blockedUntil!)}`
-                          }
-                        />
-                      </View>
-                    )}
-                  </View>
+                  <MeetupRow
+                    key={meetup.id}
+                    meetup={meetup}
+                    isAdmin={isAdmin}
+                    bellLive={bellLive}
+                    bellBusy={nudging}
+                    blockedUntil={blockedUntil}
+                    onNudge={() => void nudge(meetup.id)}
+                    onLongPress={(anchor) => {
+                      longPressFeedback();
+                      setMenuFor({ day: day.date, meetup, anchor });
+                    }}
+                  />
                 ))}
 
                 {isAdmin && (
@@ -227,32 +232,115 @@ export default function WeeklyMeetupsScreen() {
           </ScrollView>
         )}
       </DataScreen>
+
+      {menuFor !== null && (
+        <ContextMenu
+          anchor={menuFor.anchor}
+          onDismiss={() => setMenuFor(null)}
+          items={[
+            {
+              label: 'Edit',
+              icon: 'edit',
+              onPress: () => {
+                const { day, meetup } = menuFor;
+                setMenuFor(null);
+                setEditing({ mode: 'edit', date: day, meetup });
+              },
+            },
+            {
+              /* Red and last, per the menu's own rule for an action that ends something. */
+              label: 'Remove',
+              icon: 'delete-outline',
+              destructive: true,
+              onPress: () => {
+                const { meetup } = menuFor;
+                setMenuFor(null);
+                void contentApi.deleteMeetup(meetup.id).then(week.reload, week.reload);
+              },
+            },
+          ]}
+        />
+      )}
     </View>
   );
 }
 
-/** A quiet inline action on a meetup row. Text, not a filled box: nothing here is the primary act. */
-function RowAction({
-  label,
-  onPress,
-  disabled = false,
-  accessibilityLabel,
+/**
+ * One meetup on the week.
+ *
+ * **The bell is the only control on the row**, because it is the only one an admin reaches for
+ * often. Edit and Remove are behind a long press: they were inline text links, and two meetups a
+ * day turned the week into a wall of repeated words.
+ */
+function MeetupRow({
+  meetup,
+  isAdmin,
+  bellLive,
+  bellBusy,
+  blockedUntil,
+  onNudge,
+  onLongPress,
 }: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  accessibilityLabel: string;
+  meetup: Meetup;
+  isAdmin: boolean;
+  bellLive: boolean;
+  bellBusy: boolean;
+  blockedUntil: string | null;
+  onNudge: () => void;
+  onLongPress: (anchor: PressAnchor) => void;
 }) {
+  const ref = useRef<View>(null);
+  const bellOff = !bellLive || bellBusy;
+
   return (
     <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      hitSlop={space.sm}
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
-      accessibilityState={{ disabled }}
+      ref={ref}
+      style={styles.meetup}
+      onLongPress={(event) =>
+        measureRow(
+          ref.current,
+          { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY },
+          onLongPress,
+        )
+      }
+      /* Members have no menu behind the press, so they must not get the press either. */
+      disabled={!isAdmin}
+      accessibilityRole={isAdmin ? 'button' : undefined}
+      accessibilityLabel={
+        isAdmin ? `${meetup.location} at ${formatWallClock(meetup.time)}. Hold for options` : undefined
+      }
     >
-      <Text style={[styles.rowAction, disabled && styles.rowActionOff]}>{label}</Text>
+      <View style={styles.meetupText}>
+        {/* Where and when are the headline; what they are doing sits under it. */}
+        <Text style={styles.headline}>
+          {formatWallClock(meetup.time)} · {meetup.location}
+        </Text>
+        {meetup.description !== null && (
+          <Text style={styles.description}>{meetup.description}</Text>
+        )}
+      </View>
+
+      {isAdmin && (
+        <Pressable
+          onPress={onNudge}
+          disabled={bellOff}
+          hitSlop={space.sm}
+          style={[styles.bell, bellOff && styles.bellOff]}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: bellOff }}
+          accessibilityLabel={
+            bellLive
+              ? `Nudge the club about the meetup at ${meetup.location}`
+              : `Nudging is unavailable until ${formatTimeOfDay(blockedUntil ?? '')}`
+          }
+        >
+          <MaterialIcons
+            name="notifications-active"
+            size={18}
+            color={bellOff ? color.textSecondary : color.accent}
+          />
+        </Pressable>
+      )}
     </Pressable>
   );
 }
@@ -382,10 +470,17 @@ function MeetupComposer({
         }
       />
 
+      {/*
+        Keeps the bottom of the form above the keys. Without it the last field - "What are we
+        doing?" - sat under the keyboard with nothing to scroll it into view, so it could be
+        focused and not seen.
+      */}
+      <KeyboardAvoider style={styles.flex}>
       <ScrollView
         style={styles.flex}
         contentContainerStyle={styles.composerBody}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
       >
         {/* No label above it. The placeholder says what it is, and a form whose first field is
             labelled "Place" above a box reading "Where should we meet?" says it twice. */}
@@ -411,6 +506,14 @@ function MeetupComposer({
               setPicking(false);
               return;
             }
+            /*
+             * The keyboard has to go before the wheel arrives.
+             *
+             * Both want the bottom of the screen. Left up, the keys sat on top of the wheel and
+             * of the field below it, so the day column could not be reached and "What are we
+             * doing?" could not be typed into at all - which is exactly how it was reported.
+             */
+            Keyboard.dismiss();
             if (when === null) setWhen(shown);
             setPicking(true);
           }}
@@ -458,6 +561,25 @@ function MeetupComposer({
           />
         )}
 
+        {picking && (
+          /*
+             The way out of the wheel, said plainly.
+
+             `DESIGN/06` rule 11 has opening commit the value, so there is nothing to confirm -
+             but a picker with no visible way to close it reads as unfinished, and tapping the row
+             again to collapse it is not a thing anybody discovers. A poll's equivalent is its
+             "No deadline" clear; a meetup's time is required, so this only closes.
+          */
+          <Pressable
+            style={styles.done}
+            onPress={() => setPicking(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Done choosing the time"
+          >
+            <Text style={styles.doneLabel}>Done</Text>
+          </Pressable>
+        )}
+
         {/* One note, at the end of its section. */}
         <SettingNote>
           Adding a meetup notifies nobody. Use Nudge on the week to tell the club.
@@ -473,6 +595,7 @@ function MeetupComposer({
 
         {failed !== null && <Text style={styles.error}>{failed}</Text>}
       </ScrollView>
+      </KeyboardAvoider>
     </View>
   );
 }
@@ -489,12 +612,23 @@ const styles = StyleSheet.create({
   weekLabel: { ...type.label, color: color.textSecondary, flex: 1, textAlign: 'center' },
   body: { padding: space.md, paddingBottom: space.xl },
   composerBody: { padding: space.md, paddingBottom: space.xl },
-  meetup: { gap: space.xs, paddingVertical: space.sm },
+  meetup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingVertical: space.sm,
+  },
+  meetupText: { flex: 1, gap: space.xs },
   headline: { ...type.body, color: color.textPrimary },
   description: { ...type.bodySmall, color: color.textSecondary },
-  rowActions: { flexDirection: 'row', gap: space.md, paddingTop: space.xs },
-  rowAction: { ...type.label, color: color.accent },
-  rowActionOff: { color: color.textSecondary },
+  bell: { padding: space.xs },
+  bellOff: { opacity: 0.4 },
+  done: {
+    alignSelf: 'center',
+    paddingVertical: space.sm,
+    paddingHorizontal: space.lg,
+  },
+  doneLabel: { ...type.label, color: color.accent },
   empty: { ...type.bodySmall, color: color.textSecondary, paddingVertical: space.sm },
   note: { ...type.bodySmall, color: color.textSecondary, paddingHorizontal: space.md },
   error: { ...type.bodySmall, color: color.error, paddingTop: space.sm },
