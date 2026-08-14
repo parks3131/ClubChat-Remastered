@@ -14,7 +14,7 @@
 
 import { eq, sql } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
-import { SYSTEM_ACTOR_ID, type MessageType } from '@clubchat/shared';
+import { SYSTEM_ACTOR_ID, type MessageType, type NotificationType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import type { Monitor } from '../monitoring.ts';
 import { users } from '../db/schema.ts';
@@ -23,7 +23,12 @@ import { publishToChannel, publishRevocation, publishUpdate } from '../bus/redis
 import { reactionsForMessages } from '../domain/reactions.ts';
 import { nextRevision } from '../domain/revisions.ts';
 import { resolveAudience } from './audience.ts';
-import { notificationKey, resolvePendingRequests, writeNotifications } from './notify.ts';
+import {
+  notificationKey,
+  resolvePendingRequests,
+  writeNotifications,
+  type WriteNotificationsInput,
+} from './notify.ts';
 import { dispatchPush, PUSH_DEFERRAL_MS } from '../push/dispatch.ts';
 import type { PushSender } from '../push/sender.ts';
 import type { MediaStore } from '../media/store.ts';
@@ -99,6 +104,56 @@ function schedule(deps: EffectDeps, fn: () => Promise<void>) {
       }),
     );
   }, PUSH_DEFERRAL_MS).unref?.();
+}
+
+/**
+ * Write the notification rows AND buzz the phones. **One act, not two.**
+ *
+ * > **This exists because the two halves were separable, and so they got separated.** Until
+ * > 2026-08-14 fourteen call sites wrote a row and scheduled no push: every join request, every
+ * > decision on one, every add, removal and role change, and a car group left without an
+ * > Incharge. They filled the inbox and the badge and reached no phone, so the only way to learn
+ * > that somebody had asked to join your club was to happen to open the app. Nothing said this
+ * > was intended - `TECH/06` opens by calling push "a transport added to a fan-out that is
+ * > already specified", which reads as though every type in the catalogue arrives.
+ *
+ * How the class hid: `writeNotifications` is a complete, correct, satisfying-looking call. There
+ * is no error, no failing test and no missing case - the row really is written. What is absent is
+ * a second statement nobody was reminded to write. Pairing them in one function is the only fix
+ * that survives somebody adding a fifteenth type, which is why this is a helper rather than
+ * fourteen added `schedule` blocks.
+ *
+ * **The four hand-rolled pushes that do NOT come through here** each carry something this
+ * deliberately does not model, and each says so where it lives: `dm_message` and `chat_message`
+ * write no rows at all, `message_reported` pushes immediately and without a cursor on purpose,
+ * and the announcement and mention paths carry a chat context plus their own logging. This
+ * function is the DEFAULT - a type that writes a row and wants an ordinary push - so that the
+ * default cannot be half-done.
+ */
+async function notifyAndPush<K extends NotificationType>(
+  deps: EffectDeps,
+  input: WriteNotificationsInput<K>,
+): Promise<{ created: number }> {
+  const result = await writeNotifications(deps.db, input);
+
+  /*
+   * Deferred like every other push, even though none of these carries a channel and so none can
+   * be suppressed by a read cursor. The eight seconds buy nothing here and cost nothing either,
+   * and one timing rule is worth more than a second code path that has to justify itself. The
+   * exception that genuinely needed immediacy - a report landing in a review queue - says so in
+   * its own comment rather than being an option on this.
+   */
+  schedule(deps, async () => {
+    const outcome = await dispatchPush(deps.db, deps.push, {
+      outboxEventId: input.outboxEventId,
+      type: input.type,
+      params: input.params as Record<string, unknown>,
+      recipients: input.recipients,
+    });
+    deps.log('info', `${input.type} push dispatched`, { ...outcome });
+  });
+
+  return result;
 }
 
 export type EffectHandler = (event: OutboxEvent, deps: EffectDeps) => Promise<void>;
@@ -629,7 +684,7 @@ const onMemberJoined: EffectHandler = async (event, deps) => {
   // Emitting "you were added" here as well would tell one person the same thing twice, so
   // the approval path suppresses it - which is why `via` is on the event at all.
   if (via === 'added' && actorId) {
-    await writeNotifications(deps.db, {
+    await notifyAndPush(deps, {
       outboxEventId: notificationKey(event.id),
       type: 'member_added',
       params: {
@@ -663,7 +718,7 @@ const onJoinRequested: EffectHandler = async (event, deps) => {
     clubId,
   });
 
-  await writeNotifications(deps.db, {
+  await notifyAndPush(deps, {
     outboxEventId: notificationKey(event.id),
     type: 'club_join_request',
     params: {
@@ -705,7 +760,7 @@ const onJoinDecided: EffectHandler = async (event, deps) => {
     });
   }
 
-  await writeNotifications(deps.db, {
+  await notifyAndPush(deps, {
     outboxEventId: notificationKey(event.id),
     type: approved ? 'request_approved' : 'request_denied',
     params: {
@@ -788,7 +843,7 @@ const onRoleChanged: EffectHandler = async (event, deps) => {
     }
   }
 
-  await writeNotifications(deps.db, {
+  await notifyAndPush(deps, {
     outboxEventId: notificationKey(event.id),
     type: 'role_changed',
     params: { clubId, clubName: club.name, actorName, newRole },
@@ -828,7 +883,7 @@ const onEboardJoinRequested: EffectHandler = async (event, deps) => {
     clubId,
   });
 
-  await writeNotifications(deps.db, {
+  await notifyAndPush(deps, {
     outboxEventId: notificationKey(event.id),
     type: 'eboard_join_request',
     params: {
@@ -876,7 +931,7 @@ const onEboardMembershipDecided: EffectHandler = async (event, deps) => {
     });
   }
 
-  await writeNotifications(deps.db, {
+  await notifyAndPush(deps, {
     outboxEventId: notificationKey(event.id),
     /*
      * `member_added` for a direct add and `request_approved` for a decision, because the two
@@ -940,7 +995,7 @@ const onEboardMemberDeparted: EffectHandler = async (event, deps) => {
   });
 
   if (actorId) {
-    await writeNotifications(deps.db, {
+    await notifyAndPush(deps, {
       outboxEventId: notificationKey(event.id),
       type: 'member_removed',
       params: {
@@ -992,7 +1047,7 @@ const onOwnershipTransferred: EffectHandler = async (event, deps) => {
     eventId: event.id,
   });
 
-  await writeNotifications(deps.db, {
+  await notifyAndPush(deps, {
     outboxEventId: notificationKey(event.id),
     type: 'role_changed',
     params: { clubId, clubName: club.name, actorName: fromName, newRole: 'owner' },
@@ -1048,7 +1103,7 @@ function makeDepartureHandler(reason: 'removed' | 'left' | 'banned'): EffectHand
       });
 
       if (reason !== 'left' && actorId) {
-        await writeNotifications(deps.db, {
+        await notifyAndPush(deps, {
           outboxEventId: notificationKey(event.id),
           type: 'member_removed',
           params: {
@@ -1344,7 +1399,7 @@ const onInchargeLeft: EffectHandler = async (event, deps) => {
     raceId: String(event.payload['raceId']),
   });
 
-  await writeNotifications(deps.db, {
+  await notifyAndPush(deps, {
     outboxEventId: notificationKey(event.id),
     type: 'car_group_incharge_left',
     params: {
@@ -1417,7 +1472,7 @@ const onRaceMembershipDecided: EffectHandler = async (event, deps) => {
    * roster was told their request had been approved.
    */
   if (actorId !== userId) {
-    await writeNotifications(deps.db, {
+    await notifyAndPush(deps, {
       outboxEventId: notificationKey(event.id),
       type: added ? 'member_added' : approved ? 'request_approved' : 'request_denied',
       params: {
@@ -1526,7 +1581,7 @@ function makeMembersAddedHandler(
       scope,
     });
 
-    await writeNotifications(deps.db, {
+    await notifyAndPush(deps, {
       outboxEventId: notificationKey(event.id),
       type: 'member_added',
       params: {
@@ -1605,7 +1660,7 @@ const onRaceMemberDeparted: EffectHandler = async (event, deps) => {
   if (actorId && actorName) {
     const club = await clubContext(deps.db, clubId);
     if (club) {
-      await writeNotifications(deps.db, {
+      await notifyAndPush(deps, {
         outboxEventId: notificationKey(event.id),
         type: 'member_removed',
         params: {
@@ -2010,7 +2065,7 @@ export const handlers: Record<string, EffectHandler> = {
       clubId,
       raceId: String(event.payload['raceId']),
     });
-    await writeNotifications(deps.db, {
+    await notifyAndPush(deps, {
       outboxEventId: notificationKey(event.id),
       type: 'race_join_request',
       params: {

@@ -68,6 +68,14 @@ mention and not also the ordinary chat push, since "X mentioned you" is the bett
 lines. *(An announcement that also mentions somebody is the one remaining case that buzzes twice
 - see [PRD/17](17-roadmap-and-open-questions.md).)*
 
+**Every row in the catalogue above also reaches the phone.** A notification is not "an inbox row
+that might also push" - the two travel together, and the only type that deliberately stays silent
+is the chat-caught-up row, which is history rather than news. *(True since 2026-08-14. Before
+that, nine types wrote a row and pushed nothing: the three join requests, both decisions on them,
+member added, member removed, role changed, and a car group left without an Incharge. Rule 4
+below goes out of its way to keep a join request from clearing on a glance at the inbox, and yet
+nothing had ever told anybody one had arrived.)*
+
 **Behaviour rules**
 
 1. The feed merges discrete notifications and live chat-unread rows into one

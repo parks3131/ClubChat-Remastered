@@ -158,6 +158,22 @@ async function setup(): Promise<Fixture> {
   const dmChannel = await getChannelRef(h.db, opened.channelId);
   if (!dmChannel) throw new Error('fixture dm channel missing');
 
+  /*
+   * Settle the fixture's OWN effects before any test looks at the recorder.
+   *
+   * > **`addMember` writes a `member_added` notification, and since 2026-08-14 that pushes.**
+   * > Undrained, those events sat in the outbox until the first `drainAndPush()` inside a test,
+   * > which scheduled their pushes - and `dispatchPush` resolves devices at run time, so a phone
+   * > registered after the fixture but before that drain received the fixture's buzz and counted
+   * > against an assertion about the message the test had just sent. Two of them, for two added
+   * > members.
+   *
+   * The same call `setupClub` in phase1-notifications makes, for the same reason: a test that
+   * asserts "this message pushed exactly one phone" has to start from silence.
+   */
+  await drainAndPush();
+  push.reset();
+
   return {
     clubId: club.clubId,
     clubChannelId: club.mainChannelId,

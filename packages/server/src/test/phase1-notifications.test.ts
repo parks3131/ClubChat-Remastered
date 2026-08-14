@@ -18,6 +18,7 @@ import { eq, sql } from 'drizzle-orm';
 import { notificationTarget, type NotificationTarget } from '@clubchat/shared';
 import { appendMessage } from '../domain/append-message.ts';
 import { createClub } from '../domain/create-club.ts';
+import { addMember, changeRole, joinClub, setJoinPolicy } from '../domain/membership.ts';
 import { addRaceMember, createRace } from '../domain/races.ts';
 import { sendMessage, setPinned, softDeleteMessage } from '../domain/send-message.ts';
 import { advanceReadCursor, getChannelRef } from '../domain/reads.ts';
@@ -694,6 +695,117 @@ describe('column-level authority', () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe('invalid_type');
+  });
+});
+
+// ===========================================================================
+// THE TYPES THAT WROTE A ROW AND RANG NOTHING
+// ===========================================================================
+
+/**
+ * Membership, roles and requests reach a phone, not just the inbox.
+ *
+ * > **Fourteen call sites wrote a notification row and scheduled no push**, found on 2026-08-14
+ * > while checking whether "push is done" was actually true. Every join request, every decision
+ * > on one, every add, removal and role change, and a car group left without an Incharge: all of
+ * > them filled the badge and rang nothing. The tell is that there is nothing to see -
+ * > `writeNotifications` is a complete and correct call, and what was missing was a second
+ * > statement nobody was reminded to write.
+ *
+ * These assert the buzz specifically, because the ROWS were already tested and those tests all
+ * passed throughout. `notifyAndPush` is the structural fix; this is the part a helper cannot
+ * prove about itself.
+ */
+describe('membership and requests reach a phone', () => {
+  /*
+   * These handlers post a system message into club chat ("Owner promoted Member as admin")
+   * before they notify, and publishing that goes over Redis - which this file deliberately
+   * passes as `null` so that any reach for it fails loudly (see the note on `deps`). That
+   * guarantee is about the PUSH path, so these get a Redis that swallows publishes and nothing
+   * else changes: the audience, the ledger and the sender are all still the real ones.
+   *
+   * Without it the handler throws before it ever reaches the notify, the event goes back for
+   * retry, and the test reads as "membership does not push" - which is exactly the conclusion
+   * this describe block exists to check, so it would have been a convincing false negative.
+   */
+  async function drainPublishing() {
+    await drainOnce(h.db, { ...deps, redis: { publish: async () => 0 } as never });
+    const pending = [...deferred];
+    deferred = [];
+    for (const fn of pending) await fn();
+  }
+
+  it('rings every admin when somebody asks to join', async () => {
+    const f = await setupClub();
+    await registerDevice(h.db, {
+      userId: f.ownerId,
+      pushToken: 'ExponentPushToken[owner-phone]',
+      platform: 'ios',
+    });
+    await registerDevice(h.db, {
+      userId: f.adminId,
+      pushToken: 'ExponentPushToken[admin-phone]',
+      platform: 'ios',
+    });
+
+    // A request-policy club, so joining files a request rather than admitting outright.
+    await setJoinPolicy(h.db, await loadAccessContext(h.db, f.ownerId), f.clubId, 'request');
+    const outsider = await makeUser('Outsider');
+    const asked = await joinClub(h.db, outsider, f.clubId);
+    if (!asked.ok) throw new Error('join request failed');
+    await drainPublishing();
+
+    /*
+     * Both admins, and the requester is not an admin so there is nobody else to reach.
+     *
+     * This is the one that matters most of the nine: PRD/12 rule 4 goes out of its way to stop a
+     * join request clearing when the inbox is merely opened, with the note "the founder lost real
+     * join requests this way" - and until this change the only way to learn of one was to happen
+     * to open the app.
+     */
+    expect(push.sent.map((m) => m.token).sort()).toEqual([
+      'ExponentPushToken[admin-phone]',
+      'ExponentPushToken[owner-phone]',
+    ]);
+    expect(push.sent[0]?.body).toContain('asked to join');
+  });
+
+  it('rings the member whose role changed, and nobody else', async () => {
+    const f = await setupClub();
+    const tokens = new Map<string, string>();
+    for (const userId of [f.ownerId, f.adminId, f.memberId]) {
+      const token = `ExponentPushToken[r-${userId.slice(0, 8)}]`;
+      await registerDevice(h.db, { userId, pushToken: token, platform: 'ios' });
+      tokens.set(userId, token);
+    }
+
+    await changeRole(
+      h.db,
+      await loadAccessContext(h.db, f.ownerId),
+      f.clubId,
+      f.memberId,
+      'admin',
+    );
+    await drainPublishing();
+
+    // Addressed to one person. A role change is not club news.
+    expect(push.sent.map((m) => m.token)).toEqual([tokens.get(f.memberId)!]);
+    expect(push.sent[0]?.body).toContain('admin');
+  });
+
+  it('rings somebody added to a club directly', async () => {
+    const f = await setupClub();
+    const newcomer = await makeUser('Newcomer');
+    await registerDevice(h.db, {
+      userId: newcomer,
+      pushToken: 'ExponentPushToken[newcomer]',
+      platform: 'ios',
+    });
+
+    await addMember(h.db, await loadAccessContext(h.db, f.ownerId), f.clubId, newcomer);
+    await drainPublishing();
+
+    expect(push.sent.map((m) => m.token)).toContain('ExponentPushToken[newcomer]');
   });
 });
 

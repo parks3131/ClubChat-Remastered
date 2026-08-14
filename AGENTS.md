@@ -703,6 +703,31 @@ that records how to recognise the class._
     (`clubchat://clubs/<id>/members`), and `cliclick` drives it, but note that clicks only land
     when the Simulator is the frontmost app.
 
+31. **Two statements that must always happen together will eventually be one statement, and the
+    half that is missing is the half nobody can see.** Symptom: none, for the life of the project.
+    Fourteen call sites wrote a notification row and scheduled no push, so every join request,
+    every decision on one, every add, removal and role change filled the inbox and the badge and
+    rang nothing - and `PRD/12` rule 4 exists precisely because the founder had lost real join
+    requests. Found only by auditing `dispatchPush` call sites against `writeNotifications` call
+    sites while answering the question "is push actually finished?".
+
+    **Rule: when an effect must always accompany another, express the pair as one function, not as
+    a convention.** `notifyAndPush` writes the rows and schedules the push, and the exceptions
+    hand-roll it and say why. How to recognise the class, and why it is worse than a wrong line of
+    code: **the code that is present is entirely correct.** `writeNotifications(...)` is a
+    complete, well-formed, satisfying call; there is no error to raise, no case to be missing and
+    no test to fail, because what is absent was never written down anywhere. Compare entry 19 - a
+    rule asserted in three documents and implemented in none - which is the same blindness from
+    the other end: there the claim existed without the code, here the code existed without half
+    of its job. Both are invisible to any audit that reads what is there rather than asking what
+    should be beside it.
+
+    A second, cheaper tell showed up in the same change: **a test fixture that stops being inert.**
+    The DM tests built their club with `addMember`, which had always been silent; the moment it
+    pushed, the fixture's own notifications landed on a phone registered later and were counted
+    against the message under test. A fixture is not neutral - it is a sequence of real commands,
+    and it has to settle its own effects before anything asserts on a recorder.
+
 30. **On the way out, the scrim must never lift before the panel it belongs to has gone.** Same
     report, same afternoon: "you can see the glitch there, whenever I click it just stucks in
     between". `RisingSheet`'s exit faded the shade over 140ms on a quadratic and moved the panel

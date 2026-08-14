@@ -111,6 +111,19 @@ Rules carried from [Notifications](../PRD/12-notifications.md) and enforced in t
   cards - which have already pushed as `poll_created` and friends - cannot ring a second time.
 - A member is buzzed at most once per message: the ordinary-message audience subtracts anybody
   mentioned, who gets the more specific "X mentioned you" instead.
+
+**Every type that writes a row also pushes, and that is enforced by one function.** Writing the
+row and scheduling the push are a single act, `notifyAndPush` - because for most of this
+project's life they were two statements and fourteen call sites only ever made the first. Join
+requests, decisions on them, adds, removals, role changes and a stranded car-group Incharge all
+filled the inbox and the badge and rang nothing at all, which meant the only way to learn
+somebody had asked to join your club was to happen to open the app. Fixed 2026-08-14.
+
+The four pushes that are still hand-written each carry something the helper deliberately does not
+model, and each says so where it lives: `dm_message` and `chat_message` write no rows, a report
+pushes immediately and without a cursor, and the announcement and mention paths carry a chat
+context. **Anything else that writes a row goes through the helper**, so the default cannot be
+half-done.
 - An approval suppresses the "you were added" notification for the same transaction.
 
 New capability this unlocks (formerly [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) "important, not blocking"): **per-user mute

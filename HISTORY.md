@@ -90,6 +90,38 @@ gateway, `pushed: 1`, ledger row `7019 = 1754 * 4 + 3`, and zero notification ro
 while the test beside it asserted 21. A number in prose next to a list that grows is a comment that
 is wrong and cannot fail, so it now says where the real count is checked.
 
+### "So push is all addressed, right?" - no, and the question was the useful part
+
+Asked to confirm it was finished, and checking properly rather than answering from the work just
+done, `dispatchPush` had five call sites and `writeNotifications` had eighteen. **Nine notification
+types wrote a row and rang nothing**: the three join requests, both decisions on them, member added,
+member removed, role changed, and a car group left without an Incharge. Fourteen call sites in all.
+
+Nothing had ever said this was intended - `TECH/06` opens by calling push "a transport added to a
+fan-out that is already specified", which reads as though every type in the catalogue arrives. The
+sharpest one is the join request: `PRD/12` rule 4 goes out of its way to stop those clearing when
+the inbox is merely opened, with the note that the founder had lost real ones, and yet nothing had
+ever told anybody that one existed. You found out by opening the app.
+
+**The fix is a pairing, not fourteen additions.** `notifyAndPush` writes the rows and schedules the
+push in one call, because the reason this happened is that the two halves were separable and so
+they got separated. What makes the class nasty is that the code which IS there is completely
+correct: `writeNotifications(...)` is a well-formed, complete-looking call, there is no error to
+raise and no test to fail, and the missing half was never written down anywhere to be checked
+against. It is entry 19 seen from the other side, and it is now `AGENTS.md` failure mode 31.
+
+**A fixture stopped being inert, which is the second lesson.** Three DM tests broke immediately -
+`expected [ 'bob-phone', 'bob-phone' ] to deeply equal [ 'bob-phone' ]`. Their `setup()` builds the
+club with `addMember`, which had always been silent; now it pushes, and because `dispatchPush`
+resolves devices at evaluation time rather than at schedule time, the fixture's own buzz landed on
+a phone registered afterwards and counted against the message under test. The fixture settles its
+own effects now, the same call `setupClub` in the phase 1 tests had been making all along.
+
+Proved live rather than only in tests: a role change through the real API pushed to the device
+(`role_changed push dispatched`, `pushed: 1`, ledger row `7072`) and wrote its row, then the role
+was put back the way it was found. 1021 server tests, three of them new and aimed squarely at the
+buzz rather than the row, since the rows had been passing throughout.
+
 ## 2026-08-14 (later) - The roster stops navigating, and a person becomes a card
 
 The founder sent a GroupMe recording and a mockup: tapping somebody in the member list should
