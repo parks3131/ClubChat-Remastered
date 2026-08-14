@@ -66,6 +66,17 @@ they cost.
     negative-offset timezones. Build dates from split components.
 22. **Confirm dialogs, file pickers, camera, clipboard, and sharing all behave differently per
     platform.** Verify each on each.
+23. **Anything that moves with the keyboard animates the rise and NEVER the fall.** The
+    keyboard is drawn on top of the app, so on the way down it hides the space it is vacating:
+    setting the new layout immediately means the keys leave and reveal a finished screen, while
+    animating it means the content crawls down behind them and arrives after they have gone.
+    React Native's own `KeyboardAvoidingView` encodes this by omission - its hide path returns
+    before configuring an animation - which is easy to copy the mechanism from and miss. Reported
+    twice from the device as "the message is dropping so slow", the second time by reintroducing
+    it while fixing something else.
+24. **A `KeyboardAvoidingView` adds `keyboardVerticalOffset` to its padding, it does not
+    subtract it.** A positive value opens a band of background between the bar and the keys.
+    Whichever direction you assume, read the arithmetic - it is four lines in the RN source.
 
 ### Realtime
 

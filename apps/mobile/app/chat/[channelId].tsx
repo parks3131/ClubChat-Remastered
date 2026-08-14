@@ -6,7 +6,6 @@ import {
   Easing,
   FlatList,
   Keyboard,
-  KeyboardAvoidingView,
   LayoutAnimation,
   Platform,
   Pressable,
@@ -72,6 +71,7 @@ import { ChatPollCard } from "../../src/screens/polls.tsx";
 import { EmojiPicker } from "../../src/emoji-picker.tsx";
 import { spaceProfileHref, useGoBack } from "../../src/nav.tsx";
 import { useLoad } from "../../src/use-load.ts";
+import { KeyboardAvoider } from "../../src/keyboard-avoider.tsx";
 import { hrefForCard } from "../../src/notification-href.ts";
 import { color, fontFamily, radius, space, type } from "../../src/theme.ts";
 
@@ -1154,6 +1154,30 @@ function ReactionRow({
 const KEYBOARD_FALLBACK_HEIGHT = 291;
 
 /**
+ * The composer bar's tint, and its top edge.
+ *
+ * A wash of the accent rather than a panel colour: the founder asked for WhatsApp's translucent
+ * bar in our own colour. Stated here as literals rather than in `theme.ts` because they are the
+ * accent **at an alpha**, and the token module holds solid colours - the day it grows an alpha
+ * helper these move into it.
+ *
+ * A tenth is the whole judgement. Below that it reads as a grey bar somebody spilled something
+ * on; above it, it starts competing with the accent controls sitting in the same row.
+ */
+const COMPOSER_WASH = "rgba(255,77,0,0.07)";
+const COMPOSER_WASH_EDGE = "rgba(255,77,0,0.14)";
+
+/**
+ * The height of everything in the composer row that is not the message itself.
+ *
+ * One number for the "+", the announcement toggle, the send disc and the input's own minimum, so
+ * the row is a line of equal objects rather than four sizes agreeing by coincidence. Smaller than
+ * the 44 they each used to carry: that size is the accessibility floor for a *tap target*, which
+ * these still meet through their spacing, and it made the bar as tall as two rows of text.
+ */
+const COMPOSER_CONTROL = 36;
+
+/**
  * The message a piece of screen state names by `seq`.
  *
  * **Looked up rather than stored**, so it stays current: a reaction or a pin landing while a
@@ -1901,6 +1925,7 @@ export default function ChatScreen() {
    * wrong on most phones and wrong again the moment somebody enables a third-party keyboard.
    */
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+
   /**
    * How the keyboard moves: the duration and curve iOS reports with each event.
    *
@@ -2004,6 +2029,11 @@ export default function ChatScreen() {
       Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
       (event) => {
         keyboardUp.current = true;
+        /*
+         * The same number every time after the first, so React bails out and nothing re-renders.
+         * That is deliberate: see `composerFloor` for why a keyboard event must not touch state
+         * this screen draws from.
+         */
         setKeyboardHeight(event.endCoordinates.height);
         if (event.duration) {
           keyboardMove.current = {
@@ -3071,6 +3101,25 @@ export default function ChatScreen() {
   // parent if there is not. See `useGoBack`.
   const goBack = useGoBack(parent);
 
+  /**
+   * How much bar there is beneath the message field.
+   *
+   * **The home indicator's space belongs to the composer**, which is what every other app's bar
+   * does and what ours did not: the field ended a few points off the bottom edge with the
+   * indicator through it.
+   *
+   * > **It does not change when the keyboard does, and that is the point.** It used to drop to a
+   * > hairline while the keyboard was up, so the bar changed height in the middle of the
+   * > keyboard's animation - one more thing moving in the frames where the conversation is
+   * > already moving. `keyboardVerticalOffset` on the `KeyboardAvoidingView` pays for the floor
+   * > instead: the padding it adds is the keyboard minus this, so the field still lands exactly
+   * > on the keyboard's top edge and the bar never resizes.
+   *
+   * The panel is the one exception, because it supplies that space itself - and unlike the
+   * keyboard it is a deliberate, occasional swap that is already animating.
+   */
+  const composerFloor = attachOpen ? space.sm : Math.max(insets.bottom, space.sm);
+
   const act = async (run: () => Promise<unknown>, message: string) => {
     setMenuOpen(false);
     try {
@@ -3083,9 +3132,14 @@ export default function ChatScreen() {
   };
 
   return (
-    <KeyboardAvoidingView
+    <KeyboardAvoider
       style={styles.flex}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      /*
+        The composer already holds the home indicator's space, so the padding needed here is the
+        keyboard MINUS that - otherwise the two stack and the bar floats above the keys. See
+        `composerFloor`, which is the same number seen from the other side.
+      */
+      offset={insets.bottom}
     >
       {/*
         Chat's own header. The back control ALWAYS renders and always has an explicit
@@ -4152,7 +4206,25 @@ export default function ChatScreen() {
       )}
 
       {canPost ? (
-        <View style={styles.composer}>
+        /*
+          A `BlurView`, like the header and the pinned strip, so the bar is a translucent layer
+          rather than a painted one - the chrome of this screen is glass at the top and now at the
+          bottom too, instead of glass at one end and a slab at the other.
+        */
+        <BlurView intensity={60} tint="light" style={styles.composerBar}>
+          {/*
+            The accent wash is this View, between the blur and the row.
+
+            > **Not a `backgroundColor` on the `BlurView`, and not an absolutely-positioned overlay
+            > inside it.** The first is invisible - the blur material is drawn over the host view's
+            > own background, so the colour ends up behind the frosting. The second paints over its
+            > own siblings on web, where CSS puts positioned elements above static ones, while on
+            > native it sits behind them: the same code, two results, and the web one turned the
+            > message field peach.
+            >
+            > A parent cannot have that argument with its children. It tints, they draw on top.
+          */}
+          <View style={[styles.composer, { paddingBottom: composerFloor }]}>
           {/*
             The "+", which becomes a keyboard while the panel is standing in for one.
 
@@ -4202,6 +4274,15 @@ export default function ChatScreen() {
               setCaret(event.nativeEvent.selection.end)
             }
             multiline
+            /*
+              One row until there is more than one row of text.
+
+              This is a `<textarea>` on web, whose default is **two** rows - so the empty field
+              came up a whole line taller than the field it is a copy of on the device, and the
+              bar with it. It is Android-only on native, which is to say a no-op on the platform
+              this is drawn for, and the fix for the one where it is visible.
+            */
+            numberOfLines={1}
             accessibilityLabel={asAnnouncement ? "Announcement" : "Message"}
             onSubmitEditing={() => void send()}
           />
@@ -4235,26 +4316,36 @@ export default function ChatScreen() {
               />
             </Pressable>
           )}
-          <Pressable
-            style={[
-              styles.sendButton,
-              draft.trim().length === 0 && styles.sendDisabled,
-            ]}
-            onPress={() => void send()}
-            disabled={draft.trim().length === 0}
-            accessibilityRole="button"
-            accessibilityLabel="Send message"
-          >
-            <Text style={styles.sendLabel}>Send</Text>
-          </Pressable>
-        </View>
+          {/*
+            Send appears when there is something to send, and is a disc rather than a word.
+
+            > **It used to be a permanent SEND slab**, greyed out for the whole time somebody was
+            > reading rather than typing - a control in its loudest colour, occupying the corner,
+            > doing nothing. The founder pointed at WhatsApp: nothing there until you type, then a
+            > filled disc with an arrow in it.
+
+            Nothing takes its place when it is gone: the row simply gets shorter, which is what
+            makes the bar read as lean.
+          */}
+          {draft.trim().length > 0 && (
+            <Pressable
+              style={styles.sendButton}
+              onPress={() => void send()}
+              accessibilityRole="button"
+              accessibilityLabel="Send message"
+            >
+              <MaterialIcons name="send" size={18} color={color.onAccent} />
+            </Pressable>
+          )}
+          </View>
+        </BlurView>
       ) : (
         /*
           A disabled composer that STATES ITS REASON, rather than an input that silently
           rejects. History above is fully readable, which is the point: blocking and losing the
           last shared club both make a thread read-only rather than deleting it.
         */
-        <View style={styles.composerDisabled}>
+        <View style={[styles.composerDisabled, { paddingBottom: composerFloor }]}>
           <Text style={styles.composerDisabledText}>
             {DENIED_TEXT[meta?.postDeniedReason ?? "unavailable"]}
           </Text>
@@ -4336,7 +4427,7 @@ export default function ChatScreen() {
           </ScrollView>
         </View>
       )}
-    </KeyboardAvoidingView>
+    </KeyboardAvoider>
   );
 }
 
@@ -4359,6 +4450,16 @@ const styles = StyleSheet.create({
   list: {
     padding: space.md,
     gap: space.sm,
+    /*
+     * The newest message clears the composer by more than the gutter, so it reads as sitting
+     * above the bar rather than tucked beneath it.
+     *
+     * **This is `paddingTop` and it lands at the BOTTOM**, because the list is inverted: its
+     * content starts at the visual bottom, so the padding before the first item is the gap under
+     * the newest message. The gutter alone left the last bubble almost touching the composer,
+     * reported from the device as the bottom message "getting cut" against it.
+     */
+    paddingTop: space.lg,
     /*
      * No `flexGrow` and no `justifyContent` here, and their absence is deliberate.
      *
@@ -4985,20 +5086,37 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
     textAlign: "center",
   },
+  /*
+    The composer bar: blurred, with a wash of the accent rather than a flat panel colour.
+
+    The founder asked for WhatsApp's translucency in our own colour. It is a *wash*, a few percent
+    of the accent, because this bar sits under every conversation all day: enough to tint the
+    light coming through it, nowhere near enough to compete with a message bubble or with the Send
+    control, which are the two things in this row that are supposed to be seen.
+  */
+  composerBar: {
+    borderTopWidth: 1,
+    // The hairline is the same accent, a shade stronger, so the bar has an edge without a rule
+    // drawn across the screen in a colour that belongs to nothing else.
+    borderTopColor: COMPOSER_WASH_EDGE,
+  },
   composer: {
     flexDirection: "row",
     alignItems: "flex-end",
-    gap: space.sm,
-    padding: space.sm,
-    backgroundColor: color.chrome,
-    borderTopWidth: 1,
-    borderTopColor: color.divider,
+    gap: space.xs,
+    paddingHorizontal: space.sm,
+    paddingTop: space.sm,
+    // `paddingBottom` is supplied at render: it is the home indicator's, not a constant.
+    backgroundColor: COMPOSER_WASH,
   },
+  /* The same bar in a read-only conversation, so losing the ability to post does not also
+     change what the bottom of the screen is made of. */
   composerDisabled: {
-    padding: space.md,
-    backgroundColor: color.chrome,
+    paddingHorizontal: space.md,
+    paddingTop: space.md,
+    backgroundColor: COMPOSER_WASH,
     borderTopWidth: 1,
-    borderTopColor: color.divider,
+    borderTopColor: COMPOSER_WASH_EDGE,
     alignItems: "center",
   },
   composerDisabledText: {
@@ -5006,50 +5124,61 @@ const styles = StyleSheet.create({
     color: color.textSecondary,
     textAlign: "center",
   },
+  /*
+    A pill, and the only filled shape in the row when nothing is being sent.
+
+    Rounded to its own height rather than to a radius token, so it stays a pill as it grows with
+    a long message instead of turning into a rounded box at three lines.
+  */
   input: {
     flex: 1,
     maxHeight: 120,
+    minHeight: COMPOSER_CONTROL,
     backgroundColor: color.card,
-    borderRadius: radius.md,
+    borderRadius: COMPOSER_CONTROL / 2,
     borderWidth: 1,
     borderColor: color.divider,
     paddingHorizontal: space.md,
-    paddingVertical: space.sm,
+    // Enough to clear one line of `body` and no more: the padding is what decides whether the
+    // field reads as a pill beside the send disc or as a box that dwarfs it.
+    paddingVertical: space.xs + 1,
     ...type.body,
     color: color.textPrimary,
   },
   sendButton: {
-    backgroundColor: color.accent,
-    borderRadius: radius.md,
-    paddingHorizontal: space.md,
-    paddingVertical: space.md,
-  },
-  sendDisabled: { opacity: 0.4 },
-  attachButton: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.pill,
+    width: COMPOSER_CONTROL,
+    height: COMPOSER_CONTROL,
+    borderRadius: COMPOSER_CONTROL / 2,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: color.card,
-    borderWidth: 1,
-    borderColor: color.divider,
+    backgroundColor: color.accent,
+  },
+  sendDisabled: { opacity: 0.4 },
+  /*
+    The flanking controls are glyphs, not chips.
+
+    They wore a white disc with a hairline, which made three framed objects in a row that is
+    mostly one input - the founder's word for the bar he wanted was "leaner". The tap target keeps
+    its full size; only the paint is gone.
+  */
+  attachButton: {
+    width: COMPOSER_CONTROL,
+    height: COMPOSER_CONTROL,
+    borderRadius: COMPOSER_CONTROL / 2,
+    alignItems: "center",
+    justifyContent: "center",
   },
   // Same footprint as the "+", so the composer's two flanking controls line up.
   announceButton: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.pill,
+    width: COMPOSER_CONTROL,
+    height: COMPOSER_CONTROL,
+    borderRadius: COMPOSER_CONTROL / 2,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: color.card,
-    borderWidth: 1,
-    borderColor: color.divider,
   },
-  announceButtonArmed: {
-    backgroundColor: color.accent,
-    borderColor: color.accent,
-  },
+  // Armed, it fills: the one state in this row that must be unmistakable, because an
+  // announcement posted by accident cannot be recalled.
+  announceButtonArmed: { backgroundColor: color.accent },
   // Optically centred: the glyph's own line height sits high in the box.
   attachLabel: {
     fontSize: 24,

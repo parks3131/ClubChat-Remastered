@@ -71,6 +71,7 @@ restating it wrongly.
 | 06 | [Composer](06-composer.md) | The form you fill in to make a thing: sections separated by air, the action in the header, and the wheel |
 | 07 | [Reactions](07-reactions.md) | The pills under a message and the sheet behind them: tap to act, hold to ask who, and a scrim that stays put |
 | 08 | [Attachment panel](08-attachment-panel.md) | What the composer's "+" opens, in the keyboard's place: one control with two modes, and a swap with no frame in between |
+| 09 | [Chat composer](09-chat-composer.md) | The bar you write in: a wash of the accent, glyphs rather than chips, and a send that only exists when there is something to send |
 
 **Written as surfaces are worked on, not backfilled in a pass.** A spec written by reading code
 rather than by looking at a device starts out wrong, and a directory of unverified documents is

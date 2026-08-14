@@ -13,6 +13,62 @@ Newest first.
 
 ---
 
+## 2026-08-14 - The composer, and three ways to get the keyboard wrong
+
+The founder sent WhatsApp screenshots and a running commentary from his phone. Four things came
+out of it, and the first three were quick.
+
+**The newest message clears the bar.** It sat almost against the composer - "getting cut" - so the
+inverted list's content padding grew at the visual bottom, which is `paddingTop` on an inverted
+list and reads wrong every time.
+
+**A wash of the accent instead of a panel colour**, over the blur the header already uses, so both
+ends of the screen are made of the same material. Two dead ends first, both worth keeping: a
+`backgroundColor` on the `BlurView` is invisible, because the blur material draws over its own
+host's background; and an absolutely-positioned overlay inside it covers its own siblings on web,
+where CSS paints positioned elements above static ones, while sitting behind them on native. The
+tint is now the row's parent, which cannot have that argument with its children.
+
+**The bar went lean.** One 36pt size for every control, the white disc-and-hairline around the
+flanking glyphs gone, the field a pill rounded to its own height, and the permanent greyed-out
+SEND slab replaced by an accent disc that exists only when there is something to send. The bar
+also took the home indicator's space, which every other app's bar carries and ours did not.
+
+### Then the keyboard, which took four rounds
+
+**Round one: the conversation dropped slowly behind the departing keyboard.** Three causes, all
+added by this session's earlier work: a `keyboardVisible` state that re-rendered the whole chat
+screen on every keyboard event, a second `LayoutAnimation` on top of `KeyboardAvoidingView`'s, and
+the bar changing height mid-animation. All three removed; the floor became constant and
+`keyboardVerticalOffset` paid for it.
+
+**Round two: a band of background between the bar and the keys.** `KeyboardAvoidingView` computes
+its padding as `keyboardHeight + keyboardVerticalOffset`, so the offset that was meant to *remove*
+the floor added a second one. Sign error, four lines of RN source away, now
+[pitfall 24](SPEC/TECH/14-engineering-pitfalls.md).
+
+**Round three: the rise was sluggish and RN offers no way to change it** - it animates for exactly
+as long as the keyboard says, in both directions. So `KeyboardAvoider` replaced it: the same
+mechanism, minus an `await` between the event and the state, plus a duration per direction, and
+the state held inside the component so a keyboard event re-renders one `View` rather than a chat
+screen.
+
+**Round four, the one worth the entry: the fall must not be animated at all.** Copying RN's
+mechanism without copying its asymmetry brought back round one's symptom, reported in the same
+words. RN's hide path sets the padding and returns *before* configuring an animation, and that is
+correct: the keyboard is drawn on top of the app, so on the way down it hides the space it is
+vacating. Set the layout immediately and the keys leave to reveal a finished screen; animate it
+and the content crawls down behind them. Now [pitfall 23](SPEC/TECH/14-engineering-pitfalls.md),
+and stated in the file itself, because this was the second time in one night.
+
+**What the rise still is not.** It animates the whole screen's layout, which is the mechanism
+rather than the number - WhatsApp moves the conversation and the bar as a transform on the UI
+thread and never resizes its list. Recorded here rather than done: it changes this screen's
+geometry, and every step of it needs a device the agent cannot drive. The founder accepted the
+current feel for tonight.
+
+---
+
 ## 2026-08-14 - The "+" trades places with the keyboard
 
 The attach menu opened above the composer, which pushed the composer up the screen and left the

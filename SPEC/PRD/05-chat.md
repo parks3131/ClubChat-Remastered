@@ -172,6 +172,9 @@ second is a feature the whole product would have to bend around. Threads remain 
     available, plus admin-gated create actions for whatever the scope supports (club: Poll,
     Event; race: Poll; Eboard: Poll, Meeting).
 
+    **Send appears when there is something to send**, and is absent rather than disabled the rest
+    of the time.
+
     **It opens in the keyboard's place, and the "+" becomes a keyboard while it is there.**
     Sending something and typing something are two modes of the same strip of screen, so opening
     one closes the other and the way back is the control you came through. Nothing above the
