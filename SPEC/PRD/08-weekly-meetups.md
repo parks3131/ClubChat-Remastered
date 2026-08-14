@@ -84,9 +84,15 @@ field and why one should not be added back.*
     morning's run is still nudgeable this evening, because "the day has been" is what a person
     means by it and a bell that died at 06:31 would be the more surprising rule.
 16. **A refusal says when the bell comes back**, not merely that it is unavailable. "You cannot"
-    gets tapped again a minute later; "not until 10:00" does not. The week carries the same time,
-    so the control renders **disabled with the hour on it** rather than looking live and failing
-    on tap.
+    gets tapped again a minute later; "not until 10:00" does not.
+16a. **The bell is accent-coloured while it can be rung and grey once it has been - and the grey
+    one is still pressable.** Pressing it says somebody has already nudged this meetup and when it
+    comes back. A spent control that does nothing when tapped is indistinguishable from a broken
+    one: the admin learns only that the app ignored them, which is why it is grey rather than
+    gone and pressable rather than dead.
+16b. **Tapping the notification opens the club's week.** A nudge that buzzes a phone and goes
+    nowhere when tapped is the failure this rule exists to name; it happened once, on 2026-08-14,
+    and [Notifications](12-notifications.md) carries the general form.
 17. **A nudge posts nothing to chat.** The point is to reach a phone that is not currently looking
     at the app, and rule 11 keeps meetups out of the conversation. Putting one there would be a
     separate decision.

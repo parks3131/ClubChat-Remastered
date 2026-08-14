@@ -188,6 +188,11 @@ export default function WeeklyMeetupsScreen() {
                     isAdmin={isAdmin}
                     bellBusy={nudging}
                     onNudge={() => void nudge(meetup.id)}
+                    onSpent={(at) =>
+                      setNudgeNote(
+                        `Someone already nudged this meetup. You can nudge it again at ${formatTimeOfDay(at)}.`,
+                      )
+                    }
                     onLongPress={(anchor) => {
                       longPressFeedback();
                       setMenuFor({ day: day.date, meetup, anchor });
@@ -255,12 +260,15 @@ function MeetupRow({
   isAdmin,
   bellBusy,
   onNudge,
+  onSpent,
   onLongPress,
 }: {
   meetup: Meetup;
   isAdmin: boolean;
   bellBusy: boolean;
   onNudge: () => void;
+  /** Tapped while grey. Carries the time it comes back, so the screen can say it. */
+  onSpent: (blockedUntil: string) => void;
   onLongPress: (anchor: PressAnchor) => void;
 }) {
   const ref = useRef<View>(null);
@@ -270,7 +278,6 @@ function MeetupRow({
    */
   const blockedUntil = meetup.nudgeBlockedUntil;
   const cooling = blockedUntil !== null && Date.parse(blockedUntil) > Date.now();
-  const bellOff = cooling || bellBusy || !meetup.nudgeable;
 
   return (
     <Pressable
@@ -310,23 +317,30 @@ function MeetupRow({
           {cooling && (
             <Text style={styles.bellTime}>{formatTimeOfDay(blockedUntil!)}</Text>
           )}
+          {/*
+            Grey, and still pressable.
+
+            A spent bell that does nothing when tapped is indistinguishable from a broken one -
+            the admin learns only that the app ignored them. Pressing it says somebody has already
+            nudged and until when, which is the whole reason it is grey rather than gone.
+          */}
           <Pressable
-            onPress={onNudge}
-            disabled={bellOff}
+            onPress={() => (cooling ? onSpent(blockedUntil!) : onNudge())}
+            disabled={bellBusy}
             hitSlop={space.sm}
-            style={[styles.bell, bellOff && styles.bellOff]}
+            style={[styles.bell, cooling && styles.bellOff]}
             accessibilityRole="button"
-            accessibilityState={{ disabled: bellOff }}
             accessibilityLabel={
               cooling
-                ? `Nudging this meetup is unavailable until ${formatTimeOfDay(blockedUntil!)}`
+                ? `Already nudged. Nudging this meetup is unavailable until ${formatTimeOfDay(blockedUntil!)}`
                 : `Nudge the club about the meetup at ${meetup.location}`
             }
           >
             <MaterialIcons
               name="notifications-active"
               size={18}
-              color={bellOff ? color.textSecondary : color.accent}
+              /* Orange while it can be rung, grey once it has been. */
+              color={cooling ? color.textSecondary : color.accent}
             />
           </Pressable>
         </View>

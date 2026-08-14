@@ -176,3 +176,13 @@ they cost.
     failed on `CREATE SCHEMA IF NOT EXISTS "drizzle"` six seconds after the readiness script had
     printed `postgres ready on :5432`. Wait on the healthcheck - `docker compose up --wait` - and
     treat a port probe as a diagnostic, never as the gate. *(2026-08-14.)*
+35. **A `| undefined` return silently defeats switch exhaustiveness.** A switch over a union
+    whose function returns `T | undefined` compiles fine with a case missing - control falls out
+    of the switch and returns `undefined`, which is a legal value. `notification-href.ts` claimed
+    in its own header that a new target kind "becomes a compile error rather than a row that
+    silently navigates nowhere", and it did not: Nudge's target was added, no case was written,
+    and the notification reached a phone and went nowhere when tapped. Assign the narrowed value
+    to `never` after the switch, which is what actually enforces it. *(2026-08-14.)*
+36. **An exhaustive switch still says nothing about whether the string it returns is real.** The
+    `never` trick proves every case exists; it cannot prove `/clubs/${id}/typo` is a screen. Where
+    the returned value is a route, sweep every case in a test as well. *(Same day, same file.)*

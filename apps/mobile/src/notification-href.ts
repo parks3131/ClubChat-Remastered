@@ -50,6 +50,9 @@ export function hrefFor(target: NotificationTarget): string | undefined {
       return `/meetings/${target.meetingId}`;
     case 'news':
       return `/clubs/${target.clubId}/news`;
+    // The club's week. A nudge is about one meetup, but a meetup is read in its week.
+    case 'meetups':
+      return `/clubs/${target.clubId}/weekly-meetups`;
     // The Reports tab of that channel's Highlights, opened ON that tab rather than on Pinned -
     // the reviewer was sent here by a report, so landing them anywhere else is a second tap.
     case 'chat_reports':
@@ -76,6 +79,21 @@ export function hrefFor(target: NotificationTarget): string | undefined {
        */
       return undefined;
   }
+
+  /*
+   * The exhaustiveness this file's header claims, actually enforced.
+   *
+   * > **The claim was false until 2026-08-14.** A `string | undefined` return makes a missing
+   * > case fall out of the switch as `undefined`, which is a legal return - so `meetups` was
+   * > added to `NotificationTarget`, no case was written for it, nothing failed to compile, and
+   * > the notification arrived on a phone and went nowhere when tapped. That is precisely the
+   * > "row that silently navigates nowhere" the header says cannot happen.
+   *
+   * Assigning to `never` is what makes it true: a handled union narrows to `never` here, and an
+   * unhandled member does not.
+   */
+  const unhandled: never = target;
+  return unhandled;
 }
 
 /** Where the inbox lives, for the push path's `inbox` fallback. */

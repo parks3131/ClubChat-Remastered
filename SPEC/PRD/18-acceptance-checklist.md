@@ -127,6 +127,10 @@ A remaster is at parity when every line below passes on **iOS, Android, and web*
 - [ ] A meetup whose day has been shows **no bell at all**, and the nudge is refused by the
       server - **attempted directly, not inferred from the control being hidden**.
 - [ ] Only the meetup actually cooling down shows a time; the others show a live bell.
+- [ ] The bell is accent-coloured before and grey after, and **pressing the grey one says who is
+      being waited on and until when** rather than doing nothing.
+- [ ] **Tapping the nudge notification opens that club's week** - from the inbox row AND from the
+      push banner.
 - [ ] Edit and Remove are reached by a long press, and the press buzzes.
 
 ### Notifications
