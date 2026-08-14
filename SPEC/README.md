@@ -114,6 +114,7 @@ survives the number changing.
 | 07 | [Reactions](DESIGN/07-reactions.md) | The pills under a message and the sheet behind them: tap to act, hold to ask who |
 | 08 | [Attachment panel](DESIGN/08-attachment-panel.md) | What the composer's "+" opens, in the keyboard's place, and the swap between them |
 | 09 | [Chat composer](DESIGN/09-chat-composer.md) | The bar you write in, and how it moves with the keyboard |
+| 10 | [Member card](DESIGN/10-member-card.md) | Who somebody is, raised over the roster that asked: the panel travels, the shade stays put |
 
 Written as surfaces are worked on rather than backfilled in a pass, since a spec written by reading
 code instead of by looking at a device starts out wrong. See [`DESIGN/README.md`](DESIGN/README.md)

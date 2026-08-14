@@ -54,6 +54,12 @@ surface that happens to share the catalog ([Chat](../PRD/05-chat.md) rule R6).
    [Design system](../TECH/13-design-system.md) as an obligation on every bottom sheet, because it
    is a property of the platform's `Modal` rather than of this surface.
 
+   **The emoji picker behind the strip's "+" broke this until 2026-08-14** - it still had
+   `animationType="slide"` and a dark backdrop, so the shade slid with it, which is what the
+   founder was pointing at when he asked for WhatsApp's behaviour. All three sheets now share one
+   implementation (`useRisingSheet`), so this rule is enforced by construction rather than by
+   whoever remembers to read it.
+
 7. **Your own row says it is yours and removes on tap.** Which makes the sheet the one place a
    reaction can be taken back while looking at what you actually picked. Nobody else's row is
    pressable - a row that looks tappable and does nothing is worse than one that plainly does not.

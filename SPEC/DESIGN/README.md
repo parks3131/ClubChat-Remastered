@@ -72,6 +72,7 @@ restating it wrongly.
 | 07 | [Reactions](07-reactions.md) | The pills under a message and the sheet behind them: tap to act, hold to ask who, and a scrim that stays put |
 | 08 | [Attachment panel](08-attachment-panel.md) | What the composer's "+" opens, in the keyboard's place: one control with two modes, and a swap with no frame in between |
 | 09 | [Chat composer](09-chat-composer.md) | The bar you write in: a wash of the accent, glyphs rather than chips, and a send that only exists when there is something to send |
+| 10 | [Member card](10-member-card.md) | Who somebody is, raised over the list that asked: a panel that travels while the shade stays put, and a menu that is the server's answer |
 
 **Written as surfaces are worked on, not backfilled in a pass.** A spec written by reading code
 rather than by looking at a device starts out wrong, and a directory of unverified documents is

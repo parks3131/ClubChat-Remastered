@@ -678,3 +678,38 @@ that records how to recognise the class._
     perfectly valid and merely silent. The tell is a gesture handler on a parent whose child has
     any press handler of its own, and the only way to see it is to make the gesture on a device -
     which is why "verify on each platform separately" is section 2.3 rule 6 rather than advice.
+
+29. **iOS presents ONE `Modal` per view controller and refuses the second in silence, so a second
+    modal opened from inside a modal does not exist.** Symptom, reported from the phone on
+    2026-08-14: a member card whose "..." opened nothing, whose shared-club faces opened nothing,
+    and whose only working control was the one that navigated instead of opening something -
+    "pretty much not working". Root cause: the menu, the confirmation and the clubs list were
+    each a `<Modal>` rendered as a **sibling** of the card's own `<Modal>`. Nothing throws,
+    nothing logs, and the state that says the menu is open is perfectly correct.
+
+    **Rule: an overlay raised from inside a modal must be part of that modal, not a new one.**
+    `RisingSheet` takes an `overlay` prop for exactly this, and `ContextMenu` and `ConfirmDialog`
+    take `hosted`, which swaps their own `Modal` wrapper for an absolute-fill view. Window
+    coordinates still line up, because the host modal fills the screen - which is the reason
+    `ContextMenu` reached for a modal in the first place, and worth reading its note before
+    "simplifying" either.
+
+    **How to recognise the class, and why web is the trap here.** react-native-web renders a
+    `Modal` as a plain positioned element and stacks them happily, so every one of these worked
+    in a browser and the whole feature looked finished. This is failure mode 28's shape again -
+    web is where this project's fastest feedback lives and exactly where a native-only rule is
+    invisible - with the twist that here web showed a *working* control rather than a no-op.
+    **The iOS Simulator is enough to catch it**: it is the same UIKit, it takes a deep link
+    (`clubchat://clubs/<id>/members`), and `cliclick` drives it, but note that clicks only land
+    when the Simulator is the frontmost app.
+
+30. **On the way out, the scrim must never lift before the panel it belongs to has gone.** Same
+    report, same afternoon: "you can see the glitch there, whenever I click it just stucks in
+    between". `RisingSheet`'s exit faded the shade over 140ms on a quadratic and moved the panel
+    over 160ms on a **cubic** - and `Easing.in(Easing.cubic)` barely moves for its first half, so
+    a third of the way through the exit the panel had travelled a quarter of its distance with
+    the dimming already gone. What that looks like is a card frozen halfway up an ordinary list.
+    **Rule: the shade is the last thing on screen** - give it the longer duration and the steeper
+    curve, and give the panel the gentler one. The entrance is deliberately the other way round.
+    How to recognise the class: two animations of the same gesture with different durations AND
+    different easings, where only the pairing at the endpoints was ever checked.

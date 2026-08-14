@@ -10,11 +10,12 @@
  * built from `<Action>` cannot ship without a label because the prop is required.
  */
 
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentProps, ComponentType, ReactNode } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  Easing,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -247,6 +248,7 @@ export function ConfirmDialog({
   dismissLabel = 'Cancel',
   onConfirm,
   onCancel,
+  hosted = false,
 }: {
   title: string;
   body: string;
@@ -254,9 +256,19 @@ export function ConfirmDialog({
   dismissLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /**
+   * Draw without a `Modal` of this dialog's own, for a caller already inside one.
+   *
+   * Same reason as `ContextMenu`'s: iOS presents one modal per view controller and refuses the
+   * second in silence, so a confirmation raised from inside a panel belongs to that panel's
+   * modal - `RisingSheet`'s `overlay` - rather than being a new one.
+   */
+  hosted?: boolean;
 }) {
+  const Host = hosted ? HostedOverlay : ConfirmDialogModal;
+
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={onCancel}>
+    <Host onDismiss={onCancel}>
       <View style={styles.pickerBackdrop}>
         <Pressable
           style={styles.pickerScrim}
@@ -283,6 +295,21 @@ export function ConfirmDialog({
           </View>
         </View>
       </View>
+    </Host>
+  );
+}
+
+/** The dialog's own modal, for the ordinary case where nothing else is presented. */
+function ConfirmDialogModal({
+  children,
+  onDismiss,
+}: {
+  children: ReactNode;
+  onDismiss: () => void;
+}) {
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onDismiss}>
+      {children}
     </Modal>
   );
 }
@@ -1083,6 +1110,202 @@ export function SearchField({
 }
 
 /**
+ * A panel that rises from the bottom edge while the screen behind it dims in place.
+ *
+ * **The two halves are animated separately, and that is the whole point of this component.**
+ *
+ * > `animationType="slide"` on a `Modal` translates the WHOLE modal, scrim included, so the
+ * > dimming arrives as a shaded band sweeping up the screen with a hard edge across the middle of
+ * > whatever is behind it - reported from the device on 2026-08-13 as "the shade going up and
+ * > down". What every other app does is dim where it stands and move only the panel.
+ *
+ * So the modal itself animates nothing and these two values do the work: `dim` fades the scrim in
+ * place, `rise` slides the panel up from below its own bottom edge. Both run on the native driver,
+ * which keeps them smooth while whatever is behind is still settling.
+ *
+ * **The panel is measured rather than given a height**, because it hugs its content: a card about
+ * a person and a list of thirty reactors are different distances from off-screen, and a constant
+ * would make the short one crawl and the tall one snap. It is invisible until measured, so it
+ * never appears at its resting place for the one frame before the animation knows its distance.
+ *
+ * `children` is a function so that anything inside can dismiss with the exit animation rather than
+ * by yanking the panel off screen; `requestClose` is the same exit for a caller that decides from
+ * the outside that there is nothing left to show.
+ */
+export function RisingSheet({
+  children,
+  overlay,
+  onDismiss,
+  requestClose = false,
+  label = 'Close',
+}: {
+  children: (close: () => void) => ReactNode;
+  /**
+   * Anything that has to draw OVER the panel and cover the whole screen: a menu, a confirmation,
+   * a second list. Rendered inside this component's own modal, as a sibling of the panel.
+   *
+   * > **This exists because of iOS, and it is not a convenience.** A `Modal` rendered as a
+   * > SIBLING of this one - the obvious way to write a menu that belongs to a panel - never
+   * > appears on iOS. Only one modal can be presented per view controller, so the second is
+   * > silently refused; on 2026-08-14 that shipped as a card whose "..." did nothing, whose club
+   * > faces did nothing, and whose only working control was the one that navigated instead of
+   * > opening something. Web showed all of it working, because a browser has no such rule.
+   *
+   * So anything above this panel goes HERE, inside the one modal, and the components that draw it
+   * take a `hosted` prop that skips their own `Modal` wrapper. Window coordinates still line up:
+   * this modal fills the screen, so an absolutely-positioned child of it shares the window's
+   * coordinate system, which is the reason `ContextMenu` reached for a modal in the first place.
+   */
+  overlay?: ReactNode;
+  /** Called once the exit animation has finished, never before it. */
+  onDismiss: () => void;
+  /** Flip to true to play the exit from outside - "the thing this was about is gone". */
+  requestClose?: boolean;
+  /** What the scrim announces to a screen reader as the way out. */
+  label?: string;
+}) {
+  const insets = useSafeAreaInsets();
+  const { dim, rise, sheetHeight, setSheetHeight, close } = useRisingSheet(onDismiss);
+
+  useEffect(() => {
+    if (requestClose) close();
+  }, [requestClose, close]);
+
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={close}>
+      <View style={styles.risingBackdrop}>
+        {/*
+          The scrim is a sibling filling the screen, never a wrapper: a Pressable around the panel
+          would put every row inside another press target, which is failure mode 17.
+        */}
+        <Animated.View
+          style={[styles.risingScrim, { opacity: dim }]}
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+        />
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={close}
+          accessibilityRole="button"
+          accessibilityLabel={label}
+        />
+        {/* The home indicator is the phone's, not ours: the last row stops above it. */}
+        <Animated.View
+          onLayout={(event) => setSheetHeight(event.nativeEvent.layout.height)}
+          style={[
+            styles.risingSheet,
+            {
+              paddingBottom: insets.bottom + space.sm,
+              opacity: sheetHeight === 0 ? 0 : 1,
+              transform: [
+                {
+                  translateY: rise.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [sheetHeight, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          {/* The grabber says "this came from the edge" before a word of it has been read. */}
+          <View style={styles.risingGrabber} />
+          {children(close)}
+        </Animated.View>
+        {/* Last in the tree, so it draws over the panel rather than inside it. */}
+        {overlay}
+      </View>
+    </Modal>
+  );
+}
+
+/**
+ * The motion behind `RisingSheet`, on its own, for a panel that draws its own shell.
+ *
+ * Chat's reactor sheet is the other caller: it had all of this inline first, and its own layout is
+ * elaborate enough that sharing the *values* rather than the wrapper is the smaller change. What
+ * matters is that the durations, the easings and the measure-then-travel trick have one definition
+ * - two panels rising at different speeds is exactly the kind of drift nobody files a bug about
+ * and everybody feels.
+ */
+export function useRisingSheet(onDismiss: () => void) {
+  const dim = useRef(new Animated.Value(0)).current;
+  const rise = useRef(new Animated.Value(0)).current;
+  const [sheetHeight, setSheetHeight] = useState(0);
+
+  useEffect(() => {
+    Animated.timing(dim, {
+      toValue: 1,
+      duration: 160,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [dim]);
+
+  useEffect(() => {
+    if (sheetHeight === 0) return;
+    Animated.timing(rise, {
+      toValue: 1,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [rise, sheetHeight]);
+
+  /**
+   * Leave the way it arrived, then unmount.
+   *
+   * The parent drops this the moment it is told to, so the exit has to finish first - otherwise
+   * the scrim vanishes in one frame, which is the same jolt the entrance had.
+   *
+   * > **The shade must never lift before the panel has gone**, and getting that wrong is what the
+   * > founder reported from his phone on 2026-08-14 as "whenever I click, it just stucks in
+   * > between". The exit ran the shade out in 140ms on a quadratic and the panel in 160ms on a
+   * > **cubic** - and a cubic-in curve barely moves for its first half, so a third of the way
+   * > through the panel had travelled a quarter of its distance while the dimming was already
+   * > essentially gone. What you see is a card hanging halfway up a perfectly normal-looking
+   * > list, which reads as a frozen screen rather than as an animation.
+   *
+   * So the panel now leaves on the gentler curve and the shade on the steeper one: the dimming is
+   * the LAST thing on screen, every time. The entrance is deliberately the other way round -
+   * shade first, then the panel arrives into an already-dimmed screen.
+   *
+   * > **The fix is the ORDER, not the duration, and the first attempt confused the two.** Slowing
+   * > the exit to 200/220ms did fix the overlap and made every sheet in the app feel sluggish -
+   * > reported immediately, about the reactions sheet, which shares this hook and had been fine
+   * > for a day. The exit is back to its original length; only the curves changed places. If this
+   * > ever needs adjusting again, move the easings, and leave the clock alone.
+   */
+  const closing = useRef(false);
+  const close = useCallback(() => {
+    // Once only. The scrim can be tapped twice in the time the exit takes, and `requestClose`
+    // re-fires its effect whenever the caller hands down a fresh `onDismiss` - either would
+    // restart the animation from wherever it had got to, which reads as a stutter on the way out.
+    if (closing.current) return;
+    closing.current = true;
+    Animated.parallel([
+      Animated.timing(dim, {
+        toValue: 0,
+        // Ten milliseconds behind the panel, so the shade is last off screen by a hair rather
+        // than by a beat. Any longer and the whole app feels like it is thinking about it.
+        duration: 170,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(rise, {
+        toValue: 0,
+        duration: 160,
+        easing: Easing.in(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start(() => onDismiss());
+  }, [dim, rise, onDismiss]);
+
+  return { dim, rise, sheetHeight, setSheetHeight, close };
+}
+
+/**
  * A bottom sheet of choices, and its scrim.
  *
  * **An in-app sheet rather than a platform `Alert`.** A confirmation dialog can report success,
@@ -1213,12 +1436,22 @@ export function ContextMenu({
   anchor,
   preview,
   onDismiss,
+  hosted = false,
 }: {
   items: ReadonlyArray<ContextMenuItem>;
   anchor: PressAnchor;
   /** The pressed row, redrawn to be lifted. Omit and the menu opens alone at the anchor. */
   preview?: ReactNode;
   onDismiss: () => void;
+  /**
+   * Draw without a `Modal` of this component's own, for a caller that is already inside one.
+   *
+   * **iOS presents one modal per view controller and silently refuses the second**, so a menu
+   * opened from inside another modal has to be part of that modal rather than a new one - see the
+   * `overlay` prop on `RisingSheet`, which is where a hosted menu belongs. The host must fill the
+   * screen, or the window coordinates this positions itself with will not line up.
+   */
+  hosted?: boolean;
 }) {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
@@ -1285,9 +1518,14 @@ export function ContextMenu({
    *
    * `animationType="none"` because the spring below is the animation; letting the Modal fade as
    * well would be two of them fighting over the same 300ms.
+   *
+   * A `hosted` caller supplies that root itself, because it is already inside a modal and a
+   * second one would never be presented at all - see the prop's own note.
    */
+  const Host = hosted ? HostedOverlay : ContextMenuModal;
+
   return (
-    <Modal visible transparent animationType="none" onRequestClose={onDismiss}>
+    <Host onDismiss={onDismiss}>
       {/*
         The blur and the dismiss target are the same layer. A separate transparent Pressable over
         the blur would work equally well and is one more view in a tree that is already an
@@ -1353,8 +1591,34 @@ export function ContextMenu({
           </Pressable>
         ))}
       </Animated.View>
+    </Host>
+  );
+}
+
+/**
+ * The two roots an overlay can have: its own modal, or its caller's.
+ *
+ * Written as components rather than as a ternary around the whole tree, so the markup between
+ * them cannot drift - the reason a hosted menu exists at all is that two copies of an overlay
+ * diverge, and one of them is only ever seen on a platform nobody is currently looking at.
+ */
+function ContextMenuModal({
+  children,
+  onDismiss,
+}: {
+  children: ReactNode;
+  onDismiss: () => void;
+}) {
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={onDismiss}>
+      {children}
     </Modal>
   );
+}
+
+/** Fills whatever already covers the screen. See `RisingSheet`'s `overlay`. */
+function HostedOverlay({ children }: { children: ReactNode; onDismiss: () => void }) {
+  return <View style={StyleSheet.absoluteFill}>{children}</View>;
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -1843,6 +2107,37 @@ const styles = StyleSheet.create({
 
   // Explicit edges rather than `StyleSheet.absoluteFillObject`, which this React Native version
   // does not declare on the type.
+  /*
+    `RisingSheet`. The dimming is its own layer rather than a colour on the backdrop: it has to be
+    able to fade on its own, since the panel slides and the shade does not, and the two sharing a
+    view is precisely what made the dimming travel up the screen with the panel.
+  */
+  risingBackdrop: { flex: 1, justifyContent: 'flex-end' },
+  risingScrim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  risingSheet: {
+    maxHeight: '85%',
+    backgroundColor: color.card,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    paddingHorizontal: space.md,
+    paddingTop: space.sm,
+    gap: space.sm,
+  },
+  risingGrabber: {
+    alignSelf: 'center',
+    width: 36,
+    height: 4,
+    borderRadius: radius.pill,
+    backgroundColor: color.fallback,
+  },
+
   sheetBackdrop: {
     position: 'absolute',
     top: 0,

@@ -13,6 +13,134 @@ Newest first.
 
 ---
 
+## 2026-08-14 (later) - The roster stops navigating, and a person becomes a card
+
+The founder sent a GroupMe recording and a mockup: tapping somebody in the member list should
+raise their profile from the bottom edge over the dimmed list, "as similar effect like if we
+reacting someone". The scope was cut mid-conversation to exactly that - club roster only, with the
+DM entry point, Mute, Clear chat and Report explicitly left for a later pass.
+
+**Two mismatches were worth naming before building.** The mockup was not the built screen -
+`/users/:id` has a full-width "Send message" and offers **Ban**, not the mockup's "Remove from
+club" - so it was read as a target rather than as something to tweak. And the DM profile screen's
+own header comment rules out "Clear history" and "Report a concern" in as many words, which the
+requested three-dot menu reverses; his call, and it now means the two menus differ until the DM
+side catches up.
+
+**The motion was extracted rather than copied.** `ReactorSheet` already had the split-animation
+entrance and the war story behind it - `animationType="slide"` drags the scrim up with the panel,
+which reached the device as "the shade going up and down" - so the durations, easings and the
+measure-then-travel trick moved into `useRisingSheet`, and `RisingSheet` is that hook plus the
+shell. Chat's sheet now takes its motion from the same place. The extraction was deliberately
+shaped as a hook and not only a component: swapping the reactor's shell would have meant JSX
+surgery across 115 lines of a 5,700-line file, and every intermediate save on that path is a red
+screen on the phone in the founder's hand (failure modes 22 and 26).
+
+Two guards went in with it. `close()` is once-only, because the scrim can be tapped twice inside
+the exit and a caller handing down a fresh `onDismiss` re-fires the effect - either restarts the
+animation from wherever it had got to. And the button whose rectangle anchors the menu is held in
+a **ref, not state**: a `ref` callback that calls `setState` detaches with null and re-attaches on
+every render, which is an infinite loop rather than a style preference.
+
+`SharedClubsBlock` moved out of the profile screen into `member-card.tsx` and is imported back,
+so the two surfaces cannot drift. It grew an optional `onOpen`: the full screen opens the list, the
+card does not, because a panel opened from inside a panel is a stack somebody has to unwind.
+
+### What the smoke test found that reading would not have
+
+**"You're both in Binghamton Running Club and these other clubs" - about you and yourself.**
+Tapping your own row opened a card whose shared-clubs block intersected your clubs with your own
+and answered all of them. True on the full profile screen for as long as it has existed, and
+invisible there because nobody navigates to their own profile from a roster; one tap from every
+admin now. The block is absent on your own card.
+
+**A banned row announced "Open profile, or long press for options" and opened nothing.** The label
+was built from whether the row had actions, never from whether it had a destination -
+`profileHref` answers null for a banned person, since they share no club with the viewer any more.
+Pre-existing, and made worse by a card that would otherwise have looked like the thing that failed.
+
+Both writes were proved against the database rather than against the screen: Remove left one
+membership row where there had been two, Ban left a `club_bans` row plus a Banned section reading
+"banned by Rita Owner", and the club chat carried the system message for each. The reactions sheet
+was re-tested after the refactor, including the path where removing the last reaction closes it.
+
+Verified on web only. The nested modals - menu over card, confirmation over card - are the part a
+browser cannot vouch for, and that is written into the surface spec as unverified rather than
+implied to be done.
+
+### The device answered within the hour, and web had been lying
+
+"Nothing is working on the screen other than the message button." The "..." opened nothing, the
+club faces opened nothing, and there was a glitch where it "just stucks in between".
+
+**One cause, not three.** Every control that failed opened a second overlay; the one that worked
+navigated instead. **iOS presents one modal per view controller and refuses the second in
+silence**, and the menu, the confirmation and the clubs list were each a `Modal` rendered as a
+sibling of the card's own. Nothing throws and the state is correct - the view simply never
+appears. react-native-web stacks modals happily, so the browser pass had shown all of it working;
+this is failure mode 28's shape with a crueller twist, since web showed a working control rather
+than a no-op. Both are now `AGENTS.md` failure mode 29.
+
+The repair is structural: `RisingSheet` grew an `overlay` slot rendered inside its own modal, and
+`ContextMenu` and `ConfirmDialog` grew a `hosted` mode that swaps their `Modal` wrapper for an
+absolute-fill view. Window coordinates still line up because the host modal fills the screen -
+which is the reason `ContextMenu` reached for a modal in the first place. The markup is shared
+rather than forked, through two tiny host components, because two copies of an overlay diverge
+and one of them is only ever seen on the platform nobody is looking at.
+
+**The shared-clubs faces are tappable again**, which the first pass had removed on the reasoning
+that a panel inside a panel is a stack to unwind. The block has looked pressable everywhere else
+in the product since it shipped; that argument lost to the report.
+
+**And the "stuck in between" was real, and it was ours.** The exit faded the shade in 140ms on a
+quadratic and moved the panel in 160ms on a **cubic**, and a cubic-in curve barely moves for its
+first half - so a third of the way through, the panel had travelled a quarter of its distance
+with the dimming already gone. His video has the frame: the card halfway up a fully bright roster.
+The panel now leaves on the gentler curve and the shade on the steeper, longer one, so the
+dimming is the last thing on screen. Failure mode 30, and it applies to the reactions sheet too,
+which has shared this exit since the morning.
+
+### Verified on the Simulator, which turned out to be enough
+
+Rather than hand him another broken build, the app was built for the Simulator and driven there:
+deep link to the roster, tap a member, open the menu, open the clubs list, cancel a ban, then make
+one - proved against the database, with the exit recorded and read frame by frame to confirm the
+shade now outlives the panel. Two things worth keeping: `cliclick` only lands when the Simulator
+is frontmost, which cost several "the tap did nothing" rounds; and a drag on a roster row is a
+long press, which opened the destructive menu on a real club and was dismissed without touching it.
+
+A sweep for the same trap elsewhere found none: `PhotoViewer` is an absolutely-positioned view
+rather than a modal, so its confirmation is raised from a screen and is safe.
+
+### Then two more from the phone, and the second one was not the emoji picker's fault yet
+
+**"I want the old animation on that, slow as bitch."** The exit fix above had lengthened both
+halves to 200/220ms when the defect was the *ordering*, not the clock - and the reactions sheet
+shares that hook, so a sheet that had been fine for a day suddenly felt sluggish. Put back to
+160ms for the panel and 170ms for the shade, which is the original speed with the curves swapped:
+the panel now takes exactly as long as it always did and simply leaves before the shade does. The
+lesson is worth more than the fix: **when an animation is wrong, move the easings before touching
+the durations**, because duration is what everybody feels.
+
+**"I want like whatsapp, i dont want the shade explicitly shown sliding."** The emoji picker
+behind the reaction strip's "+" still opened with `Modal animationType="slide"` and carried
+`rgba(0,0,0,0.4)` on the backdrop itself - so the dimming was part of the sliding view, and what
+travelled up and down the screen was a grey block with a hard edge. This is the identical defect
+the reactor sheet was fixed for on 2026-08-13, and the rule from that day had already been
+promoted into `TECH/13` as an obligation on **every** bottom sheet. It was simply never applied to
+a surface nobody re-read - a rule stated in three documents and implemented in two of the three
+places it governs, which is failure mode 19's shape at the design layer.
+
+The picker now uses `useRisingSheet` like everything else: dimming fades in place, only the panel
+travels, and it is **faster than before** rather than slower, since the platform slide it replaced
+runs about twice as long. Picking an emoji animates out too - the chosen character is held and
+handed to the caller when the exit finishes, rather than the parent unmounting the panel
+mid-screen. Verified on the Simulator, opening and closing, frame by frame.
+
+That makes three sheets on one implementation, which is now the point: the obligation used to be a
+paragraph and is now a function, so a new sheet that writes its own `Animated.timing` is a code
+review away from being caught rather than a device report.
+
 ## 2026-08-14 - The composer, and three ways to get the keyboard wrong
 
 The founder sent WhatsApp screenshots and a running commentary from his phone. Four things came

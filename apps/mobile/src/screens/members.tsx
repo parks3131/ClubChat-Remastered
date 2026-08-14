@@ -27,7 +27,14 @@
  * because the whole point is finding somebody who is not on this list yet.
  */
 
-import { useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -99,6 +106,7 @@ export function MembersScreen({
   addPeople,
   emptyTitle,
   profileHref,
+  renderProfileCard,
   onChanged,
 }: {
   rows: readonly MemberRow[];
@@ -159,11 +167,26 @@ export function MembersScreen({
    * of its own to hand a profile.
    */
   profileHref?: (row: MemberRow) => string | null;
+  /**
+   * Show this person as a card over the roster instead of navigating to `profileHref`.
+   *
+   * > **A roster is a list somebody is working down** - checking who a name belongs to, then
+   * > carrying on - and a full screen push makes that a navigation each way. A caller that
+   * > supplies this keeps the list behind the card, dimmed and one tap from being back.
+   *
+   * Optional, and its absence is what the race and Eboard rosters use: they have no club
+   * authority to put in a card, so the plain screen is the whole of what they would show.
+   * `profileHref` still decides *whether* a row opens at all - a banned row answers null there
+   * and gets neither the card nor the push.
+   */
+  renderProfileCard?: (row: MemberRow, dismiss: () => void) => ReactNode;
   /** Called after any write, so the caller can re-read the roster it owns. */
   onChanged: () => void;
 }) {
   const router = useRouter();
   const [filter, setFilter] = useState('');
+  /** The person whose card is open over the list, if any. */
+  const [cardFor, setCardFor] = useState<MemberRow | null>(null);
   /**
    * The row whose menu is open, plus the rectangle it occupies on screen.
    *
@@ -183,6 +206,27 @@ export function MembersScreen({
       ? rows
       : rows.filter((row) => row.name.toLowerCase().includes(needle));
   }, [rows, filter]);
+
+  /**
+   * Open a person: the card over the list when the caller supplies one, the profile screen
+   * otherwise.
+   *
+   * One function rather than the same lines at the row and again in the menu. Both used to call
+   * `profileHref` twice apiece and build the href themselves, which is two copies of a rule that
+   * would have drifted the first time either grew a condition.
+   */
+  const openProfile = (row: MemberRow) => {
+    const href = profileHref === undefined ? `/users/${row.userId}` : profileHref(row);
+    // Null is "this row has no reachable profile": a banned person shares no club with the viewer
+    // any more, so both the card and the screen would open onto "Not found".
+    if (href === null) return;
+    setMenuFor(null);
+    if (renderProfileCard !== undefined) {
+      setCardFor(row);
+      return;
+    }
+    router.push(href);
+  };
 
   /** Runs a write, then re-reads. Refuses concurrent writes on the same person. */
   const act = async (key: string, run: () => Promise<unknown>) => {
@@ -288,6 +332,14 @@ export function MembersScreen({
                 <Text style={styles.section}>{section}</Text>
                 {inSection.map((row) => {
                   const actions = actionsFor(row);
+                  /*
+                   * Whether a tap on this row leads anywhere, which is what the label has to say.
+                   *
+                   * A banned row answers `null` from `profileHref` and so opens nothing - it had
+                   * been announcing "Open profile, or long press for options" regardless, which
+                   * tells somebody using a screen reader to do a thing that does nothing.
+                   */
+                  const opens = profileHref === undefined || profileHref(row) !== null;
                   return (
                     /*
                       A View, with TWO SIBLING pressables inside it - never a pressable wrapping
@@ -310,11 +362,7 @@ export function MembersScreen({
                         rowViews.current.set(row.userId, view as unknown as View | null);
                       }}
                       style={styles.row}
-                      onPress={() => {
-                        const href = profileHref?.(row) ?? `/users/${row.userId}`;
-                        if (profileHref !== undefined && profileHref(row) === null) return;
-                        router.push(href);
-                      }}
+                      onPress={() => openProfile(row)}
                       onLongPress={(event) => {
                         if (actions.length === 0) return;
                         // The same buzz every other long press in the app gives, from the one
@@ -329,9 +377,13 @@ export function MembersScreen({
                       delayLongPress={280}
                       accessibilityRole="button"
                       accessibilityLabel={
-                        actions.length > 0
+                        opens && actions.length > 0
                           ? `${row.name}. Open profile, or long press for options`
-                          : `Open ${row.name}'s profile`
+                          : opens
+                            ? `Open ${row.name}'s profile`
+                            : actions.length > 0
+                              ? `${row.name}. Long press for options`
+                              : row.name
                       }
                     >
                       <Avatar name={row.name} image={row.image} />
@@ -424,12 +476,7 @@ export function MembersScreen({
                   {
                     label: 'View profile',
                     icon: 'person' as const,
-                    onPress: () => {
-                      const href =
-                        profileHref?.(menuFor.row) ?? `/users/${menuFor.row.userId}`;
-                      setMenuFor(null);
-                      router.push(href);
-                    },
+                    onPress: () => openProfile(menuFor.row),
                   },
                 ]),
             ...actionsFor(menuFor.row).map((action) => ({
@@ -444,6 +491,14 @@ export function MembersScreen({
           ]}
         />
       )}
+
+      {/*
+        The person, as a card over the list. Last in the tree so it draws over everything else on
+        this screen, and rendered by the caller because what a card may offer is the caller's
+        knowledge - which club this is, and therefore what the server said may be done here.
+      */}
+      {cardFor !== null && renderProfileCard !== undefined &&
+        renderProfileCard(cardFor, () => setCardFor(null))}
     </View>
   );
 }

@@ -17,6 +17,21 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       Nothing else in Weekly Meetups is outstanding: Nudge shipped and was verified on a device on
       2026-08-14, notification included.
 
+- [ ] **The member card's other three actions, and its other two entry points.** The card
+      ([`DESIGN/10`](SPEC/DESIGN/10-member-card.md)) ships with Message, Remove and Ban. Still to
+      come, all agreed on 2026-08-14 and deliberately not built in that pass: **Mute** and **Clear
+      chat**, which act on a conversation and so appear only once one exists - note `channel_mutes`
+      and `channel_clears` both exist already, so this is likely wiring rather than schema; and
+      **Report a person**, which has no server surface at all today, since reports are per message
+      and the moderation queue is keyed by `messageId`. The second entry point is a DM: tapping
+      through to the person should raise the same card, which is also the moment to decide whether
+      it absorbs `dm/[channelId]/profile` or leaves it as the thread's own screen.
+- [ ] **The repaired card has not been back on the physical phone.** The first build reached it and
+      was broken there ([`AGENTS.md`](AGENTS.md) failure modes 29 and 30); the fixes are proved on
+      the iOS Simulator, which is the same UIKit and was enough to catch both. One pass on the
+      device closes it - open a roster, tap somebody, use the "..." and the club faces - and then
+      the surface spec's table can say so.
+
 ## Known broken, or quietly wrong
 
 - [ ] **Watch the first few CI runs for testcontainer flake.** `test/harness.ts` records a

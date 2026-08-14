@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Animated,
   Dimensions,
-  Easing,
   FlatList,
   Keyboard,
   LayoutAnimation,
@@ -64,7 +63,7 @@ import {
   type MentionPick,
 } from "../../src/mentions.ts";
 import { MaterialIcons } from "@expo/vector-icons";
-import { Avatar, Tabs } from "../../src/ui.tsx";
+import { Avatar, Tabs, useRisingSheet } from "../../src/ui.tsx";
 import { ChatEventCard } from "../../src/screens/events.tsx";
 import { ChatMeetingCard } from "../../src/screens/meetings.tsx";
 import { ChatPollCard } from "../../src/screens/polls.tsx";
@@ -894,56 +893,16 @@ function ReactorSheet({
    * scrim in place, `rise` slides the sheet up from below its own bottom edge. Both run on the
    * native driver, which is what keeps them smooth while the list behind them is still settling.
    */
-  const dim = useRef(new Animated.Value(0)).current;
-  const rise = useRef(new Animated.Value(0)).current;
   /*
-   * The sheet's own height, measured, because it hugs its content: a sheet listing three people
-   * and one listing thirty are different distances from off-screen, and a constant would make
-   * the short one crawl and the tall one snap.
-   */
-  const [sheetHeight, setSheetHeight] = useState(0);
-
-  useEffect(() => {
-    Animated.timing(dim, {
-      toValue: 1,
-      duration: 160,
-      easing: Easing.out(Easing.quad),
-      useNativeDriver: true,
-    }).start();
-  }, [dim]);
-
-  useEffect(() => {
-    if (sheetHeight === 0) return;
-    Animated.timing(rise, {
-      toValue: 1,
-      duration: 220,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
-  }, [rise, sheetHeight]);
-
-  /**
-   * Leave the way it arrived, then unmount.
+   * The sheet's own height is measured rather than given, because it hugs its content: a sheet
+   * listing three people and one listing thirty are different distances from off-screen, and a
+   * constant would make the short one crawl and the tall one snap.
    *
-   * The parent drops this component the moment it is told to, so the exit has to finish first -
-   * otherwise the scrim vanishes in one frame, which is the same jolt the entrance had.
+   * > **Both halves used to live here**, and moved into `useRisingSheet` on 2026-08-14 when the
+   * > member card needed the same entrance. The durations and easings are one definition now:
+   * > two panels rising at different speeds is the kind of drift nobody files and everybody feels.
    */
-  const close = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(dim, {
-        toValue: 0,
-        duration: 140,
-        easing: Easing.in(Easing.quad),
-        useNativeDriver: true,
-      }),
-      Animated.timing(rise, {
-        toValue: 0,
-        duration: 160,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    ]).start(() => onDismiss());
-  }, [dim, rise, onDismiss]);
+  const { dim, rise, sheetHeight, setSheetHeight, close } = useRisingSheet(onDismiss);
 
   /*
    * The last reaction going away takes the sheet with it: there is nothing left to list, and the

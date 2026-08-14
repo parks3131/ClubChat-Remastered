@@ -10,8 +10,9 @@
  * it into ~240 rows, which virtualises properly.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
   FlatList,
   Modal,
   Platform,
@@ -26,6 +27,7 @@ import * as SecureStore from 'expo-secure-store';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { emojiCatalog, type CatalogEmoji } from '@clubchat/shared';
 import { color, radius, space, type } from './theme.ts';
+import { useRisingSheet } from './ui.tsx';
 
 /**
  * Emoji per row.
@@ -136,6 +138,26 @@ export function EmojiPicker({
   const [activeGroup, setActiveGroup] = useState<string>(GROUPS[1]!.key);
   const insets = useSafeAreaInsets();
 
+  /*
+   * The entrance and the exit, from the hook every other panel in the app uses.
+   *
+   * > **This used to be `animationType="slide"` on the Modal, and that slides the SCRIM TOO.**
+   *   The founder reported it from his phone on 2026-08-14 pointing at WhatsApp: "i dont want the
+   *   shade explicitly shown sliding". What you saw was a grey block travelling up and down the
+   *   screen with the panel, with a hard edge across the middle of the conversation - the panel
+   *   and the dimming are one view to the platform animation, so it moves both.
+   *
+   * The reactions sheet learned this on 2026-08-13 and the member card on 2026-08-14; this is the
+   * third and last surface that had it. `useRisingSheet` dims in place and moves only the panel.
+   */
+  const picked = useRef<string | null>(null);
+  const finish = useCallback(() => {
+    const chosen = picked.current;
+    if (chosen === null) onDismiss();
+    else onPick(chosen);
+  }, [onDismiss, onPick]);
+  const { dim, rise, sheetHeight, setSheetHeight, close } = useRisingSheet(finish);
+
   useEffect(() => {
     void loadRecents().then(setRecents);
   }, []);
@@ -208,23 +230,55 @@ export function EmojiPicker({
   const pick = (emoji: string) => {
     // Remembered before the sheet closes, so the next open already has it at the front.
     void saveRecent(emoji);
-    onPick(emoji);
+    // Handed over at the END of the exit rather than immediately, so the panel leaves the way it
+    // arrived instead of being unmounted mid-screen by the parent.
+    picked.current = emoji;
+    close();
   };
 
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={onDismiss}>
+    <Modal visible transparent animationType="none" onRequestClose={close}>
       <View style={styles.backdrop}>
         {/*
-          The scrim is a sibling filling the screen, never a wrapper: a Pressable around the
-          sheet would put every emoji inside another press target, which is failure mode 17.
+          The dimming, as its own layer rather than a colour on the backdrop. It has to be able to
+          fade on its own: the panel travels and the shade does not, and the two sharing one view
+          is exactly what made the shade slide up and down the screen with it.
+        */}
+        <Animated.View
+          style={[styles.scrim, { opacity: dim }]}
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+        />
+        {/*
+          The dismiss target is a sibling filling the screen, never a wrapper: a Pressable around
+          the sheet would put every emoji inside another press target, which is failure mode 17.
         */}
         <Pressable
           style={StyleSheet.absoluteFill}
-          onPress={onDismiss}
+          onPress={close}
           accessibilityRole="button"
           accessibilityLabel="Close the emoji picker"
         />
-        <View style={styles.sheet}>
+        <Animated.View
+          onLayout={(event) => setSheetHeight(event.nativeEvent.layout.height)}
+          style={[
+            styles.sheet,
+            {
+              // Hidden until measured, so it never shows at its resting place for the one frame
+              // before the animation knows how far it has to travel.
+              opacity: sheetHeight === 0 ? 0 : 1,
+              transform: [
+                {
+                  translateY: rise.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [sheetHeight, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
           <View style={styles.head}>
             <View style={styles.search}>
               <MaterialIcons name="search" size={18} color={color.textSecondary} />
@@ -240,7 +294,7 @@ export function EmojiPicker({
               />
             </View>
             <Pressable
-              onPress={onDismiss}
+              onPress={close}
               hitSlop={space.sm}
               accessibilityRole="button"
               accessibilityLabel="Close"
@@ -334,14 +388,26 @@ export function EmojiPicker({
               })}
             </View>
           )}
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  /*
+   * No colour on the backdrop itself - the dimming is the layer below, so it can fade while the
+   * panel travels. A background here is what made the shade slide with the sheet.
+   */
+  backdrop: { flex: 1, justifyContent: 'flex-end' },
+  scrim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
   sheet: {
     height: '70%',
     backgroundColor: color.card,

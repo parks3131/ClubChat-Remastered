@@ -99,6 +99,22 @@ The **"Kinetic Performance System"**, extracted verbatim from the Stitch export'
   way. The panel's travel is its **measured** height, since a sheet that hugs its content has no
   constant to slide by. See [`DESIGN/07`](../DESIGN/07-reactions.md) rule 6.
 
+  **Written here on 2026-08-13 and still violated by the emoji picker on 2026-08-14**, which had
+  kept `animationType="slide"` and a dark colour on its backdrop - so the shade travelled with it,
+  reported from the device as "i dont want the shade explicitly shown sliding". The rule was
+  correct, promoted, and simply never applied to a surface nobody re-read. **The obligation is now
+  a shared implementation rather than a paragraph**: `useRisingSheet` in `ui.tsx` owns the
+  entrance, the exit and the measurement, and every sheet in the app takes its motion from it.
+  A new sheet that writes its own `Animated.timing` is the thing to catch in review.
+
+- **On the way out, the shade is the last thing to leave.** The panel gets the shorter duration
+  and the gentler curve; the dimming gets the longer and the steeper one. Reversed, the scrim
+  lifts while the panel is still mid-screen and what is left is a panel hanging over an ordinary
+  looking page, which reads as a frozen app rather than an animation - reported on 2026-08-14 as
+  "it just stucks in between". **The fix is the ordering, never the clock**: the first attempt
+  lengthened both exits instead and made every sheet in the app feel sluggish, which was reported
+  within the hour.
+
 - **Anything that stands in the keyboard's place changes inside the keyboard's own event.** Not
   when the control is pressed. The press asks the keyboard to move; `keyboardWillShow` and
   `keyboardWillHide` are where the replacement opens and closes, so its height lands in the same

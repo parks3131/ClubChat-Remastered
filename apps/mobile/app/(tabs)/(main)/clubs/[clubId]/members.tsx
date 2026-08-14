@@ -28,6 +28,7 @@ import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { clubApi } from '../../../../../src/api.ts';
 import type { ClubBan, ClubRoster, RosterEntry } from '../../../../../src/api-types.ts';
 import { useSession } from '../../../../../src/chat-provider.tsx';
+import { MemberCardSheet } from '../../../../../src/member-card.tsx';
 import {
   MembersScreen,
   type MemberAction,
@@ -45,6 +46,23 @@ const SECTIONS = ['Owner', 'Admins', 'Members', 'Banned'] as const;
 
 function sectionOf(role: RosterEntry['role']): string {
   return role === 'owner' ? 'Owner' : role === 'admin' ? 'Admins' : 'Members';
+}
+
+/**
+ * The same standing, said about one person rather than about a group of them.
+ *
+ * A section heading is a plural ("Admins"); a tag under somebody's name is what they are. Derived
+ * from the section rather than read again from the roster row, so the card and the list it was
+ * opened from can never disagree about where somebody sits.
+ */
+function roleLabel(section: string): string | null {
+  return section === 'Owner'
+    ? 'Owner'
+    : section === 'Admins'
+      ? 'Admin'
+      : section === 'Members'
+        ? 'Member'
+        : null;
 }
 
 type RosterView = { roster: ClubRoster; bans: ClubBan[] };
@@ -220,6 +238,23 @@ export default function ClubMembersScreen() {
               // The Lift ban action on the row is the whole menu for them.
               row.section === 'Banned' ? null : `/users/${row.userId}?clubId=${clubId}`
             }
+            /*
+             * Tapping somebody raises their card over this list rather than navigating to it.
+             *
+             * The role comes from the section they are already sitting under, which is this
+             * screen's own answer and not a second read - the card shows it as a tag under the
+             * name. Everything the card may DO is still the server's `canRemove` / `canBan`,
+             * asked with the `clubId` it is handed here.
+             */
+            renderProfileCard={(row, dismiss) => (
+              <MemberCardSheet
+                userId={row.userId}
+                clubId={clubId}
+                role={roleLabel(row.section)}
+                onDismiss={dismiss}
+                onChanged={view.reload}
+              />
+            )}
             onChanged={view.reload}
           />
         );
