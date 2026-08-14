@@ -154,7 +154,8 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0027](decisions/0027-race-management-requires-a-roster-row.md) | Managing a race requires a roster row |
 | [0028](decisions/0028-reactions-come-from-a-catalog-table.md) | Reactions come from a catalog table, not a fixed set |
 | [0029](decisions/0029-a-meetup-answers-where-when-and-what.md) | A meetup answers where, when and what, and carries no activity type |
-| [0030](decisions/0030-the-nudge-cooldown-is-a-constraint.md) | The Nudge cooldown is an exclusion constraint, not a check in the handler |
+| [0030](decisions/0030-the-nudge-cooldown-is-a-constraint.md) | The Nudge cooldown is an exclusion constraint, not a check in the handler *(superseded by 0031)* |
+| [0031](decisions/0031-the-nudge-cooldown-is-per-meetup.md) | The Nudge cooldown is per meetup, and a past day cannot be nudged |
 
 ## Templates
 

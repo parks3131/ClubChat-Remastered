@@ -1408,17 +1408,22 @@ export const meetups = pgTable(
  * **This row exists to be a rate limit, not to be read.** Weekly Meetups notifies nobody
  * (PRD/08 rule 11) and Nudge is the single deliberate exception to that, so the only thing
  * standing between it and being the reason members turn push off is the cooldown - and the
- * cooldown is an `EXCLUDE` constraint in `0028_meetup_nudges.sql`, not a check in a handler.
- * At most one nudge per club per hour, enforced by Postgres, because two admins tapping the
+ * cooldown is an `EXCLUDE` constraint, not a check in a handler, because two admins tapping the
  * bell at the same moment is exactly the case a read-then-write loses. See ADR-0030.
+ *
+ * **At most one nudge per MEETUP per hour** since 2026-08-14 (ADR-0031, superseding ADR-0030's
+ * per-club rule). Four meetups in a day are four things to tell people about and carry four
+ * independent clocks; nudging the morning run no longer silences the evening social.
  *
  * **Drizzle cannot express an exclusion constraint**, so it is raw SQL in the migration and
  * this declaration does not describe it. Do not conclude from this file that the table has no
  * constraints.
  *
- * `meetupId` clears rather than cascades, and is nullable for that reason: the cooldown is a
- * fact about the CLUB, so deleting the meetup that was nudged must not hand back an early
- * nudge.
+ * `meetupId` clears rather than cascades, and is nullable for that reason - which now also
+ * decides the constraint's behaviour: **a NULL operand takes a row out of an exclusion
+ * constraint**, so a nudge whose meetup has been deleted blocks nothing. That is right under
+ * the per-meetup rule, where there is no longer a meetup to nudge, and was exactly wrong under
+ * the per-club one.
  */
 export const meetupNudges = pgTable(
   'meetup_nudges',
@@ -1445,7 +1450,7 @@ export const meetupNudges = pgTable(
       .notNull()
       .default(sql`now() + interval '1 hour'`),
   },
-  (t) => [index('meetup_nudges_by_club').on(t.clubId, t.createdAt)],
+  (t) => [index('meetup_nudges_by_meetup').on(t.meetupId, t.cooldownUntil)],
 );
 
 /**

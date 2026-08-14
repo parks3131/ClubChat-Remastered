@@ -71,11 +71,18 @@ field and why one should not be added back.*
 14. **The audience is every other member of the club**, and it reaches their phone: a push, not
     only a row in the inbox. The nudger is excluded, as with every other creation notification -
     nobody is told about something they just did.
-15. **One nudge per hour, for the whole club.** Not per meetup, which would let an admin post a
-    week of meetups on Sunday and nudge all seven; not per admin, which would let three admins
-    take turns. The hour is enforced by a database constraint rather than a check in the handler,
-    because two admins tapping in the same second is exactly what a read-then-write loses - see
-    [ADR-0030](../decisions/0030-the-nudge-cooldown-is-a-constraint.md).
+15. **One nudge per hour, per meetup.** Four meetups in a day are four separate things to tell
+    people about and carry four independent clocks: nudging the morning run leaves the evening
+    social's bell alone. The hour is enforced by a database constraint rather than a check in the
+    handler, because two admins tapping **the same** bell in the same second is exactly what a
+    read-then-write loses. *(Was per club until 2026-08-14, which made announcing the second of
+    two meetups on one day impossible - see
+    [ADR-0031](../decisions/0031-the-nudge-cooldown-is-per-meetup.md), superseding
+    [ADR-0030](../decisions/0030-the-nudge-cooldown-is-a-constraint.md).)*
+15a. **A meetup whose day has been cannot be nudged, and shows no bell at all.** There is nothing
+    left to tell anybody about a run that has run. **Compared by date, not by moment**: this
+    morning's run is still nudgeable this evening, because "the day has been" is what a person
+    means by it and a bell that died at 06:31 would be the more surprising rule.
 16. **A refusal says when the bell comes back**, not merely that it is unavailable. "You cannot"
     gets tapped again a minute later; "not until 10:00" does not. The week carries the same time,
     so the control renders **disabled with the hour on it** rather than looking live and failing
@@ -83,13 +90,13 @@ field and why one should not be added back.*
 17. **A nudge posts nothing to chat.** The point is to reach a phone that is not currently looking
     at the app, and rule 11 keeps meetups out of the conversation. Putting one there would be a
     separate decision.
-18. **Deleting a nudged meetup does not return the nudge.** The hour belongs to the club, so the
-    record of it outlives the thing it was about.
+18. **Deleting a nudged meetup releases nothing and blocks nothing.** The hour belongs to that
+    meetup, so once it is gone there is no bell to hold.
 
-**Edge case worth stating.** The bell is shared state, so an admin can find it already spent by
-somebody else. That is the design rather than a collision to smooth over: the limit protects
-members' phones, which is a club-wide quantity, and an admin seeing "Nudge at 10:00" is being told
-the truth about the club rather than about themselves.
+**Edge case worth stating.** A meetup's bell is shared between admins, so one can find it already
+spent by another. That is the design rather than a collision to smooth over - the limit is about how
+often *this meetup* interrupts people, not about who rang it - and only the meetup actually cooling
+down shows a time, so the week does not repeat the same sentence down the screen.
 
 **Permissions.** Every club member reads the week. Only an admin creates, edits or deletes a
 meetup, or nudges one. Owner and Admin are equivalent here; see

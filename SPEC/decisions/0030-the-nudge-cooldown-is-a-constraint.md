@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Accepted |
+| Status | Superseded by [ADR-0031](0031-the-nudge-cooldown-is-per-meetup.md) |
 | Date | 2026-08-14 |
 | Deciders | parks3131 |
 | Supersedes | none |

@@ -127,16 +127,6 @@ export default function WeeklyMeetupsScreen() {
   const club = useLoad(() => clubApi.detail(clubId), [clubId]);
   const isAdmin = club.data?.club.viewer.isAdmin === true;
 
-  /*
-   * One bell for the club, not one per meetup.
-   *
-   * The server owns the hour and returns when it lifts; this only decides whether to draw the
-   * control as available. Re-reading the week after a nudge is what moves it, rather than the
-   * screen keeping its own clock and drifting out of agreement with the server.
-   */
-  const blockedUntil = week.data?.nudgeBlockedUntil ?? null;
-  const bellLive = blockedUntil === null || Date.parse(blockedUntil) <= Date.now();
-
   const nudge = async (meetupId: string) => {
     setNudging(true);
     setNudgeNote(null);
@@ -175,17 +165,7 @@ export default function WeeklyMeetupsScreen() {
         <Action label="Next" variant="secondary" onPress={() => setMonday(shift(monday, 1))} />
       </View>
 
-      {/*
-        One line for the whole screen, not one per meetup.
-        The bell's unavailability is a fact about the CLUB, so repeating "Nudge at 3:52 AM" beside
-        every meetup said the same thing five times and was the bulk of what read as clutter.
-      */}
       {nudgeNote !== null && <Text style={styles.note}>{nudgeNote}</Text>}
-      {nudgeNote === null && !bellLive && blockedUntil !== null && (
-        <Text style={styles.note}>
-          Already nudged. You can nudge again at {formatTimeOfDay(blockedUntil)}.
-        </Text>
-      )}
 
       <DataScreen load={week}>
         {(data) => (
@@ -206,9 +186,7 @@ export default function WeeklyMeetupsScreen() {
                     key={meetup.id}
                     meetup={meetup}
                     isAdmin={isAdmin}
-                    bellLive={bellLive}
                     bellBusy={nudging}
-                    blockedUntil={blockedUntil}
                     onNudge={() => void nudge(meetup.id)}
                     onLongPress={(anchor) => {
                       longPressFeedback();
@@ -275,22 +253,24 @@ export default function WeeklyMeetupsScreen() {
 function MeetupRow({
   meetup,
   isAdmin,
-  bellLive,
   bellBusy,
-  blockedUntil,
   onNudge,
   onLongPress,
 }: {
   meetup: Meetup;
   isAdmin: boolean;
-  bellLive: boolean;
   bellBusy: boolean;
-  blockedUntil: string | null;
   onNudge: () => void;
   onLongPress: (anchor: PressAnchor) => void;
 }) {
   const ref = useRef<View>(null);
-  const bellOff = !bellLive || bellBusy;
+  /*
+   * This meetup's own clock. Four meetups in a day are four bells, so none of this comes from
+   * the screen - nudging the morning run must leave the evening social's bell alone.
+   */
+  const blockedUntil = meetup.nudgeBlockedUntil;
+  const cooling = blockedUntil !== null && Date.parse(blockedUntil) > Date.now();
+  const bellOff = cooling || bellBusy || !meetup.nudgeable;
 
   return (
     <Pressable
@@ -320,26 +300,36 @@ function MeetupRow({
         )}
       </View>
 
-      {isAdmin && (
-        <Pressable
-          onPress={onNudge}
-          disabled={bellOff}
-          hitSlop={space.sm}
-          style={[styles.bell, bellOff && styles.bellOff]}
-          accessibilityRole="button"
-          accessibilityState={{ disabled: bellOff }}
-          accessibilityLabel={
-            bellLive
-              ? `Nudge the club about the meetup at ${meetup.location}`
-              : `Nudging is unavailable until ${formatTimeOfDay(blockedUntil ?? '')}`
-          }
-        >
-          <MaterialIcons
-            name="notifications-active"
-            size={18}
-            color={bellOff ? color.textSecondary : color.accent}
-          />
-        </Pressable>
+      {/*
+        A day that has been gets no bell at all, rather than a dead one. There is nothing left to
+        tell anybody about, so the control would be furniture.
+      */}
+      {isAdmin && meetup.nudgeable && (
+        <View style={styles.bellWrap}>
+          {/* Only the meetup actually cooling down says when - which is one row, not all of them. */}
+          {cooling && (
+            <Text style={styles.bellTime}>{formatTimeOfDay(blockedUntil!)}</Text>
+          )}
+          <Pressable
+            onPress={onNudge}
+            disabled={bellOff}
+            hitSlop={space.sm}
+            style={[styles.bell, bellOff && styles.bellOff]}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: bellOff }}
+            accessibilityLabel={
+              cooling
+                ? `Nudging this meetup is unavailable until ${formatTimeOfDay(blockedUntil!)}`
+                : `Nudge the club about the meetup at ${meetup.location}`
+            }
+          >
+            <MaterialIcons
+              name="notifications-active"
+              size={18}
+              color={bellOff ? color.textSecondary : color.accent}
+            />
+          </Pressable>
+        </View>
       )}
     </Pressable>
   );
@@ -621,6 +611,8 @@ const styles = StyleSheet.create({
   meetupText: { flex: 1, gap: space.xs },
   headline: { ...type.body, color: color.textPrimary },
   description: { ...type.bodySmall, color: color.textSecondary },
+  bellWrap: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
+  bellTime: { ...type.bodySmall, color: color.textSecondary },
   bell: { padding: space.xs },
   bellOff: { opacity: 0.4 },
   done: {

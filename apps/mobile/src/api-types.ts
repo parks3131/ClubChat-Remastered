@@ -285,6 +285,15 @@ export type Meetup = {
   time: string;
   location: string;
   description: string | null;
+  /**
+   * When THIS meetup's bell comes back, or null if it is live.
+   *
+   * Per meetup, not per club: four meetups in a day carry four clocks, so nudging the morning
+   * run leaves the evening social's bell alone.
+   */
+  nudgeBlockedUntil: string | null;
+  /** False for a day that has been. The server decides, so the client cannot disagree. */
+  nudgeable: boolean;
 };
 
 /**
@@ -300,15 +309,8 @@ export type MeetupBody = {
   description?: string | null;
 };
 
-/**
- * The week, plus whether the club's Nudge bell is live.
- *
- * `nudgeBlockedUntil` is null when it is available. Sent to every viewer, not only admins: who
- * sees the bell is the screen's question, and whether it can be rung is the server's.
- */
 export type MeetupWeek = {
   days: MeetupDay[];
-  nudgeBlockedUntil: string | null;
 };
 
 export type MeetupDay = {

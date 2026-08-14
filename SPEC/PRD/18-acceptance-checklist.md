@@ -119,6 +119,15 @@ A remaster is at parity when every line below passes on **iOS, Android, and web*
       the detail, not as an icon in the week.
 - [ ] A meetup does **not** appear on the month calendar or in the Upcoming/Past list.
 - [ ] A member sees no create, edit or delete control anywhere - **including by direct URL**.
+- [ ] Nudging a meetup pushes it to every OTHER club member and reaches a real device.
+- [ ] Nudging the same meetup again inside the hour is refused, and the refusal names the time.
+- [ ] **Nudging a different meetup in the same hour still works** - two meetups on one day carry
+      two independent clocks.
+- [ ] Two admins nudging the same meetup at the same moment produce **one** push, not two.
+- [ ] A meetup whose day has been shows **no bell at all**, and the nudge is refused by the
+      server - **attempted directly, not inferred from the control being hidden**.
+- [ ] Only the meetup actually cooling down shows a time; the others show a live bell.
+- [ ] Edit and Remove are reached by a long press, and the press buzzes.
 
 ### Notifications
 

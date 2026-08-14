@@ -383,7 +383,7 @@ export async function deleteMeetup(
  */
 export type NudgeResult =
   | { ok: true; cooldownUntil: string }
-  | { ok: false; code: 'forbidden' | 'not_found' }
+  | { ok: false; code: 'forbidden' | 'not_found' | 'already_happened' }
   | { ok: false; code: 'cooling_down'; availableAt: string };
 
 /** Postgres `exclusion_violation`. The cooldown losing a race is this and nothing else. */
@@ -411,9 +411,16 @@ function isExclusionViolation(error: unknown): boolean {
  * changes is that a person can choose to send one, which is a different act from the app deciding
  * to buzz.
  *
- * The hour is enforced by an `EXCLUDE` constraint, not by the read below. The read exists so the
- * refusal can name a time; the constraint is what stays true when two admins tap the bell in the
- * same second, which a read-then-write cannot. See ADR-0030.
+ * **The hour is per MEETUP** (ADR-0031, superseding ADR-0030's per-club rule), and it is enforced
+ * by an `EXCLUDE` constraint rather than by the read below. The read exists so the refusal can
+ * name a time; the constraint is what stays true when two admins tap the same bell in the same
+ * second, which a read-then-write cannot.
+ *
+ * **A meetup that has already happened cannot be nudged**, and that one IS a handler check rather
+ * than a constraint - deliberately. "Is this date in the past" is a question whose answer changes
+ * with the clock, so it is not immutable and cannot live in an index. There is also no race to
+ * lose: two admins nudging a past meetup at the same moment are both simply wrong, where two
+ * admins nudging a live one are competing for a single slot.
  */
 export async function nudgeMeetup(
   db: Db,
@@ -425,7 +432,14 @@ export async function nudgeMeetup(
   if (!meetup) return { ok: false, code: 'not_found' };
   if (!canManageClubContent(ctx, meetup.clubId)) return { ok: false, code: 'forbidden' };
 
-  const open = await openCooldown(db, meetup.clubId);
+  /*
+   * Today and forward only. Compared by DATE, not by instant, so this morning's run is still
+   * nudgeable this evening - the rule is "not a day that has been", not "not a moment that has
+   * passed", and a bell that died at 06:31 would be the more surprising of the two.
+   */
+  if (meetup.meetupDate < todayIso()) return { ok: false, code: 'already_happened' };
+
+  const open = await openCooldown(db, meetup.id);
   if (open) return { ok: false, code: 'cooling_down', availableAt: open };
 
   try {
@@ -457,21 +471,31 @@ export async function nudgeMeetup(
     // Lost the race rather than hit a bug: another admin's nudge committed between the read
     // above and this insert. Re-read so the refusal still names a time.
     if (!isExclusionViolation(error)) throw error;
-    const now = await openCooldown(db, meetup.clubId);
+    const now = await openCooldown(db, meetup.id);
     return { ok: false, code: 'cooling_down', availableAt: now ?? new Date().toISOString() };
   }
 }
 
-/** When the club's bell comes back, or null if it is live. */
-async function openCooldown(db: Db, clubId: string): Promise<string | null> {
+/** When THIS meetup's bell comes back, or null if it is live. */
+async function openCooldown(db: Db, meetupId: string): Promise<string | null> {
   const rows = await db.execute<{ cooldown_until: string }>(sql`
     SELECT ${isoUtc('cooldown_until')} AS cooldown_until
       FROM meetup_nudges
-     WHERE club_id = ${clubId} AND cooldown_until > now()
+     WHERE meetup_id = ${meetupId} AND cooldown_until > now()
      ORDER BY cooldown_until DESC
      LIMIT 1
   `);
   return rows.rows[0]?.cooldown_until ?? null;
+}
+
+/**
+ * Today, as the club's own calendar date.
+ *
+ * The same expression `readMeetupWeek` uses to decide which days of the current week to hide, and
+ * deliberately the same: a meetup the week has stopped showing must not still be nudgeable.
+ */
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 export type WeekDay = {
@@ -483,6 +507,15 @@ export type WeekDay = {
     time: string;
     location: string;
     description: string | null;
+    /**
+     * When THIS meetup's bell comes back, or null if it is live.
+     *
+     * Per meetup since ADR-0031: four meetups in a day carry four clocks, so this cannot be one
+     * field on the week. A past day is never nudgeable at all, and the server says so here
+     * rather than leaving the client to compare dates and reach a different answer.
+     */
+    nudgeBlockedUntil: string | null;
+    nudgeable: boolean;
   }>;
   /** True when nothing is planned. Rendered explicitly as "Nothing planned", never omitted. */
   empty: boolean;
@@ -505,23 +538,41 @@ export async function readMeetupWeek(
   ctx: AccessContext,
   clubId: string,
   mondayIso: string,
-): Promise<Result<{ days: WeekDay[]; nudgeBlockedUntil: string | null }>> {
+): Promise<Result<{ days: WeekDay[] }>> {
   if (!canReadClubContent(ctx, clubId)) return { ok: false, code: 'not_found' };
 
+  /*
+   * One read, with each meetup's own open cooldown joined on.
+   *
+   * A query per meetup would be seven-plus round trips for one screen; the lateral is what keeps
+   * "four clocks" from costing four times the work.
+   */
   const rows = await db.execute<{
     id: string;
     meetup_date: string;
     meetup_time: string;
     location: string;
     description: string | null;
+    cooldown_until: string | null;
   }>(sql`
-    SELECT id, meetup_date, meetup_time, location, description
-      FROM meetups
-     WHERE club_id = ${clubId}
-       AND meetup_date >= ${mondayIso}::date
-       AND meetup_date < ${mondayIso}::date + interval '7 days'
-     ORDER BY meetup_date, meetup_time, created_at
+    SELECT m.id, m.meetup_date, m.meetup_time, m.location, m.description,
+           ${isoUtc('n.cooldown_until')} AS cooldown_until
+      FROM meetups m
+      LEFT JOIN LATERAL (
+        SELECT cooldown_until
+          FROM meetup_nudges
+         WHERE meetup_id = m.id AND cooldown_until > now()
+         ORDER BY cooldown_until DESC
+         LIMIT 1
+      ) n ON true
+     WHERE m.club_id = ${clubId}
+       AND m.meetup_date >= ${mondayIso}::date
+       AND m.meetup_date < ${mondayIso}::date + interval '7 days'
+     ORDER BY m.meetup_date, m.meetup_time, m.created_at
   `);
+
+  /* One clock for the whole read, so the hide rule and the nudge rule cannot disagree. */
+  const today = todayIso();
 
   const byDate = new Map<string, WeekDay['meetups']>();
   for (const row of rows.rows) {
@@ -536,12 +587,14 @@ export async function readMeetupWeek(
       time: String(row.meetup_time).slice(0, 5),
       location: row.location,
       description: row.description,
+      nudgeBlockedUntil: row.cooldown_until,
+      // Today and forward only, and decided here so the client cannot reach a different answer.
+      nudgeable: key >= today,
     });
     byDate.set(key, list);
   }
 
   const monday = new Date(`${mondayIso}T00:00:00Z`);
-  const todayIso = new Date().toISOString().slice(0, 10);
   const days: WeekDay[] = [];
 
   for (let offset = 0; offset < 7; offset += 1) {
@@ -550,21 +603,14 @@ export async function readMeetupWeek(
     const iso = day.toISOString().slice(0, 10);
 
     // Hide past days of the CURRENT week only. A past week shows all seven.
-    const isCurrentWeek = todayIso >= mondayIso && todayIso < isoPlusDays(mondayIso, 7);
-    if (isCurrentWeek && iso < todayIso) continue;
+    const isCurrentWeek = today >= mondayIso && today < isoPlusDays(mondayIso, 7);
+    if (isCurrentWeek && iso < today) continue;
 
     const dayMeetups = byDate.get(iso) ?? [];
     days.push({ date: iso, meetups: dayMeetups, empty: dayMeetups.length === 0 });
   }
 
-  /*
-   * Whether the bell is live, and if not, when it returns.
-   *
-   * Read for every viewer rather than only for admins, because "who sees the bell" is the
-   * client's question and "is it available" is this one. Returning it unconditionally keeps
-   * those two from having to agree - a member simply never renders the control.
-   */
-  return { ok: true, days, nudgeBlockedUntil: await openCooldown(db, clubId) };
+  return { ok: true, days };
 }
 
 function isoPlusDays(iso: string, days: number): string {

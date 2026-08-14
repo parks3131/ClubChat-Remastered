@@ -633,23 +633,38 @@ SELECT pg_temp.assert_rejected(
 
 -- Nudge is rate limited by an EXCLUDE constraint, not by a check in a handler, because two
 -- admins tapping the bell in the same second is exactly what a read-then-write loses (ADR-0030).
--- The rule is per CLUB, so the second insert below names a DIFFERENT meetup on a different day
--- and must still be refused - proving the window is the club's and not the meetup's.
+-- The window is per MEETUP since ADR-0031, which is what the second and third inserts prove
+-- together: the same meetup twice is refused, a different meetup in the same hour is not.
+INSERT INTO meetups (id, club_id, meetup_date, meetup_time, location) VALUES
+  ('dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '06:30', 'Track'),
+  ('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '19:00', 'The Anchor');
+
 SELECT pg_temp.assert_accepted(
-  'nudge - the first one in an hour',
-  $$INSERT INTO meetup_nudges (club_id) VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')$$);
+  'nudge - the first one for a meetup',
+  $$INSERT INTO meetup_nudges (club_id, meetup_id)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd')$$);
 
 SELECT pg_temp.assert_rejected(
-  'nudge - a second one in the same hour, anywhere in the club',
-  $$INSERT INTO meetup_nudges (club_id) VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')$$);
+  'nudge - the SAME meetup again inside the hour',
+  $$INSERT INTO meetup_nudges (club_id, meetup_id)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd')$$);
+
+-- The morning run and the evening social are two things to tell people about. This is the whole
+-- point of ADR-0031 and would have been REJECTED under the per-club rule it replaced.
+SELECT pg_temp.assert_accepted(
+  'nudge - a DIFFERENT meetup in the same hour, same club',
+  $$INSERT INTO meetup_nudges (club_id, meetup_id)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee')$$);
 
 -- ...and the window really is an hour rather than "any two rows", so a nudge whose hour has
 -- already passed does not block the next one.
 SELECT pg_temp.assert_accepted(
-  'nudge - again once the hour is up',
-  $$INSERT INTO meetup_nudges (club_id, created_at, cooldown_until)
-    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', now() + interval '2 hours',
-            now() + interval '3 hours')$$);
+  'nudge - the same meetup again once the hour is up',
+  $$INSERT INTO meetup_nudges (club_id, meetup_id, created_at, cooldown_until)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+            now() + interval '2 hours', now() + interval '3 hours')$$);
 
 -- A day holds as many meetups as the club needs. There is deliberately NO unique key on
 -- (club_id, meetup_date), and this is what proves it: a morning session and an evening social

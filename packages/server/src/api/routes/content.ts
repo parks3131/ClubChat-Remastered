@@ -243,10 +243,13 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
   });
 
   /**
-   * Nudge: push one meetup at the club, at most once an hour per club.
+   * Nudge: push one meetup at the club, at most once an hour **per meetup** (ADR-0031).
    *
    * 409 rather than 404 when the bell is cooling down, and the body carries `availableAt` - the
-   * refusal has to say WHEN, or an admin told only "no" taps it again a minute later.
+   * refusal has to say WHEN, or an admin told only "no" taps it again a minute later. A meetup
+   * whose day has been is `already_happened`, also 409: it is a conflict with the calendar
+   * rather than a permission problem, and saying `not_found` about a meetup plainly on screen
+   * would be a lie.
    */
   app.post<{ Params: { id: string } }>('/meetups/:id/nudge', async (request, reply) => {
     const result = await nudgeMeetup(deps.db, request.access!, request.params.id);

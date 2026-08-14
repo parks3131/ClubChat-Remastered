@@ -500,17 +500,41 @@ describe('weekly meetups', () => {
 
     expect((await as(owner, 'POST', `/meetups/${first}/nudge`)).status).toBe(202);
 
-    // The hour is the CLUB's, so a different meetup on a different day is refused too - and the
-    // refusal carries when, because "no" alone gets tapped again a minute later.
-    const blocked = await as(owner, 'POST', `/meetups/${second}/nudge`);
+    // The SAME meetup inside the hour is refused, and the refusal carries when - "no" alone
+    // gets tapped again a minute later.
+    const blocked = await as(owner, 'POST', `/meetups/${first}/nudge`);
     expect(blocked.status).toBe(409);
     expect(blocked.body.error).toBe('cooling_down');
     expect(Date.parse(blocked.body.availableAt)).toBeGreaterThan(Date.now());
 
-    // The week tells the screen the same thing, so the bell can render disabled rather than
-    // looking live and failing on tap.
+    // A DIFFERENT meetup carries its own clock (ADR-0031), so it is still live.
+    expect((await as(owner, 'POST', `/meetups/${second}/nudge`)).status).toBe(202);
+
+    // The week says the same thing per meetup, so each bell renders for itself rather than the
+    // screen keeping a clock of its own.
     const week = await as(member, 'GET', `/clubs/${clubId}/meetups?monday=2027-05-03`);
-    expect(Date.parse(week.body.nudgeBlockedUntil)).toBeGreaterThan(Date.now());
+    const all = week.body.days.flatMap((d: { meetups: unknown[] }) => d.meetups);
+    expect(all).toHaveLength(2);
+    for (const m of all as { nudgeBlockedUntil: string; nudgeable: boolean }[]) {
+      expect(Date.parse(m.nudgeBlockedUntil)).toBeGreaterThan(Date.now());
+      expect(m.nudgeable).toBe(true);
+    }
+  });
+
+  it('refuses to nudge a day that has been, and says the week is not nudgeable', async () => {
+    const owner = await signUp('PastOwner');
+    const { clubId } = await createClubAs(owner);
+    const past = (await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+      meetupDate: '2020-05-04', meetupTime: '18:30', location: 'Track',
+    })).body.meetupId as string;
+
+    const refused = await as(owner, 'POST', `/meetups/${past}/nudge`);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe('already_happened');
+
+    const week = await as(owner, 'GET', `/clubs/${clubId}/meetups?monday=2020-05-04`);
+    expect(week.body.days.flatMap((d: { meetups: { nudgeable: boolean }[] }) => d.meetups)[0]
+      .nudgeable).toBe(false);
   });
 
   it('refuses a meetup with no place or no time', async () => {

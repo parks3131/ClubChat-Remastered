@@ -139,11 +139,16 @@ check 201 "POST meetup" -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-
 check 400 "meetup with no place"      -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30"}' "$API/clubs/$CLUB/meetups"
 check 400 "meetups without a monday"  "${AO[@]}" "$API/clubs/$CLUB/meetups"
 MEETUP=$(curl -sS -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-06","meetupTime":"07:00","location":"Track"}' "$API/clubs/$CLUB/meetups" | python3 -c 'import json,sys;print(json.load(sys.stdin)["meetupId"])')
-check 404 "nudge as member"           -X POST "${AM[@]}" "$API/meetups/$MEETUP/nudge"
-check 202 "nudge as admin"            -X POST "${AO[@]}" "$API/meetups/$MEETUP/nudge"
-# The hour is the CLUB's, so the SECOND meetup is refused too - and 409 rather than 404,
-# because a cooldown is a conflict and the body names when it lifts (ADR-0030).
-check 409 "nudge again inside the hour" -X POST "${AO[@]}" "$API/meetups/$MEETUP/nudge"
+OTHER=$(curl -sS -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-06","meetupTime":"19:00","location":"The Anchor"}' "$API/clubs/$CLUB/meetups" | python3 -c 'import json,sys;print(json.load(sys.stdin)["meetupId"])')
+PAST=$(curl -sS -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2020-05-06","meetupTime":"07:00","location":"Gone"}' "$API/clubs/$CLUB/meetups" | python3 -c 'import json,sys;print(json.load(sys.stdin)["meetupId"])')
+check 404 "nudge as member"             -X POST "${AM[@]}" "$API/meetups/$MEETUP/nudge"
+check 202 "nudge as admin"              -X POST "${AO[@]}" "$API/meetups/$MEETUP/nudge"
+# 409 rather than 404: a cooldown is a conflict, and the body names when it lifts (ADR-0030).
+check 409 "nudge the SAME one again"    -X POST "${AO[@]}" "$API/meetups/$MEETUP/nudge"
+# The clock is per MEETUP (ADR-0031), so the evening one is untouched by the morning one.
+check 202 "nudge a DIFFERENT one"       -X POST "${AO[@]}" "$API/meetups/$OTHER/nudge"
+# Today and forward only. Nothing left to tell anybody about a run that has run.
+check 409 "nudge a day that has been"   -X POST "${AO[@]}" "$API/meetups/$PAST/nudge"
 check 200 "meetups week"              "${AO[@]}" "$API/clubs/$CLUB/meetups?monday=2027-05-03"
 check 200 "calendar merged"           "${AO[@]}" "$API/calendar"
 check 200 "calendar club upcoming"    "${AO[@]}" "$API/calendar?club=$CLUB&when=upcoming"
