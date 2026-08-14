@@ -14,6 +14,8 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
 ## Next up
 
 - [ ] **Recurrence** is the next real feature, and is deferred rather than pending - see below.
+      Nothing else in Weekly Meetups is outstanding: Nudge shipped and was verified on a device on
+      2026-08-14, notification included.
 
 ## Known broken, or quietly wrong
 
