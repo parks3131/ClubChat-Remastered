@@ -5,7 +5,9 @@ import {
   Dimensions,
   Easing,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
+  LayoutAnimation,
   Platform,
   Pressable,
   Modal,
@@ -1142,6 +1144,16 @@ function ReactionRow({
 }
 
 /**
+ * How tall the attachment panel is before this app has ever seen the keyboard.
+ *
+ * Only ever used for the first "+" of a session where nobody has typed yet: one keyboard event
+ * replaces it with the real number, per device and per keyboard. A wrong guess costs a single
+ * settle of the composer on that one occasion, which is why a plain constant is enough - and why
+ * it is deliberately close to a stock iPhone keyboard rather than round.
+ */
+const KEYBOARD_FALLBACK_HEIGHT = 291;
+
+/**
  * The message a piece of screen state names by `seq`.
  *
  * **Looked up rather than stored**, so it stays current: a reaction or a pin landing while a
@@ -1873,7 +1885,168 @@ export default function ChatScreen() {
    */
   const [asAnnouncement, setAsAnnouncement] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * True while the attachment panel stands in the keyboard's place.
+   *
+   * The two are alternatives, never both: this is a *mode* of the same strip of screen, which is
+   * why the "+" becomes a keyboard glyph rather than a second control appearing beside it.
+   */
   const [attachOpen, setAttachOpen] = useState(false);
+  /**
+   * How tall the keyboard is, remembered from the last time it appeared.
+   *
+   * The panel has to be exactly this tall or the composer moves when they swap, which is the
+   * whole illusion. Remembered rather than measured on demand because the keyboard is **gone** by
+   * the time the panel is drawn - and it is per device and per keyboard, so a constant would be
+   * wrong on most phones and wrong again the moment somebody enables a third-party keyboard.
+   */
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  /**
+   * How the keyboard moves: the duration and curve iOS reports with each event.
+   *
+   * `KeyboardAvoidingView` animates its own padding with exactly these values, so borrowing them
+   * is what keeps the panel's growth and the keyboard's exit on one clock. A hand-picked duration
+   * would drift against the real one and the composer would visibly stagger.
+   */
+  const keyboardMove = useRef<{ duration: number; easing: string }>({
+    duration: 250,
+    easing: "keyboard",
+  });
+  /** The composer's field, so the keyboard glyph can put the keyboard back by focusing it. */
+  const inputRef = useRef<TextInput>(null);
+  /**
+   * Whether the keyboard is on screen right now, and whether a "+" is waiting for it to leave.
+   *
+   * > **The swap has to happen inside a keyboard event, and these are what make that possible.**
+   * > Opening the panel the moment "+" is pressed puts the panel's height on screen while the
+   * > keyboard's is still there, and for the two or three frames before the keyboard begins to
+   * > leave, the composer carries both - it jumps up and then eases back down. Reported from the
+   * > device as "a split second render where it just pops above, like how it used to do".
+   *
+   * So the press only *asks*: it dismisses the keyboard and leaves `wantsPanel` set, and the
+   * panel is opened by `keyboardWillHide`, in the same commit that removes the keyboard's own
+   * height. Closing works the same way in reverse, driven by `keyboardWillShow`.
+   *
+   * Refs rather than state because a listener registered once has to read the current value, and
+   * because nothing renders from them.
+   */
+  const keyboardUp = useRef(false);
+  const wantsPanel = useRef(false);
+  /** The panel's open state, for the same listener to read without re-subscribing. */
+  const attachOpenNow = useRef(attachOpen);
+  useEffect(() => {
+    attachOpenNow.current = attachOpen;
+  }, [attachOpen]);
+
+  /**
+   * Animate the next layout change the way the keyboard animates.
+   *
+   * The panel appearing and the keyboard leaving are two separate changes to the same strip of
+   * screen. Run on one duration and one curve they read as a single swap; run on two they read
+   * as the composer being shoved.
+   */
+  const animateWithKeyboard = useCallback(() => {
+    const { duration, easing } = keyboardMove.current;
+    /*
+     * The event's easing is a name, and the one the keyboard reports on iOS is `keyboard`, which
+     * is a type this API has. Anything else it might report falls back to that same curve rather
+     * than to a default the keyboard does not use.
+     */
+    const named = LayoutAnimation.Types[easing as keyof typeof LayoutAnimation.Types];
+    LayoutAnimation.configureNext({
+      // The floor is RCTLayoutAnimation's, not ours: it refuses anything shorter.
+      duration: Math.max(duration, 10),
+      update: {
+        duration: Math.max(duration, 10),
+        type: named ?? LayoutAnimation.Types.keyboard,
+      },
+    });
+  }, []);
+
+  /**
+   * Swap the keyboard for the attachment panel, or the panel back for the keyboard.
+   *
+   * **This mostly does not change anything itself.** Where a keyboard is involved it asks the
+   * keyboard to move and lets the keyboard's own event flip the panel, so the two heights are
+   * never on screen at once - see `keyboardUp`. It acts directly in exactly the two cases where
+   * no keyboard event is coming: opening with the keyboard already down, and web, which has no
+   * software keyboard to swap with at all.
+   */
+  const toggleAttach = useCallback(() => {
+    if (attachOpen) {
+      if (Platform.OS === "web" || !inputRef.current) {
+        animateWithKeyboard();
+        setAttachOpen(false);
+        return;
+      }
+      // Focusing raises the keyboard; `keyboardWillShow` closes the panel as it arrives.
+      inputRef.current.focus();
+      return;
+    }
+
+    if (keyboardUp.current) {
+      wantsPanel.current = true;
+      Keyboard.dismiss();
+      return;
+    }
+
+    animateWithKeyboard();
+    setAttachOpen(true);
+  }, [attachOpen, animateWithKeyboard]);
+
+  useEffect(() => {
+    /*
+     * `will` on iOS, `did` on Android: iOS reports the coming change before it animates, which is
+     * what allows anything to move WITH the keyboard rather than after it. Android has no
+     * equivalent, so it gets the honest late one.
+     */
+    const showing = Keyboard.addListener(
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
+      (event) => {
+        keyboardUp.current = true;
+        setKeyboardHeight(event.endCoordinates.height);
+        if (event.duration) {
+          keyboardMove.current = {
+            duration: event.duration,
+            easing: event.easing ?? "keyboard",
+          };
+        }
+        /*
+         * The panel closes HERE, as the keyboard arrives, so its height leaves in the same commit
+         * that the keyboard's height lands. One place decides that the keyboard beats the panel,
+         * rather than every control that might raise one - tapping the message field while the
+         * panel is open therefore does the right thing without knowing the panel exists.
+         */
+        if (attachOpenNow.current) {
+          animateWithKeyboard();
+          setAttachOpen(false);
+        }
+      },
+    );
+    const hiding = Keyboard.addListener(
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
+      (event) => {
+        keyboardUp.current = false;
+        if (event.duration) {
+          keyboardMove.current = {
+            duration: event.duration,
+            easing: event.easing ?? "keyboard",
+          };
+        }
+        // And the panel opens HERE, for the mirror-image reason.
+        if (wantsPanel.current) {
+          wantsPanel.current = false;
+          animateWithKeyboard();
+          setAttachOpen(true);
+        }
+      },
+    );
+    return () => {
+      showing.remove();
+      hiding.remove();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   /** The dropdown of this conversation's other screens. */
   const [gridOpen, setGridOpen] = useState(false);
   /**
@@ -3538,70 +3711,6 @@ export default function ChatScreen() {
       )}
 
       {/*
-        The attach menu. PRD/05 rule 11: Photos, Camera and Document for anybody who can post,
-        plus the admin-gated create actions for whatever the scope supports.
-
-        The two axes are independent and are kept independent here. `createActions` answers
-        "what does this scope have" from the scope alone; `meta.canAnnounce` answers "may this
-        person create things here" - one channel-admin question the server already resolved per
-        scope, rather than three role rules restated in the client.
-      */}
-      {attachOpen && canPost && (
-        <View style={styles.attachGrid}>
-          {/*
-            v1's grid of circular tiles, not a list of rows. Each is one tap and the icons carry
-            the recognition, which is what makes "+" feel like a menu of things you can send
-            rather than a settings list.
-
-            Photos, Camera and Document are for anybody who can post. The create actions below
-            them are gated on `canAnnounce` - one channel-admin question the server already
-            resolves per scope - and on what the scope actually HAS. The two are independent:
-            Event is club-only and Meeting is Eboard-only, and neither absence is a permission.
-          */}
-          {(
-            [
-              ["Photos", "photo-library", color.accent, pickPhoto, "photo"],
-              ["Camera", "photo-camera", color.secondary, takePhoto, "photo"],
-              ["Document", "insert-drive-file", color.tertiary, pickDocument, "document"],
-            ] as const
-          ).map(([label, icon, tint, pick, kind]) => (
-            <Pressable
-              key={label}
-              style={styles.attachTile}
-              onPress={() => void attach(pick, kind)}
-              accessibilityRole="button"
-              accessibilityLabel={label}
-            >
-              <View style={[styles.attachTileIcon, { backgroundColor: tint }]}>
-                <MaterialIcons name={icon} size={24} color={color.onAccent} />
-              </View>
-              <Text style={styles.attachTileLabel}>{label}</Text>
-            </Pressable>
-          ))}
-
-          {meta !== null &&
-            meta.canAnnounce &&
-            createActions(meta).map((action) => (
-              <Pressable
-                key={action.label}
-                style={styles.attachTile}
-                onPress={() => {
-                  setAttachOpen(false);
-                  router.push(action.href);
-                }}
-                accessibilityRole="button"
-                accessibilityLabel={action.label}
-              >
-                <View style={[styles.attachTileIcon, { backgroundColor: action.tint }]}>
-                  <MaterialIcons name={action.icon} size={24} color={color.onAccent} />
-                </View>
-                <Text style={styles.attachTileLabel}>{action.label}</Text>
-              </Pressable>
-            ))}
-        </View>
-      )}
-
-      {/*
         The long-press overlay.
 
         > **Rendered at screen level, not inside the message row.** The row lives in a FlatList
@@ -4045,25 +4154,40 @@ export default function ChatScreen() {
       {canPost ? (
         <View style={styles.composer}>
           {/*
-            The "+". Disabled while bytes are in flight rather than hidden, so a second tap
-            cannot start a concurrent upload and the reason is visible.
+            The "+", which becomes a keyboard while the panel is standing in for one.
+
+            **One control with two modes, not two controls.** The panel occupies the keyboard's
+            space, so the way back to typing has to be where the way out of typing was - and the
+            glyph naming its destination is the only thing that says the panel is a mode you can
+            leave rather than a menu that ate the keyboard.
+
+            Disabled while bytes are in flight rather than hidden, so a second tap cannot start a
+            concurrent upload and the reason is visible.
           */}
           <Pressable
             style={[styles.attachButton, uploading && styles.sendDisabled]}
-            onPress={() => setAttachOpen((open) => !open)}
+            onPress={toggleAttach}
             disabled={uploading}
             accessibilityRole="button"
+            accessibilityState={{ expanded: attachOpen }}
             accessibilityLabel={
-              uploading ? "Uploading an attachment" : "Attach a photo or file"
+              uploading
+                ? "Uploading an attachment"
+                : attachOpen
+                  ? "Show the keyboard"
+                  : "Attach a photo or file"
             }
           >
             {uploading ? (
               <ActivityIndicator color={color.accent} />
+            ) : attachOpen ? (
+              <MaterialIcons name="keyboard" size={24} color={color.accent} />
             ) : (
               <Text style={styles.attachLabel}>+</Text>
             )}
           </Pressable>
           <TextInput
+            ref={inputRef}
             style={styles.input}
             placeholder={asAnnouncement ? "Announcement" : "Message"}
             placeholderTextColor={color.textSecondary}
@@ -4134,6 +4258,82 @@ export default function ChatScreen() {
           <Text style={styles.composerDisabledText}>
             {DENIED_TEXT[meta?.postDeniedReason ?? "unavailable"]}
           </Text>
+        </View>
+      )}
+
+      {/*
+        Everything the "+" can send, in the keyboard's place - `DESIGN/08` rule 1.
+
+        > **Below the composer, which is the whole point.** It used to open above it, which pushed
+        > the composer up the screen and left the keyboard underneath, so the conversation lost two
+        > bands of itself at once. Standing where the keyboard stood costs nothing that was not
+        > already spent, and the composer does not move at all.
+
+        Its height is the keyboard's own, so the swap is invisible; see `keyboardHeight`. The grid
+        scrolls because a scope with polls, events and meetings has more tiles than a short
+        keyboard has room for, and a tile nobody can reach is a feature nobody has.
+      */}
+      {attachOpen && canPost && (
+        <View
+          style={[
+            styles.attachPanel,
+            { height: keyboardHeight > 0 ? keyboardHeight : KEYBOARD_FALLBACK_HEIGHT },
+          ]}
+        >
+          <ScrollView
+            contentContainerStyle={[styles.attachGrid, { paddingBottom: insets.bottom }]}
+          >
+            {/*
+              v1's grid of circular tiles, not a list of rows. Each is one tap and the icons carry
+              the recognition, which is what makes "+" feel like a menu of things you can send
+              rather than a settings list.
+
+              Photos, Camera and Document are for anybody who can post. The create actions below
+              them are gated on `canAnnounce` - one channel-admin question the server already
+              resolves per scope - and on what the scope actually HAS. The two are independent:
+              Event is club-only and Meeting is Eboard-only, and neither absence is a permission.
+            */}
+            {(
+              [
+                ["Photos", "photo-library", color.accent, pickPhoto, "photo"],
+                ["Camera", "photo-camera", color.secondary, takePhoto, "photo"],
+                ["Document", "insert-drive-file", color.tertiary, pickDocument, "document"],
+              ] as const
+            ).map(([label, icon, tint, pick, kind]) => (
+              <Pressable
+                key={label}
+                style={styles.attachTile}
+                onPress={() => void attach(pick, kind)}
+                accessibilityRole="button"
+                accessibilityLabel={label}
+              >
+                <View style={[styles.attachTileIcon, { backgroundColor: tint }]}>
+                  <MaterialIcons name={icon} size={24} color={color.onAccent} />
+                </View>
+                <Text style={styles.attachTileLabel}>{label}</Text>
+              </Pressable>
+            ))}
+
+            {meta !== null &&
+              meta.canAnnounce &&
+              createActions(meta).map((action) => (
+                <Pressable
+                  key={action.label}
+                  style={styles.attachTile}
+                  onPress={() => {
+                    setAttachOpen(false);
+                    router.push(action.href);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={action.label}
+                >
+                  <View style={[styles.attachTileIcon, { backgroundColor: action.tint }]}>
+                    <MaterialIcons name={action.icon} size={24} color={color.onAccent} />
+                  </View>
+                  <Text style={styles.attachTileLabel}>{action.label}</Text>
+                </Pressable>
+              ))}
+          </ScrollView>
         </View>
       )}
     </KeyboardAvoidingView>
@@ -4943,16 +5143,25 @@ const styles = StyleSheet.create({
   headerTitle: { ...type.headerTitle, color: color.accent },
   /** 9px, v1's value. Doubles as the connection state, which chat is the one screen to care. */
   headerSubtitle: { ...type.label, fontSize: 9, color: color.textSecondary },
+  /*
+    The attachment panel, which stands in the keyboard's place.
+
+    Sunken rather than chrome, so it reads as the space the keyboard came out of and the composer
+    still reads as a bar sitting on top of something. Its height is supplied at render and is the
+    keyboard's own - see `KEYBOARD_FALLBACK_HEIGHT` for the one case where it cannot be.
+  */
+  attachPanel: { backgroundColor: color.cardSunken, overflow: "hidden" },
   attachGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: space.md,
-    padding: space.md,
-    backgroundColor: color.chrome,
-    borderTopWidth: 1,
-    borderTopColor: color.divider,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    paddingHorizontal: space.sm,
+    paddingTop: space.md,
   },
-  attachTile: { alignItems: 'center', gap: space.xs, width: 72 },
+  /*
+    Four to a row, by width rather than by a fixed size: the row has to divide the screen evenly
+    on a phone of any width, and a fixed tile leaves a ragged gap on the wide ones.
+  */
+  attachTile: { width: "25%", alignItems: "center", gap: space.xs, marginBottom: space.lg },
   attachTileIcon: {
     width: 56,
     height: 56,

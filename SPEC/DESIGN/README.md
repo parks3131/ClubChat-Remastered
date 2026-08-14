@@ -70,6 +70,7 @@ restating it wrongly.
 | 05 | [Content card](05-content-card.md) | What a poll, an event or a meeting becomes in a conversation: one shell, three payloads, and the votable bar |
 | 06 | [Composer](06-composer.md) | The form you fill in to make a thing: sections separated by air, the action in the header, and the wheel |
 | 07 | [Reactions](07-reactions.md) | The pills under a message and the sheet behind them: tap to act, hold to ask who, and a scrim that stays put |
+| 08 | [Attachment panel](08-attachment-panel.md) | What the composer's "+" opens, in the keyboard's place: one control with two modes, and a swap with no frame in between |
 
 **Written as surfaces are worked on, not backfilled in a pass.** A spec written by reading code
 rather than by looking at a device starts out wrong, and a directory of unverified documents is

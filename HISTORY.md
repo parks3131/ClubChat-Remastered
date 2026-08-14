@@ -13,6 +13,51 @@ Newest first.
 
 ---
 
+## 2026-08-14 - The "+" trades places with the keyboard
+
+The attach menu opened above the composer, which pushed the composer up the screen and left the
+keyboard sitting underneath it - two bands of the conversation gone for one action. The founder
+sent a GroupMe recording of the arrangement he wanted: the panel takes the keyboard's own place,
+and the "+" becomes a keyboard glyph, so the two are modes of one strip of screen rather than
+things that stack.
+
+The panel is therefore exactly the keyboard's height, which is **remembered from the last time the
+keyboard appeared** rather than guessed: it is per device and per keyboard, so a constant is wrong
+on most phones and wrong again the moment somebody installs a third-party keyboard. A constant
+survives only as the fallback for the one press that can happen before the keyboard has ever been
+seen in that session.
+
+### Both heights were on screen at once, and it looked like the old code
+
+Reported as "a split second render where it just pops above, like how it used to do, and then it's
+going down... both are happening" - and the reading was right, though not about the old code, which
+was already deleted. It was the two *heights*: the panel mounted the instant "+" was pressed, while
+`KeyboardAvoidingView` was still padding the composer by a keyboard that had not been told to leave
+yet. For the two or three frames before the keyboard began to travel, the composer carried both.
+
+**The press no longer opens anything.** It dismisses the keyboard and sets a flag; the panel is
+opened by `keyboardWillHide`, in the same commit that removes the keyboard's height. Closing is the
+mirror: the glyph only focuses the field, and `keyboardWillShow` collapses the panel as the keyboard
+arrives. Two cases still act immediately, and both are cases where no keyboard event is coming -
+opening with the keyboard already down, and web, which has no software keyboard at all.
+
+`KeyboardAvoidingView` animates its padding through `LayoutAnimation` using the duration and curve
+the keyboard event carries, so the panel's height change borrows the same two values. One clock,
+one curve, and the two halves of the swap cancel out exactly.
+
+**Recognising the class**: two independently-correct pieces of code each own a bottom inset, and
+neither is wrong on its own. It is only visible in the frames between them, which is why it was
+found by watching a slowed recording rather than by reading either one.
+
+### What could not be verified here
+
+The simulator could not be driven: `osascript` was refused assistive access, so no taps. This is a
+keyboard behaviour, so the browser can prove the states and the labels and nothing about the
+timing - it was checked there for the open/close cycle and handed to the founder's device for the
+frames, which is where the bug was reported from in the first place.
+
+---
+
 ## 2026-08-14 - Who reacted, and a shade that travelled
 
 The founder sent a GroupMe screenshot: chips across the top of a sheet, then a face and a name per

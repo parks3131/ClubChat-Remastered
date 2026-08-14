@@ -99,6 +99,16 @@ The **"Kinetic Performance System"**, extracted verbatim from the Stitch export'
   way. The panel's travel is its **measured** height, since a sheet that hugs its content has no
   constant to slide by. See [`DESIGN/07`](../DESIGN/07-reactions.md) rule 6.
 
+- **Anything that stands in the keyboard's place changes inside the keyboard's own event.** Not
+  when the control is pressed. The press asks the keyboard to move; `keyboardWillShow` and
+  `keyboardWillHide` are where the replacement opens and closes, so its height lands in the same
+  commit that the keyboard's height leaves. Open it on the press instead and the composer carries
+  **both** heights for the two or three frames before the keyboard starts to travel - it jumps up
+  and eases back, which is what the founder saw as "a split second render where it just pops
+  above". The same events carry the duration and curve `KeyboardAvoidingView` animates its padding
+  with, and borrowing them is what keeps the two halves of the swap on one clock. See
+  [`DESIGN/08`](../DESIGN/08-attachment-panel.md) rule 5.
+
 **Light mode only** today; there is no dark palette. The token module is a flat named export
 specifically so a dark variant can be swapped in without touching call sites.
 

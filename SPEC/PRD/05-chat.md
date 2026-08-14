@@ -172,6 +172,12 @@ second is a feature the whole product would have to bend around. Threads remain 
     available, plus admin-gated create actions for whatever the scope supports (club: Poll,
     Event; race: Poll; Eboard: Poll, Meeting).
 
+    **It opens in the keyboard's place, and the "+" becomes a keyboard while it is there.**
+    Sending something and typing something are two modes of the same strip of screen, so opening
+    one closes the other and the way back is the control you came through. Nothing above the
+    composer moves, and the conversation loses no more room than the keyboard was already
+    taking - see [`DESIGN/08`](../DESIGN/08-attachment-panel.md).
+
     **The two axes are independent, and conflating them is the mistake to avoid.** *Which*
     actions the scope has is a fact about the scope; *whether this person gets them* is a fact
     about their authority in it. Read off v1 on 2026-07-30:
