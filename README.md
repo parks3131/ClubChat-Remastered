@@ -93,7 +93,7 @@ should all fit with zero customisation work.
 
 **Clubs** with an owner, admins and members. Join an open club instantly, request one that is
 closed, or follow an invite link straight in. Each club has a main chat, news and highlights, a
-calendar, polls, and weekly training routines.
+calendar, polls, and a weekly meetups plan.
 
 **Races and meets**, each a nested space with its own roster, its own chat, its own polls, meet
 information (location, hotel, results), and car groups for who is driving whom.
@@ -214,14 +214,14 @@ running on a physical device.
   </tr>
 </table>
 
-### Calendar, events, notifications and routines
+### Calendar, events, notifications and weekly meetups
 
 <table>
   <tr>
     <td width="25%"><img src="docs/screenshots/ios-calendar.jpg" alt="Calendar" /></td>
     <td width="25%"><img src="docs/screenshots/ios-events.jpg" alt="Upcoming events and polls" /></td>
     <td width="25%"><img src="docs/screenshots/ios-notifications.jpg" alt="Notifications" /></td>
-    <td width="25%"><img src="docs/screenshots/ios-weekly-routine.jpg" alt="Weekly routine" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-weekly-routine.jpg" alt="Weekly meetups" /></td>
   </tr>
   <tr>
     <td valign="top"><sub><b>One merged month.</b> Every scope you can see, merged by permission.
@@ -232,8 +232,10 @@ running on a physical device.
     <td valign="top"><sub><b>Read-cursor notifications.</b> Every row is a <b>type plus params</b>
       rendered on the client, so renaming a club fixes history. "Caught up on 5 messages" is the read
       cursor talking - the same cursor that decides whether a push was ever sent.</sub></td>
-    <td valign="top"><sub><b>Weekly routines.</b> The training plan clubs used to screenshot into chat
-      every week, now a real dated object you page through week by week, rest days included.</sub></td>
+    <td valign="top"><sub><b>Weekly meetups.</b> The plan clubs used to screenshot into chat every
+      week, now a real dated object you page through week by week - where, when, and what you are
+      doing, with every empty day saying so. <i>Shown before the 2026-08-14 rename; it carried an
+      activity type then, and carries a place and a time now.</i></sub></td>
   </tr>
 </table>
 

@@ -618,10 +618,27 @@ SELECT pg_temp.assert_rejected(
   $$INSERT INTO news_reactions (post_id, user_id, emoji)
     SELECT id, '11111111-1111-4111-8111-111111111111', '🔥' FROM news_posts LIMIT 1$$);
 
+-- Weekly Meetups has no activity-type CHECK left to prove. ADR-0029 deleted the field rather
+-- than generalising it, so the invariants that remain are that a meetup answers WHERE and WHEN.
+-- The absence of a type assertion here is the decision, not a dropped test.
 SELECT pg_temp.assert_rejected(
-  'routines - an invented activity type',
-  $$INSERT INTO routine_workouts (club_id, workout_date, activity_type, title)
-    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', 'quidditch', 'nope')$$);
+  'meetups - no place',
+  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, location)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '18:00', NULL)$$);
+
+SELECT pg_temp.assert_rejected(
+  'meetups - no time',
+  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, location)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', NULL, 'Track')$$);
+
+-- A day holds as many meetups as the club needs. There is deliberately NO unique key on
+-- (club_id, meetup_date), and this is what proves it: a morning session and an evening social
+-- on one day must both be accepted.
+SELECT pg_temp.assert_accepted(
+  'meetups - two on the same day',
+  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, location) VALUES
+      ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '06:30', 'Track'),
+      ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '19:00', 'The Anchor')$$);
 
 SELECT pg_temp.assert_rejected(
   'calendar - an invented event type',

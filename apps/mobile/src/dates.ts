@@ -8,7 +8,7 @@
  *
  * **The rule that governs this whole module** is AGENTS.md's failure mode: *a date-only value
  * parsed as an ISO string is UTC midnight, and renders a day early in a negative-offset timezone.*
- * A race's `raceDate` and a workout's `workoutDate` are date-only; a message's `createdAt` and an
+ * A race's `raceDate` and a meetup's `meetupDate` are date-only; a message's `createdAt` and an
  * event's `startsAt` are instants. The two are formatted by different functions on purpose, and
  * the date-only ones build a `Date` from split components rather than parsing.
  */
@@ -89,6 +89,22 @@ export function formatDateLong(dateKey: string): string {
 }
 
 /** "Tue, Mar 2" for a date-only value. Never parses the string as an instant. */
+/**
+ * "6:30 PM" from a wall-clock `HH:MM`.
+ *
+ * Deliberately not `formatClock`, which takes an instant. A meetup's time is the club's own
+ * wall-clock and has no timezone to convert from - Tuesday 6pm is Tuesday 6pm for everybody on
+ * the roster. The throwaway Date exists only to reach the locale's 12-or-24-hour preference;
+ * its day is never read and must never be.
+ */
+export function formatWallClock(hhmm: string): string {
+  const [hour, minute] = hhmm.split(':').map(Number);
+  return new Date(2000, 0, 1, hour ?? 0, minute ?? 0).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 export function formatDateOnly(dateKey: string): string {
   return fromDateKey(dateKey).toLocaleDateString(undefined, {
     weekday: 'short',

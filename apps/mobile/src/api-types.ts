@@ -272,28 +272,40 @@ export type NewsPost = {
   reactions: Array<{ emoji: string; count: number; mine: boolean }>;
 };
 
-export type ActivityType =
-  | 'run'
-  | 'trail_run'
-  | 'bike'
-  | 'swim'
-  | 'strength'
-  | 'hybrid_fitness'
-  | 'indoor_climb'
-  | 'bouldering'
-  | 'xc_ski'
-  | 'other';
+/**
+ * One entry on the club's week: where, when, and what.
+ *
+ * **There is no activity type**, and its absence is the design rather than an omission - see
+ * ADR-0029, which records the per-club catalog that was specified and rejected. `description`
+ * is the only place what the club is doing is recorded, in that club's own words.
+ */
+export type Meetup = {
+  id: string;
+  /** `HH:MM`, wall-clock in the club's own day. Never converted to the reader's timezone. */
+  time: string;
+  location: string;
+  description: string | null;
+};
 
-export type RoutineDay = {
+/**
+ * What the create and edit forms send. `location` and `meetupTime` are required: the surface
+ * exists to answer where and when, and a club that has not decided types "TBC".
+ */
+export type MeetupBody = {
+  /** `YYYY-MM-DD`. */
+  meetupDate: string;
+  /** `HH:MM`, 24-hour. */
+  meetupTime: string;
+  location: string;
+  description?: string | null;
+};
+
+export type MeetupDay = {
   date: string;
-  workouts: Array<{
-    id: string;
-    activityType: ActivityType;
-    title: string;
-    description: string | null;
-  }>;
-  /** Rendered as "Rest day", never as an empty absence. */
-  restDay: boolean;
+  /** Several may share a day, in time order. A morning session and an evening social are two. */
+  meetups: Meetup[];
+  /** Rendered as "Nothing planned", never as an empty absence. */
+  empty: boolean;
 };
 
 export type EventType = 'race' | 'practice' | 'team_bonding' | 'volunteer' | 'other';

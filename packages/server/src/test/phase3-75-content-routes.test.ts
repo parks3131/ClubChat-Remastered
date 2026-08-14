@@ -1,8 +1,8 @@
 /**
- * The content HTTP surface: meetings, calendar events, routines and news.
+ * The content HTTP surface: meetings, calendar events, meetups and news.
  *
  * Four features that look alike, and the tests are mostly about the ways they deliberately
- * differ - who may edit, and what notifies. The silences are the fragile part: a routine
+ * differ - who may edit, and what notifies. The silences are the fragile part: a meetup
  * notifies nobody, and editing or deleting news notifies nobody, and both are the sort of
  * property a later change breaks without failing anything.
  */
@@ -426,53 +426,103 @@ describe('calendar events', () => {
   });
 });
 
-describe('routines', () => {
-  it('creates a workout that notifies nobody and posts nothing', async () => {
-    const owner = await signUp('RoutineOwner');
-    const member = await signUp('RoutineMember');
+describe('weekly meetups', () => {
+  it('creates a meetup that notifies nobody and posts nothing', async () => {
+    const owner = await signUp('MeetupOwner');
+    const member = await signUp('MeetupMember');
     const { clubId } = await createClubAs(owner);
     await join(clubId, member);
 
     const before = await outboxTypes(clubId);
 
-    const created = await as(owner, 'POST', `/clubs/${clubId}/workouts`, {
-      workoutDate: '2027-05-03',
-      activityType: 'run',
-      title: 'Easy 5k',
+    const created = await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+      meetupDate: '2027-05-03',
+      meetupTime: '18:30',
+      location: 'Memorial Park gate',
+      description: '8 x 400m, then a cool-down loop',
     });
     expect(created.status).toBe(201);
 
-    // The silence is the point: a week of workouts authored in one sitting must not fire seven
+    // The silence is the point: a week of meetups authored in one sitting must not fire seven
     // notifications, and the mechanism is the absence of an outbox row rather than a filter.
     expect(await outboxTypes(clubId)).toEqual(before);
 
     // A member reads the week and cannot write to it.
-    const week = await as(member, 'GET', `/clubs/${clubId}/routines?monday=2027-05-03`);
+    const week = await as(member, 'GET', `/clubs/${clubId}/meetups?monday=2027-05-03`);
     expect(week.status).toBe(200);
     expect(week.body.days).toHaveLength(7);
     expect(week.body.days[0].date).toBe('2027-05-03');
-    expect(week.body.days[0].workouts).toHaveLength(1);
-    // A day with nothing scheduled says so explicitly rather than being an empty absence.
-    expect(week.body.days[1].restDay).toBe(true);
+    expect(week.body.days[0].meetups).toHaveLength(1);
+    expect(week.body.days[0].meetups[0].time).toBe('18:30');
+    expect(week.body.days[0].meetups[0].location).toBe('Memorial Park gate');
+    // A day with nothing on it says so explicitly rather than being an empty absence.
+    expect(week.body.days[1].empty).toBe(true);
 
     expect(
-      (await as(member, 'POST', `/clubs/${clubId}/workouts`, {
-        workoutDate: '2027-05-04',
-        activityType: 'run',
-        title: 'No',
+      (await as(member, 'POST', `/clubs/${clubId}/meetups`, {
+        meetupDate: '2027-05-04',
+        meetupTime: '09:00',
+        location: 'No',
       })).status,
     ).toBe(404);
-    expect((await as(member, 'DELETE', `/workouts/${created.body.workoutId}`)).status).toBe(404);
+    expect(
+      (await as(member, 'PATCH', `/meetups/${created.body.meetupId}`, {
+        meetupDate: '2027-05-04', meetupTime: '09:00', location: 'No',
+      })).status,
+    ).toBe(404);
+    expect((await as(member, 'DELETE', `/meetups/${created.body.meetupId}`)).status).toBe(404);
 
-    // Any admin edits any workout, not only its author.
-    expect((await as(owner, 'DELETE', `/workouts/${created.body.workoutId}`)).status).toBe(200);
+    // Any admin edits any meetup, not only its author.
+    expect(
+      (await as(owner, 'PATCH', `/meetups/${created.body.meetupId}`, {
+        meetupDate: '2027-05-03', meetupTime: '06:30', location: 'Track',
+      })).status,
+    ).toBe(200);
+    expect((await as(owner, 'DELETE', `/meetups/${created.body.meetupId}`)).status).toBe(200);
+  });
+
+  it('refuses a meetup with no place or no time', async () => {
+    // The surface exists to answer where and when. "TBC" is a real answer; a blank is not.
+    const owner = await signUp('BlankOwner');
+    const { clubId } = await createClubAs(owner);
+
+    for (const payload of [
+      { meetupDate: '2027-05-03', meetupTime: '18:30' },
+      { meetupDate: '2027-05-03', location: 'Track' },
+      { meetupDate: '2027-05-03', meetupTime: '18:30', location: '   ' },
+      { meetupDate: '2027-05-03', meetupTime: '25:00', location: 'Track' },
+      { meetupDate: '2027-05-03', meetupTime: '6:30pm', location: 'Track' },
+    ]) {
+      const response = await as(owner, 'POST', `/clubs/${clubId}/meetups`, payload);
+      expect(response.status, JSON.stringify(payload)).toBe(400);
+    }
+  });
+
+  it('holds several meetups on one day, in time order', async () => {
+    const owner = await signUp('TwiceOwner');
+    const { clubId } = await createClubAs(owner);
+
+    for (const [meetupTime, location] of [
+      ['19:00', 'The Anchor'],
+      ['06:30', 'Track'],
+    ] as const) {
+      expect(
+        (await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+          meetupDate: '2027-05-04', meetupTime, location,
+        })).status,
+      ).toBe(201);
+    }
+
+    const week = await as(owner, 'GET', `/clubs/${clubId}/meetups?monday=2027-05-03`);
+    const tuesday = week.body.days.find((d: { date: string }) => d.date === '2027-05-04');
+    expect(tuesday.meetups.map((m: { time: string }) => m.time)).toEqual(['06:30', '19:00']);
   });
 
   it('requires the Monday rather than guessing the caller timezone', async () => {
     const owner = await signUp('MondayOwner');
     const { clubId } = await createClubAs(owner);
-    expect((await as(owner, 'GET', `/clubs/${clubId}/routines`)).status).toBe(400);
-    expect((await as(owner, 'GET', `/clubs/${clubId}/routines?monday=next`)).status).toBe(400);
+    expect((await as(owner, 'GET', `/clubs/${clubId}/meetups`)).status).toBe(400);
+    expect((await as(owner, 'GET', `/clubs/${clubId}/meetups?monday=next`)).status).toBe(400);
   });
 });
 
@@ -636,8 +686,10 @@ describe('the session boundary', () => {
       ['POST', `/clubs/${id}/events`],
       ['GET', `/events/${id}`],
       ['DELETE', `/events/${id}`],
-      ['POST', `/clubs/${id}/workouts`],
-      ['GET', `/clubs/${id}/routines`],
+      ['POST', `/clubs/${id}/meetups`],
+      ['GET', `/clubs/${id}/meetups`],
+      ['PATCH', `/meetups/${id}`],
+      ['DELETE', `/meetups/${id}`],
       ['POST', `/clubs/${id}/news`],
       ['GET', `/clubs/${id}/news`],
       ['POST', `/news/${id}/reactions`],

@@ -202,7 +202,7 @@ const DENIED_TEXT: Record<
 /**
  * The header quick-nav entries for a group scope.
  *
- * `PRD/15` gives club chat "Members · Poll · Routines · Events" and race chat "Members · Meet
+ * `PRD/15` gives club chat "Members · Poll · Meetups · Events" and race chat "Members · Meet
  * Information · Polls · Car Assignments and Groups", and Eboard chat "Members · Meetings · Polls".
  * Built from the channel's scope rather than forked per scope: one list function, three answers.
  *
@@ -236,7 +236,7 @@ function scopeLinks(
       highlights,
       { href: `/clubs/${meta.scopeId}/members`, label: "Members", icon: "group" },
       { href: `/clubs/${meta.scopeId}/polls`, label: "Poll", icon: "how-to-vote" },
-      { href: `/clubs/${meta.scopeId}/routines`, label: "Routines", icon: "fitness-center" },
+      { href: `/clubs/${meta.scopeId}/weekly-meetups`, label: "Meetups", icon: "calendar-view-week" },
       { href: `/clubs/${meta.scopeId}/events`, label: "Events", icon: "event" },
     ];
   }

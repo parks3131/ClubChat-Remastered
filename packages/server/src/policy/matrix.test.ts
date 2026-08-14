@@ -127,7 +127,7 @@ const contentMatrix: ContentRow[] = [
     member: false,
   },
   {
-    action: 'Create/edit/delete a routine workout',
+    action: 'Create/edit/delete a meetup (any admin, any meetup)',
     run: (c) => canManageClubContent(c, CLUB),
     owner: true,
     admin: true,

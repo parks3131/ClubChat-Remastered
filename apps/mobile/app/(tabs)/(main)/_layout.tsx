@@ -294,8 +294,8 @@ export default function MainStackLayout() {
         }))}
       />
       <Stack.Screen
-        name="clubs/[clubId]/routines"
-        options={inClub('Routines', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
+        name="clubs/[clubId]/weekly-meetups"
+        options={inClub('Weekly Meetups', (p) => ({ href: `/clubs/${p.clubId}`, label: 'Club' }))}
       />
       <Stack.Screen
         name="clubs/[clubId]/polls"

@@ -25,6 +25,7 @@ import {
   pgTable,
   primaryKey,
   text,
+  time,
   unique,
   timestamp,
   uniqueIndex,
@@ -1327,7 +1328,7 @@ export const pollVotes = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Calendar, routines, news
+// Calendar, meetups, news
 // ---------------------------------------------------------------------------
 
 /**
@@ -1363,36 +1364,42 @@ export const calendarEvents = pgTable(
 );
 
 /**
- * A weekly routine workout. The feature that replaces the screenshotted Excel sheet.
+ * One entry on the club's week. The feature that replaces the screenshotted Excel sheet.
  *
- * `workoutDate` is a real calendar DATE - the week view shows one real Monday-to-Sunday
- * week, not a repeating template. Deliberately carries an activity type, a title and an
- * optional description and **nothing else**: no sets, reps, distances or splits, and no
- * completion tracking. That is an explicit "keep it very simple" scoping call, not an
- * omission to be filled in later.
+ * **Answers three questions and only these three:** where (`location`), when (`meetupDate`
+ * plus `meetupTime`) and what (`description`, free text). The first two are `NOT NULL` -
+ * the surface exists to answer them, and a club that has not decided yet types "TBC", which
+ * tells a member something a blank does not.
+ *
+ * **There is no type, category or kind column, and that absence is the design.** A per-club,
+ * admin-editable catalog of activity types was specified in full and rejected; see ADR-0029,
+ * which records it at length precisely so a reader who finds this table and assumes the
+ * missing column is an oversight does not add one back.
+ *
+ * **`meetupDate` is a DATE and `meetupTime` is a TIME, deliberately not one timestamp.** A
+ * club's week is local wall-clock and no club carries a timezone, so there is nothing to
+ * convert from - and an instant would put Tuesday's meetup on Monday for a member reading
+ * from another country. The week groups by `meetupDate`, and that grouping must not depend on
+ * who is looking.
+ *
+ * No unique key on (clubId, meetupDate): a day holds as many meetups as the club needs, in
+ * time order. A morning session and an evening social are two rows, not one squashed together.
  */
-export const routineWorkouts = pgTable(
-  'routine_workouts',
+export const meetups = pgTable(
+  'meetups',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     clubId: uuid('club_id')
       .notNull()
       .references(() => clubs.id, { onDelete: 'cascade' }),
-    workoutDate: date('workout_date').notNull(),
-    activityType: text('activity_type').notNull(),
-    title: text('title').notNull(),
+    meetupDate: date('meetup_date').notNull(),
+    meetupTime: time('meetup_time').notNull(),
+    location: text('location').notNull(),
     description: text('description'),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [
-    check(
-      'routine_workouts_activity_valid',
-      sql`activity_type in ('run', 'trail_run', 'bike', 'swim', 'strength',
-                            'hybrid_fitness', 'indoor_climb', 'bouldering', 'xc_ski', 'other')`,
-    ),
-    index('routine_workouts_by_club').on(t.clubId, t.workoutDate),
-  ],
+  (t) => [index('meetups_by_club').on(t.clubId, t.meetupDate, t.meetupTime)],
 );
 
 /**

@@ -28,10 +28,10 @@ import {
   createEvent,
   createMeeting,
   createNewsPost,
-  createWorkout,
+  createMeetup,
   deleteEvent,
   deleteMeeting,
-  readRoutineWeek,
+  readMeetupWeek,
   updateMeeting,
 } from '../domain/content.ts';
 import { sendMessage } from '../domain/send-message.ts';
@@ -720,19 +720,20 @@ describe('the scheduled closing-soon job', () => {
 // ===========================================================================
 
 describe('content notification behaviour', () => {
-  it('a routine workout notifies NOBODY and posts NOTHING', async () => {
-    // A week authored in one sitting would otherwise fire seven notifications.
+  it('a meetup notifies NOBODY and posts NOTHING', async () => {
+    // A week authored in one sitting would otherwise fire seven notifications. This silence is
+    // why Weekly Meetups is a separate surface from the calendar rather than a view over it.
     const f = await setup();
     for (let i = 0; i < 7; i += 1) {
-      await createWorkout(h.db, await ctxFor(f.ownerId), {
-        clubId: f.clubId, workoutDate: `2026-04-0${i + 1}`,
-        activityType: 'run', title: `Day ${i + 1}`,
+      await createMeetup(h.db, await ctxFor(f.ownerId), {
+        clubId: f.clubId, meetupDate: `2026-04-0${i + 1}`,
+        meetupTime: '18:00', location: 'Memorial Park gate',
       });
     }
     await drainAll();
 
     const rows = await h.db.select().from(notifications);
-    expect(rows, 'a routine workout notified somebody').toHaveLength(0);
+    expect(rows, 'a meetup notified somebody').toHaveLength(0);
     expect(push.sent).toHaveLength(0);
   });
 
@@ -971,28 +972,53 @@ describe('chat cards', () => {
 });
 
 // ===========================================================================
-// Routines and the calendar feed
+// Weekly Meetups and the calendar feed
 // ===========================================================================
 
-describe('the routine week', () => {
-  it('renders a rest day explicitly rather than omitting it', async () => {
+describe('the meetup week', () => {
+  it('renders an empty day explicitly rather than omitting it', async () => {
     const f = await setup();
     // A past week, so no days are hidden.
-    await createWorkout(h.db, await ctxFor(f.ownerId), {
-      clubId: f.clubId, workoutDate: '2026-01-06', activityType: 'run', title: 'Intervals',
+    await createMeetup(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId, meetupDate: '2026-01-06', meetupTime: '18:30',
+      location: 'Track', description: '8 x 400m',
     });
 
-    const week = await readRoutineWeek(h.db, await ctxFor(f.memberId), f.clubId, '2026-01-05');
+    const week = await readMeetupWeek(h.db, await ctxFor(f.memberId), f.clubId, '2026-01-05');
     expect(week.ok).toBe(true);
     if (!week.ok) return;
 
     expect(week.days).toHaveLength(7);
     const tuesday = week.days.find((d) => d.date === '2026-01-06');
-    expect(tuesday?.restDay).toBe(false);
-    // An empty day is otherwise ambiguous between "rest" and "not posted yet".
+    expect(tuesday?.empty).toBe(false);
+    // HH:MM on the wire. Postgres hands back HH:MM:SS and nobody wants to read the seconds.
+    expect(tuesday?.meetups[0]?.time).toBe('18:30');
+    expect(tuesday?.meetups[0]?.location).toBe('Track');
+    // An empty day is otherwise ambiguous between "nothing on" and "not posted yet".
     const monday = week.days.find((d) => d.date === '2026-01-05');
-    expect(monday?.restDay).toBe(true);
-    expect(monday?.workouts).toEqual([]);
+    expect(monday?.empty).toBe(true);
+    expect(monday?.meetups).toEqual([]);
+  });
+
+  it('holds several meetups on one day, in time order', async () => {
+    // A morning session and an evening social are two meetups, not one squashed together.
+    const f = await setup();
+    for (const [time, location] of [
+      ['19:00', 'The Anchor'],
+      ['06:30', 'Track'],
+    ] as const) {
+      await createMeetup(h.db, await ctxFor(f.ownerId), {
+        clubId: f.clubId, meetupDate: '2026-01-07', meetupTime: time, location,
+      });
+    }
+
+    const week = await readMeetupWeek(h.db, await ctxFor(f.memberId), f.clubId, '2026-01-05');
+    expect(week.ok).toBe(true);
+    if (!week.ok) return;
+
+    const wednesday = week.days.find((d) => d.date === '2026-01-07');
+    expect(wednesday?.meetups.map((m) => m.time)).toEqual(['06:30', '19:00']);
+    expect(wednesday?.empty).toBe(false);
   });
 });
 

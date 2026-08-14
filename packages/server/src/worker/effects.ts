@@ -1071,7 +1071,7 @@ const onAccountSuspended: EffectHandler = async (event, deps) => {
  * rules in one place rather than repeated five times with five chances to omit the
  * exclude-the-actor rule.
  *
- * Routines are deliberately absent from every call site: creating a workout notifies nobody
+ * Meetups are deliberately absent from every call site: creating one notifies nobody
  * and posts nothing.
  */
 function makeCreationHandler(config: {

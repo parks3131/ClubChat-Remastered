@@ -1,5 +1,5 @@
 /**
- * Meetings, calendar events, routines and news.
+ * Meetings, calendar events, meetups and news.
  *
  * Four features that look alike and have deliberately different notification behaviour. The
  * differences are the interesting part, so they are stated at each command rather than left
@@ -10,10 +10,12 @@
  * | Meeting | Other Eboard members | Yes, into Eboard chat |
  * | Calendar event | Every other club member | Yes, into club chat |
  * | News post | Every other club member | No |
- * | Routine workout | **Nobody** | **No** |
+ * | Meetup | **Nobody** | **No** |
  *
- * The routine row is not an oversight. A routine is reference material, not an event - and a
- * week of workouts authored in one sitting would otherwise fire seven notifications.
+ * The meetup row is not an oversight. A meetup is reference material, not an event - and a week
+ * of them authored in one sitting would otherwise fire seven notifications. That silence is what
+ * makes Weekly Meetups a separate surface from the calendar rather than a view over it, and the
+ * one deliberate exception to it is Nudge, which is a person choosing to send one.
  */
 
 import { and, eq, sql } from 'drizzle-orm';
@@ -24,8 +26,8 @@ import {
   meetings,
   newsPosts,
   newsReactions,
+  meetups,
   outbox,
-  routineWorkouts,
 } from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
@@ -272,103 +274,132 @@ export async function deleteEvent(
 }
 
 // ---------------------------------------------------------------------------
-// Routines
+// Weekly Meetups
 // ---------------------------------------------------------------------------
 
-export type ActivityType =
-  | 'run'
-  | 'trail_run'
-  | 'bike'
-  | 'swim'
-  | 'strength'
-  | 'hybrid_fitness'
-  | 'indoor_climb'
-  | 'bouldering'
-  | 'xc_ski'
-  | 'other';
+/**
+ * What one meetup carries. Where, when, and what - and deliberately nothing else.
+ *
+ * There is **no type, category or kind field**, and its absence is the design rather than an
+ * omission: see ADR-0029, which records the per-club catalog of activity types that was
+ * specified in full and then rejected. `description` is the only place what the club is doing
+ * is ever recorded, in whatever words that club uses.
+ */
+type MeetupInput = {
+  /** A real calendar date, `YYYY-MM-DD`. Never an instant - see `readMeetupWeek`. */
+  meetupDate: string;
+  /** Wall-clock `HH:MM`, in the club's own day. Required. */
+  meetupTime: string;
+  /** Required. "TBC" is a real answer; a blank is not. */
+  location: string;
+  description?: string | null | undefined;
+};
 
 /**
- * Create a routine workout. Any club admin, and **it notifies nobody and posts nothing**.
+ * Create a meetup. Any club admin, and **it notifies nobody and posts nothing**.
  *
- * That silence is deliberate and is the one thing to preserve here. A routine is reference
+ * That silence is deliberate and is the one thing to preserve here. A meetup is reference
  * material rather than an event, and an admin authoring a week of them in one sitting would
  * otherwise fire seven notifications at every member. Note the absence of an outbox write
  * below - there is no event because there is no effect.
  */
-export async function createWorkout(
+export async function createMeetup(
   db: Db,
   ctx: AccessContext,
-  input: {
-    clubId: string;
-    workoutDate: string;
-    activityType: ActivityType;
-    title: string;
-    description?: string | null | undefined;
-  },
-): Promise<Result<{ workoutId: string }>> {
+  input: { clubId: string } & MeetupInput,
+): Promise<Result<{ meetupId: string }>> {
   if (!canManageClubContent(ctx, input.clubId)) return { ok: false, code: 'forbidden' };
 
   const rows = await db
-    .insert(routineWorkouts)
+    .insert(meetups)
     .values({
       clubId: input.clubId,
-      workoutDate: input.workoutDate,
-      activityType: input.activityType,
-      title: input.title,
+      meetupDate: input.meetupDate,
+      meetupTime: input.meetupTime,
+      location: input.location,
       description: input.description ?? null,
       createdBy: ctx.userId,
     })
     .returning();
-  const workout = rows[0];
-  if (!workout) throw new Error('workout insert returned no row');
+  const meetup = rows[0];
+  if (!meetup) throw new Error('meetup insert returned no row');
 
   // No outbox event, on purpose. See above.
-  return { ok: true, workoutId: workout.id };
+  return { ok: true, meetupId: meetup.id };
 }
 
-/** Any admin can edit or delete any workout, not only its author. */
-export async function deleteWorkout(
+/**
+ * Any admin can edit any meetup, not only its author - the same rule as calendar events, and
+ * the opposite of a meeting. A cancelled session that only its absent author could correct is
+ * the failure this avoids.
+ *
+ * Editing notifies nobody either, for the same reason creating does not.
+ */
+export async function updateMeetup(
   db: Db,
   ctx: AccessContext,
-  workoutId: string,
-): Promise<Result<{ deleted: true }>> {
-  const rows = await db
-    .select()
-    .from(routineWorkouts)
-    .where(eq(routineWorkouts.id, workoutId))
-    .limit(1);
-  const workout = rows[0];
-  if (!workout) return { ok: false, code: 'not_found' };
-  if (!canManageClubContent(ctx, workout.clubId)) return { ok: false, code: 'forbidden' };
+  meetupId: string,
+  input: MeetupInput,
+): Promise<Result<{ updated: true }>> {
+  const rows = await db.select().from(meetups).where(eq(meetups.id, meetupId)).limit(1);
+  const meetup = rows[0];
+  if (!meetup) return { ok: false, code: 'not_found' };
+  if (!canManageClubContent(ctx, meetup.clubId)) return { ok: false, code: 'forbidden' };
 
-  await db.delete(routineWorkouts).where(eq(routineWorkouts.id, workoutId));
+  await db
+    .update(meetups)
+    .set({
+      meetupDate: input.meetupDate,
+      meetupTime: input.meetupTime,
+      location: input.location,
+      description: input.description ?? null,
+    })
+    .where(eq(meetups.id, meetupId));
+  return { ok: true, updated: true };
+}
+
+/** Any admin can delete any meetup, not only its author. */
+export async function deleteMeetup(
+  db: Db,
+  ctx: AccessContext,
+  meetupId: string,
+): Promise<Result<{ deleted: true }>> {
+  const rows = await db.select().from(meetups).where(eq(meetups.id, meetupId)).limit(1);
+  const meetup = rows[0];
+  if (!meetup) return { ok: false, code: 'not_found' };
+  if (!canManageClubContent(ctx, meetup.clubId)) return { ok: false, code: 'forbidden' };
+
+  await db.delete(meetups).where(eq(meetups.id, meetupId));
   return { ok: true, deleted: true };
 }
 
 export type WeekDay = {
   date: string;
-  workouts: Array<{
+  /** Several may share a day, in time order. A morning session and an evening social are two. */
+  meetups: Array<{
     id: string;
-    activityType: ActivityType;
-    title: string;
+    /** `HH:MM`. Wall-clock in the club's day, never converted to the reader's zone. */
+    time: string;
+    location: string;
     description: string | null;
   }>;
-  /** True when nothing is scheduled. Rendered explicitly as "Rest day", never omitted. */
-  restDay: boolean;
+  /** True when nothing is planned. Rendered explicitly as "Nothing planned", never omitted. */
+  empty: boolean;
 };
 
 /**
  * One real calendar week, Monday through Sunday.
  *
- * Not a repeating template - the week is a plan for specific dates. Two rules live here:
+ * Not a repeating template - the week is a plan for specific dates. Three rules live here:
  *
- *  - **A day with no workout is a rest day, explicitly.** An empty day is otherwise ambiguous
- *    between "rest" and "not posted yet", so the flag is returned rather than left for the
- *    client to infer from an absence.
+ *  - **A day with nothing on it is empty, explicitly.** An empty day is otherwise ambiguous
+ *    between "nothing is happening" and "nobody has posted yet", so the flag is returned rather
+ *    than left for the client to infer from an absence.
  *  - **On the current week, only today and future days are shown.** The week is a plan, not a
  *    record. Paging back shows all seven days.
+ *  - **A day may hold several meetups**, ordered by time. Nothing here limits it to one.
  */
-export async function readRoutineWeek(
+export async function readMeetupWeek(
   db: Db,
   ctx: AccessContext,
   clubId: string,
@@ -378,29 +409,31 @@ export async function readRoutineWeek(
 
   const rows = await db.execute<{
     id: string;
-    workout_date: string;
-    activity_type: string;
-    title: string;
+    meetup_date: string;
+    meetup_time: string;
+    location: string;
     description: string | null;
   }>(sql`
-    SELECT id, workout_date, activity_type, title, description
-      FROM routine_workouts
+    SELECT id, meetup_date, meetup_time, location, description
+      FROM meetups
      WHERE club_id = ${clubId}
-       AND workout_date >= ${mondayIso}::date
-       AND workout_date < ${mondayIso}::date + interval '7 days'
-     ORDER BY workout_date, created_at
+       AND meetup_date >= ${mondayIso}::date
+       AND meetup_date < ${mondayIso}::date + interval '7 days'
+     ORDER BY meetup_date, meetup_time, created_at
   `);
 
-  const byDate = new Map<string, WeekDay['workouts']>();
+  const byDate = new Map<string, WeekDay['meetups']>();
   for (const row of rows.rows) {
     // Split components, never a parsed ISO string: a date-only value parsed as ISO is UTC
     // midnight and renders a day early in negative-offset timezones.
-    const key = String(row.workout_date).slice(0, 10);
+    const key = String(row.meetup_date).slice(0, 10);
     const list = byDate.get(key) ?? [];
     list.push({
       id: row.id,
-      activityType: row.activity_type as ActivityType,
-      title: row.title,
+      // Postgres hands back HH:MM:SS. The seconds are always zero and nobody wants to read
+      // them, so the wire format is HH:MM and the trim happens once, here.
+      time: String(row.meetup_time).slice(0, 5),
+      location: row.location,
       description: row.description,
     });
     byDate.set(key, list);
@@ -419,8 +452,8 @@ export async function readRoutineWeek(
     const isCurrentWeek = todayIso >= mondayIso && todayIso < isoPlusDays(mondayIso, 7);
     if (isCurrentWeek && iso < todayIso) continue;
 
-    const workouts = byDate.get(iso) ?? [];
-    days.push({ date: iso, workouts, restDay: workouts.length === 0 });
+    const dayMeetups = byDate.get(iso) ?? [];
+    days.push({ date: iso, meetups: dayMeetups, empty: dayMeetups.length === 0 });
   }
 
   return { ok: true, days };
@@ -575,7 +608,7 @@ export async function toggleNewsReaction(
 // Reads
 // ---------------------------------------------------------------------------
 //
-// `readRoutineWeek` above was the only read this module had. The meetings list, a single
+// `readMeetupWeek` above was the only read this module had. The meetings list, a single
 // meeting and the news feed are all screens in PRD/15 with nothing behind them, which is the
 // shape of gap Phase 3.75a exists to close.
 

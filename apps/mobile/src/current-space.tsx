@@ -4,7 +4,7 @@
  * Two facts, one context, because they change together and are read apart.
  *
  *  - **The club** is "anywhere in that club's world" - the hub, its chat, Highlights, news,
- *    calendar, routines, polls, a race hub, a race chat, the Eboard space, any of it. That
+ *    calendar, weekly meetups, polls, a race hub, a race chat, the Eboard space, any of it. That
  *    breadth is the whole point: the Clubs tab and the Calendar destination sit in *other tabs*
  *    and cannot see the club's route params, so a car-groups screen four levels down still has
  *    to say which club it belongs to.

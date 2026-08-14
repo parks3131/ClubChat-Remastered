@@ -1,5 +1,5 @@
 /**
- * Meetings, calendar events, routines and news.
+ * Meetings, calendar events, meetups and news.
  *
  * Four features that look alike and notify deliberately differently. The table lives in the
  * domain module; what matters at this layer is that none of these routes accepts a `clubId`.
@@ -15,17 +15,18 @@ import {
   createEvent,
   createMeeting,
   createNewsPost,
-  createWorkout,
+  createMeetup,
   deleteEvent,
   deleteMeeting,
   deleteNewsPost,
-  deleteWorkout,
+  deleteMeetup,
   listMeetings,
   readEvent,
   readMeeting,
   readNewsFeed,
   readNewsPost,
-  readRoutineWeek,
+  readMeetupWeek,
+  updateMeetup,
   toggleNewsReaction,
   updateMeeting,
   updateNewsPost,
@@ -187,34 +188,35 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
   });
 
   // ---------------------------------------------------------------------
-  // Routines
+  // Weekly Meetups
   // ---------------------------------------------------------------------
 
-  const WorkoutBody = z.object({
-    workoutDate: IsoDate,
-    activityType: z.enum([
-      'run',
-      'trail_run',
-      'bike',
-      'swim',
-      'strength',
-      'hybrid_fitness',
-      'indoor_climb',
-      'bouldering',
-      'xc_ski',
-      'other',
-    ]),
-    title: z.string().min(1).max(300),
+  /**
+   * Where, when and what. **There is no activity type**, and adding one back is a decision
+   * ADR-0029 already made and rejected - the free-text description is where what the club is
+   * doing lives, in that club's own words.
+   *
+   * `location` and `meetupTime` are required rather than nullable. The surface exists to answer
+   * where and when, and a club that has not decided yet types "TBC", which tells a member
+   * something a blank does not.
+   */
+  const MeetupBody = z.object({
+    meetupDate: IsoDate,
+    meetupTime: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'expected HH:MM')
+      .describe('Wall-clock in the club own day. Never an instant - see ADR-0029.'),
+    location: z.string().trim().min(1).max(300),
     description: z.string().max(5_000).nullish(),
   });
 
-  /** Notifies nobody and posts nothing. A routine is reference material, not an event. */
-  app.post<{ Params: { id: string } }>('/clubs/:id/workouts', async (request, reply) => {
-    const body = WorkoutBody.safeParse(request.body);
+  /** Notifies nobody and posts nothing. A meetup is reference material, not an event. */
+  app.post<{ Params: { id: string } }>('/clubs/:id/meetups', async (request, reply) => {
+    const body = MeetupBody.safeParse(request.body);
     if (!body.success) {
       return reply.code(400).send({ error: 'invalid_body', issues: body.error.issues });
     }
-    const result = await createWorkout(deps.db, request.access!, {
+    const result = await createMeetup(deps.db, request.access!, {
       clubId: request.params.id,
       ...body.data,
     });
@@ -222,8 +224,19 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
     return reply.code(201).send(result);
   });
 
-  app.delete<{ Params: { id: string } }>('/workouts/:id', async (request, reply) => {
-    const result = await deleteWorkout(deps.db, request.access!, request.params.id);
+  /** Any admin edits any meetup, not only its author. */
+  app.patch<{ Params: { id: string } }>('/meetups/:id', async (request, reply) => {
+    const body = MeetupBody.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: 'invalid_body', issues: body.error.issues });
+    }
+    const result = await updateMeetup(deps.db, request.access!, request.params.id, body.data);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  app.delete<{ Params: { id: string } }>('/meetups/:id', async (request, reply) => {
+    const result = await deleteMeetup(deps.db, request.access!, request.params.id);
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return result;
   });
@@ -236,11 +249,11 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
    * The Monday is required rather than defaulted, because "this week" is a question about the
    * caller's timezone and the server has no business guessing it.
    */
-  app.get<{ Params: { id: string } }>('/clubs/:id/routines', async (request, reply) => {
+  app.get<{ Params: { id: string } }>('/clubs/:id/meetups', async (request, reply) => {
     const query = WeekQuery.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
 
-    const result = await readRoutineWeek(
+    const result = await readMeetupWeek(
       deps.db,
       request.access!,
       request.params.id,

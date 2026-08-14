@@ -121,9 +121,10 @@ check 201 "POST news"            -X POST "${AO[@]}" "${JSON[@]}" -d '{"body":"We
 NEWS=$(jsonf "['postId']")
 check 400 "news reaction outside the set" -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"🦄"}' "$API/news/$NEWS/reactions"
 check 200 "news reaction in the set"      -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"🔥"}' "$API/news/$NEWS/reactions"
-check 201 "POST workout" -X POST "${AO[@]}" "${JSON[@]}" -d '{"workoutDate":"2027-05-03","activityType":"run","title":"Easy 5k"}' "$API/clubs/$CLUB/workouts"
-check 400 "routines without a monday" "${AO[@]}" "$API/clubs/$CLUB/routines"
-check 200 "routines week"             "${AO[@]}" "$API/clubs/$CLUB/routines?monday=2027-05-03"
+check 201 "POST meetup" -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30","location":"Memorial Park gate"}' "$API/clubs/$CLUB/meetups"
+check 400 "meetup with no place"      -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30"}' "$API/clubs/$CLUB/meetups"
+check 400 "meetups without a monday"  "${AO[@]}" "$API/clubs/$CLUB/meetups"
+check 200 "meetups week"              "${AO[@]}" "$API/clubs/$CLUB/meetups?monday=2027-05-03"
 check 200 "calendar merged"           "${AO[@]}" "$API/calendar"
 check 200 "calendar club upcoming"    "${AO[@]}" "$API/calendar?club=$CLUB&when=upcoming"
 check 200 "calendar markers"          "${AO[@]}" "$API/calendar/markers?club=$CLUB&year=2027&month=4"

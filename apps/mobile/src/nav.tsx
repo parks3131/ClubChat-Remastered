@@ -386,7 +386,7 @@ export function HeaderAction({
 /**
  * The header quick-nav strip under a chat or hub header.
  *
- * `PRD/15` gives club chat "Members · Poll · Routines · Events" and race chat "Members · Meet
+ * `PRD/15` gives club chat "Members · Poll · Meetups · Events" and race chat "Members · Meet
  * Information · Polls · Car Assignments and Groups". One component, given different entries,
  * rather than one per scope - design-system rule 5.
  */

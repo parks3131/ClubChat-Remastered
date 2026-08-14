@@ -953,7 +953,7 @@ export const canEditMeeting = (
  */
 export const canCancelMeeting = isEboardMember;
 
-/** Calendar events, routines and news: any club admin, any item. Not only its author. */
+/** Calendar events, meetups and news: any club admin, any item. Not only its author. */
 export const canManageClubContent = isClubAdmin;
 
 /** Every club member reads club content and reacts to news. */

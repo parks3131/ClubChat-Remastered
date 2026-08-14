@@ -190,6 +190,13 @@
       "when": 1786640829956,
       "tag": "0026_emoji_catalog",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1786727229956,
+      "tag": "0027_weekly_meetups",
+      "breakpoints": true
     }
   ]
 }

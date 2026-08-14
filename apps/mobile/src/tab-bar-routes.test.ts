@@ -48,7 +48,7 @@ describe('the screens that must not have it', () => {
 
   it.each([
     `/clubs/${CLUB}/members`,
-    `/clubs/${CLUB}/routines`,
+    `/clubs/${CLUB}/weekly-meetups`,
     `/clubs/${CLUB}/polls`,
     `/clubs/${CLUB}/news`,
     `/clubs/${CLUB}/events`,

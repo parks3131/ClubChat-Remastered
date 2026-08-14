@@ -21,7 +21,6 @@ import type {
   ReactionEmoji,
 } from '@clubchat/shared';
 import type {
-  ActivityType,
   AroundWindow,
   CarGroupsView,
   ClubDetail,
@@ -49,7 +48,8 @@ import type {
   RaceListItem,
   RaceRoster,
   ReportRow,
-  RoutineDay,
+  MeetupBody,
+  MeetupDay,
   SharedClub,
 } from './api-types.ts';
 import { config } from './config.ts';
@@ -547,21 +547,18 @@ export const contentApi = {
   deleteEvent: (eventId: string) => apiFetch<unknown>(`/events/${eventId}`, { method: 'DELETE' }),
 
   /** The Monday is required: "this week" is a question about the caller's timezone. */
-  routines: (clubId: string, monday: string) =>
-    apiFetch<{ days: RoutineDay[] }>(`/clubs/${clubId}/routines${query({ monday })}`),
+  meetups: (clubId: string, monday: string) =>
+    apiFetch<{ days: MeetupDay[] }>(`/clubs/${clubId}/meetups${query({ monday })}`),
 
-  createWorkout: (
-    clubId: string,
-    body: {
-      workoutDate: string;
-      activityType: ActivityType;
-      title: string;
-      description?: string | null;
-    },
-  ) => apiFetch<{ workoutId: string }>(`/clubs/${clubId}/workouts`, { method: 'POST', body }),
+  createMeetup: (clubId: string, body: MeetupBody) =>
+    apiFetch<{ meetupId: string }>(`/clubs/${clubId}/meetups`, { method: 'POST', body }),
 
-  deleteWorkout: (workoutId: string) =>
-    apiFetch<unknown>(`/workouts/${workoutId}`, { method: 'DELETE' }),
+  /** Any admin edits any meetup, not only its author. */
+  updateMeetup: (meetupId: string, body: MeetupBody) =>
+    apiFetch<unknown>(`/meetups/${meetupId}`, { method: 'PATCH', body }),
+
+  deleteMeetup: (meetupId: string) =>
+    apiFetch<unknown>(`/meetups/${meetupId}`, { method: 'DELETE' }),
 
   news: (clubId: string, before?: string) =>
     apiFetch<{ posts: NewsPost[]; hasMore: boolean }>(`/clubs/${clubId}/news${query({ before })}`),
