@@ -41,12 +41,16 @@ export type AudienceRequest = {
 /**
  * Types whose notification deliberately INCLUDES the actor.
  *
- * Exactly one: the poll closing-soon reminder. Everything else excludes the person who
- * caused it, because you are never notified about something you just did. The creator is
- * precisely who needs to know their own poll is about to close, so it is the exception
- * rather than an oversight.
+ * Two. Everything else excludes the person who caused it, because you are never notified about
+ * something you just did.
+ *
+ *  - `poll_closing_soon` - the creator is precisely who needs to know their own poll is closing.
+ *  - `meetup_nudged` - **a nudge is a broadcast, and the sender is in the room.** An admin who
+ *    rings the bell and receives nothing cannot tell whether it went out at all, and the only
+ *    other evidence is asking a member. Reported from the device on 2026-08-14 in exactly those
+ *    terms. It is also the one notification whose whole purpose is to be seen arriving.
  */
-const INCLUDES_ACTOR: readonly NotificationType[] = ['poll_closing_soon'];
+const INCLUDES_ACTOR: readonly NotificationType[] = ['poll_closing_soon', 'meetup_nudged'];
 
 /**
  * Resolve who gets notified.

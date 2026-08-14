@@ -188,11 +188,7 @@ export default function WeeklyMeetupsScreen() {
                     isAdmin={isAdmin}
                     bellBusy={nudging}
                     onNudge={() => void nudge(meetup.id)}
-                    onSpent={(at) =>
-                      setNudgeNote(
-                        `Someone already nudged this meetup. You can nudge it again at ${formatTimeOfDay(at)}.`,
-                      )
-                    }
+                    onGrey={setNudgeNote}
                     onLongPress={(anchor) => {
                       longPressFeedback();
                       setMenuFor({ day: day.date, meetup, anchor });
@@ -260,15 +256,15 @@ function MeetupRow({
   isAdmin,
   bellBusy,
   onNudge,
-  onSpent,
+  onGrey,
   onLongPress,
 }: {
   meetup: Meetup;
   isAdmin: boolean;
   bellBusy: boolean;
   onNudge: () => void;
-  /** Tapped while grey. Carries the time it comes back, so the screen can say it. */
-  onSpent: (blockedUntil: string) => void;
+  /** Tapped while grey. Carries the reason, because there are two and they read differently. */
+  onGrey: (reason: string) => void;
   onLongPress: (anchor: PressAnchor) => void;
 }) {
   const ref = useRef<View>(null);
@@ -278,6 +274,19 @@ function MeetupRow({
    */
   const blockedUntil = meetup.nudgeBlockedUntil;
   const cooling = blockedUntil !== null && Date.parse(blockedUntil) > Date.now();
+
+  /*
+   * Accent only when it can actually be rung: today's meetup, not already nudged.
+   *
+   * Two ways to be grey and they read differently, so the bell carries the sentence rather than
+   * the screen guessing. `nudgeable` is the server's answer to "is this today" - the client does
+   * not compare dates itself, or the two could disagree across midnight.
+   */
+  const greyReason = !meetup.nudgeable
+    ? 'Only today\'s meetups can be nudged.'
+    : cooling
+      ? `Someone already nudged this meetup. You can nudge it again at ${formatTimeOfDay(blockedUntil!)}.`
+      : null;
 
   return (
     <Pressable
@@ -308,13 +317,14 @@ function MeetupRow({
       </View>
 
       {/*
-        A day that has been gets no bell at all, rather than a dead one. There is nothing left to
-        tell anybody about, so the control would be furniture.
+        Always drawn for an admin, and grey when it cannot be rung. Hiding it on other days made
+        the control appear and disappear down the week, which reads as a rendering fault rather
+        than as a rule - and left no way to ask why.
       */}
-      {isAdmin && meetup.nudgeable && (
+      {isAdmin && (
         <View style={styles.bellWrap}>
           {/* Only the meetup actually cooling down says when - which is one row, not all of them. */}
-          {cooling && (
+          {cooling && meetup.nudgeable && (
             <Text style={styles.bellTime}>{formatTimeOfDay(blockedUntil!)}</Text>
           )}
           {/*
@@ -325,22 +335,20 @@ function MeetupRow({
             nudged and until when, which is the whole reason it is grey rather than gone.
           */}
           <Pressable
-            onPress={() => (cooling ? onSpent(blockedUntil!) : onNudge())}
+            onPress={() => (greyReason === null ? onNudge() : onGrey(greyReason))}
             disabled={bellBusy}
             hitSlop={space.sm}
-            style={[styles.bell, cooling && styles.bellOff]}
+            style={[styles.bell, greyReason !== null && styles.bellOff]}
             accessibilityRole="button"
             accessibilityLabel={
-              cooling
-                ? `Already nudged. Nudging this meetup is unavailable until ${formatTimeOfDay(blockedUntil!)}`
-                : `Nudge the club about the meetup at ${meetup.location}`
+              greyReason ?? `Nudge the club about the meetup at ${meetup.location}`
             }
           >
             <MaterialIcons
               name="notifications-active"
               size={18}
-              /* Orange while it can be rung, grey once it has been. */
-              color={cooling ? color.textSecondary : color.accent}
+              /* Accent only when today and unrung. Grey is the rule showing, not a dead control. */
+              color={greyReason === null ? color.accent : color.textSecondary}
             />
           </Pressable>
         </View>

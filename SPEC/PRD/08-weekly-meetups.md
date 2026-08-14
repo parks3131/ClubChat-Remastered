@@ -68,9 +68,12 @@ field and why one should not be added back.*
     is separate from the calendar. **Nudge does not weaken it - it turns the silence from a wall
     into a default.** Seven meetups posted on Sunday still fire zero notifications. A bell tapped
     on Thursday morning fires one, because a person decided that one mattered.
-14. **The audience is every other member of the club**, and it reaches their phone: a push, not
-    only a row in the inbox. The nudger is excluded, as with every other creation notification -
-    nobody is told about something they just did.
+14. **The audience is every member of the club, the sender included**, and it reaches their
+    phone: a push, not only a row in the inbox. **This is the exception to "nobody is told about
+    something they just did"** - it and the poll closing reminder are the only two. An admin who
+    rings the bell and receives nothing cannot tell whether it went out at all, and the only
+    other evidence available to them is asking a member. *(Reported from the device on
+    2026-08-14 in exactly those terms.)*
 15. **One nudge per hour, per meetup.** Four meetups in a day are four separate things to tell
     people about and carry four independent clocks: nudging the morning run leaves the evening
     social's bell alone. The hour is enforced by a database constraint rather than a check in the
@@ -79,17 +82,20 @@ field and why one should not be added back.*
     two meetups on one day impossible - see
     [ADR-0031](../decisions/0031-the-nudge-cooldown-is-per-meetup.md), superseding
     [ADR-0030](../decisions/0030-the-nudge-cooldown-is-a-constraint.md).)*
-15a. **A meetup whose day has been cannot be nudged, and shows no bell at all.** There is nothing
-    left to tell anybody about a run that has run. **Compared by date, not by moment**: this
-    morning's run is still nudgeable this evening, because "the day has been" is what a person
-    means by it and a bell that died at 06:31 would be the more surprising rule.
+15a. **Only TODAY's meetups can be nudged.** A nudge means "we are meeting, today", so a past day
+    has nothing left to say and next Tuesday is premature rather than early. **Compared by date,
+    not by moment**: this morning's run is still nudgeable this evening, because a bell that died
+    at 06:31 would be the more surprising rule. The server decides this and the week carries the
+    answer, so the client never compares dates itself and the two cannot disagree across
+    midnight.
 16. **A refusal says when the bell comes back**, not merely that it is unavailable. "You cannot"
     gets tapped again a minute later; "not until 10:00" does not.
-16a. **The bell is accent-coloured while it can be rung and grey once it has been - and the grey
-    one is still pressable.** Pressing it says somebody has already nudged this meetup and when it
-    comes back. A spent control that does nothing when tapped is indistinguishable from a broken
-    one: the admin learns only that the app ignored them, which is why it is grey rather than
-    gone and pressable rather than dead.
+16a. **The bell is accent-coloured only when it can actually be rung - today's meetup, not yet
+    nudged - and grey otherwise.** It is always drawn for an admin and always pressable. Grey has
+    two causes and they read differently, so pressing it says which: "only today's meetups can be
+    nudged", or "someone already nudged this, you can nudge again at 10:00". A control that
+    vanishes on other days appears and disappears down the week, which reads as a rendering fault
+    rather than a rule; one that does nothing when pressed is indistinguishable from broken.
 16b. **Tapping the notification opens the club's week.** A nudge that buzzes a phone and goes
     nowhere when tapped is the failure this rule exists to name; it happened once, on 2026-08-14,
     and [Notifications](12-notifications.md) carries the general form.

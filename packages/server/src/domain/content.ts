@@ -383,7 +383,7 @@ export async function deleteMeetup(
  */
 export type NudgeResult =
   | { ok: true; cooldownUntil: string }
-  | { ok: false; code: 'forbidden' | 'not_found' | 'already_happened' }
+  | { ok: false; code: 'forbidden' | 'not_found' | 'not_today' }
   | { ok: false; code: 'cooling_down'; availableAt: string };
 
 /** Postgres `exclusion_violation`. The cooldown losing a race is this and nothing else. */
@@ -416,11 +416,14 @@ function isExclusionViolation(error: unknown): boolean {
  * name a time; the constraint is what stays true when two admins tap the same bell in the same
  * second, which a read-then-write cannot.
  *
- * **A meetup that has already happened cannot be nudged**, and that one IS a handler check rather
- * than a constraint - deliberately. "Is this date in the past" is a question whose answer changes
- * with the clock, so it is not immutable and cannot live in an index. There is also no race to
- * lose: two admins nudging a past meetup at the same moment are both simply wrong, where two
- * admins nudging a live one are competing for a single slot.
+ * **Only TODAY's meetups can be nudged**, and that one IS a handler check rather than a
+ * constraint - deliberately. "Is this date today" is a question whose answer changes with the
+ * clock, so it is not immutable and cannot live in an index. There is also no race to lose: two
+ * admins nudging a meetup on the wrong day are both simply wrong, where two admins nudging a live
+ * one are competing for a single slot.
+ *
+ * Today and **not** today-or-later: a nudge means "we are meeting, today", so ringing it about
+ * next Tuesday is premature rather than early. A past day has nothing left to say at all.
  */
 export async function nudgeMeetup(
   db: Db,
@@ -433,11 +436,11 @@ export async function nudgeMeetup(
   if (!canManageClubContent(ctx, meetup.clubId)) return { ok: false, code: 'forbidden' };
 
   /*
-   * Today and forward only. Compared by DATE, not by instant, so this morning's run is still
-   * nudgeable this evening - the rule is "not a day that has been", not "not a moment that has
-   * passed", and a bell that died at 06:31 would be the more surprising of the two.
+   * Today only. Compared by DATE, not by instant, so this morning's run is still nudgeable this
+   * evening - the rule is about the day, not the moment, and a bell that died at 06:31 would be
+   * the more surprising reading.
    */
-  if (meetup.meetupDate < todayIso()) return { ok: false, code: 'already_happened' };
+  if (meetup.meetupDate !== todayIso()) return { ok: false, code: 'not_today' };
 
   const open = await openCooldown(db, meetup.id);
   if (open) return { ok: false, code: 'cooling_down', availableAt: open };
@@ -515,6 +518,7 @@ export type WeekDay = {
      * rather than leaving the client to compare dates and reach a different answer.
      */
     nudgeBlockedUntil: string | null;
+    /** True only on today's date. A nudge says "we are meeting, today". */
     nudgeable: boolean;
   }>;
   /** True when nothing is planned. Rendered explicitly as "Nothing planned", never omitted. */
@@ -588,8 +592,8 @@ export async function readMeetupWeek(
       location: row.location,
       description: row.description,
       nudgeBlockedUntil: row.cooldown_until,
-      // Today and forward only, and decided here so the client cannot reach a different answer.
-      nudgeable: key >= today,
+      // Today only, and decided here so the client cannot reach a different answer.
+      nudgeable: key === today,
     });
     byDate.set(key, list);
   }

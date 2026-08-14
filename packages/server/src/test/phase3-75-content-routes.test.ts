@@ -426,6 +426,14 @@ describe('calendar events', () => {
   });
 });
 
+/** The Monday of the week containing a `YYYY-MM-DD`, so a week read covers it. */
+function mondayOf(dateKey: string): string {
+  const d = new Date(`${dateKey}T00:00:00Z`);
+  const day = d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() - (day === 0 ? 6 : day - 1));
+  return d.toISOString().slice(0, 10);
+}
+
 describe('weekly meetups', () => {
   it('creates a meetup that notifies nobody and posts nothing', async () => {
     const owner = await signUp('MeetupOwner');
@@ -487,13 +495,15 @@ describe('weekly meetups', () => {
     const { clubId } = await createClubAs(owner);
     await join(clubId, member);
 
-    const made = async (meetupDate: string) =>
+    const made = async (meetupDate: string, meetupTime: string) =>
       (await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
-        meetupDate, meetupTime: '18:30', location: 'Memorial Park gate',
+        meetupDate, meetupTime, location: 'Memorial Park gate',
       })).body.meetupId as string;
 
-    const first = await made('2027-05-03');
-    const second = await made('2027-05-06');
+    // Today: only today's meetups are nudgeable, so a fixed date would pass until it did not.
+    const today = new Date().toISOString().slice(0, 10);
+    const first = await made(today, '07:00');
+    const second = await made(today, '19:00');
 
     // A member has no bell. Attempted directly, not inferred from the control being hidden.
     expect((await as(member, 'POST', `/meetups/${first}/nudge`)).status).toBe(404);
@@ -512,7 +522,7 @@ describe('weekly meetups', () => {
 
     // The week says the same thing per meetup, so each bell renders for itself rather than the
     // screen keeping a clock of its own.
-    const week = await as(member, 'GET', `/clubs/${clubId}/meetups?monday=2027-05-03`);
+    const week = await as(member, 'GET', `/clubs/${clubId}/meetups?monday=${mondayOf(today)}`);
     const all = week.body.days.flatMap((d: { meetups: unknown[] }) => d.meetups);
     expect(all).toHaveLength(2);
     for (const m of all as { nudgeBlockedUntil: string; nudgeable: boolean }[]) {
@@ -521,20 +531,27 @@ describe('weekly meetups', () => {
     }
   });
 
-  it('refuses to nudge a day that has been, and says the week is not nudgeable', async () => {
-    const owner = await signUp('PastOwner');
+  it('refuses to nudge any day but today, in both directions', async () => {
+    // A nudge means "we are meeting, today". Next Tuesday is premature, not early.
+    const owner = await signUp('OtherDayOwner');
     const { clubId } = await createClubAs(owner);
-    const past = (await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
-      meetupDate: '2020-05-04', meetupTime: '18:30', location: 'Track',
-    })).body.meetupId as string;
 
-    const refused = await as(owner, 'POST', `/meetups/${past}/nudge`);
-    expect(refused.status).toBe(409);
-    expect(refused.body.error).toBe('already_happened');
+    for (const date of ['2020-05-04', '2099-05-04']) {
+      const id = (await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+        meetupDate: date, meetupTime: '18:30', location: 'Track',
+      })).body.meetupId as string;
 
-    const week = await as(owner, 'GET', `/clubs/${clubId}/meetups?monday=2020-05-04`);
-    expect(week.body.days.flatMap((d: { meetups: { nudgeable: boolean }[] }) => d.meetups)[0]
-      .nudgeable).toBe(false);
+      const refused = await as(owner, 'POST', `/meetups/${id}/nudge`);
+      expect(refused.status, date).toBe(409);
+      expect(refused.body.error, date).toBe('not_today');
+
+      const week = await as(owner, 'GET', `/clubs/${clubId}/meetups?monday=${mondayOf(date)}`);
+      expect(
+        week.body.days.flatMap((d: { meetups: { nudgeable: boolean }[] }) => d.meetups)[0]
+          .nudgeable,
+        date,
+      ).toBe(false);
+    }
   });
 
   it('refuses a meetup with no place or no time', async () => {

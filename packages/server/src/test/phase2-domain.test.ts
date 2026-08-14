@@ -976,9 +976,17 @@ describe('chat cards', () => {
 // Weekly Meetups and the calendar feed
 // ===========================================================================
 
-/** Today and tomorrow as `YYYY-MM-DD`. A nudge is refused for a day that has been. */
+/** Today and tomorrow as `YYYY-MM-DD`. Only today's meetups are nudgeable. */
 const todayKey = () => new Date().toISOString().slice(0, 10);
 const tomorrow = () => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+
+/** The Monday of the week containing today, so a week read covers today and tomorrow. */
+function mondayOfToday(): string {
+  const d = new Date();
+  const day = d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() - (day === 0 ? 6 : day - 1));
+  return d.toISOString().slice(0, 10);
+}
 
 describe('the meetup week', () => {
   it('renders an empty day explicitly rather than omitting it', async () => {
@@ -1032,12 +1040,13 @@ describe('the meetup week', () => {
     expect(first.ok).toBe(true);
     await drainAll();
 
-    // Creating the meetup notified nobody; nudging it notified everybody else. Both halves
-    // matter - the first is PRD/08 rule 11, the second is the exception being real.
+    // Creating the meetup notified nobody; nudging it notified everybody INCLUDING the sender.
+    // The first half is PRD/08 rule 11. The second is the exception being real - and the sender
+    // is on the list because an admin who rings the bell and receives nothing cannot tell
+    // whether it went out.
     const rows = await h.db.select().from(notifications);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.type).toBe('meetup_nudged');
-    expect(rows[0]?.recipientId, 'the nudger notified themselves').toBe(f.memberId);
+    expect(rows.map((r) => r.recipientId).sort()).toEqual([f.memberId, f.ownerId].sort());
+    expect(rows.every((r) => r.type === 'meetup_nudged')).toBe(true);
     expect(push.sent.length, 'a nudge must reach a phone').toBeGreaterThan(0);
 
     // The same meetup, inside the hour: refused, with a time.
@@ -1047,9 +1056,10 @@ describe('the meetup week', () => {
     expect(Date.parse(again.availableAt)).toBeGreaterThan(Date.now());
 
     // A DIFFERENT meetup carries its own clock (ADR-0031). Four meetups in a day are four
-    // things to tell people about, so nudging one must not silence the rest.
+    // things to tell people about, so nudging one must not silence the rest. Same DAY, because
+    // only today's are nudgeable at all.
     const other = await createMeetup(h.db, await ctxFor(f.ownerId), {
-      clubId: f.clubId, meetupDate: tomorrow(), meetupTime: '07:00', location: 'The Anchor',
+      clubId: f.clubId, meetupDate: todayKey(), meetupTime: '07:00', location: 'The Anchor',
     });
     expect(other.ok).toBe(true);
     if (!other.ok) return;
@@ -1058,18 +1068,39 @@ describe('the meetup week', () => {
     });
   });
 
-  it('refuses to nudge a day that has been', async () => {
-    // Today and forward only. There is nothing left to tell anybody about a run that has run.
+  it('refuses to nudge any day but today, in both directions', async () => {
+    /*
+     * A nudge means "we are meeting, today". A past day has nothing left to say, and next
+     * Tuesday is premature rather than early - so BOTH are refused, which is the half a test
+     * written only against the past would miss.
+     */
     const f = await setup();
-    const past = await createMeetup(h.db, await ctxFor(f.ownerId), {
-      clubId: f.clubId, meetupDate: '2020-01-06', meetupTime: '18:30', location: 'Track',
-    });
-    expect(past.ok).toBe(true);
-    if (!past.ok) return;
-    expect(await nudgeMeetup(h.db, await ctxFor(f.ownerId), past.meetupId)).toMatchObject({
-      ok: false,
-      code: 'already_happened',
-    });
+    for (const [label, date] of [['a day that has been', '2020-01-06'], ['a future day', tomorrow()]] as const) {
+      const made = await createMeetup(h.db, await ctxFor(f.ownerId), {
+        clubId: f.clubId, meetupDate: date, meetupTime: '18:30', location: 'Track',
+      });
+      expect(made.ok, label).toBe(true);
+      if (!made.ok) return;
+      expect(await nudgeMeetup(h.db, await ctxFor(f.ownerId), made.meetupId), label).toMatchObject({
+        ok: false,
+        code: 'not_today',
+      });
+    }
+  });
+
+  it('marks only today as nudgeable on the week', async () => {
+    const f = await setup();
+    for (const date of [todayKey(), tomorrow()]) {
+      await createMeetup(h.db, await ctxFor(f.ownerId), {
+        clubId: f.clubId, meetupDate: date, meetupTime: '18:30', location: 'Track',
+      });
+    }
+    const week = await readMeetupWeek(h.db, await ctxFor(f.memberId), f.clubId, mondayOfToday());
+    expect(week.ok).toBe(true);
+    if (!week.ok) return;
+    const byDate = new Map(week.days.map((d) => [d.date, d.meetups]));
+    expect(byDate.get(todayKey())?.[0]?.nudgeable).toBe(true);
+    expect(byDate.get(tomorrow())?.[0]?.nudgeable).toBe(false);
   });
 
   it('refuses the second of two simultaneous nudges, rather than sending two', async () => {
@@ -1094,7 +1125,17 @@ describe('the meetup week', () => {
     expect(results.filter((r) => r.ok), 'both nudges were accepted').toHaveLength(1);
     expect(results.filter((r) => !r.ok && r.code === 'cooling_down')).toHaveLength(1);
     await drainAll();
-    expect(await h.db.select().from(notifications)).toHaveLength(1);
+
+    /*
+     * One nudge, not two - asserted on the recipients rather than on a row count.
+     *
+     * A bare `toHaveLength(1)` was the proxy here, and it broke the moment the sender joined the
+     * audience: one nudge legitimately writes a row per member. What must not happen is anybody
+     * being told twice.
+     */
+    const recipients = (await h.db.select().from(notifications)).map((r) => r.recipientId);
+    expect(recipients.sort()).toEqual([f.memberId, f.ownerId].sort());
+    expect(new Set(recipients).size, 'somebody was notified twice').toBe(recipients.length);
   });
 
   it('holds several meetups on one day, in time order', async () => {
