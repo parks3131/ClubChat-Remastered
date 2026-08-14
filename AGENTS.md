@@ -254,6 +254,9 @@ move a version bump rather than a migration. Do not "upgrade" this without check
 
 | Path | What it is |
 |---|---|
+| `TODO.md` | **The working backlog.** What to fix next, and what is known broken. Read it before
+picking work; delete an item when it is done rather than ticking it. Durable decisions graduate
+into `SPEC/PRD/17` and `SPEC/TECH/14` - this file is meant to shrink |
 | `SPEC/README.md` | Index of everything below. Start here. |
 | `SPEC/PRD/` | Product requirements, one file per feature area |
 | `SPEC/TECH/` | Technical spec, one file per subsystem |

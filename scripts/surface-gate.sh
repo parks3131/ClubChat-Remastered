@@ -73,7 +73,7 @@ check 404 "POST rotate as member"            -X POST "${AM[@]}" "$API/clubs/$CLU
 check 200 "POST rotate as owner"             -X POST "${AO[@]}" "$API/clubs/$CLUB/invite-token/rotate"
 check 404 "old invite link is dead"          -X POST "${AX[@]}" "$API/invites/$TOKEN/redeem"
 
-echo "== races: authority is not access =="
+echo "== races: you run the races you are in =="
 check 404 "POST race as member"  -X POST "${AM[@]}" "${JSON[@]}" -d '{"name":"R","raceDate":"2027-01-01"}' "$API/clubs/$CLUB/races"
 check 201 "POST race as owner"   -X POST "${AO[@]}" "${JSON[@]}" -d '{"name":"Gate Race","raceDate":"2027-01-01"}' "$API/clubs/$CLUB/races"
 RACE=$(jsonf "['raceId']"); RCHAN=$(jsonf "['channelId']")
@@ -84,10 +84,18 @@ check 404 "GET car-groups as admin off-roster" "${AA[@]}" "$API/races/$RACE/car-
 check 404 "GET race chat as admin off-roster"  "${AA[@]}" "$API/channels/$RCHAN/messages"
 check 200 "GET race chat as roster member"     "${AO[@]}" "$API/channels/$RCHAN/messages"
 check 404 "PATCH meet-info as member"          -X PATCH "${AM[@]}" "${JSON[@]}" -d '{"meetDescription":"x"}' "$API/races/$RACE/meet-information"
-check 200 "PATCH meet-info as manager"         -X PATCH "${AA[@]}" "${JSON[@]}" -d '{"meetDescription":"Leaving at 6am"}' "$API/races/$RACE/meet-information"
-check 201 "POST car-group as manager"          -X POST "${AA[@]}" "$API/races/$RACE/car-groups"
+# ADR-0027, 2026-08-12: management is roster-gated. A club admin who is not on THIS race's
+# roster has a plain member's powers over it - so the two lines below flipped from 200/201 to
+# refusals, and the roster admin (the owner, put on the roster by creating it) is what proves
+# the permission still exists at all.
+check 404 "PATCH meet-info as admin off-roster" -X PATCH "${AA[@]}" "${JSON[@]}" -d '{"meetDescription":"x"}' "$API/races/$RACE/meet-information"
+check 200 "PATCH meet-info as roster admin"     -X PATCH "${AO[@]}" "${JSON[@]}" -d '{"meetDescription":"Leaving at 6am"}' "$API/races/$RACE/meet-information"
+check 404 "POST car-group as admin off-roster"  -X POST "${AA[@]}" "$API/races/$RACE/car-groups"
+check 201 "POST car-group as roster admin"      -X POST "${AO[@]}" "$API/races/$RACE/car-groups"
 GROUP=$(jsonf "['groupId']")
-check 404 "seat the off-roster manager"        -X POST "${AA[@]}" "${JSON[@]}" -d "{\"userId\":\"$(curl -sS "${AA[@]}" "$API/me" | python3 -c 'import json,sys;print(json.load(sys.stdin)["userId"])')\"}" "$API/car-groups/$GROUP/members"
+# PRD/09 rule 16: only somebody with real race access can be seated. Attempted BY a manager who
+# can, ON a club admin who has no roster row - otherwise the refusal proves the wrong thing.
+check 404 "seat somebody with no race access"   -X POST "${AO[@]}" "${JSON[@]}" -d "{\"userId\":\"$(curl -sS "${AA[@]}" "$API/me" | python3 -c 'import json,sys;print(json.load(sys.stdin)["userId"])')\"}" "$API/car-groups/$GROUP/members"
 
 echo "== polls: the race scope by direct URL =="
 check 201 "POST race poll as roster admin" -X POST "${AO[@]}" "${JSON[@]}" -d '{"question":"Day?","options":["Sat","Sun"]}' "$API/races/$RACE/polls"
@@ -119,8 +127,14 @@ check 201 "POST event as owner"  -X POST "${AO[@]}" "${JSON[@]}" -d '{"type":"pr
 check 400 "POST empty news"      -X POST "${AO[@]}" "${JSON[@]}" -d '{}' "$API/clubs/$CLUB/news"
 check 201 "POST news"            -X POST "${AO[@]}" "${JSON[@]}" -d '{"body":"We won."}' "$API/clubs/$CLUB/news"
 NEWS=$(jsonf "['postId']")
-check 400 "news reaction outside the set" -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"🦄"}' "$API/news/$NEWS/reactions"
-check 200 "news reaction in the set"      -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"🔥"}' "$API/news/$NEWS/reactions"
+# ADR-0028, 2026-08-13: reactions are a 1,914-row catalog, not six hardcoded emoji, so 🦄 is now
+# a legitimate reaction and this line used to assert the opposite. The catalog's real edge is skin
+# tone - 330 emoji support it and the catalog deliberately excludes every variant - so that is
+# what "outside the set" has to mean now.
+check 400 "news reaction, skin-tone variant" -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"👏🏽"}' "$API/news/$NEWS/reactions"
+check 400 "news reaction that is not emoji"  -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"nope"}' "$API/news/$NEWS/reactions"
+check 200 "news reaction, plain in catalog"  -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"👏"}' "$API/news/$NEWS/reactions"
+check 200 "news reaction, once in the six"   -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"🔥"}' "$API/news/$NEWS/reactions"
 check 201 "POST meetup" -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30","location":"Memorial Park gate"}' "$API/clubs/$CLUB/meetups"
 check 400 "meetup with no place"      -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30"}' "$API/clubs/$CLUB/meetups"
 check 400 "meetups without a monday"  "${AO[@]}" "$API/clubs/$CLUB/meetups"
