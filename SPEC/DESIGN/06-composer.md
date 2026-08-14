@@ -7,9 +7,17 @@ of them, so that learning to create one teaches you how to create the rest.
 
 ## Where it appears
 
-Every create flow. **Built for the poll composer on 2026-08-13 and adopted there first** - the
-event, race and meeting composers still wear the older cards-and-labels arrangement and are meant
-to follow. The kit exists so that following is composition rather than a second rewrite.
+Every create flow. **Built for the poll composer on 2026-08-13 and adopted there first.**
+**Weekly Meetups followed on 2026-08-14** and cost no new parts, which is the claim below being
+tested rather than asserted: it needed the header action, a filled field, one setting row and the
+wheel, all of them already here. The event, race and meeting composers still wear the older
+cards-and-labels arrangement and are meant to follow. The kit exists so that following is
+composition rather than a second rewrite.
+
+> **The week itself took rule 1 too.** Its seven days were bordered cards and read as seven
+> unrelated panels rather than as one week - the same failure the poll composer's four groups had,
+> on a screen that is not a composer at all. The rule is about forms because that is where it was
+> found, not because that is where it stops.
 
 ## Anatomy
 
