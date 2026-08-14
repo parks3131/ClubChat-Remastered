@@ -285,6 +285,7 @@ it, and the reports it would contain belong to the platform moderation queue.
       viewer - see [Media and galleries](13-media-and-galleries.md).)*
 - [ ] A document bubble shows its filename and size.
 - [ ] Reactions toggle on and off and are visible to everyone.
+- [ ] Holding a pill lists everyone who reacted, by name and picture, filterable to one emoji.
 - [ ] A reaction added on one device appears on another in realtime, without a refresh.
 - [ ] Deleting a message clears its reactions for everyone.
 - [ ] An @mention notifies the mentioned member and renders highlighted.
@@ -337,8 +338,16 @@ R1. **Any emoji in the catalog may be used**, from a quick row of six plus a `+`
     [ADR-0028](../decisions/0028-reactions-come-from-a-catalog-table.md).
 
 R2. **At most four pills show under a message**, ordered most-reacted first, followed by a `+N`
-    chip when there are more. Tapping the chip opens the full list with who reacted to each.
-    Nothing is ever hidden without the row saying so.
+    chip when there are more. Nothing is ever hidden without the row saying so.
+
+R2a. **A pill taps to join or leave that reaction, and holds to ask who made it.** The hold buzzes
+    before the list appears, like every other hold in the product. The `+N` chip has no reaction of
+    its own, so a tap on it goes straight to the list.
+
+R2b. **The list is one row per person**, with their picture, their name and the emoji they chose,
+    behind chips that filter it to a single emoji. It shows everybody, not only the reactions the
+    `+N` chip was hiding. Your own row says so and removes that reaction when tapped - the same
+    toggle the pill performs, offered where you are already looking at what you picked.
 
 R3. **Ties hold their position.** Equal counts are broken by the catalog's own order, so a pill
     only ever moves when a count actually changes. Ordering by count means the row can reshuffle -

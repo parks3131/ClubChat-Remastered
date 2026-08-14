@@ -69,6 +69,7 @@ restating it wrongly.
 | 04 | [Share sheet](04-share-sheet.md) | Handing a club to somebody: the preview, the ways the link travels, and the code |
 | 05 | [Content card](05-content-card.md) | What a poll, an event or a meeting becomes in a conversation: one shell, three payloads, and the votable bar |
 | 06 | [Composer](06-composer.md) | The form you fill in to make a thing: sections separated by air, the action in the header, and the wheel |
+| 07 | [Reactions](07-reactions.md) | The pills under a message and the sheet behind them: tap to act, hold to ask who, and a scrim that stays put |
 
 **Written as surfaces are worked on, not backfilled in a pass.** A spec written by reading code
 rather than by looking at a device starts out wrong, and a directory of unverified documents is

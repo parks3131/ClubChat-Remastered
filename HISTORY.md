@@ -13,6 +13,74 @@ Newest first.
 
 ---
 
+## 2026-08-14 - Who reacted, and a shade that travelled
+
+The founder sent a GroupMe screenshot: chips across the top of a sheet, then a face and a name per
+row with the emoji that person chose. We had the data for all of it already - the envelope carries
+`userIds` per emoji, and `GET /channels/:id/messages/:seq/reactions` was already joining names and
+pictures for the sheet behind the `+N` chip. What existed was the wrong shape: one row per *emoji*,
+with its reactors' names joined by commas, which answers "who liked this" only by making you read a
+sentence and does not answer "which Emma" at all.
+
+So the unit became a person. Filter chips reuse `Tabs variant="chip"`, the rows reuse `Avatar`, and
+ordering reuses `reactionSummary` - the same function the pill row sorts with, so the chips read in
+the order the pills do rather than growing a second rule that could drift from the first.
+
+**The sheet reads its counts from the live envelope and fetches only names.** Two sources, on
+purpose: chips are correct the instant it opens, somebody else's reaction landing over the socket
+appears in the open sheet, and removing your own redraws it the moment the store patches. Names are
+the one thing the envelope must not carry, for the reason `readReactions` already gives - a name
+under every emoji on every message in a page of history.
+
+### Three corrections from the device, in one sitting
+
+The founder was holding the phone with live reload on, so each of these arrived as a video or a
+sentence while the previous one was still being written.
+
+**Tap or hold.** The first build opened the sheet on a tap, which cost the one-tap "me too" on an
+existing pill. The founder asked for the hold instead: tap still joins or leaves, hold opens the
+list, which is the same tap-acts / hold-explains split the message bubble already uses. The `+N`
+chip has no reaction of its own, so it stays a tap.
+
+**The buzz.** A hold with no haptic is indistinguishable from a dead control until the sheet
+arrives. `longPressFeedback()` fires before it is drawn, same as every other hold in the app.
+
+**The shade that travelled.** `animationType="slide"` on a `Modal` translates the whole modal, and
+the scrim is inside it - so the dimming arrived as a shaded band with a hard edge sweeping up the
+conversation. Reported as "the shades going till top and to the bottom", with a second video of
+GroupMe doing it properly. The modal now animates nothing: a scrim layer fades in place (160ms) and
+the panel rises from below its own bottom edge (220ms), both on the native driver, and the exit
+runs in reverse before the component unmounts rather than the shade vanishing in one frame. The
+panel's height is measured because it hugs its content - a constant would make a three-person sheet
+crawl and a thirty-person one snap - and it stays invisible for the one frame before the
+measurement, the same trick the long-press menu uses one entry below.
+
+**The emoji picker has the identical flaw** and was left alone deliberately, with the founder told
+so: it is a sibling sheet built the same way, and the fix belongs in one shared component rather
+than copied into the second place.
+
+### Two things fixed on the way past
+
+`reactionsForMessages` had no `ORDER BY`, so Postgres was free to return the same three reactors in
+a different order on the next read. Invisible while the client only counted them; visible the
+moment they became rows. Ordered oldest-first, with `user_id` breaking the tie.
+
+The lookup "the message this piece of state names by `seq`" had been hand-written twice and was
+about to be written a third time. Extracted, per failure mode 9: the second copy is where a rule
+quietly stops applying.
+
+### Verification
+
+Typecheck, the full suite (1,207) and `check:runtime` green. The sheet itself was driven in a real
+browser against real data - three accounts created through the API, joined through the invite
+route, reacting through the reaction route, so the rows are joins that actually happened rather
+than fixtures. Confirmed there: hold opens the sheet without toggling, tap toggles without opening
+it, a chip filters to one emoji, and tapping your own row removes that reaction and updates the
+count, the chip and the pill row underneath. The haptic is the one part a browser cannot show, and
+it was left to the device rather than reported as checked.
+
+---
+
 ## 2026-08-13 (end) - The menu opens where the message is
 
 The last piece of the long-press work, deliberately left out of the compact-panels change so that

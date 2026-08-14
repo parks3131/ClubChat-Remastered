@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Animated,
   Dimensions,
+  Easing,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -25,6 +26,7 @@ import {
   VISIBLE_REACTION_PILLS,
   SYSTEM_ACTOR_ID,
   type MessageEnvelope,
+  type MessageReaction,
   type MessageReplyRef,
   type ReactionEmoji,
 } from "@clubchat/shared";
@@ -46,7 +48,6 @@ import {
   uploadAttachment,
   UploadError,
   type PickedAttachment,
-  type UploadKind,
 } from "../../src/upload.ts";
 import * as Clipboard from "expo-clipboard";
 import { BlurView } from "expo-blur";
@@ -62,12 +63,12 @@ import {
   type MentionPick,
 } from "../../src/mentions.ts";
 import { MaterialIcons } from "@expo/vector-icons";
-import { Avatar } from "../../src/ui.tsx";
+import { Avatar, Tabs } from "../../src/ui.tsx";
 import { ChatEventCard } from "../../src/screens/events.tsx";
 import { ChatMeetingCard } from "../../src/screens/meetings.tsx";
 import { ChatPollCard } from "../../src/screens/polls.tsx";
 import { EmojiPicker } from "../../src/emoji-picker.tsx";
-import { QuickNav, spaceProfileHref, useGoBack } from "../../src/nav.tsx";
+import { spaceProfileHref, useGoBack } from "../../src/nav.tsx";
 import { useLoad } from "../../src/use-load.ts";
 import { hrefForCard } from "../../src/notification-href.ts";
 import { color, fontFamily, radius, space, type } from "../../src/theme.ts";
@@ -800,51 +801,202 @@ function BubbleContainer({
   );
 }
 
+/** The `All` chip's key. Not an emoji, so it cannot collide with one. */
+const ALL_REACTIONS = "all";
+
 /**
- * Everyone who reacted to one message, behind the `+N` chip.
+ * Everyone who reacted to one message, one person per row.
  *
- * Fetched on open rather than held: the envelope carries `userIds` but not names, and putting a
- * name under every emoji somebody used would repeat that person once per reaction on every
- * message in a page of history. The lookup arrives beside the set - see `readReactions`.
+ * **A person is the unit here, not an emoji.** It listed each emoji with its reactors' names
+ * joined by commas until 2026-08-13, which answers "who liked this" only by making you read a
+ * sentence, and answers "is that Emma or Emma R" not at all. The founder asked for the shape
+ * WhatsApp and GroupMe both use: chips across the top to filter, and beneath them a face and a
+ * name per row with the emoji that person chose at the end of it.
  *
- * Ordered by the same `reactionSummary` the pill row uses, so the sheet reads in the order the
- * row does. A second ordering rule here would drift from the first.
+ * **Two sources, deliberately.** The emoji, the counts and who used what come from the live
+ * envelope the row is already drawing, so the chips are right the instant the sheet opens and
+ * stay right while it is open. Only the names and pictures are fetched, because putting a name
+ * under every emoji on every message in a page of history is the one thing the envelope must
+ * not carry - see `readReactions`.
+ *
+ * Ordered by the same `reactionSummary` the pill row uses, so the chips read in the order the
+ * pills did. A second ordering rule here would drift from the first.
  */
 function ReactorSheet({
   channelId,
   seq,
+  reactions,
   viewerId,
+  onToggle,
   onDismiss,
 }: {
   channelId: string;
   seq: number;
+  /** The live set from the envelope. The sheet's own read supplies names, never counts. */
+  reactions: readonly MessageReaction[];
   viewerId: string | null;
+  /** Remove the viewer's own reaction. Only their row offers it. */
+  onToggle: (emoji: ReactionEmoji) => void;
   onDismiss: () => void;
 }) {
-  const load = useLoad(() => dmApi.reactionsFor(channelId, seq), [channelId, seq]);
+  const insets = useSafeAreaInsets();
+  const [filter, setFilter] = useState<string>(ALL_REACTIONS);
 
-  const named = new Map((load.data?.people ?? []).map((p) => [p.userId, p]));
-  const rows = reactionSummary(load.data?.reactions ?? [], viewerId).map((entry) => ({
-    ...entry,
-    who: (load.data?.reactions.find((r) => r.emoji === entry.emoji)?.userIds ?? [])
-      .map((id) => named.get(id)?.name)
-      .filter((name): name is string => name !== undefined),
-  }));
+  /*
+   * Re-read when the set changes, so somebody reacting while the sheet is open gets a name
+   * rather than a missing row. The key is built from the envelope, never from the response, so
+   * this cannot chase its own tail.
+   */
+  const setKey = reactions.map((r) => `${r.emoji}:${r.userIds.join(",")}`).join("|");
+  const load = useLoad(() => dmApi.reactionsFor(channelId, seq), [channelId, seq, setKey]);
+  const people = useMemo(
+    () => new Map((load.data?.people ?? []).map((p) => [p.userId, p])),
+    [load.data],
+  );
+
+  const summary = reactionSummary(reactions, viewerId);
+  const total = summary.reduce((sum, entry) => sum + entry.count, 0);
+
+  /*
+   * A filter whose emoji has just gone falls back to All rather than to an empty list, which is
+   * exactly what happens when you filter to your own reaction and then remove it.
+   */
+  const active = summary.some((entry) => entry.emoji === filter) ? filter : ALL_REACTIONS;
+
+  const listed = summary
+    .filter((entry) => active === ALL_REACTIONS || entry.emoji === active)
+    .flatMap((entry) =>
+      (reactions.find((r) => r.emoji === entry.emoji)?.userIds ?? []).map((userId) => ({
+        key: `${entry.emoji}-${userId}`,
+        emoji: entry.emoji,
+        mine: userId === viewerId,
+        person: people.get(userId) ?? null,
+      })),
+    )
+    // A reactor whose name has not arrived yet is left out rather than drawn nameless. The
+    // fetch above runs again on every change to the set, so this is a blink, not a hole.
+    .filter((row): row is typeof row & { person: { name: string; image: string | null } } =>
+      row.person !== null,
+    );
+
+  /*
+   * The two halves of the entrance, animated separately.
+   *
+   * > **`animationType="slide"` translates the WHOLE modal, scrim included**, so the dimming
+   * > arrived as a shaded band sweeping up the screen with a hard edge across the middle of the
+   * > conversation - reported from the device on 2026-08-13 as "the shade going up and down".
+   * > What every other app does, and what the founder pointed at, is to dim the screen where it
+   * > stands and move only the panel.
+   *
+   * So the modal itself animates nothing (`none`) and these two do the work: `dim` fades the
+   * scrim in place, `rise` slides the sheet up from below its own bottom edge. Both run on the
+   * native driver, which is what keeps them smooth while the list behind them is still settling.
+   */
+  const dim = useRef(new Animated.Value(0)).current;
+  const rise = useRef(new Animated.Value(0)).current;
+  /*
+   * The sheet's own height, measured, because it hugs its content: a sheet listing three people
+   * and one listing thirty are different distances from off-screen, and a constant would make
+   * the short one crawl and the tall one snap.
+   */
+  const [sheetHeight, setSheetHeight] = useState(0);
+
+  useEffect(() => {
+    Animated.timing(dim, {
+      toValue: 1,
+      duration: 160,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [dim]);
+
+  useEffect(() => {
+    if (sheetHeight === 0) return;
+    Animated.timing(rise, {
+      toValue: 1,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [rise, sheetHeight]);
+
+  /**
+   * Leave the way it arrived, then unmount.
+   *
+   * The parent drops this component the moment it is told to, so the exit has to finish first -
+   * otherwise the scrim vanishes in one frame, which is the same jolt the entrance had.
+   */
+  const close = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(dim, {
+        toValue: 0,
+        duration: 140,
+        easing: Easing.in(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.timing(rise, {
+        toValue: 0,
+        duration: 160,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start(() => onDismiss());
+  }, [dim, rise, onDismiss]);
+
+  /*
+   * The last reaction going away takes the sheet with it: there is nothing left to list, and the
+   * pill that opened it is gone from the row underneath.
+   */
+  useEffect(() => {
+    if (total === 0) close();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [total]);
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={onDismiss}>
-      <View style={styles.dialogBackdrop}>
+    <Modal visible transparent animationType="none" onRequestClose={close}>
+      <View style={styles.reactorBackdrop}>
+        {/*
+          The scrim is a sibling filling the screen, never a wrapper: a Pressable around the
+          sheet would put every row inside another press target, which is failure mode 17.
+        */}
+        <Animated.View
+          style={[styles.reactorScrim, { opacity: dim }]}
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+        />
         <Pressable
           style={StyleSheet.absoluteFill}
-          onPress={onDismiss}
+          onPress={close}
           accessibilityRole="button"
           accessibilityLabel="Close"
         />
-        <View style={styles.reactorSheet}>
+        {/* The home indicator is the phone's, not ours: the last row stops above it. */}
+        <Animated.View
+          onLayout={(event) => setSheetHeight(event.nativeEvent.layout.height)}
+          style={[
+            styles.reactorSheet,
+            {
+              paddingBottom: insets.bottom + space.sm,
+              // Hidden until it has been measured, so it never appears at its resting place
+              // for the one frame before the animation can know how far it has to travel.
+              opacity: sheetHeight === 0 ? 0 : 1,
+              transform: [
+                {
+                  translateY: rise.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [sheetHeight, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <View style={styles.reactorGrabber} />
           <View style={styles.reactorHead}>
-            <Text style={styles.dialogTitle}>Reactions</Text>
+            <Text style={styles.dialogTitle}>{`Reactions (${total})`}</Text>
             <Pressable
-              onPress={onDismiss}
+              onPress={close}
               hitSlop={space.sm}
               accessibilityRole="button"
               accessibilityLabel="Close"
@@ -853,24 +1005,68 @@ function ReactorSheet({
             </Pressable>
           </View>
 
+          {/*
+            The filter chips. `All` first, then every emoji in the pill row's own order, so the
+            two rows read the same way round - one horizontal strip because twenty distinct
+            emoji is a supported message (`PRD/05` rule R4) and wrapping them would push the
+            people off the bottom of the sheet.
+          */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <Tabs
+              variant="chip"
+              active={active}
+              onChange={setFilter}
+              tabs={[
+                { key: ALL_REACTIONS, label: "All", count: total },
+                ...summary.map((entry) => ({
+                  key: entry.emoji,
+                  label: entry.emoji,
+                  count: entry.count,
+                })),
+              ]}
+            />
+          </ScrollView>
+
           <ScrollView>
-            {rows.length === 0 ? (
-              <Text style={styles.dialogBody}>Nobody has reacted to this yet.</Text>
+            {listed.length === 0 ? (
+              load.state === "loading" ? (
+                <ActivityIndicator style={styles.reactorBusy} color={color.accent} />
+              ) : (
+                <Text style={styles.reactorEmpty}>
+                  {load.state === "error"
+                    ? "Could not load who reacted."
+                    : "Nobody has reacted to this yet."}
+                </Text>
+              )
             ) : (
-              rows.map((row) => (
-                <View key={row.emoji} style={styles.reactorRow}>
-                  <Text style={styles.pillEmoji}>{row.emoji}</Text>
-                  <Text style={styles.reactorCount}>{row.count}</Text>
-                  {/* Names, not avatars: this answers "who", and a row of faces makes that a
-                      guessing game for anybody without a photo. */}
-                  <Text style={styles.reactorNames} numberOfLines={2}>
-                    {row.who.join(', ')}
-                  </Text>
-                </View>
+              listed.map((row) => (
+                <Pressable
+                  key={row.key}
+                  style={styles.reactorRow}
+                  // Only your own reaction is yours to remove, so only your own row is a
+                  // button. Everybody else's is a fact about them.
+                  disabled={!row.mine}
+                  onPress={() => onToggle(row.emoji)}
+                  accessibilityRole={row.mine ? "button" : "text"}
+                  accessibilityLabel={
+                    row.mine
+                      ? `You reacted with ${row.emoji}. Remove it`
+                      : `${row.person.name} reacted with ${row.emoji}`
+                  }
+                >
+                  <Avatar name={row.person.name} image={row.person.image} size={36} />
+                  <View style={styles.reactorText}>
+                    <Text style={styles.reactorName} numberOfLines={1}>
+                      {row.person.name}
+                    </Text>
+                    {row.mine && <Text style={styles.reactorHint}>Tap to remove</Text>}
+                  </View>
+                  <Text style={styles.reactorEmoji}>{row.emoji}</Text>
+                </Pressable>
               ))
             )}
           </ScrollView>
-        </View>
+        </Animated.View>
       </View>
     </Modal>
   );
@@ -886,6 +1082,10 @@ function ReactorSheet({
  * `PRD/05` rule R2: at most four, most-reacted first, then a `+N` chip for the rest. The chip is
  * what makes the cap honest - a row that just stopped at four would hide somebody's reaction with
  * no way to know it was there, including your own.
+ *
+ * **A pill taps to join and holds to ask who.** Both gestures on the one target, which is the
+ * split the message bubble already uses: the tap acts, the hold explains. The `+N` chip has no
+ * reaction of its own, so a tap on it goes straight to the list.
  */
 function ReactionRow({
   summary,
@@ -910,11 +1110,17 @@ function ReactionRow({
           key={entry.emoji}
           style={[styles.pill, entry.mine && styles.pillMine]}
           onPress={() => onReact(seq, entry.emoji)}
+          onLongPress={() => {
+            // The buzz lands before the sheet does, for the reason `longPressFeedback` gives:
+            // a hold has no visual progress, so the acknowledgement has to be felt.
+            longPressFeedback();
+            onShowAll(seq);
+          }}
           accessibilityRole="button"
           accessibilityLabel={
             entry.mine
-              ? `Remove your ${entry.emoji} reaction, ${entry.count} total`
-              : `React with ${entry.emoji}, ${entry.count} total`
+              ? `Remove your ${entry.emoji} reaction, ${entry.count} total. Hold to see who reacted`
+              : `React with ${entry.emoji}, ${entry.count} total. Hold to see who reacted`
           }
         >
           <Text style={styles.pillEmoji}>{entry.emoji}</Text>
@@ -932,6 +1138,26 @@ function ReactionRow({
         </Pressable>
       )}
     </View>
+  );
+}
+
+/**
+ * The message a piece of screen state names by `seq`.
+ *
+ * **Looked up rather than stored**, so it stays current: a reaction or a pin landing while a
+ * sheet is open updates the copy on screen instead of freezing a stale one. That is the whole
+ * reason these hold a number and not an envelope.
+ *
+ * Extracted at the third caller - the long-press menu, the reply preview and the reactor sheet
+ * all ask this identical question, and a hand-copied `find` is failure mode 9 in miniature.
+ */
+function messageAt(rows: readonly Row[], seq: number | null): MessageEnvelope | null {
+  if (seq === null) return null;
+  return (
+    rows.find(
+      (row): row is { kind: "message"; message: MessageEnvelope } =>
+        row.kind === "message" && row.message.seq === seq,
+    )?.message ?? null
   );
 }
 
@@ -1084,7 +1310,15 @@ const MessageRow = memo(function MessageRow({
    */
   onSelect: (seq: number, anchor: MessageAnchor | null) => void;
   onReact: (seq: number, emoji: ReactionEmoji) => void;
-  /** Open the sheet listing every reaction and who made it. The `+N` chip calls it. */
+  /**
+   * Open the sheet listing everyone who reacted and what they picked.
+   *
+   * **A long press on any pill reaches it**, and a tap on the `+N` chip, which has no reaction
+   * of its own to toggle. Tapping a pill still joins or leaves that reaction - the founder was
+   * explicit that the one-tap gesture stays, so the list is the held gesture on the same target
+   * rather than a replacement for it. That is the same tap-acts / hold-explains split the
+   * message bubble itself already uses.
+   */
   onShowReactors: (seq: number) => void;
   onOpenProfile: (userId: string) => void;
   onJumpToQuote: (seq: number) => void;
@@ -1625,7 +1859,7 @@ export default function ChatScreen() {
    * conversation entirely.
    */
   const [confirmingPollDelete, setConfirmingPollDelete] = useState<string | null>(null);
-  /** The message whose reactions are being listed in full, by seq. The `+N` chip sets it. */
+  /** The message whose reactions are listed in full, by seq. A held pill or the `+N` chip sets it. */
   const [showingReactorsFor, setShowingReactorsFor] = useState<number | null>(null);
   /** True while the full emoji catalog is open over the long-press menu. */
   const [pickingEmoji, setPickingEmoji] = useState(false);
@@ -2189,15 +2423,18 @@ export default function ChatScreen() {
    * Looked up rather than stored, so it stays current: a reaction or a pin landing while the menu
    * is open updates the copy on screen instead of freezing a stale one.
    */
-  const selectedMessage = useMemo(
-    () =>
-      selected === null
-        ? null
-        : (rows.find(
-            (row): row is { kind: "message"; message: MessageEnvelope } =>
-              row.kind === "message" && row.message.seq === selected,
-          )?.message ?? null),
-    [rows, selected],
+  const selectedMessage = useMemo(() => messageAt(rows, selected), [rows, selected]);
+
+  /**
+   * The message whose reactor sheet is open, for the same reason and by the same lookup.
+   *
+   * The sheet reads its emoji and counts from this live envelope rather than from its own fetch,
+   * so removing your reaction redraws the chips the moment the store patches - and somebody
+   * else's reaction landing over the socket appears in the open sheet instead of behind it.
+   */
+  const reactorsMessage = useMemo(
+    () => messageAt(rows, showingReactorsFor),
+    [rows, showingReactorsFor],
   );
 
   /*
@@ -2220,16 +2457,7 @@ export default function ChatScreen() {
     selectedPoll.data?.poll.isCreator === true ? { closed: selectedPoll.data.poll.closed } : null;
 
   /** The message the composer is answering, resolved the same way and for the same reasons. */
-  const replyingTo = useMemo(
-    () =>
-      replyingToSeq === null
-        ? null
-        : (rows.find(
-            (row): row is { kind: "message"; message: MessageEnvelope } =>
-              row.kind === "message" && row.message.seq === replyingToSeq,
-          )?.message ?? null),
-    [rows, replyingToSeq],
-  );
+  const replyingTo = useMemo(() => messageAt(rows, replyingToSeq), [rows, replyingToSeq]);
 
   /*
    * The `@` list's contents, derived from the draft and the caret rather than held in state.
@@ -3447,12 +3675,14 @@ export default function ChatScreen() {
         />
       )}
 
-      {/* Everyone who reacted, behind the `+N` chip. `PRD/05` rule R2. */}
-      {showingReactorsFor !== null && (
+      {/* Everyone who reacted, behind a held pill or the `+N` chip. `PRD/05` rule R2. */}
+      {showingReactorsFor !== null && reactorsMessage !== null && (
         <ReactorSheet
           channelId={channelId}
           seq={showingReactorsFor}
+          reactions={reactorsMessage.reactions}
           viewerId={userId}
+          onToggle={(emoji) => void react(showingReactorsFor, emoji)}
           onDismiss={() => setShowingReactorsFor(null)}
         />
       )}
@@ -4319,24 +4549,61 @@ const styles = StyleSheet.create({
     backgroundColor: color.cardSunken,
   },
   dialogButtonLabel: { ...type.headline, color: color.textPrimary },
+  /*
+    Everyone who reacted, arriving from the bottom edge rather than in the middle of the screen.
+
+    **The same presentation as the emoji picker**, deliberately: both open from the reaction row,
+    and one sliding up while the other appeared centred read as two unrelated surfaces built by
+    two different people. It hugs its content up to a cap, so three reactors get a short sheet
+    and thirty get a scrolling one.
+  */
+  reactorBackdrop: { flex: 1, justifyContent: "flex-end" },
+  /*
+    The dimming, as its own layer rather than a colour on the backdrop.
+
+    It has to be able to fade on its own: the sheet slides and the shade does not, and the two
+    sharing a view is precisely what made the dimming travel up the screen with the panel.
+  */
+  reactorScrim: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.35)",
+  },
   reactorSheet: {
-    width: "100%",
-    maxWidth: 360,
     maxHeight: "70%",
     backgroundColor: color.card,
-    borderRadius: radius.xl,
-    padding: space.md,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    paddingHorizontal: space.md,
+    paddingTop: space.sm,
     gap: space.sm,
   },
-  reactorHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  reactorRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.sm + 4,
-    paddingVertical: space.sm,
+  /* The grabber says "this came from the edge" before a word of it has been read. */
+  reactorGrabber: {
+    alignSelf: "center",
+    width: 36,
+    height: 4,
+    borderRadius: radius.pill,
+    backgroundColor: color.fallback,
   },
-  reactorCount: { ...type.bodySmallStrong, color: color.textSecondary, minWidth: 20 },
-  reactorNames: { ...type.bodySmall, color: color.textPrimary, flex: 1 },
+  reactorHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  reactorRow: { flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.sm },
+  reactorText: { flex: 1, gap: 2 },
+  reactorName: { ...type.headline, color: color.textPrimary },
+  /* Only your own row says this, because only your own row does anything when tapped. */
+  reactorHint: { ...type.bodySmall, color: color.textSecondary },
+  /*
+    The emoji this person used, at the end of their row.
+
+    Larger than the pill's copy of the same character: a pill is a count with a glyph on it and
+    this is the answer to "which one did they pick", read down a column of faces.
+  */
+  reactorEmoji: { fontSize: 20, lineHeight: 26 },
+  reactorEmpty: { ...type.bodySmall, color: color.textSecondary, paddingVertical: space.md },
+  reactorBusy: { paddingVertical: space.lg },
 
   /**
    * The message row: an author line, then the bubble, then any reactions.

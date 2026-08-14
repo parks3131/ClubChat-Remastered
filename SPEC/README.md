@@ -111,6 +111,7 @@ survives the number changing.
 | 04 | [Share sheet](DESIGN/04-share-sheet.md) | Handing a club to somebody: the preview, the ways the link travels, and the code |
 | 05 | [Content card](DESIGN/05-content-card.md) | A poll, event or meeting in a conversation: one shell, three payloads, and the votable bar |
 | 06 | [Composer](DESIGN/06-composer.md) | The form you fill in to make a thing: sections of air, the action in the header, and the wheel |
+| 07 | [Reactions](DESIGN/07-reactions.md) | The pills under a message and the sheet behind them: tap to act, hold to ask who |
 
 Written as surfaces are worked on rather than backfilled in a pass, since a spec written by reading
 code instead of by looking at a device starts out wrong. See [`DESIGN/README.md`](DESIGN/README.md)

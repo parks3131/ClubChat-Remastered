@@ -90,6 +90,15 @@ The **"Kinetic Performance System"**, extracted verbatim from the Stitch export'
   chevron, so without one a tap is acknowledged only by the next screen arriving, and on a slow
   open the row reads as dead. `Row` now carries that with the variant.
 
+- **A sheet arrives from the bottom edge, and its scrim does not travel with it.** The dimming
+  fades where it stands while the panel rises; the exit runs in reverse before the component
+  unmounts. This is an obligation on every bottom sheet in the app, not a preference: React
+  Native's `Modal animationType="slide"` translates the **whole** modal, scrim included, so the
+  dimming arrives as a shaded band with a hard edge sweeping up the screen behind it. Reported
+  from the device on 2026-08-13 against the reactor sheet, and visible in any sheet built that
+  way. The panel's travel is its **measured** height, since a sheet that hugs its content has no
+  constant to slide by. See [`DESIGN/07`](../DESIGN/07-reactions.md) rule 6.
+
 **Light mode only** today; there is no dark palette. The token module is a flat named export
 specifically so a dark variant can be swapped in without touching call sites.
 

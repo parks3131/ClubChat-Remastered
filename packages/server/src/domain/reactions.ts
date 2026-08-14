@@ -6,9 +6,10 @@
  * > mode alongside the messages they belong to. A separate endpoint would have needed its
  * > own sync path, its own cache and its own offline story. See ADR-0017.
  *
- * The fixed six-emoji set is enforced by a check constraint on the column, so nothing here
- * needs to police it and no second write path can bypass it. The Zod enum at the API boundary
- * exists to return a 400 rather than a 500 - it is a courtesy, not the enforcement.
+ * The set of usable emoji is enforced by a foreign key onto the catalog table, so nothing here
+ * needs to police it and no second write path can bypass it. The validator at the API boundary
+ * exists to return a 400 rather than a 500 - it is a courtesy, not the enforcement. (It was a
+ * check constraint over six fixed emoji until ADR-0028 opened the set.)
  */
 
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -50,7 +51,17 @@ export async function reactionsForMessages(
       userId: messageReactions.userId,
     })
     .from(messageReactions)
-    .where(inArray(messageReactions.messageId, [...messageIds]));
+    .where(inArray(messageReactions.messageId, [...messageIds]))
+    /*
+     * Oldest reactor first, which is an ordering the client can actually show.
+     *
+     * Unordered, Postgres is free to hand back the same three people in a different order on
+     * the next read - and the who-reacted sheet lists them one per row, so a re-read after
+     * somebody reacts would shuffle the names already on screen. `user_id` breaks the tie
+     * because two reactions can share a timestamp, and a tie left to the planner is the same
+     * bug in a smaller window.
+     */
+    .orderBy(messageReactions.createdAt, messageReactions.userId);
 
   // emoji -> userIds, per message, then flattened in the canonical order below.
   const staging = new Map<string, Map<string, string[]>>();
