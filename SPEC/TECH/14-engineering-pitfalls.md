@@ -147,3 +147,13 @@ they cost.
 28. **Verify a permission by impersonating the unprivileged user and watching the write get
     rejected**, not by reading the rule.
 29. **A migration is never edited after being applied.** A correction is always a new one.
+30. **A rename must be hand-written; `drizzle-kit generate` cannot be trusted with one.** Given a
+    table that changed name, drizzle cannot tell a rename from a drop-and-create and stops to ask
+    - and it asks with an arrow-key prompt, so with no TTY it dies with an error and with a piped
+    TTY it simply hangs. **The answer to that prompt is the difference between moving the data and
+    destroying it.** For a rename: write the `ALTER ... RENAME` SQL by hand, then hand-write the
+    `meta/NNNN_snapshot.json` (copy the previous one, edit the table, set `prevId` to the old
+    `id`, give it a new `id`, and record the rename under `_meta.tables`) and append the
+    `_journal.json` entry. Generating first and editing the SQL afterwards leaves a snapshot that
+    disagrees with what actually ran, which is invisible until the *next* migration diffs against
+    it. *(Found on 2026-08-14 renaming `routine_workouts` to `meetups`.)*
