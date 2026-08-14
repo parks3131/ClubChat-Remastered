@@ -300,6 +300,17 @@ export type MeetupBody = {
   description?: string | null;
 };
 
+/**
+ * The week, plus whether the club's Nudge bell is live.
+ *
+ * `nudgeBlockedUntil` is null when it is available. Sent to every viewer, not only admins: who
+ * sees the bell is the screen's question, and whether it can be rung is the server's.
+ */
+export type MeetupWeek = {
+  days: MeetupDay[];
+  nudgeBlockedUntil: string | null;
+};
+
 export type MeetupDay = {
   date: string;
   /** Several may share a day, in time order. A morning session and an evening social are two. */

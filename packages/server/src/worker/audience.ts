@@ -128,9 +128,14 @@ async function gather(db: Db, request: AudienceRequest): Promise<string[]> {
       return eboardMembersForClub(db, request.clubId);
 
     // Every club member.
+    //
+    // `meetup_nudged` sits here rather than anywhere narrower on purpose: a nudge is an admin
+    // telling the CLUB about a meetup, so its audience is the club. The actor is removed above
+    // with everybody else's - you are not notified about something you just did.
     case 'event_created':
     case 'race_created':
     case 'news_post_created':
+    case 'meetup_nudged':
       if (!request.clubId) return [];
       return clubMembers(db, request.clubId);
 

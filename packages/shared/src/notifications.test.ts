@@ -30,6 +30,7 @@ const EVENT = '33333333-3333-4333-8333-333333333333';
 const MEETING = '44444444-4444-4444-8444-444444444444';
 const POST = '55555555-5555-4555-8555-555555555555';
 const DM = '66666666-6666-4666-8666-666666666666';
+const MEETUP = '77777777-7777-4777-8777-777777777777';
 
 /** A valid params object per type, for the exhaustive sweep below. */
 const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
@@ -124,6 +125,15 @@ const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
     actorName: 'Riley',
     postId: POST,
   },
+  meetup_nudged: {
+    clubId: CLUB,
+    clubName: 'Hillside',
+    actorName: 'Riley',
+    meetupId: MEETUP,
+    meetupDate: '2026-08-14',
+    meetupTime: '18:30',
+    location: 'Memorial Park gate',
+  },
   announcement: {
     clubId: CLUB,
     channelId: CHANNEL,
@@ -179,7 +189,10 @@ describe('the catalogue is complete', () => {
     // phone, which is what makes muting a conversation mean anything. See ADR-0015.
     // message_reported is the twentieth, added on 2026-08-01: reporting used to write a row
     // into a work queue and tell nobody there was work in it.
-    expect(notificationTypes).toHaveLength(20);
+    // meetup_nudged is the twenty-first, added on 2026-08-14 with Nudge - the one deliberate
+    // exception to Weekly Meetups notifying nobody, and the only type a person sends on purpose
+    // about something that already existed.
+    expect(notificationTypes).toHaveLength(21);
   });
 
   it('has a params schema for every type', () => {
@@ -412,6 +425,7 @@ describe('notificationSubject', () => {
     'event_created',
     'meeting_created',
     'news_post_created',
+    'meetup_nudged',
     'car_group_incharge_left',
   ];
 

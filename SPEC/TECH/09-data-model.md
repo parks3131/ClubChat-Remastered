@@ -290,6 +290,22 @@ meetups               id, club_id, meetup_date, meetup_time, location, descripti
                       -- NO unique key on (club_id, meetup_date): a day holds as many
                       -- meetups as the club needs, ordered by time.
                       -- created_by is audit only: any admin edits any meetup.
+meetup_nudges         id, club_id, meetup_id, actor_id, created_at, cooldown_until
+                      EXCLUDE USING gist (club_id WITH =,
+                                          tstzrange(created_at, cooldown_until) WITH &&)
+                      -- Requires btree_gist, the repo's only CREATE EXTENSION.
+                      -- ONE NUDGE PER CLUB PER HOUR, and the constraint is the rule -
+                      -- not a check in the handler, because two admins tapping the bell
+                      -- in the same second is exactly what a read-then-write loses
+                      -- (ADR-0030). The handler reads it first anyway, so the refusal
+                      -- can name a TIME rather than only saying no.
+                      -- cooldown_until is STORED, not created_at + interval '1 hour'.
+                      -- An exclusion constraint is an index and an index expression must
+                      -- be IMMUTABLE; timestamptz + interval is only STABLE, since it
+                      -- reads the session time zone. Two plain columns fix that, and make
+                      -- the hour data rather than schema.
+                      -- meetup_id is nullable and SET NULL: the cooldown is a fact about
+                      -- the CLUB, so deleting the nudged meetup must not return the nudge.
 news_posts            id, club_id, author_id, body, media_id, created_at, updated_at
                       CHECK (body IS NOT NULL OR media_id IS NOT NULL)
                       -- The check carries "a post must have body text, a photo, or

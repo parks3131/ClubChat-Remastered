@@ -73,6 +73,19 @@ export const notificationTypes = [
    * and contradict "computed on read, never stored". See ADR-0015.
    */
   'dm_message',
+  /**
+   * An admin nudged a meetup: a push to the club about a meetup that already existed.
+   *
+   * **This is the one deliberate exception to the silence of Weekly Meetups.** Creating a meetup
+   * notifies nobody (PRD/08 rule 11), and that silence is why the week is a separate surface from
+   * the calendar rather than a view over it. A nudge does not weaken the rule - it turns it from a
+   * wall into a default, because a person chose to send this one rather than the meetup sending
+   * itself.
+   *
+   * Rate-limited to once an hour per CLUB, not per meetup and not per admin, by an exclusion
+   * constraint rather than by a check in the handler - see ADR-0030.
+   */
+  'meetup_nudged',
   // Housekeeping.
   'car_group_incharge_left',
   'chat_caught_up',
@@ -206,6 +219,22 @@ export const notificationParams = {
     title: z.string(),
   }),
   news_post_created: club.merge(actor).extend({ postId: Uuid }),
+  /**
+   * Where and when, carried as params rather than as a sentence.
+   *
+   * The place and time are copied in rather than joined at read time, for the same reason every
+   * `actorName` here is denormalised: the row must render without a join, and it is a record of
+   * what the club was told at the time. A meetup edited afterwards does not silently rewrite the
+   * notification that went out about it.
+   */
+  meetup_nudged: club.merge(actor).extend({
+    meetupId: Uuid,
+    /** `YYYY-MM-DD`. */
+    meetupDate: z.string(),
+    /** `HH:MM`, wall-clock in the club's own day. */
+    meetupTime: z.string(),
+    location: z.string(),
+  }),
 
   announcement: z
     .object({
@@ -349,6 +378,8 @@ export type NotificationTarget =
   | { kind: 'event'; eventId: string }
   | { kind: 'meeting'; meetingId: string }
   | { kind: 'news'; clubId: string }
+  /** The club's week. A nudge is about one meetup, but the week is where a meetup is read. */
+  | { kind: 'meetups'; clubId: string }
   /**
    * The Reports tab of a channel's Highlights, which is where a group-scope report is worked.
    *
@@ -405,6 +436,8 @@ export function notificationTarget(n: {
       return { kind: 'meeting', meetingId: p['meetingId']! };
     case 'news_post_created':
       return { kind: 'news', clubId: p['clubId']! };
+    case 'meetup_nudged':
+      return { kind: 'meetups', clubId: p['clubId']! };
 
     // Straight to the message, which is what makes a push deep-link land on the right
     // one rather than merely opening the conversation.
@@ -556,14 +589,15 @@ export function notificationSubject(n: {
 
     /*
      * The glyph tier: a thing that happened rather than a place or a person. A poll, an event, a
-     * meeting, a post, and a car group that needs a new Incharge - which is about a car inside a
-     * race, and keeps the car.
+     * meeting, a post, a nudged meetup, and a car group that needs a new Incharge - which is about
+     * a car inside a race, and keeps the car.
      */
     case 'poll_created':
     case 'poll_closing_soon':
     case 'event_created':
     case 'meeting_created':
     case 'news_post_created':
+    case 'meetup_nudged':
     case 'car_group_incharge_left':
       return null;
   }
@@ -664,6 +698,20 @@ export function renderNotification(n: {
       return { title: p['clubName']!, body: `${p['actorName']} scheduled ${p['title']}` };
     case 'news_post_created':
       return { title: p['clubName']!, body: `${p['actorName']} posted club news` };
+    /*
+     * Where and when, in that order, because they are what the reader needs off a lock screen.
+     *
+     * The actor is named for the same reason every other line here names one: a push that says
+     * only "6:30 PM at the Track" reads like the app deciding to buzz, and a nudge is somebody
+     * choosing to. The day is the raw date rather than a weekday - this function is pure and
+     * locale-free by design (see the note above about a second locale being another
+     * implementation, not a migration), and the client formats it when it draws the row.
+     */
+    case 'meetup_nudged':
+      return {
+        title: p['clubName']!,
+        body: `${p['actorName']} nudged: ${p['meetupTime']} at ${p['location']}`,
+      };
     case 'announcement':
       return { title: p['channelName']!, body: `${p['actorName']}: ${p['preview']}` };
     case 'mentioned':

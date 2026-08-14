@@ -1071,7 +1071,7 @@ const onAccountSuspended: EffectHandler = async (event, deps) => {
  * rules in one place rather than repeated five times with five chances to omit the
  * exclude-the-actor rule.
  *
- * Meetups are deliberately absent from every call site: creating one notifies nobody
+ * Meetup CREATION is deliberately absent from every call site: creating one notifies nobody
  * and posts nothing.
  */
 function makeCreationHandler(config: {
@@ -1080,7 +1080,8 @@ function makeCreationHandler(config: {
     | 'event_created'
     | 'meeting_created'
     | 'news_post_created'
-    | 'poll_created';
+    | 'poll_created'
+    | 'meetup_nudged';
   buildParams: (
     event: OutboxEvent,
     ctx: { clubName: string; actorName: string },
@@ -1959,6 +1960,27 @@ export const handlers: Record<string, EffectHandler> = {
     cardLink: (event) => ({ linkedEventId: String(event.payload['eventId']) }),
   }),
   'event.deleted': removeCards('linked_event_id', 'eventId'),
+
+  /*
+   * Nudge: the one deliberate exception to Weekly Meetups notifying nobody.
+   *
+   * Reuses the creation handler for its audience resolution and push scheduling, and passes NO
+   * card config - a nudge is a push, not a chat post. PRD/08 rule 11 keeps meetups out of chat,
+   * and nudging one is not a reason to put it there: the point is to reach a phone that is not
+   * currently looking at the app.
+   */
+  'meetup.nudged': makeCreationHandler({
+    notificationType: 'meetup_nudged',
+    buildParams: (event, ctx) => ({
+      clubId: String(event.payload['clubId']),
+      clubName: ctx.clubName,
+      actorName: ctx.actorName,
+      meetupId: String(event.payload['meetupId']),
+      meetupDate: String(event.payload['meetupDate']),
+      meetupTime: String(event.payload['meetupTime']),
+      location: String(event.payload['location']),
+    }),
+  }),
 
   'meeting.created': makeCreationHandler({
     cardType: 'meeting',

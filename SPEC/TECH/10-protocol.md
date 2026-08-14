@@ -201,7 +201,12 @@ GET    /events/:id                           ← any club member; `canManage` sa
 POST   /clubs/:id/meetups · PATCH · DELETE /meetups/:id
 GET    /clubs/:id/meetups?monday=YYYY-MM-DD  ← the Monday is required, never guessed.
                                                Returns a day's meetups time-ordered;
-                                               a day may hold several
+                                               a day may hold several. Carries
+                                               nudgeBlockedUntil for the bell
+POST   /meetups/:id/nudge                    ← admin; 202. Pushes the meetup to the club.
+                                               409 { error, availableAt } while cooling
+                                               down - the refusal names a TIME, because
+                                               a bare no gets tapped again (ADR-0030)
 GET    /clubs/:id/news · POST /clubs/:id/news
 GET    /news/:id · PATCH · DELETE            ← any club admin, not only the author
 POST   /news/:id/reactions                   ← the same emoji set as chat, constrained in the column

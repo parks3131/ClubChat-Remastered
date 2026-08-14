@@ -81,6 +81,7 @@ in both directions, by the permission-matrix test suite.
 |---|---|---|---|
 | Create/edit/delete a calendar event | ✅ | ✅ | ❌ |
 | Create/edit/delete a meetup (any admin, any meetup) | ✅ | ✅ | ❌ |
+| Nudge a meetup - push it to the club, once an hour per club | ✅ | ✅ | ❌ |
 | Create/edit/delete a news post (any admin, any post) | ✅ | ✅ | ❌ |
 | React to a news post | ✅ | ✅ | ✅ |
 | Create a club poll | ✅ | ✅ | ❌ |

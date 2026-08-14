@@ -157,3 +157,16 @@ they cost.
     `_journal.json` entry. Generating first and editing the SQL afterwards leaves a snapshot that
     disagrees with what actually ran, which is invisible until the *next* migration diffs against
     it. *(Found on 2026-08-14 renaming `routine_workouts` to `meetups`.)*
+31. **A hand-written journal `when` in the future silently swallows the NEXT migration.** The
+    migrator applies entries whose `when` is greater than the newest `created_at` already recorded,
+    so a fabricated timestamp ahead of the real clock makes the following migration look applied.
+    It prints **"migrations applied"** and creates nothing. *(Done on 2026-08-14 by stamping 0027 a
+    day after 0026; drizzle then stamped 0028 with the real clock, which was behind it. Confirmed
+    by querying the table rather than trusting the success line - which is the actual lesson.)*
+32. **`timestamptz + interval` is `STABLE`, not `IMMUTABLE`**, because it reads the session's time
+    zone - so it cannot appear in an index expression, and an `EXCLUDE` constraint is an index.
+    Postgres refuses with *"functions in index expression must be marked IMMUTABLE"*. Store the
+    computed endpoint as its own column and range over two plain columns instead. *(ADR-0030.)*
+33. **Drizzle wraps the driver's error, so a Postgres `SQLSTATE` is on `.cause` and not on the
+    error you catch.** Checking `error.code` for `23505`/`23P01` silently never matches, and a
+    handled conflict surfaces as an unhandled crash. Walk the cause chain.

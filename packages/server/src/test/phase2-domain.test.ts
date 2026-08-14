@@ -29,6 +29,7 @@ import {
   createMeeting,
   createNewsPost,
   createMeetup,
+  nudgeMeetup,
   deleteEvent,
   deleteMeeting,
   readMeetupWeek,
@@ -998,6 +999,76 @@ describe('the meetup week', () => {
     const monday = week.days.find((d) => d.date === '2026-01-05');
     expect(monday?.empty).toBe(true);
     expect(monday?.meetups).toEqual([]);
+  });
+
+  it('a nudge pushes the club, and the hour is enforced by the database', async () => {
+    const f = await setup();
+    // The member's phone. A nudge that writes a row and reaches nothing is the feature failing
+    // silently, so the device is registered and the push asserted rather than assumed.
+    await registerDevice(h.db, {
+      userId: f.memberId,
+      pushToken: 'ExponentPushToken[member-phone]',
+      platform: 'ios',
+    });
+    const created = await createMeetup(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId, meetupDate: '2026-01-06', meetupTime: '18:30', location: 'Track',
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    // A member cannot nudge. Attempted, not inferred from the button being hidden.
+    expect(await nudgeMeetup(h.db, await ctxFor(f.memberId), created.meetupId)).toMatchObject({
+      ok: false,
+      code: 'forbidden',
+    });
+
+    const first = await nudgeMeetup(h.db, await ctxFor(f.ownerId), created.meetupId);
+    expect(first.ok).toBe(true);
+    await drainAll();
+
+    // Creating the meetup notified nobody; nudging it notified everybody else. Both halves
+    // matter - the first is PRD/08 rule 11, the second is the exception being real.
+    const rows = await h.db.select().from(notifications);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.type).toBe('meetup_nudged');
+    expect(rows[0]?.recipientId, 'the nudger notified themselves').toBe(f.memberId);
+    expect(push.sent.length, 'a nudge must reach a phone').toBeGreaterThan(0);
+
+    // The hour, per CLUB. A second meetup on a different day is still refused.
+    const other = await createMeetup(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId, meetupDate: '2026-01-08', meetupTime: '07:00', location: 'The Anchor',
+    });
+    expect(other.ok).toBe(true);
+    if (!other.ok) return;
+    const second = await nudgeMeetup(h.db, await ctxFor(f.ownerId), other.meetupId);
+    expect(second).toMatchObject({ ok: false, code: 'cooling_down' });
+    if (second.ok || second.code !== 'cooling_down') return;
+    expect(Date.parse(second.availableAt)).toBeGreaterThan(Date.now());
+  });
+
+  it('refuses the second of two simultaneous nudges, rather than sending two', async () => {
+    /*
+     * The case a read-then-write loses, and the reason the cooldown is an EXCLUDE constraint
+     * rather than a check in the handler (ADR-0030). Both calls read an empty cooldown, both
+     * try to insert, and exactly one may win.
+     */
+    const f = await setup();
+    const created = await createMeetup(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId, meetupDate: '2026-02-03', meetupTime: '19:00', location: 'Room 204',
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const ctx = await ctxFor(f.ownerId);
+    const results = await Promise.all([
+      nudgeMeetup(h.db, ctx, created.meetupId),
+      nudgeMeetup(h.db, ctx, created.meetupId),
+    ]);
+
+    expect(results.filter((r) => r.ok), 'both nudges were accepted').toHaveLength(1);
+    expect(results.filter((r) => !r.ok && r.code === 'cooling_down')).toHaveLength(1);
+    await drainAll();
+    expect(await h.db.select().from(notifications)).toHaveLength(1);
   });
 
   it('holds several meetups on one day, in time order', async () => {

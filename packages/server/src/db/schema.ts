@@ -1403,6 +1403,52 @@ export const meetups = pgTable(
 );
 
 /**
+ * A nudge: an admin pushing one meetup at the whole club.
+ *
+ * **This row exists to be a rate limit, not to be read.** Weekly Meetups notifies nobody
+ * (PRD/08 rule 11) and Nudge is the single deliberate exception to that, so the only thing
+ * standing between it and being the reason members turn push off is the cooldown - and the
+ * cooldown is an `EXCLUDE` constraint in `0028_meetup_nudges.sql`, not a check in a handler.
+ * At most one nudge per club per hour, enforced by Postgres, because two admins tapping the
+ * bell at the same moment is exactly the case a read-then-write loses. See ADR-0030.
+ *
+ * **Drizzle cannot express an exclusion constraint**, so it is raw SQL in the migration and
+ * this declaration does not describe it. Do not conclude from this file that the table has no
+ * constraints.
+ *
+ * `meetupId` clears rather than cascades, and is nullable for that reason: the cooldown is a
+ * fact about the CLUB, so deleting the meetup that was nudged must not hand back an early
+ * nudge.
+ */
+export const meetupNudges = pgTable(
+  'meetup_nudges',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    clubId: uuid('club_id')
+      .notNull()
+      .references(() => clubs.id, { onDelete: 'cascade' }),
+    meetupId: uuid('meetup_id').references(() => meetups.id, { onDelete: 'set null' }),
+    actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * When the bell comes back, stored rather than computed.
+     *
+     * **The window is a column because `timestamptz + interval` is STABLE, not IMMUTABLE** - it
+     * depends on the session's time zone - so it cannot appear in an index expression, and an
+     * exclusion constraint is an index. Writing the end of the window down turns the constraint
+     * into `tstzrange(created_at, cooldown_until)` over two plain columns, which is immutable.
+     *
+     * It also makes the hour data rather than schema: shortening the cooldown becomes a new
+     * default and a handler change, not a constraint rewrite.
+     */
+    cooldownUntil: timestamp('cooldown_until', { withTimezone: true })
+      .notNull()
+      .default(sql`now() + interval '1 hour'`),
+  },
+  (t) => [index('meetup_nudges_by_club').on(t.clubId, t.createdAt)],
+);
+
+/**
  * A news post. The club's front page.
  *
  * A post must have **body text, a photo, or both** - the check constraint carries that, so

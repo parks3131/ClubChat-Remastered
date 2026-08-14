@@ -13,12 +13,7 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
 
 ## Next up
 
-- [ ] **Nudge.** The admin-only bell that pushes one meetup to the club. Designed in
-      [`PRD/08`](SPEC/PRD/08-weekly-meetups.md); three things must be answered first, and they are
-      written down there: who the audience is, what stops several admins tapping it repeatedly,
-      and which notification type carries it. It needs a new type in the catalogue
-      ([ADR-0013](SPEC/decisions/0013-notifications-store-type-and-params.md) stores type plus
-      params, never rendered text).
+- [ ] **Recurrence** is the next real feature, and is deferred rather than pending - see below.
 
 ## Known broken, or quietly wrong
 

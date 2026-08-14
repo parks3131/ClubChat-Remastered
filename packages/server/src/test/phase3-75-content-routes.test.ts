@@ -481,6 +481,38 @@ describe('weekly meetups', () => {
     expect((await as(owner, 'DELETE', `/meetups/${created.body.meetupId}`)).status).toBe(200);
   });
 
+  it('nudges once an hour per club, and says when the bell returns', async () => {
+    const owner = await signUp('NudgeOwner');
+    const member = await signUp('NudgeMember');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, member);
+
+    const made = async (meetupDate: string) =>
+      (await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+        meetupDate, meetupTime: '18:30', location: 'Memorial Park gate',
+      })).body.meetupId as string;
+
+    const first = await made('2027-05-03');
+    const second = await made('2027-05-06');
+
+    // A member has no bell. Attempted directly, not inferred from the control being hidden.
+    expect((await as(member, 'POST', `/meetups/${first}/nudge`)).status).toBe(404);
+
+    expect((await as(owner, 'POST', `/meetups/${first}/nudge`)).status).toBe(202);
+
+    // The hour is the CLUB's, so a different meetup on a different day is refused too - and the
+    // refusal carries when, because "no" alone gets tapped again a minute later.
+    const blocked = await as(owner, 'POST', `/meetups/${second}/nudge`);
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error).toBe('cooling_down');
+    expect(Date.parse(blocked.body.availableAt)).toBeGreaterThan(Date.now());
+
+    // The week tells the screen the same thing, so the bell can render disabled rather than
+    // looking live and failing on tap.
+    const week = await as(member, 'GET', `/clubs/${clubId}/meetups?monday=2027-05-03`);
+    expect(Date.parse(week.body.nudgeBlockedUntil)).toBeGreaterThan(Date.now());
+  });
+
   it('refuses a meetup with no place or no time', async () => {
     // The surface exists to answer where and when. "TBC" is a real answer; a blank is not.
     const owner = await signUp('BlankOwner');
@@ -690,6 +722,7 @@ describe('the session boundary', () => {
       ['GET', `/clubs/${id}/meetups`],
       ['PATCH', `/meetups/${id}`],
       ['DELETE', `/meetups/${id}`],
+      ['POST', `/meetups/${id}/nudge`],
       ['POST', `/clubs/${id}/news`],
       ['GET', `/clubs/${id}/news`],
       ['POST', `/news/${id}/reactions`],

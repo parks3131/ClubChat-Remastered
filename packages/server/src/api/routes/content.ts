@@ -25,6 +25,7 @@ import {
   readMeeting,
   readNewsFeed,
   readNewsPost,
+  nudgeMeetup,
   readMeetupWeek,
   updateMeetup,
   toggleNewsReaction,
@@ -239,6 +240,24 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
     const result = await deleteMeetup(deps.db, request.access!, request.params.id);
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return result;
+  });
+
+  /**
+   * Nudge: push one meetup at the club, at most once an hour per club.
+   *
+   * 409 rather than 404 when the bell is cooling down, and the body carries `availableAt` - the
+   * refusal has to say WHEN, or an admin told only "no" taps it again a minute later.
+   */
+  app.post<{ Params: { id: string } }>('/meetups/:id/nudge', async (request, reply) => {
+    const result = await nudgeMeetup(deps.db, request.access!, request.params.id);
+    if (!result.ok) {
+      return reply.code(refusalStatus(result.code)).send(
+        result.code === 'cooling_down'
+          ? { error: result.code, availableAt: result.availableAt }
+          : { error: result.code },
+      );
+    }
+    return reply.code(202).send(result);
   });
 
   const WeekQuery = z.object({ monday: IsoDate });

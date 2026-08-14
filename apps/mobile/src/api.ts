@@ -49,7 +49,7 @@ import type {
   RaceRoster,
   ReportRow,
   MeetupBody,
-  MeetupDay,
+  MeetupWeek,
   SharedClub,
 } from './api-types.ts';
 import { config } from './config.ts';
@@ -548,7 +548,7 @@ export const contentApi = {
 
   /** The Monday is required: "this week" is a question about the caller's timezone. */
   meetups: (clubId: string, monday: string) =>
-    apiFetch<{ days: MeetupDay[] }>(`/clubs/${clubId}/meetups${query({ monday })}`),
+    apiFetch<MeetupWeek>(`/clubs/${clubId}/meetups${query({ monday })}`),
 
   createMeetup: (clubId: string, body: MeetupBody) =>
     apiFetch<{ meetupId: string }>(`/clubs/${clubId}/meetups`, { method: 'POST', body }),
@@ -559,6 +559,15 @@ export const contentApi = {
 
   deleteMeetup: (meetupId: string) =>
     apiFetch<unknown>(`/meetups/${meetupId}`, { method: 'DELETE' }),
+
+  /**
+   * Nudge: push one meetup at the whole club. Any admin, at most once an hour per club.
+   *
+   * Refuses with 409 and an `availableAt` when the bell is cooling down. The caller is expected
+   * to show that time rather than a bare failure - see PRD/08.
+   */
+  nudgeMeetup: (meetupId: string) =>
+    apiFetch<{ cooldownUntil: string }>(`/meetups/${meetupId}/nudge`, { method: 'POST' }),
 
   news: (clubId: string, before?: string) =>
     apiFetch<{ posts: NewsPost[]; hasMore: boolean }>(`/clubs/${clubId}/news${query({ before })}`),

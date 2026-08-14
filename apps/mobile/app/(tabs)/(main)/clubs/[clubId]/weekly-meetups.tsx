@@ -18,8 +18,12 @@
  *
  * Creating a meetup **notifies nobody and posts nothing**: it is reference material, and a week
  * authored in one sitting would otherwise fire seven notifications. That silence is why this is
- * a separate surface from the calendar rather than a view over it (PRD/08 rule 11), and the one
- * deliberate exception to it - Nudge - is designed and not yet built.
+ * a separate surface from the calendar rather than a view over it (PRD/08 rule 11).
+ *
+ * **Nudge is the one deliberate exception**, and it is a person choosing to send one rather than
+ * the app deciding to buzz. Admins only, once an hour for the whole club - so the bell is shared
+ * state, not per-meetup, and it renders disabled with the time it returns rather than looking
+ * live and failing on tap.
  *
  * There is deliberately **no activity type** anywhere on this screen. See ADR-0029.
  */
@@ -30,7 +34,12 @@ import { useLocalSearchParams } from 'expo-router';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { clubApi, contentApi } from '../../../../../src/api.ts';
 import type { Meetup } from '../../../../../src/api-types.ts';
-import { formatDateLong, formatDayTitle, formatWallClock } from '../../../../../src/dates.ts';
+import {
+  formatDateLong,
+  formatDayTitle,
+  formatWallClock,
+  formatTimeOfDay,
+} from '../../../../../src/dates.ts';
 import { color, space, type } from '../../../../../src/theme.ts';
 import {
   Action,
@@ -76,6 +85,34 @@ export default function WeeklyMeetupsScreen() {
   const week = useLoad(() => contentApi.meetups(clubId, monday), [clubId, monday]);
   const club = useLoad(() => clubApi.detail(clubId), [clubId]);
   const isAdmin = club.data?.club.viewer.isAdmin === true;
+  const [nudging, setNudging] = useState<string | null>(null);
+  const [nudgeNote, setNudgeNote] = useState<string | null>(null);
+
+  /*
+   * One bell for the club, not one per meetup.
+   *
+   * The server owns the hour and returns when it lifts; this only decides whether to draw the
+   * control as available. Re-reading the week after a nudge is what moves it, rather than the
+   * screen keeping its own clock and drifting out of agreement with the server.
+   */
+  const blockedUntil = week.data?.nudgeBlockedUntil ?? null;
+  const bellLive = blockedUntil === null || Date.parse(blockedUntil) <= Date.now();
+
+  const nudge = async (meetupId: string) => {
+    setNudging(meetupId);
+    setNudgeNote(null);
+    try {
+      await contentApi.nudgeMeetup(meetupId);
+      setNudgeNote('Nudged. Everyone in the club has been notified.');
+    } catch {
+      // The refusal carries a time, but a failed fetch here has no body to read - so the
+      // reload below is what tells the truth, and this line only has to not lie.
+      setNudgeNote('Could not nudge. The club may have been nudged already.');
+    } finally {
+      setNudging(null);
+      week.reload();
+    }
+  };
 
   if (editing !== null) {
     return (
@@ -98,6 +135,8 @@ export default function WeeklyMeetupsScreen() {
         <Text style={styles.weekLabel}>Week of {monday}</Text>
         <Action label="Next" variant="secondary" onPress={() => setMonday(shift(monday, 1))} />
       </View>
+
+      {nudgeNote !== null && <Text style={styles.nudgeNote}>{nudgeNote}</Text>}
 
       <DataScreen load={week}>
         {(data) => (
@@ -139,6 +178,19 @@ export default function WeeklyMeetupsScreen() {
                               .then(week.reload, week.reload);
                           }}
                           accessibilityLabel={`Remove the meetup at ${meetup.location}`}
+                        />
+                        {/* One bell per club. Disabled rather than hidden while cooling down,
+                            so an admin can see it exists and when it comes back. */}
+                        <Action
+                          label={bellLive ? 'Nudge' : `Nudge at ${formatTimeOfDay(blockedUntil!)}`}
+                          variant="quiet"
+                          disabled={!bellLive || nudging !== null}
+                          onPress={() => void nudge(meetup.id)}
+                          accessibilityLabel={
+                            bellLive
+                              ? `Nudge the club about the meetup at ${meetup.location}`
+                              : `Nudging is unavailable until ${formatTimeOfDay(blockedUntil!)}`
+                          }
                         />
                       </View>
                     )}
@@ -268,6 +320,7 @@ const styles = StyleSheet.create({
   meetupActions: { flexDirection: 'row', gap: space.xs },
   body: { ...type.bodySmall, color: color.textPrimary },
   meta: { ...type.bodySmall, color: color.textSecondary },
+  nudgeNote: { ...type.bodySmall, color: color.textSecondary, paddingHorizontal: space.md },
   error: { ...type.bodySmall, color: color.error },
   actions: { flexDirection: 'row', gap: space.sm },
   actionButton: { flex: 1 },

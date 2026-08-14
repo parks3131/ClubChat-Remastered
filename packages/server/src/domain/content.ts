@@ -26,6 +26,7 @@ import {
   meetings,
   newsPosts,
   newsReactions,
+  meetupNudges,
   meetups,
   outbox,
 } from '../db/schema.ts';
@@ -373,6 +374,106 @@ export async function deleteMeetup(
   return { ok: true, deleted: true };
 }
 
+/**
+ * The outcome of tapping the bell.
+ *
+ * `cooling_down` carries **when the bell comes back**, which is why this is its own result type
+ * rather than the shared `Refusal`: "you cannot" is a worse answer than "not until 10:00", and an
+ * admin told only the first will tap it again in a minute.
+ */
+export type NudgeResult =
+  | { ok: true; cooldownUntil: string }
+  | { ok: false; code: 'forbidden' | 'not_found' }
+  | { ok: false; code: 'cooling_down'; availableAt: string };
+
+/** Postgres `exclusion_violation`. The cooldown losing a race is this and nothing else. */
+const EXCLUSION_VIOLATION = '23P01';
+
+/**
+ * Walk the cause chain looking for the exclusion violation.
+ *
+ * **Not `error.code`.** Drizzle wraps the driver's error, so the pg code sits on `.cause` rather
+ * than on the error that surfaces - and reading only the top level makes this look like an
+ * unrelated crash, which is exactly how it first presented.
+ */
+function isExclusionViolation(error: unknown): boolean {
+  for (let e: unknown = error; e != null; e = (e as { cause?: unknown }).cause) {
+    if ((e as { code?: string }).code === EXCLUSION_VIOLATION) return true;
+  }
+  return false;
+}
+
+/**
+ * Nudge a meetup: push it to every other member of the club, at most once an hour.
+ *
+ * **This is the single deliberate exception to Weekly Meetups notifying nobody** (PRD/08 rule 11).
+ * The rule is not weakened by it - creating seven meetups still fires zero notifications. What
+ * changes is that a person can choose to send one, which is a different act from the app deciding
+ * to buzz.
+ *
+ * The hour is enforced by an `EXCLUDE` constraint, not by the read below. The read exists so the
+ * refusal can name a time; the constraint is what stays true when two admins tap the bell in the
+ * same second, which a read-then-write cannot. See ADR-0030.
+ */
+export async function nudgeMeetup(
+  db: Db,
+  ctx: AccessContext,
+  meetupId: string,
+): Promise<NudgeResult> {
+  const rows = await db.select().from(meetups).where(eq(meetups.id, meetupId)).limit(1);
+  const meetup = rows[0];
+  if (!meetup) return { ok: false, code: 'not_found' };
+  if (!canManageClubContent(ctx, meetup.clubId)) return { ok: false, code: 'forbidden' };
+
+  const open = await openCooldown(db, meetup.clubId);
+  if (open) return { ok: false, code: 'cooling_down', availableAt: open };
+
+  try {
+    return await db.transaction(async (tx) => {
+      const inserted = await tx
+        .insert(meetupNudges)
+        .values({ clubId: meetup.clubId, meetupId: meetup.id, actorId: ctx.userId })
+        .returning();
+      const nudge = inserted[0];
+      if (!nudge) throw new Error('nudge insert returned no row');
+
+      await tx.insert(outbox).values({
+        partitionKey: meetup.clubId,
+        eventType: 'meetup.nudged',
+        payload: {
+          clubId: meetup.clubId,
+          meetupId: meetup.id,
+          meetupDate: meetup.meetupDate,
+          // HH:MM on the wire, as everywhere else. Postgres hands back HH:MM:SS.
+          meetupTime: String(meetup.meetupTime).slice(0, 5),
+          location: meetup.location,
+          actorId: ctx.userId,
+        },
+      });
+
+      return { ok: true as const, cooldownUntil: nudge.cooldownUntil.toISOString() };
+    });
+  } catch (error) {
+    // Lost the race rather than hit a bug: another admin's nudge committed between the read
+    // above and this insert. Re-read so the refusal still names a time.
+    if (!isExclusionViolation(error)) throw error;
+    const now = await openCooldown(db, meetup.clubId);
+    return { ok: false, code: 'cooling_down', availableAt: now ?? new Date().toISOString() };
+  }
+}
+
+/** When the club's bell comes back, or null if it is live. */
+async function openCooldown(db: Db, clubId: string): Promise<string | null> {
+  const rows = await db.execute<{ cooldown_until: string }>(sql`
+    SELECT ${isoUtc('cooldown_until')} AS cooldown_until
+      FROM meetup_nudges
+     WHERE club_id = ${clubId} AND cooldown_until > now()
+     ORDER BY cooldown_until DESC
+     LIMIT 1
+  `);
+  return rows.rows[0]?.cooldown_until ?? null;
+}
+
 export type WeekDay = {
   date: string;
   /** Several may share a day, in time order. A morning session and an evening social are two. */
@@ -404,7 +505,7 @@ export async function readMeetupWeek(
   ctx: AccessContext,
   clubId: string,
   mondayIso: string,
-): Promise<Result<{ days: WeekDay[] }>> {
+): Promise<Result<{ days: WeekDay[]; nudgeBlockedUntil: string | null }>> {
   if (!canReadClubContent(ctx, clubId)) return { ok: false, code: 'not_found' };
 
   const rows = await db.execute<{
@@ -456,7 +557,14 @@ export async function readMeetupWeek(
     days.push({ date: iso, meetups: dayMeetups, empty: dayMeetups.length === 0 });
   }
 
-  return { ok: true, days };
+  /*
+   * Whether the bell is live, and if not, when it returns.
+   *
+   * Read for every viewer rather than only for admins, because "who sees the bell" is the
+   * client's question and "is it available" is this one. Returning it unconditionally keeps
+   * those two from having to agree - a member simply never renders the control.
+   */
+  return { ok: true, days, nudgeBlockedUntil: await openCooldown(db, clubId) };
 }
 
 function isoPlusDays(iso: string, days: number): string {

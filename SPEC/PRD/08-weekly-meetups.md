@@ -62,31 +62,38 @@ field and why one should not be added back.*
 
 ### Nudge
 
-*Designed 2026-08-14, deliberately not in the first chunk.*
+**A meetup carries a bell, and only an admin sees it. Tapping it pushes that meetup to the club.**
 
-**A meetup carries a bell, and only an admin sees it. Tapping it pushes that meetup to the club
-once.** Rule 11 says creating a meetup notifies nobody, and that rule is the whole reason this
-surface is separate from the calendar. **Nudge does not weaken it - it turns the silence from a
-wall into a default.** Seven meetups posted on Sunday still fire zero notifications. A bell tapped
-on Thursday morning fires one, because a person decided that one mattered.
+13. Rule 11 says creating a meetup notifies nobody, and that rule is the whole reason this surface
+    is separate from the calendar. **Nudge does not weaken it - it turns the silence from a wall
+    into a default.** Seven meetups posted on Sunday still fire zero notifications. A bell tapped
+    on Thursday morning fires one, because a person decided that one mattered.
+14. **The audience is every other member of the club**, and it reaches their phone: a push, not
+    only a row in the inbox. The nudger is excluded, as with every other creation notification -
+    nobody is told about something they just did.
+15. **One nudge per hour, for the whole club.** Not per meetup, which would let an admin post a
+    week of meetups on Sunday and nudge all seven; not per admin, which would let three admins
+    take turns. The hour is enforced by a database constraint rather than a check in the handler,
+    because two admins tapping in the same second is exactly what a read-then-write loses - see
+    [ADR-0030](../decisions/0030-the-nudge-cooldown-is-a-constraint.md).
+16. **A refusal says when the bell comes back**, not merely that it is unavailable. "You cannot"
+    gets tapped again a minute later; "not until 10:00" does not. The week carries the same time,
+    so the control renders **disabled with the hour on it** rather than looking live and failing
+    on tap.
+17. **A nudge posts nothing to chat.** The point is to reach a phone that is not currently looking
+    at the app, and rule 11 keeps meetups out of the conversation. Putting one there would be a
+    separate decision.
+18. **Deleting a nudged meetup does not return the nudge.** The hour belongs to the club, so the
+    record of it outlives the thing it was about.
 
-The three things to settle before it is built, each of which is a way it goes wrong:
-
-1. **The audience.** "Every member" and "everyone in the club chat" are the same set today, and
-   would stop being the same set the moment anybody can mute or leave a club chat without leaving
-   the club. The rule must name which one it means rather than relying on them coinciding.
-2. **A bell that can be tapped twice is a spam vector**, and it is held by every admin rather than
-   one person. Whether it is once per meetup, once per meetup per admin, or throttled by time is
-   the difference between a useful reminder and the thing that makes members turn push off - which
-   would cost far more than this feature is worth.
-3. **What the push says and where it lands.** Notifications store a type and params rather than
-   rendered text ([ADR-0013](../decisions/0013-notifications-store-type-and-params.md)), so this
-   needs a new type in the catalogue and a target - and the reason the silence was questioned in
-   the first place was somebody expecting to tap through from a notification and finding no type
-   for it ([Roadmap](17-roadmap-and-open-questions.md)).
+**Edge case worth stating.** The bell is shared state, so an admin can find it already spent by
+somebody else. That is the design rather than a collision to smooth over: the limit protects
+members' phones, which is a club-wide quantity, and an admin seeing "Nudge at 10:00" is being told
+the truth about the club rather than about themselves.
 
 **Permissions.** Every club member reads the week. Only an admin creates, edits or deletes a
-meetup. Owner and Admin are equivalent here; see [Roles and permissions](02-roles-and-permissions.md).
+meetup, or nudges one. Owner and Admin are equivalent here; see
+[Roles and permissions](02-roles-and-permissions.md).
 
 **Edge cases.** A week with nothing in it is seven explicit "Nothing planned" days, not an empty
 screen. A day with several meetups orders them by time, and two at the same time hold their
