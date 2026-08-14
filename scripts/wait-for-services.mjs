@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 //
-// Block until Postgres and Redis actually accept connections.
+// A fast port check. **This is not the readiness gate - `docker compose up --wait` is.**
 //
-// `docker compose up -d` returns as soon as the containers are created, not when
-// the services inside them are ready. Running a migration against a Postgres that
-// is still initialising fails with a connection error that reads like a config
-// problem, so this exists to make `npm run db:up` mean what it says.
+// > **An open TCP port is not a ready Postgres, and this script used to claim it was.**
+// > The postmaster listens before initdb has finished, so a socket connects and the very
+// > first query is refused. On a laptop the image is warm and the window is too small to
+// > ever see; on a cold CI runner that has just pulled the image it is wide, and the first
+// > CI run failed on `CREATE SCHEMA IF NOT EXISTS \"drizzle\"` about six seconds after
+// > this script said "postgres ready on :5432". See SPEC/TECH/14.
+//
+// `db:up` now passes `--wait`, which blocks on the healthchecks declared in
+// docker-compose.yml - `pg_isready`, `redis-cli ping`, `mc ready` - and those are what
+// actually mean ready. This runs after them and stays because it fails fast and legibly
+// when a port is bound by something else entirely, which a healthcheck does not diagnose.
 
 import net from 'node:net';
 

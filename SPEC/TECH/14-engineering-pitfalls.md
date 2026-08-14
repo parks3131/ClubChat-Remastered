@@ -170,3 +170,9 @@ they cost.
 33. **Drizzle wraps the driver's error, so a Postgres `SQLSTATE` is on `.cause` and not on the
     error you catch.** Checking `error.code` for `23505`/`23P01` silently never matches, and a
     handled conflict surfaces as an unhandled crash. Walk the cause chain.
+34. **An open TCP port is not a ready Postgres.** The postmaster listens before `initdb` has
+    finished, so a socket connects and the first query is still refused. A warm image closes the
+    window to nothing, which is why this only ever appears somewhere cold: the repo's first CI run
+    failed on `CREATE SCHEMA IF NOT EXISTS "drizzle"` six seconds after the readiness script had
+    printed `postgres ready on :5432`. Wait on the healthcheck - `docker compose up --wait` - and
+    treat a port probe as a diagnostic, never as the gate. *(2026-08-14.)*
