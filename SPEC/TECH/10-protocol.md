@@ -198,8 +198,10 @@ DELETE /polls/:id
 
 POST   /clubs/:id/events · DELETE /events/:id
 GET    /events/:id                           ← any club member; `canManage` says who may delete
-POST   /clubs/:id/workouts · DELETE /workouts/:id
-GET    /clubs/:id/routines?monday=YYYY-MM-DD ← the Monday is required, never guessed
+POST   /clubs/:id/meetups · PATCH · DELETE /meetups/:id
+GET    /clubs/:id/meetups?monday=YYYY-MM-DD  ← the Monday is required, never guessed.
+                                               Returns a day's meetups time-ordered;
+                                               a day may hold several
 GET    /clubs/:id/news · POST /clubs/:id/news
 GET    /news/:id · PATCH · DELETE            ← any club admin, not only the author
 POST   /news/:id/reactions                   ← the same emoji set as chat, constrained in the column

@@ -1,8 +1,8 @@
 # ClubChat - Spec Index
 
-A purpose-built replacement for the GroupMe-plus-Excel-screenshot workflow that running clubs use
-today: structured club chat, calendar, weekly routines, races-as-mini-clubs, polls, and a private
-board channel - as a template any club can adopt.
+A purpose-built replacement for the GroupMe-plus-Excel-screenshot workflow that clubs use today:
+structured club chat, calendar, weekly meetups, races-as-mini-clubs, polls, and a private board
+channel - as a template **any** club can adopt, with nothing to configure.
 
 **Stack:** Expo (iOS / Android / web) · TypeScript on Node 24 · Fly.io · Neon Postgres · Redis ·
 Kafka downstream of a transactional outbox · Cloudflare R2 · authorization in an application
@@ -51,7 +51,7 @@ shipped as defects more than once.
 | 05 | [Chat](PRD/05-chat.md) | The centre of gravity: messages, reactions, pins, announcements, mentions, moderation |
 | 06 | [News and Highlights](PRD/06-news-and-highlights.md) | The club's front-page feed, and how it differs from pinned chat |
 | 07 | [Calendar and events](PRD/07-calendar-and-events.md) | Month grid and merged upcoming/past feed, club and cross-club |
-| 08 | [Routines](PRD/08-routines.md) | Weekly admin-authored training plans |
+| 08 | [Weekly Meetups](PRD/08-weekly-meetups.md) | Where the club is meeting this week, when, and what they will be doing |
 | 09 | [Races and Meets](PRD/09-races-and-meets.md) | Races as mini-clubs: roster, chat, meet info, car groups, personal pins |
 | 10 | [Eboard and Council](PRD/10-eboard-and-council.md) | The private admins-only space and its meetings |
 | 11 | [Polls](PRD/11-polls.md) | Creation, voting, deadlines, voter visibility, scoping |
@@ -153,6 +153,7 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0026](decisions/0026-filter-hate-speech-not-profanity.md) | Filter hate speech, not profanity, and send the ambiguous cases to a human |
 | [0027](decisions/0027-race-management-requires-a-roster-row.md) | Managing a race requires a roster row |
 | [0028](decisions/0028-reactions-come-from-a-catalog-table.md) | Reactions come from a catalog table, not a fixed set |
+| [0029](decisions/0029-a-meetup-answers-where-when-and-what.md) | A meetup answers where, when and what, and carries no activity type |
 
 ## Templates
 

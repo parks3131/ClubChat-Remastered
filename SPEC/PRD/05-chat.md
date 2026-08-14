@@ -207,7 +207,7 @@ second is a feature the whole product would have to bend around. Threads remain 
     > the three from drifting apart.
 
 11a. **The header's grid menu is quick-nav and is NOT role-gated.** Every member of the scope
-    sees the same entries - club: Members, Poll, Routines, Events; race: Members, Meet
+    sees the same entries - club: Members, Poll, Meetups, Events; race: Members, Meet
     Information, Polls, Car Assignments and Groups; Eboard: Members, Meetings, Polls. Being
     able to *reach* a screen is not being able to *act* on it, and each destination applies its
     own rules on arrival. Hiding a destination a member may read would be a worse lie than

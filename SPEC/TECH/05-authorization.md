@@ -520,7 +520,7 @@ this in a service layer instead. What must not change is the guarantee.
 
 For any new table/resource: enable enforcement → write the **read** rule first → write the
 **create** rule so it implies the read rule → decide explicitly whether writes are
-**any-admin** (news posts, races, routines, events, Meet Information) or **creator-only**
+**any-admin** (news posts, races, meetups, events, Meet Information) or **creator-only**
 (meetings, polls) → **write the delete rule in the same change** (three tables shipped
 without one) → prove the forbidden case is actually blocked by impersonating a
 non-privileged user, not by reading the code.

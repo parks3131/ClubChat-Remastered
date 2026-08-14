@@ -96,7 +96,7 @@ A remaster is at parity when every line below passes on **iOS, Android, and web*
 - [ ] Closing-soon reminder fires once, 10 minutes out, to everyone **including** the creator.
 - [ ] A race poll is invisible to an admin without a roster row, **including by direct URL**.
 
-### Calendar and routines
+### Calendar and weekly meetups
 
 - [ ] The grid marks exactly the days with an event, race, or meeting, and no filler days.
 - [ ] Paging months does not change the grid's height.
@@ -108,9 +108,17 @@ A remaster is at parity when every line below passes on **iOS, Android, and web*
 - [ ] An open, deadline-less poll never falls into Past.
 - [ ] Eboard meetings are absent from a non-member's calendar; races are visible to everyone.
 - [ ] The merged cross-club feed tags each row with its club and offers no create action.
-- [ ] The routines week shows Monday-Sunday, hides past days on the current week, and says
-      "Rest day" where nothing is scheduled.
-- [ ] Any admin can edit any workout; creating one notifies nobody and posts nothing.
+- [ ] The meetups week shows Monday-Sunday, hides past days on the current week, and says
+      "Nothing planned" on every empty day.
+- [ ] Any admin can edit any meetup; creating one notifies nobody and posts nothing.
+- [ ] Creating one opens on the day that was tapped and asks **"Where should we meet on ...?"**,
+      with the date already filled in.
+- [ ] Save stays unavailable until **both** the place and the time are filled in.
+- [ ] Two meetups on one day both show, in time order, and the day grows to fit them.
+- [ ] **No screen anywhere offers an activity type, category or kind** - not on create, not on
+      the detail, not as an icon in the week.
+- [ ] A meetup does **not** appear on the month calendar or in the Upcoming/Past list.
+- [ ] A member sees no create, edit or delete control anywhere - **including by direct URL**.
 
 ### Notifications
 

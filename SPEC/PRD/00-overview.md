@@ -2,8 +2,9 @@
 
 ### The problem
 
-A sports club (the founding case is a university running club) coordinates itself entirely
-through GroupMe plus ad-hoc tools:
+A club coordinates itself entirely through GroupMe plus ad-hoc tools. The founding case is a
+university running club, and the table below is its version of the problem - but every row of it
+restates itself for a theatre, a volunteering group or a history society, with different nouns:
 
 | What they need | What they do today | Why it breaks |
 |---|---|---|
@@ -30,8 +31,8 @@ history.
    same shape again.
 2. **Structure, not features.** Every addition must replace something members currently do
    by hand, not add a new thing to maintain.
-3. **Deliberately simple where the founder said simple.** Routines carry a title and a
-   description, not a structured exercise builder. Races carry a name and a date, not a full
+3. **Deliberately simple where the founder said simple.** A meetup carries a title and
+   a description, not a structured exercise builder. Races carry a name and a date, not a full
    event schema.
 4. **Chat is the centre of gravity.** Chat is where a club actually lives. Every other
    feature is reachable from chat, and things created elsewhere post themselves back into
@@ -44,23 +45,29 @@ history.
 - Replace the group-chat app as the club's primary coordination surface.
 - Make a race's logistics survive as durable, revisitable structure instead of a disposable
   group chat.
-- Make weekly training plans first-class, dated, and per-sport rather than a screenshot.
-- Work as a **template**: a swim club, a running club, and a climbing club should all fit
-  with no customisation work.
+- Make a club's recurring week first-class and dated rather than a screenshot, **in whatever
+  words that club uses for it** - workouts, rehearsals, shifts, readings.
+- Work as a **template for any club**, not only any sport. A swim club, a chess club, a theatre
+  and a history society should all fit **with nothing to configure**, because no surface names a
+  sport or asks what kind of club this is.
+  *(Widened from "a swim club, a running club, and a climbing club" on 2026-08-14. The old wording
+  was true and too small: it held only while every club was a sports club. What made the wider
+  version affordable was deleting the last sport-specific field rather than making it
+  configurable - [ADR-0029](../decisions/0029-a-meetup-answers-where-when-and-what.md).)*
 
 ### Non-goals (deliberate, do not build)
 
 | Not building | Why |
 |---|---|
-| Activity/training tracking | Strava exists. ClubChat plans workouts, it does not record them |
-| Workout completion tracking | Explicit scoping call - routines are a plan, not a checklist |
+| Activity/training tracking | Strava exists. ClubChat plans what a club will do, it does not record what anybody did |
+| Completion tracking of any kind | Explicit scoping call - Weekly Meetups is a plan, not a checklist |
 | Structured exercise builders (sets/reps/splits) | Explicit "keep it very simple" call |
 | RSVP or attendance, anywhere | No attendance concept exists in the product |
 | Cross-club discovery or a social graph | Clubs are found by name or invite link, nothing more |
 | An "invite-only" club tier | Covered by the `request` policy plus a private share link |
 | Threaded replies, message editing, message search | Out of scope by decision |
 | Comments on news posts | Discussion belongs in chat |
-| Recurring events | Weekly training is Routines' job |
+| Recurring events | **Weakened 2026-08-14, and now an open question rather than a non-goal.** The stated reason was that weekly training is Routines' job, which held while every club trained. A chess club's Tuesday club night genuinely is an event, happens 52 times, and wants the notification that [Weekly Meetups](08-weekly-meetups.md) withholds by default. Nothing is built yet; the reason for not building it no longer stands on its own. See that spec's open questions |
 
 > **Reversed 2026-07-28: direct messages.** DMs were a non-goal in v1, on the reasoning that
 > every conversation is scoped to a club, a race, or an Eboard. They are now **in scope for the

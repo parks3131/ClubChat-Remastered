@@ -92,7 +92,7 @@ building the scaled implementation now.
     ┌───────────────────────┐   ┌───────────────────────────────┐
     │  GATEWAY              │   │  API                          │
     │  · WS termination     │   │  · REST: clubs, races, eboard,│
-    │  · auth handshake     │   │    polls, events, routines,   │
+    │  · auth handshake     │   │    polls, events, meetups,    │
     │  · channel subscribe  │   │    news, members, media       │
     │    (authorized once)  │   │  · chat history + sync reads  │
     │  · fan-out to sockets │   │  · every command handler      │

@@ -5,7 +5,7 @@
 > owes. Two facts dominate everything below:
 >
 > 1. **Most of the product has no user interface** - but it does now have a server. Races, polls,
->    calendar, routines, news and Eboard are reachable over 111 HTTP routes as of Phase 3.75a, and
+>    calendar, weekly meetups, news and Eboard are reachable over 111 HTTP routes as of Phase 3.75a, and
 >    the app is still sign-in, a club list, chat and a DM list. The remaining work is screens
 >    against a finished surface (Phase 3.75b), which is a different and much smaller problem than
 >    the one this entry described before.
@@ -17,7 +17,7 @@
 | Gap | Impact | Note for the remaster |
 |---|---|---|
 | ~~**Push notifications**~~ | | **Done in Phase 1** on the server; **the device half landed 2026-08-08** and the whole path is now proved on real hardware. Device registry, Expo Push, per-device fan-out, and suppression by read cursor rather than by connection liveness (ADR-0008). Phase 3.5 added the DM push (ADR-0015). Until 2026-08-08 the client had no `expo-notifications` at all - nothing ever asked permission, fetched a token or called `POST /devices` - so "done" described one end of a wire with nothing on the other |
-| **A user interface for most of the product** | Races, polls, calendar, routines, news and Eboard are unreachable from the **app**, though no longer from the API | **Half closed 2026-07-30.** Phase 3.75a built the HTTP surface: 45 routes became 111, with the ~20 missing queries and the six capabilities that had no function of any kind. What is left is Phase 3.75b, the screens - and it is now ordinary client work rather than a screen with nothing to call |
+| **A user interface for most of the product** | Races, polls, calendar, weekly meetups, news and Eboard are unreachable from the **app**, though no longer from the API | **Half closed 2026-07-30.** Phase 3.75a built the HTTP surface: 45 routes became 111, with the ~20 missing queries and the six capabilities that had no function of any kind. What is left is Phase 3.75b, the screens - and it is now ordinary client work rather than a screen with nothing to call |
 | **An https join page, and universal links** | The invite link is `clubchat://join/<token>`, so it opens the club for somebody who already has the app and does **nothing at all** for somebody who does not - no prompt, no error, no page. [ADR-0010](../decisions/0010-link-only-invites.md) recorded this as the cost of removing the typed code and named "a real web client" as the mitigation; it has never been built | **Promoted from a footnote on 2026-08-12**, when the club QR code shipped. A link in a message is at least *seen* by a person who can be told to install the app first; a code taped to a table is scanned by a stranger who gets a blank camera. What it needs: `clubchatapp.com` serving `/join/:token` with the club's name and a store link, `apple-app-site-association` plus the associated-domains entitlement, Android `assetlinks.json` and intent filters, and a native rebuild. The QR screen itself does not change - only the string it carries |
 | **Legal review** of Privacy Policy and Terms | The shipped documents are an in-house first draft, explicitly not legal advice | Must happen before any public release |
 | **iOS distribution** | Blocked on paid developer-program enrolment | Not a code problem |
@@ -305,15 +305,18 @@ own posture. This is an audit of code that has been written, by reading it.
 
 Race-specific workout plans (in the original vision, never built; may have been absorbed by
 Meet Information - needs a product call). Bidirectional chat paging. Message search. Comments
-on news posts. Recurring events. External calendar sync. RSVP or attendance, anywhere.
+on news posts. External calendar sync. RSVP or attendance, anywhere. *("Recurring events" left
+this list on 2026-08-14 - it is an open question below, not a settled no.)*
 
 ### Open product questions
 
-- ~~**Should a routine notify anybody?**~~ **Settled 2026-08-08: no.** Raised when the founder
-  expected to tap through to a routine from a notification and found the catalogue has no type for
-  it. He confirmed the silence is intended - a routine is reference material somebody consults,
-  not an announcement - so the asymmetry with events, polls, news and meetings stands on purpose.
-  Recorded so it is not re-raised as an omission.
+- ~~**Should a meetup notify anybody?**~~ **Settled 2026-08-08: no**, and unchanged by the
+  2026-08-14 rename. Raised when the founder expected to tap through to one from a notification and
+  found the catalogue has no type for it. He confirmed the silence is intended - it is reference
+  material somebody consults, not an announcement - so the asymmetry with events, polls, news and
+  meetings stands on purpose. Recorded so it is not re-raised as an omission. **This is now the
+  load-bearing reason Weekly Meetups and the calendar are separate surfaces rather than one**, so it
+  is cited by [Weekly Meetups](08-weekly-meetups.md) rule 9 rather than merely recorded here.
 - ~~**Should a mention require an exact name match?**~~ **The over-matching half was fixed
   2026-08-08**; what is left is one narrow case, described below. This entry originally read that
   `body.includes` has no word boundary, so `@Parks RPK` also satisfied a member called `Parks`, and
@@ -341,9 +344,27 @@ on news posts. Recurring events. External calendar sync. RSVP or attendance, any
   the envelope carries `mentions: []`, and nothing compares what was claimed against what came back.
   The open question is whether that is worth a signal to the sender at all, given the window is one
   person renaming themselves while another is mid-message.
-- **Hub placement:** Routines, Polls, and the Events list are fully reachable from club chat's
+- **Hub placement:** Weekly Meetups, Polls, and the Events list are fully reachable from club chat's
   header quick-nav, and work normally there. Whether they should *also* sit on the club hub is
   unresolved. A stopgap "More" menu on the hub was explicitly rejected.
+- **Should a meetup repeat?** Deferred with the 2026-08-14 rename and the largest remaining gap
+  between the feature and "fits any club": a club that meets daily hand-enters 365 meetups a year,
+  because [Weekly Meetups](08-weekly-meetups.md) rule 1 says the week is a real week and never a
+  template. Answering yes also reopens [Overview](00-overview.md)'s recurring-events non-goal,
+  whose stated reason was that this surface already covered the weekly case.
+- **Should a club still have a `sport`?** It is a required field on create, free text, validated by
+  nothing and read by nothing - a leftover of the founding case that now asks a chess club what
+  sport it plays. [ADR-0029](../decisions/0029-a-meetup-answers-where-when-and-what.md) removed the
+  reason to replace it with a club type and did not remove the column. Deleting it is the obvious
+  move; what stops it being obvious is that the club profile currently shows it.
+- **Nudge**, the admin-only bell that pushes one meetup to the club, is designed and unbuilt - see
+  [Weekly Meetups](08-weekly-meetups.md). Three things decide whether it works rather than becoming
+  the reason members turn push off: who the audience is, what stops it being tapped repeatedly by
+  several admins, and which notification type carries it.
+- **Is "Races and Meets" the next name to generalise?** The abstraction under it - a mini-club with
+  its own roster, chat and logistics - already fits a theatre production, a debate tournament and a
+  field trip; only the word is sport-coded. It is now also one letter from "meetup", which
+  [Weekly Meetups](08-weekly-meetups.md) disambiguates in prose because the data model cannot.
 - Should a club (or a finished race) be **archivable** - read-only history preserved - rather
   than only deletable?
 - Should the calendar's `race` event **type be removed**, given it has no relationship to a

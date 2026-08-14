@@ -6,7 +6,7 @@ Conceptual entities and their relationships. No storage decisions implied.
 User ──< ClubMembership >── Club
                              ├──< JoinRequest
                              ├──< CalendarEvent
-                             ├──< RoutineWorkout
+                             ├──< Meetup
                              ├──< NewsPost ──< NewsPostReaction
                              ├──< Poll ──< PollOption ──< PollVote
                              ├──< Race
@@ -72,7 +72,7 @@ abstraction has been broken.
 | Entity | Key facts |
 |---|---|
 | **User / profile** | Full name, avatar, bio, city, date of birth, school. Self-editable only. Created automatically on signup. |
-| **Club** | Name, sport, description, avatar, join policy (`open` \| `request`), invite token. Exactly one Owner at all times. The token is **only ever surfaced as a share link** and is never displayed as something a person types. |
+| **Club** | Name, sport, description, avatar, join policy (`open` \| `request`), invite token. Exactly one Owner at all times. The token is **only ever surfaced as a share link** and is never displayed as something a person types. *(`sport` is a leftover of the founding case and is now a required field a chess club has to answer - see [Roadmap](17-roadmap-and-open-questions.md).)* |
 | **ClubMembership** | Role: `owner` \| `admin` \| `member`. Per club. **Exactly one owner per club, enforced at the data layer, not in the UI.** |
 | **Channel** | Belongs to a club **except in the `dm` scope**, where it belongs to a pair of users and carries no club at all. Exactly one main channel per club, one per race, one per Eboard, one per conversation. |
 | **DmConversation** | A pair of users, stored in canonical order so one pair cannot produce two threads. Exactly one thread per pair of people, ever - not one per shared club. |
@@ -85,7 +85,7 @@ abstraction has been broken.
 | **Meeting** | Title, description, datetime, optional link. Creator-only edit/delete. |
 | **Poll** | Question, 2-10 options, `allow_multiple`, `is_private`, optional `closes_at`. Scope: club, race, or Eboard. **Closed-ness is not stored** - it is "closed by its creator, or past its deadline", evaluated whenever the poll is read, so a passed deadline reads as closed everywhere without anyone having acted. |
 | **CalendarEvent** | Type (`race` \| `practice` \| `team_bonding` \| `volunteer` \| `other`), title, start datetime, optional end, optional location, optional description. Club-scoped only. The `race` type is a **label only** and has no relationship to a real Race. |
-| **RoutineWorkout** | Date (a real calendar date), activity type (10 values), title, optional description. Club-scoped only. |
+| **Meetup** | A place, a date, a time of day, and optional free text saying what the club will be doing. Club-scoped only. **No type, category or kind of any sort** - the absence is deliberate and [ADR-0029](../decisions/0029-a-meetup-answers-where-when-and-what.md) exists to stop one being added back. Several may share a day. |
 | **NewsPost** | Body text and/or one photo (at least one required), author, timestamp, emoji reactions. |
 | **Notification** | Recipient, actor, club, type (18 values), and the structured parameters its text and target are rendered from. The wording and the destination are produced when the row is read, not frozen into it when written. |
 

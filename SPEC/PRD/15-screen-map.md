@@ -167,7 +167,7 @@ Chats  (every club chat and DM, newest first; chips: Unread | DMs | Clubs)
    │  └─ Create / edit post      (admin)
    ├─ Club main chat             ← the centre of gravity
    │  ├─ Highlights   (Pinned | Announcements | Reports)
-   │  └─ header quick-nav: Members · Poll · Routines · Events
+   │  └─ header quick-nav: Members · Poll · Meetups · Events
    ├─ Eboard and Council         (admins only)
    ├─ Races and Meets            (preview of ~5 + searchable "See all")
    ├─ Club profile               (identity, and the way in for everybody else)
@@ -181,7 +181,7 @@ Chats  (every club chat and DM, newest first; chips: Unread | DMs | Clubs)
    │                               reached from a club roster - see below)
    ├─ Calendar (club-scoped) → Event detail → Create/edit event (admin)
    ├─ Events list (Upcoming | Past)
-   ├─ Routines (week view) → Activity type → Workout create/detail
+   ├─ Weekly Meetups (week view) → Meetup create/detail   (admin creates from a day)
    └─ Polls (ALL POLLS | MY VOTES) → Create → Poll detail
 ```
 
@@ -345,7 +345,7 @@ never "the tab root" and never nothing.
 | Club calendar | Club hub | | Race roster | Race hub |
 | Events list | Club hub | | Meet Information | Race hub |
 | News feed | Club hub | | Car groups | Race hub |
-| Routines | Club hub | | Race polls | Race hub |
+| Weekly Meetups | Club hub | | Race polls | Race hub |
 | Polls list | Club hub | | Eboard hub | Club hub |
 | Races list | Club hub | | **Eboard chat** | **Club hub** |
 | Club profile | Club hub | | Eboard Highlights | Eboard chat |
@@ -366,9 +366,9 @@ sub-page - there is nothing deeper to come back from.
 ### The Chats tab is a two-stage escape hatch
 
 Not a plain "go to the list" tab. Its meaning depends on whether the viewer is **inside a club**,
-which means anywhere in that club's world - the hub, its chat, Highlights, news, calendar,
-routines, polls, the races list, a race hub, a race chat, the Eboard channel, any of it. Not just
-the hub.
+which means anywhere in that club's world - the hub, its chat, Highlights, news, calendar, the
+weekly meetups, polls, the races list, a race hub, a race chat, the Eboard channel, any of it. Not
+just the hub.
 
 | Where | Tapping CHATS goes to |
 |---|---|
@@ -435,6 +435,10 @@ signing in, opening a conversation from a member's profile.
 
 One vocabulary, taken from v1. An icon that means a thing in one place means it everywhere.
 
+**An icon names the surface, never its contents.** Weekly Meetups' was `fitness-center` until
+2026-08-14, which was a dumbbell shown to a book club. `calendar-view-week` describes what the
+screen is - one week, laid out - and stays true whatever the club puts in it.
+
 | Concept | Icon | Concept | Icon |
 |---|---|---|---|
 | Chats (destination) | `forum` | Calendar (destination) | `calendar-month` |
@@ -442,7 +446,7 @@ One vocabulary, taken from v1. An icon that means a thing in one place means it 
 | News and Highlights | `auto-awesome` | Club main chat | `forum` |
 | Eboard and Council | `shield` | Race or meet | `flag` |
 | Highlights (from chat) | `bolt` | Members or roster | `group` |
-| Polls | `how-to-vote` | Routines | `fitness-center` |
+| Polls | `how-to-vote` | Weekly Meetups | `calendar-view-week` |
 | Events | `event` | Meetings | `groups` |
 | Meet Information | `info` | Car groups | `directions-car` |
 | Pinned | `push-pin` | Announcement | `campaign` |

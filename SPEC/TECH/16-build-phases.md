@@ -56,11 +56,11 @@ root `README.md` about whether the project is release-ready - see the note under
 > second point is still true.
 >
 > The client went from six files to roughly thirty-five during 3.75b: a real tab shell over the four
-> destinations `PRD/15` names, and screens for clubs, races, polls, meetings, news, routines, events,
+> destinations `PRD/15` names, and screens for clubs, races, polls, meetings, news, meetups, events,
 > the calendar, the Eboard space, Highlights, the gallery, profiles and the invite link. What is
 > still owed is listed under the phase below.
 
-**1. Phase 2 shipped a domain, not a feature.** Races, polls, calendar, routines, news and Eboard
+**1. Phase 2 shipped a domain, not a feature.** Races, polls, calendar, meetups, news and Eboard
 meetings all had schema, handlers and tests - 32 exported command handlers across four modules,
 47 test cases - and **none of them was reachable over HTTP**. The API registered 45 routes covering
 clubs, membership, chat reads, reactions, reports, moderation, mute, media, DMs, notifications,
@@ -191,7 +191,7 @@ without duplicating a single notification or system message.*
 
 **Phase 2 - Breadth across the domain.**
 Races (roster, Meet Information, car groups, pins), Eboard (auto-membership sync, meetings),
-polls in all three scopes, calendar, routines, news. Every one reuses the channel abstraction -
+polls in all three scopes, calendar, meetups, news. Every one reuses the channel abstraction -
 if any of them forks chat, the abstraction has been broken ([Domain model](../PRD/01-domain-model.md) rule).
 *Done when: the permission-matrix test suite covers every cell of the three matrices in
 [Roles and permissions](../PRD/02-roles-and-permissions.md).*
@@ -307,7 +307,7 @@ router.
 function for the club roster or its pending requests, the club or Eboard space itself, the race
 list, a race and its Meet Information, the race roster, the car groups, the news feed, the meetings
 list, or another member's profile card. Ten or so query functions, none of which exist. The one
-place this is *not* true is the calendar and the routines week, which Phase 2 built as reads
+place this is *not* true is the calendar and the meetups week, which Phase 2 built as reads
 already.
 
 **Second: six specified capabilities have no function of either kind** - only a column, or a spec
@@ -375,7 +375,7 @@ one-Owner invariant and the other members' club.
 **Phase 3.75b - The screens.** *(Started 2026-07-30.)*
 The screens [Screen map](../PRD/15-screen-map.md) already specifies: races and their roster, Meet
 Information and car groups; polls in three scopes with inline voting; the calendar and events
-list; routines; news and Highlights; the Eboard space and its meetings. Plus the surfaces every
+list; meetups; news and Highlights; the Eboard space and its meetings. Plus the surfaces every
 phase has quietly deferred - the notification inbox, the member roster, profile, and chat's own
 Highlights tabs. Phase 3's remaining two, the Gallery grid and the full-screen viewer, closed
 on 2026-08-01.

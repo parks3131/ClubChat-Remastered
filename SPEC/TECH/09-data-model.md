@@ -51,6 +51,10 @@ clubs                 id, name, sport, description, avatar_media_id, join_policy
                       invite_token, member_invite_token, invite_token_rotated_at,
                       created_at
                       UNIQUE (invite_token), UNIQUE (member_invite_token)
+                      -- `sport` is required, free text, validated by nothing and read
+                      -- by nothing - a leftover of the founding case that now asks a
+                      -- chess club what sport it plays. ADR-0029 removed the reason to
+                      -- replace it with a club type and did not remove it; see PRD/17.
                       -- TWO links, and which one is redeemed is the whole decision
                       -- (ADR-0025): the admin token bypasses the join policy, the
                       -- member token obeys it. Independently minted, never derived
@@ -265,12 +269,27 @@ calendar_events       id, club_id, type, title, starts_at, ends_at, location, de
                       -- created_by is audit only. Any club admin may edit or delete
                       -- ANY event, so it is deliberately not the authorization
                       -- subject - unlike meetings.creator_id, which is.
-routine_workouts      id, club_id, workout_date, activity_type, title, description,
+meetups               id, club_id, meetup_date, meetup_time, location, description,
                       created_by, created_at
-                      CHECK (activity_type IN (10 values))
-                      -- created_by is audit only: any admin edits any workout.
-                      -- workout_date is a DATE. The week view shows one real
-                      -- Monday-to-Sunday week, not a repeating template.
+                      INDEX (club_id, meetup_date, meetup_time)
+                      -- Was routine_workouts, whose CHECK listed ten sports. The CHECK
+                      -- is DELETED, not replaced: a meetup has no type, category or
+                      -- kind of any sort (ADR-0029), and the free-text description is
+                      -- the only place what the club is doing is ever recorded. A
+                      -- reader who assumes the missing column is an oversight should
+                      -- read that ADR before adding one back.
+                      -- location and meetup_time are NOT NULL. The surface exists to
+                      -- answer where and when; "TBC" is a valid place and a blank is
+                      -- not.
+                      -- meetup_date is a DATE and meetup_time is a TIME, deliberately
+                      -- NOT one timestamptz. A club's week is local wall-clock and no
+                      -- club carries a timezone, so there is nothing to convert from -
+                      -- and an instant would put Tuesday's meetup on Monday for a
+                      -- member reading from another country. The week grid groups by
+                      -- meetup_date and that grouping must not depend on the reader.
+                      -- NO unique key on (club_id, meetup_date): a day holds as many
+                      -- meetups as the club needs, ordered by time.
+                      -- created_by is audit only: any admin edits any meetup.
 news_posts            id, club_id, author_id, body, media_id, created_at, updated_at
                       CHECK (body IS NOT NULL OR media_id IS NOT NULL)
                       -- The check carries "a post must have body text, a photo, or

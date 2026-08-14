@@ -49,7 +49,7 @@ in both directions, by the permission-matrix test suite.
 
 | Action | Owner | Admin | Member | Non-member |
 |---|---|---|---|---|
-| Read club chat / calendar / routines / news / races list | ✅ | ✅ | ✅ | ❌ |
+| Read club chat / calendar / weekly meetups / news / races list | ✅ | ✅ | ✅ | ❌ |
 | Send messages, react, report a message | ✅ | ✅ | ✅ | ❌ |
 | Pin / unpin, post an announcement | ✅ | ✅ | ❌ | ❌ |
 | Delete any message | ✅ | ✅ | own only | ❌ |
@@ -80,7 +80,7 @@ in both directions, by the permission-matrix test suite.
 | Action | Owner | Admin | Member |
 |---|---|---|---|
 | Create/edit/delete a calendar event | ✅ | ✅ | ❌ |
-| Create/edit/delete a routine workout | ✅ | ✅ | ❌ |
+| Create/edit/delete a meetup (any admin, any meetup) | ✅ | ✅ | ❌ |
 | Create/edit/delete a news post (any admin, any post) | ✅ | ✅ | ❌ |
 | React to a news post | ✅ | ✅ | ✅ |
 | Create a club poll | ✅ | ✅ | ❌ |
