@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { ChannelScope, ClubRole, Uuid } from './domain.ts';
 
 /**
- * The 22 types.
+ * The 23 types.
  *
  * Phase 1 emits the subset whose triggering feature exists. The rest are declared now
  * because the renderer is exhaustive over this union - adding a type is then a compile
@@ -23,7 +23,7 @@ import { ChannelScope, ClubRole, Uuid } from './domain.ts';
  *
  * PRD/12's table lists 18. Two of the rest are **push-only** - `dm_message` and
  * `chat_message` buzz a phone and never become a row in anybody's inbox (ADR-0015, ADR-0032);
- * the others are `message_reported` and `meetup_nudged`.
+ * the others are `message_reported`, `user_reported` and `meetup_nudged`.
  *
  * **The count above is asserted by `notifications.test.ts`, which is the only reason to trust
  * it.** It read "19" from Phase 1 until 2026-08-14, by which point there were 21 - a number in
@@ -85,6 +85,27 @@ export const notificationTypes = [
    * possible way to break that.
    */
   'message_reported',
+  /**
+   * Somebody reported a *person*, rather than something they said.
+   *
+   * > **Its own type rather than a `message_reported` with no message**, because the two differ in
+   * > the one way that matters to whoever receives them: a message report points at evidence and
+   * > this one does not. A moderator opening this has the accusation and the account, and the
+   * > `moderation_reads` door stays shut because there is no reported message to open a window
+   * > around. Saying so in the type is what stops a reviewer expecting a transcript that was never
+   * > going to be there.
+   *
+   * **Always to platform moderators, never to a club's admins**, which is the one place this
+   * diverges from `message_reported`'s two-way routing - see ADR-0035. There is therefore no
+   * `clubId` at all, rather than a nullable one: a person report has no club, ever, so the type
+   * says that rather than carrying a field that is always null.
+   *
+   * Names the reporter and **not the reported member**, on exactly the reasoning `message_reported`
+   * records: this text can land on a lock screen before anybody has looked at it, and an accusation
+   * is not a thing to broadcast. PRD/05 rule 10 and PRD/14 rule 7 both require reporting to be
+   * invisible to its subject, and a push is the loudest possible way to break that.
+   */
+  'user_reported',
   /**
    * A direct message arrived. **Push only - never written to the inbox.**
    *
@@ -299,6 +320,20 @@ export const notificationParams = {
       seq: z.number().int().positive(),
     })
     .merge(actor),
+
+  /**
+   * A person waiting to be reviewed.
+   *
+   * **The reporter's name, and nothing else.** No `subjectId` and no `subjectName`, which is the
+   * type-level statement of the rule rather than a convention the writer has to remember: the row
+   * can reach a lock screen, so it cannot carry who was accused. The queue is one tap away and is
+   * the access-checked place to learn that.
+   *
+   * No `clubId` either, unlike `message_reported` above. That one is nullable because its two
+   * destinations are chosen by it; this type has one destination, always, so a field that could
+   * only ever be null would be an invitation to route on it later.
+   */
+  user_reported: z.object({}).merge(actor),
 
   /**
    * The same shape as `announcement`, because it is the same fact at a lower volume: somebody
@@ -520,6 +555,16 @@ export function notificationTarget(n: {
         ? { kind: 'platform_moderation' }
         : { kind: 'chat_reports', channelId: p['channelId']! };
 
+    /*
+     * One destination, with no branch to get wrong.
+     *
+     * A person report goes to platform moderators and to nobody else (ADR-0035), so unlike the
+     * type above there is nothing here to decide. The queue is also the only screen that can
+     * render it: a club's Reports tab is keyed by channel, and this report has none.
+     */
+    case 'user_reported':
+      return { kind: 'platform_moderation' };
+
     case 'car_group_incharge_left':
       return { kind: 'race_car_groups', raceId: p['raceId']! };
     case 'chat_caught_up':
@@ -657,6 +702,17 @@ export function notificationSubject(n: {
     case 'news_post_created':
     case 'meetup_nudged':
     case 'car_group_incharge_left':
+      return null;
+
+    /*
+     * A glyph, and this one is a privacy rule rather than a taxonomy call.
+     *
+     * The entry above puts a report in the glyph tier because it has no room to point at; this one
+     * has no room AND must not point at a person. The reported member's face would hand back
+     * exactly what the params deliberately withhold, and the reporter's face would be wrong twice
+     * over - it is not about them, and it would name an accuser on a lock screen.
+     */
+    case 'user_reported':
       return null;
   }
 }
@@ -799,6 +855,19 @@ export function renderNotification(n: {
       return {
         title: p['channelName']!,
         body: `${p['actorName']} reported a message for review`,
+      };
+    /*
+     * "Moderation" rather than a name, and it is the only title in this file that is not one.
+     *
+     * Every other type titles itself with the room or the person it is about, because there is
+     * one. This has neither: naming the reported member is the thing the params exist to prevent,
+     * and naming the reporter would put an accuser on a lock screen. What is left is the queue
+     * this points at, which is also the honest answer to "where is this going".
+     */
+    case 'user_reported':
+      return {
+        title: 'Moderation',
+        body: `${p['actorName']} reported a member for review`,
       };
     // The title is the sender's name and the body is what they said, with no "X said:" prefix -
     // in a one-to-one conversation the sender is already the title, so repeating them reads as

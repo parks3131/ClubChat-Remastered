@@ -266,14 +266,14 @@ running on a physical device.
 |---|---|
 | **Language** | TypeScript throughout, strict, no `any` escape hatches in the domain layer |
 | **Runtime** | Node 24, npm workspaces monorepo, three server entrypoints (API, gateway, worker) |
-| **Data** | Postgres 17 via Drizzle, **43 tables**, **25 migrations**, invariants enforced as constraints rather than in handlers |
-| **HTTP surface** | **130 routes** across 12 route modules on Fastify |
+| **Data** | Postgres 17 via Drizzle, **46 tables**, **32 migrations**, invariants enforced as constraints rather than in handlers |
+| **HTTP surface** | **136 routes** across 12 route modules on Fastify |
 | **Realtime** | WebSocket gateway, Redis pub/sub per channel topic, gapless per-channel sequence numbers |
 | **Async** | Transactional outbox drained with `FOR UPDATE SKIP LOCKED`, with Kafka specified downstream |
 | **Client** | React Native / Expo, expo-router, local SQLite message cache, send outbox, sync engine |
-| **Tests** | **1,177 passing** across 52 files, real Postgres and Redis per suite via Testcontainers |
+| **Tests** | **1,331 passing** across 60 files, real Postgres and Redis per suite via Testcontainers |
 | **Code** | ~46,000 lines of TypeScript across server, shared protocol, client core and the app |
-| **Documentation** | 19 product docs, 18 technical docs, **17 architecture decision records** |
+| **Documentation** | 19 product docs, 18 technical docs, 11 design surfaces, **35 architecture decision records** |
 
 ---
 
@@ -337,7 +337,7 @@ multi-region are all explicitly declined in
                 ▼                          ▼
     ┌───────────────────────┐   ┌───────────────────────────────┐
     │  GATEWAY              │   │  API                          │
-    │  · WS termination     │   │  · 116 REST routes            │
+    │  · WS termination     │   │  · 136 REST routes            │
     │  · auth handshake     │   │  · chat history + sync reads  │
     │  · subscribe, authed  │   │  · every command handler      │
     │    once at subscribe  │   │    writes domain + outbox     │
@@ -573,13 +573,13 @@ Four layers, each catching something the layer below cannot.
 
 **1. Types.** `npm run typecheck` across all four workspaces. Clean.
 
-**2. Tests: 1,177 passing across 52 files.** `npm test`
+**2. Tests: 1,331 passing across 60 files.** `npm test`
 
 ```
  @clubchat/client-core    2 files    36 tests   passed
- @clubchat/server        41 files   989 tests   passed   (~100s)
+ @clubchat/server        45 files  1075 tests   passed   (~120s)
  @clubchat/shared         2 files    40 tests   passed
- @clubchat/mobile         7 files   112 tests   passed
+ @clubchat/mobile        11 files   180 tests   passed
 ```
 
 Handler tests run against a **disposable Postgres and Redis started per suite with
@@ -606,7 +606,7 @@ slightly wrong `WHERE` clause, or a unique index containing a nullable column, b
 and enforce nothing. This harness fails loudly in the one direction that matters, and a silent
 pass is the single outcome it must never produce.
 
-**4. Surface gate: `npm run gate:surface`.** 73 checks that call every route against a **running
+**4. Surface gate: `npm run gate:surface`.** 97 checks that call every route against a **running
 server over TCP**, through the real HTTP stack, against real Postgres, exactly as a client will.
 
 This exists because of a lesson worth keeping. An earlier phase's exit gate was "the permission
@@ -635,12 +635,12 @@ ClubChat-Remastered/
 ├── packages/
 │   ├── server/
 │   │   └── src/
-│   │       ├── api/             Fastify app + 12 route modules (130 routes)
+│   │       ├── api/             Fastify app + 12 route modules (136 routes)
 │   │       ├── gateway/         WebSocket termination, subscribe-time authorization
 │   │       ├── worker/          outbox drain, effects, notifications, scheduled jobs
 │   │       ├── domain/          command handlers and queries, one file per area
 │   │       ├── policy/          every authorization predicate, defined once
-│   │       ├── db/              Drizzle schema, 25 migrations, constraint proof
+│   │       ├── db/              Drizzle schema, 32 migrations, constraint proof
 │   │       ├── media/           MediaStore port, S3 adapter, derivation pipeline
 │   │       ├── push/            audience, cursor suppression, per-device fan-out
 │   │       └── test/            Testcontainers harness and the phase suites
@@ -685,9 +685,9 @@ npm run dev:mobile            # :8081  Expo, press w for web
 Verify the whole thing:
 
 ```bash
-npm run verify                # typecheck, runtime parse, lint, 1,177 tests
+npm run verify                # typecheck, runtime parse, lint, 1,331 tests
 npm run db:prove              # attempt to violate every invariant, expect rejection
-npm run gate:surface          # 73 checks against the running API
+npm run gate:surface          # 97 checks against the running API
 ```
 
 Local services are development only. Production targets Fly.io with Neon Postgres, Upstash Redis
@@ -707,7 +707,7 @@ Built in phases, each with a written exit gate that has to be met before the nex
 | 2 - Breadth across the domain | **Done** | Schema, 32 command handlers, and the permission matrix gate |
 | 3 - Media and offline | **Done** | Presigned uploads, derivation, local SQLite cache, attach and render |
 | 3.5 - Direct messages and safety tooling | **Done** | DMs, blocking, reports, moderator queue, reactions |
-| 3.75a - The HTTP surface | **Done** | 45 routes became 111, and 130 today; 73-check gate against a running server; five defects in shipped code found and fixed on the way |
+| 3.75a - The HTTP surface | **Done** | 45 routes became 111, and 136 today; 97-check gate against a running server; five defects in shipped code found and fixed on the way |
 | 3.75b - The screens | **Done** | Tab shell, shared primitives and ~56 screens; the full reachability walk is outstanding |
 | 4 - Hardening | **In progress** | Done: rate limits on every route, retention and media GC, Sentry across all three processes. Outstanding: the accessibility audit, a load test, and the parity checklist run on all three platforms |
 

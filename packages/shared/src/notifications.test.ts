@@ -157,6 +157,11 @@ const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
     seq: 43,
     actorName: 'Riley',
   },
+  // The reporter and nothing else. There is deliberately no subject here to fixture: naming the
+  // reported member is what this type's schema exists to prevent - see ADR-0035.
+  user_reported: {
+    actorName: 'Riley',
+  },
   car_group_incharge_left: {
     clubId: CLUB,
     clubName: 'Hillside',
@@ -191,7 +196,7 @@ const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
 };
 
 describe('the catalogue is complete', () => {
-  it('declares 22 types: the PRD table, two push-only kinds, the report and the nudge', () => {
+  it('declares 23 types: the PRD table, two push-only kinds, two reports and the nudge', () => {
     // PRD/12's catalogue lists 18. dm_message is the nineteenth and never appears in that
     // table because it never becomes an inbox row - it exists so a direct message can buzz a
     // phone, which is what makes muting a conversation mean anything. See ADR-0015.
@@ -202,7 +207,10 @@ describe('the catalogue is complete', () => {
     // about something that already existed.
     // chat_message is the twenty-second, added later the same day: the second push-only type,
     // and the one that reversed group chat's deliberate silence. See ADR-0032.
-    expect(notificationTypes).toHaveLength(22);
+    // user_reported is the twenty-third, added 2026-08-15 with Report on the member card: the
+    // other noun a report can name, and the only type with exactly one audience and no scope
+    // switch at all. See ADR-0035.
+    expect(notificationTypes).toHaveLength(23);
   });
 
   it('has a params schema for every type', () => {
@@ -437,6 +445,14 @@ describe('notificationSubject', () => {
     'news_post_created',
     'meetup_nudged',
     'car_group_incharge_left',
+    /*
+     * The one entry here for a privacy reason rather than a taxonomy one.
+     *
+     * Every other glyph-tier type has no place or person to draw; this one has a person and must
+     * not draw them. The reported member's face would hand back exactly what the params withhold,
+     * and the reporter's would name an accuser on a lock screen. See ADR-0035.
+     */
+    'user_reported',
   ];
 
   it('resolves a subject for every type outside the glyph tier', () => {

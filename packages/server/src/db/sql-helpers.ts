@@ -21,3 +21,25 @@ import { sql, type SQL } from 'drizzle-orm';
  */
 export const isoUtc = (column: SQL | string): SQL =>
   sql`to_char(${typeof column === 'string' ? sql.raw(column) : column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
+
+/**
+ * A mute that is still in force. **A lapsed `muted_until` is not a mute.**
+ *
+ * > **Extracted on 2026-08-15, at the sixth copy.** `muted_until IS NULL OR muted_until > now()`
+ * > had been hand-written in the DM thread list, the channel meta read, the push audience, the
+ * > race list and the chat list, and a seventh was about to be added for the member card. Every
+ * > copy was individually correct, which is precisely the shape failure mode 9 describes: nothing
+ * > diverges loudly, no type error appears, and the day one of them forgets the `IS NULL` half,
+ * > indefinite mutes silently stop counting in exactly one screen.
+ *
+ * The NULL half is the one worth naming: **NULL means muted indefinitely, not "not muted"** - the
+ * row's existence is the mute, and the column is only an expiry. Written as `NOT (... <= now())`
+ * would have been wrong for the same reason.
+ *
+ * @param alias the table alias the `muted_until` column is reached through, e.g. `mute`. Pass
+ *   nothing where the query selects from `channel_mutes` unaliased.
+ */
+export const muteInForce = (alias?: string): SQL => {
+  const column = alias === undefined ? sql.raw('muted_until') : sql.raw(`${alias}.muted_until`);
+  return sql`(${column} IS NULL OR ${column} > now())`;
+};

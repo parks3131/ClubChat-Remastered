@@ -512,6 +512,33 @@ export type ProfileClubActions = {
   canLiftBan: boolean;
 };
 
+/**
+ * The conversation the viewer already holds with this person, if there is one.
+ *
+ * **Present only when a thread already exists**, which is what makes Mute and Delete chat safe to
+ * offer from a roster: `POST /dm/threads` would create one, so resolving the channel by opening it
+ * would bring a conversation into being as a side effect of muting it. Absent on a person you have
+ * never messaged, and on your own card.
+ *
+ * Read from the server's `ProfileDmActions`, not inferred from the screen - failure mode 16.
+ */
+export type ProfileDmActions = {
+  channelId: string;
+  muted: boolean;
+};
+
+/** One reported person, grouped by the subject rather than by report. */
+export type UserReportRow = {
+  subjectId: string;
+  subjectName: string;
+  subjectImage: string | null;
+  /** So the queue offers Suspend or Reinstate rather than guessing which applies. */
+  subjectSuspended: boolean;
+  reporters: Array<{ userId: string; name: string; createdAt: string }>;
+  dismissedAt: string | null;
+  createdAt: string;
+};
+
 // ---------------------------------------------------------------------------
 // Chat reads that the Highlights and jump-to-message screens use
 // ---------------------------------------------------------------------------

@@ -21,9 +21,11 @@
 import { sql } from 'drizzle-orm';
 import { ADMIN_TIER, type NotificationType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
+import { muteInForce } from '../db/sql-helpers.ts';
 import {
   channelAudienceById,
   channelModerationAudienceById,
+  platformModerators,
 } from '../domain/channel-access.ts';
 
 export type AudienceRequest = {
@@ -107,6 +109,20 @@ async function gather(db: Db, request: AudienceRequest): Promise<string[]> {
     case 'message_reported':
       if (!request.channelId) return [];
       return channelModerationAudienceById(db, request.channelId);
+
+    /*
+     * Every platform moderator, with no channel to narrow it and no club to widen it.
+     *
+     * The type above resolves through a scope switch because a message belongs to a room; a person
+     * belongs to none, and the club the reporter happened to be looking at is not a routing key -
+     * a report filed from a direct message would land on a club admin's desk, which PRD/14 rule 7
+     * refuses. One audience, always. See ADR-0035.
+     *
+     * The reporter is dropped by `resolveAudience` like every other actor, which is what handles a
+     * moderator reporting somebody themselves.
+     */
+    case 'user_reported':
+      return platformModerators(db);
 
     // The club's admin tier. BOTH admin and owner.
     case 'club_join_request':
@@ -245,7 +261,7 @@ export async function mutedRecipients(
     SELECT user_id FROM channel_mutes
      WHERE channel_id = ${channelId}
        AND user_id = ANY(${sql.param(recipients as string[])}::uuid[])
-       AND (muted_until IS NULL OR muted_until > now())
+       AND ${muteInForce()}
   `);
   return new Set(rows.rows.map((r) => r.user_id));
 }

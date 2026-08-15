@@ -17,18 +17,25 @@
  * same ladder, while ANY admin may lift a ban (ADR-0021) - and a client re-deriving one is how a
  * second definition of a permission starts drifting from the first.
  *
- * What is deliberately NOT here yet, so it is not mistaken for an oversight: Mute, Clear chat and
- * Report. Mute and Clear chat act on a conversation and this card is reached from a roster, where
- * there may not be one; reporting a person has no server surface at all today, since reports are
- * per message. All three are the next pass.
+ * **Mute, Clear chat and Report arrived on 2026-08-15**, and the shape of the first two is the
+ * part worth reading. They act on a *conversation*, and this card is reached from a roster where
+ * there may not be one - so they are offered only when `dm` comes back on the profile read, which
+ * says a thread already exists. The card never resolves the channel itself: `POST /dm/threads` is
+ * idempotent-create, so asking it "which channel is this" would open a conversation as a side
+ * effect of muting one.
+ *
+ * Report needed a server surface that did not exist, because every report in the product was
+ * keyed by `messageId` - the queue, the audited context read, the removal and the dismissal all
+ * hang off one. A person report is a `user_reports` row instead, and it goes to platform
+ * moderators always rather than routing by scope the way a message report does. See ADR-0035.
  */
 
 import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { accountApi, clubApi, dmApi } from './api.ts';
-import type { ProfileClubActions, SharedClub } from './api-types.ts';
+import { accountApi, channelApi, clubApi, dmApi } from './api.ts';
+import type { ProfileClubActions, ProfileDmActions, SharedClub } from './api-types.ts';
 import { useSession } from './chat-provider.tsx';
 import { ARRIVED_FORWARD } from './nav.tsx';
 import { color, radius, space, type } from './theme.ts';
@@ -70,7 +77,9 @@ export function MemberCardSheet({
   onChanged?: () => void;
 }) {
   const router = useRouter();
-  const { userId: viewerId } = useSession();
+  // `client` is here for Clear chat, which has to drop the local SQLite copy as well as writing
+  // the server-side floor - otherwise the cache re-renders exactly what was just hidden.
+  const { userId: viewerId, client } = useSession();
 
   const load = useLoad(() => accountApi.profile(userId, clubId), [userId, clubId]);
   /*
@@ -92,10 +101,20 @@ export function MemberCardSheet({
    */
   const menuButton = useRef<View | null>(null);
   const [confirmingBan, setConfirmingBan] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const [confirmingReport, setConfirmingReport] = useState(false);
   /** The shared-clubs list, which the block below opens exactly as the full profile does. */
   const [clubsOpen, setClubsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * What a write that STAYS on the card reports back.
+   *
+   * The three roster writes leave, so their outcome is the roster reloading behind them. Mute,
+   * Clear chat and Report all keep the card open, and a control that changes something invisible
+   * and says nothing reads as a control that did not work.
+   */
+  const [notice, setNotice] = useState<string | null>(null);
   /** Set by an action that is done with this card: plays the exit, then unmounts it. */
   const [leaving, setLeaving] = useState(false);
   /** Where to go once the card has finished leaving, so the two never animate over each other. */
@@ -120,6 +139,28 @@ export function MemberCardSheet({
     }
   };
 
+  /**
+   * Runs a write and STAYS, re-reading the profile so the menu redraws against the new state.
+   *
+   * The reload is what makes Mute a toggle rather than a one-way trip: `dm.muted` comes back from
+   * the server, so the next open of the menu says Unmute because the server says so - not because
+   * this file kept a boolean of its own that a second device could contradict.
+   */
+  const actInPlace = async (run: () => Promise<unknown>, message: string) => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await run();
+      load.reload();
+      setNotice(message);
+    } catch {
+      setError('That did not work. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const openDm = async () => {
     setBusy(true);
     setError(null);
@@ -139,6 +180,15 @@ export function MemberCardSheet({
   };
 
   const club: ProfileClubActions | undefined = load.data?.club;
+  /**
+   * The conversation, when there already is one.
+   *
+   * **The server answers this and the card never works it out.** `dmApi.open` would CREATE a
+   * thread, so resolving the channel here in order to offer Mute would bring a conversation into
+   * being as a side effect of muting it - which is why the flag rides on the profile read instead.
+   * Absent on somebody you have never messaged, and on your own card.
+   */
+  const dm: ProfileDmActions | undefined = load.data?.dm;
   const name = load.data?.profile.name ?? '';
   const first = name.split(' ')[0] ?? 'this member';
 
@@ -150,6 +200,60 @@ export function MemberCardSheet({
    * "you may not do anything here".
    */
   const menuItems: ContextMenuItem[] = [];
+
+  /*
+   * The conversation actions, first, and **only when a conversation exists**.
+   *
+   * Both act on a thread rather than on a person, so on a roster row you have never messaged
+   * there is nothing for them to act on - `DESIGN/10` rule 5 then does the rest and the "..."
+   * is simply absent for a member with no other authority over this row. That is also why
+   * `dm/[channelId]/profile` still exists and still carries them: reached from a DM there is
+   * always a thread, which is the case this card cannot assume.
+   */
+  if (dm !== undefined) {
+    menuItems.push({
+      label: dm.muted ? 'Unmute' : 'Mute',
+      icon: dm.muted ? 'notifications' : 'notifications-off',
+      onPress: () => {
+        setMenuAnchor(null);
+        void actInPlace(
+          () => (dm.muted ? dmApi.unmute(dm.channelId) : dmApi.mute(dm.channelId)),
+          // Mute is not "mark as read", and saying so is the difference between somebody trusting
+          // this control and somebody reaching for Delete chat instead.
+          dm.muted ? 'Unmuted.' : 'Muted. The unread count still counts.',
+        );
+      },
+    });
+    menuItems.push({
+      label: 'Clear chat',
+      icon: 'delete-sweep',
+      destructive: true,
+      onPress: () => {
+        setMenuAnchor(null);
+        setConfirmingClear(true);
+      },
+    });
+  }
+
+  /*
+   * Report, when the server says so.
+   *
+   * `canReport` rather than a check on `viewerId !== userId` here, for `DESIGN/10` rule 4's
+   * reason: the eligibility rule is `canReportUser` and this file must not hold a second copy of
+   * it. It happens to be "not yourself, and you can see them" today.
+   */
+  if (load.data?.canReport === true) {
+    menuItems.push({
+      label: 'Report',
+      icon: 'flag',
+      destructive: true,
+      onPress: () => {
+        setMenuAnchor(null);
+        setConfirmingReport(true);
+      },
+    });
+  }
+
   if (club !== undefined) {
     if (club.banned) {
       // Any admin, including one who did not impose it. That asymmetry is the safeguard against a
@@ -232,6 +336,60 @@ export function MemberCardSheet({
                 void act(() => clubApi.ban(club.clubId, userId));
               }}
               onCancel={() => setConfirmingBan(false)}
+            />
+          )}
+
+          {/*
+            The wording does the work here, exactly as it does on the DM profile screen, and it
+            is deliberately the same sentence: "delete" sounds mutual and is not. Saying so stops
+            somebody using this believing it reaches the other person, and stops somebody avoiding
+            it believing it destroys their own record permanently.
+          */}
+          {confirmingClear && dm !== undefined && (
+            <ConfirmDialog
+              hosted
+              title="Delete this chat?"
+              body={`This clears the conversation for you only. ${
+                first === 'this member' ? 'They' : first
+              } will still have every message, and will not be told.`}
+              confirmLabel="Delete chat"
+              dismissLabel="Keep it"
+              onCancel={() => setConfirmingClear(false)}
+              onConfirm={() => {
+                setConfirmingClear(false);
+                void act(async () => {
+                  await channelApi.clear(dm.channelId);
+                  // Drop the local copy too, or the cache re-renders what the server just hid.
+                  // See ChatClient.forgetChannel.
+                  await client?.forgetChannel(dm.channelId);
+                });
+              }}
+            />
+          )}
+
+          {/*
+            Reporting is confirmed because it is an accusation and it is not undoable from here.
+
+            The body says who sees it and what happens next, which is the one thing a reporter
+            actually wants to know - and the reason it can be stated plainly is that the answer no
+            longer depends on where the card was opened from. ADR-0035 gave person reports one
+            destination precisely so this sentence could be one sentence.
+          */}
+          {confirmingReport && (
+            <ConfirmDialog
+              hosted
+              title={`Report ${first}?`}
+              body="A ClubChat moderator will review this. They are not told by anybody in your club, and the person you are reporting is never told that you reported them."
+              confirmLabel="Report"
+              dismissLabel="Cancel"
+              onCancel={() => setConfirmingReport(false)}
+              onConfirm={() => {
+                setConfirmingReport(false);
+                void actInPlace(
+                  () => accountApi.reportUser(userId),
+                  'Reported. A moderator will review it.',
+                );
+              }}
             />
           )}
 
@@ -351,6 +509,11 @@ export function MemberCardSheet({
                   )}
 
                   {error !== null && <Text style={styles.error}>{error}</Text>}
+                  {/*
+                    Where a refusal already goes, so an outcome and its failure occupy the same
+                    place rather than the eye having to find two. Cleared by the next write.
+                  */}
+                  {notice !== null && <Text style={styles.notice}>{notice}</Text>}
 
                   {/* Absent rows are simply absent - PRD/03. "Description" is v1's label for the bio. */}
                   <View style={styles.details}>
@@ -667,6 +830,8 @@ const styles = StyleSheet.create({
 
   details: { width: '100%', gap: space.sm },
   error: { ...type.bodySmall, color: color.error, textAlign: 'center' },
+  /** The same line as an error, in the accent rather than the error colour. */
+  notice: { ...type.bodySmall, color: color.accent, textAlign: 'center' },
 
   /*
    * The shared-clubs block: centred under the name, because it is a statement about the two of

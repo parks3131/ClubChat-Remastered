@@ -495,6 +495,48 @@ export const canReadReports = (ctx: AccessContext, ch: ChannelRef): boolean => {
 export const canDismissReport = canReadReports;
 
 /**
+ * May this user report a *person*, rather than something that person said?
+ *
+ * > **Deliberately the same reachability rule as `canViewProfile`, and not a narrower one.** If
+ * > you can be shown somebody's card you can report them from it - anything tighter would put a
+ * > Report control on a surface where it sometimes refuses, which teaches people the button is
+ * > broken rather than that they are ineligible.
+ *
+ * Written as its own predicate rather than as an alias of `canViewProfile` with a self-check,
+ * because failure mode 10 is about exactly this shape: the day profile visibility widens - and
+ * ADR-0009 has been asked to widen it once already - reporting must not silently widen with it.
+ *
+ * **A block is not consulted, and that is the same call `canReportMessage` makes.** Blocking is
+ * the instant self-service half of member safety and reporting is the reviewed half; taking the
+ * second away at the moment somebody uses the first would remove the reporting path at exactly
+ * the point it is needed. The two are deliberately independent (PRD/14 rule 6).
+ *
+ * Reporting yourself is refused here and again by `user_reports_not_self`, which is not
+ * belt-and-braces: the check constraint is what makes it true of the data under a handler nobody
+ * has re-read, and this is what lets the card decline to draw the control at all.
+ */
+export const canReportUser = (ctx: AccessContext, subject: DmCandidate): boolean =>
+  subject.userId !== ctx.userId && canViewProfile(ctx, subject);
+
+/**
+ * Who may READ person reports.
+ *
+ * **Platform moderators, always, with no scope switch at all** - the one place this diverges from
+ * `canReadReports` above, and the divergence is the decision rather than an oversight. A message
+ * report is routed by the reported message's channel scope; a person report has no channel, and
+ * the alternative - routing by whichever club the reporter happened to be looking at - would put a
+ * report filed from a direct message on a club admin's desk, which PRD/14 rule 7 refuses. See
+ * ADR-0035.
+ *
+ * Its own predicate rather than an alias of the `dm` branch of `canReadReports`, for failure mode
+ * 10's reason: the two answer different questions and happen to agree today.
+ */
+export const canReadUserReports = (ctx: AccessContext): boolean => ctx.isPlatformModerator;
+
+/** Dismissing follows the same reader rule, and is named separately so it can stop doing so. */
+export const canDismissUserReport = (ctx: AccessContext): boolean => ctx.isPlatformModerator;
+
+/**
  * Enough of an account for a platform moderator to authorize against.
  *
  * Loaded by the caller, like `DmCandidate`, because both extra facts are rows and a predicate

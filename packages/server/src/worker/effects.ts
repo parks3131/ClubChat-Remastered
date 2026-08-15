@@ -2046,6 +2046,61 @@ export const handlers: Record<string, EffectHandler> = {
   },
 
   /**
+   * Somebody reported a person. Tell every platform moderator.
+   *
+   * The same shape as `message.reported` above with the channel taken out, and the two things that
+   * follow from that are worth stating rather than inferring. There is **no `channelContext`**,
+   * so nothing can fail on a channel that has since gone; and the audience needs no scope switch,
+   * because a person report has exactly one destination (ADR-0035).
+   *
+   * **Pushed immediately and without a channel**, for the identical reason the type above is:
+   * `dispatchPush` suppresses on a read cursor, and there is no conversation here whose cursor
+   * could mean anything. Having read something is not having reviewed it.
+   *
+   * The params name the reporter and never the subject. That is enforced by the schema in
+   * `@clubchat/shared` rather than remembered here, which is the point of validating params at the
+   * write - see `notificationParams.user_reported`.
+   */
+  'user.reported': async (event, deps) => {
+    const subjectId = String(event.payload['subjectId'] ?? event.partitionKey);
+    const reporterId = String(event.payload['reporterId'] ?? '');
+
+    const recipients = await resolveAudience(deps.db, {
+      type: 'user_reported',
+      actorId: reporterId || null,
+      clubId: null,
+    });
+
+    const params = {
+      actorName: reporterId ? await displayName(deps.db, reporterId) : 'Someone',
+    };
+
+    const { created } = await writeNotifications(deps.db, {
+      outboxEventId: notificationKey(event.id, 0),
+      type: 'user_reported',
+      params,
+      recipients,
+      actorId: reporterId || null,
+      clubId: null,
+    });
+
+    const outcome = await dispatchPush(deps.db, deps.push, {
+      outboxEventId: notificationKey(event.id, 0),
+      type: 'user_reported',
+      params,
+      recipients,
+    });
+
+    deps.log('info', 'user.reported notified', {
+      eventId: event.id,
+      subjectId,
+      recipients: recipients.length,
+      created,
+      pushed: outcome.pushed,
+    });
+  },
+
+  /**
    * A pin or unpin. Notifies nobody: pins are reference, not interruption.
    *
    * **Re-read at publish time rather than published from the payload**, which is the same choice

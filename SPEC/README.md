@@ -161,6 +161,7 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0032](decisions/0032-every-chat-message-pushes.md) | Every chat message pushes, and still writes no inbox row |
 | [0033](decisions/0033-a-message-may-be-edited-for-five-minutes.md) | A message may be edited by its sender for five minutes |
 | [0034](decisions/0034-the-calendar-carries-only-things-that-happen-on-a-day.md) | The calendar carries only things that happen on a day |
+| [0035](decisions/0035-a-person-is-reported-to-platform-moderators.md) | A person is reported to platform moderators, and never to a club's admins |
 
 ## Templates
 

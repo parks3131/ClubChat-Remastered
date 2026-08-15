@@ -10,7 +10,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { isUniqueViolation } from '../db/errors.ts';
-import { isoUtc } from '../db/sql-helpers.ts';
+import { isoUtc, muteInForce } from '../db/sql-helpers.ts';
 import {
   carGroupMembers,
   carGroups,
@@ -962,7 +962,7 @@ export async function listRaces(
       LEFT JOIN channel_mutes mute
              ON mute.channel_id = ch.id
             AND mute.user_id = ${ctx.userId}
-            AND (mute.muted_until IS NULL OR mute.muted_until > now())
+            AND ${muteInForce('mute')}
      WHERE r.club_id = ${clubId}
        ${query.length > 0 ? sql`AND r.name ILIKE ${'%' + query + '%'}` : sql``}
      -- Pinned first, then newest-created. NOT the race date: it is optional now, so a dateless

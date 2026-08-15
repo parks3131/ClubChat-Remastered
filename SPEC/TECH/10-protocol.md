@@ -106,7 +106,10 @@ Three properties follow, and each is load-bearing:
 ```
 POST   /api/auth/*                           ← better-auth handles sign-up/in/out
 GET    /me                                   ← the caller's id and club roles
-GET    /users/:id                            ← profile card; dob withheld from everyone but its owner
+GET    /users/:id[?clubId=]                  ← profile card; dob withheld from everyone but its owner.
+                                               Carries canReport, and a `dm` block ONLY when the pair
+                                               already has a thread - the card must never open one to
+                                               find out (DESIGN/10 rule 5a)
 PATCH  /me/profile                           ← self only; there is deliberately no PATCH /users/:id
 DELETE /me                                   ← anonymize + block future sign-in; 409 while they own a club
 
@@ -138,7 +141,11 @@ GET    /dm/shared-clubs/:uid                 ← the clubs you both belong to, f
 POST   /dm/threads                           ← open or re-open; idempotent per pair
 GET    /blocks | POST /blocks | DELETE /blocks/:uid
 
+POST   /users/:uid/report                    ← report a PERSON; every refusal is 404 (ADR-0035)
+
 GET    /moderation/dm-reports                ← platform moderators only, metadata only
+GET    /moderation/user-reports              ← the person queue; never a club admin, ever
+POST   /moderation/user-reports/:uid/dismiss ← by SUBJECT, closing every open report about them
 GET    /moderation/reports/:id/context       ← the narrow, audit-logged read
 POST   /moderation/reports/:id/dismiss
 POST   /moderation/reports/:id/remove        ← soft-delete the reported message; dm scope only

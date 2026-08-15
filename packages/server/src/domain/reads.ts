@@ -32,7 +32,7 @@ import {
 } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { channels, messages, users } from '../db/schema.ts';
-import { isoUtc } from '../db/sql-helpers.ts';
+import { isoUtc, muteInForce } from '../db/sql-helpers.ts';
 import { clearedFloor, type AccessContext } from '../policy/context.ts';
 import { canLeaveClub, canPostInChannel, type ChannelRef } from '../policy/predicates.ts';
 import {
@@ -726,7 +726,7 @@ export async function listConversations(
       LEFT JOIN channel_mutes mute
              ON mute.channel_id = c.id
             AND mute.user_id = ${ctx.userId}
-            AND (mute.muted_until IS NULL OR mute.muted_until > now())
+            AND ${muteInForce('mute')}
       LEFT JOIN channel_pins pin
              ON pin.channel_id = c.id AND pin.user_id = ${ctx.userId}
       -- Null for a dm, which has no club and answers with its own count instead.

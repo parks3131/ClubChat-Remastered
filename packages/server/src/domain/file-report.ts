@@ -37,7 +37,11 @@ export async function fileReport(
   const rows = await tx
     .insert(messageReports)
     .values({ messageId: args.messageId, reporterId: args.reporterId })
-    .onConflictDoNothing()
+    // Named, not bare. The table happens to carry one unique constraint today, so an untargeted
+    // clause behaves identically - and that is exactly the state the car-group defect was in
+    // before somebody added the second one. Naming it is the difference between "ignore a repeat
+    // report" and "ignore whatever this table starts enforcing next".
+    .onConflictDoNothing({ target: [messageReports.messageId, messageReports.reporterId] })
     .returning({ messageId: messageReports.messageId });
 
   if (rows.length === 0) return false;

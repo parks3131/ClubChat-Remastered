@@ -13,7 +13,7 @@
 
 import { eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { isoUtc } from '../db/sql-helpers.ts';
+import { isoUtc, muteInForce } from '../db/sql-helpers.ts';
 import { outbox, users } from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
 import type { ClubRole } from '@clubchat/shared';
@@ -21,7 +21,9 @@ import {
   canBanFromClub,
   canLiftClubBan,
   canRemoveMember,
+  canReportUser,
   canViewProfile,
+  dmThreadWith,
 } from '../policy/predicates.ts';
 import { accessibleChannelPredicate } from './channel-access.ts';
 
@@ -62,6 +64,25 @@ export type ProfileClubActions = {
   /** Whether this person is currently barred, so the card can offer Unban instead. */
   banned: boolean;
   canLiftBan: boolean;
+};
+
+/**
+ * The conversation the viewer already holds with this person, if there is one.
+ *
+ * > **Present only when a thread ALREADY exists, and that is the load-bearing part.** Mute and
+ * > Delete chat act on a conversation, and `openDm` creates one - so a card that resolved the
+ * > channel by asking to open it would bring a conversation into being as a side effect of
+ * > muting it. The card can only offer what this block answers, and this block never creates
+ * > anything.
+ *
+ * Absent, therefore, on a roster row you have never messaged, on your own card, and wherever the
+ * pair is ineligible. `DESIGN/10` rule 5 then does the rest: a menu with nothing in it is no menu
+ * at all, rather than a "..." that opens onto two controls over nothing.
+ */
+export type ProfileDmActions = {
+  channelId: string;
+  /** So the card can say Unmute without a second read, and without guessing. */
+  muted: boolean;
 };
 
 /**
@@ -122,7 +143,16 @@ export async function readProfile(
   ctx: AccessContext,
   userId: string,
   opts: { clubId?: string | undefined } = {},
-): Promise<Result<{ profile: Profile | PublicProfile; club?: ProfileClubActions }>> {
+): Promise<
+  Result<{
+    profile: Profile | PublicProfile;
+    club?: ProfileClubActions;
+    /** Absent when the pair has no thread. See `ProfileDmActions`. */
+    dm?: ProfileDmActions;
+    /** Whether to offer Report on this card. `DESIGN/10` rule 4: the server's answer, never a role. */
+    canReport: boolean;
+  }>
+> {
   const rows = await db.execute<{
     id: string;
     full_name: string;
@@ -179,7 +209,39 @@ export async function readProfile(
   };
 
   const profile = userId === ctx.userId ? { ...base, dob: row.dob } : base;
-  if (opts.clubId === undefined) return { ok: true, profile };
+
+  const subject = { userId: row.id, clubIds: row.club_ids ?? [] };
+  const canReport = canReportUser(ctx, subject);
+
+  /*
+   * The conversation, if there already is one.
+   *
+   * The thread comes from the access context, which loaded every one of this caller's threads at
+   * authentication - so "do we have a conversation" costs no query at all. Only the mute state
+   * needs a row, and only when a thread exists, which is the uncommon case on a roster.
+   *
+   * **Nothing here opens a conversation**, and that is the rule rather than an optimisation. See
+   * `ProfileDmActions`.
+   */
+  const thread = userId === ctx.userId ? undefined : dmThreadWith(ctx, userId);
+  let dm: ProfileDmActions | undefined;
+  if (thread !== undefined) {
+    const found = await db.execute<{ channel_id: string; muted: boolean }>(sql`
+      SELECT c.id::text AS channel_id,
+             (m.channel_id IS NOT NULL) AS muted
+        FROM channels c
+        -- A lapsed muted_until is not a mute, through the one definition of that. Written out by
+        -- hand it would have been the seventh copy - see muteInForce.
+        LEFT JOIN channel_mutes m ON m.channel_id = c.id
+                                 AND m.user_id = ${ctx.userId}
+                                 AND ${muteInForce('m')}
+       WHERE c.scope = 'dm' AND c.scope_id = ${thread.conversationId}
+    `);
+    const channel = found.rows[0];
+    if (channel) dm = { channelId: channel.channel_id, muted: channel.muted === true };
+  }
+
+  if (opts.clubId === undefined) return { ok: true, profile, canReport, ...(dm ? { dm } : {}) };
 
   /*
    * Club-scoped actions, when the caller says which club they are looking from.
@@ -201,6 +263,8 @@ export async function readProfile(
   return {
     ok: true,
     profile,
+    canReport,
+    ...(dm ? { dm } : {}),
     club: {
       clubId: opts.clubId,
       canRemove:

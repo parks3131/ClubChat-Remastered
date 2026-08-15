@@ -44,6 +44,7 @@ import type {
   ModerationContext,
   Profile,
   ProfileClubActions,
+  ProfileDmActions,
   RaceDetail,
   RaceListItem,
   RaceRoster,
@@ -51,6 +52,7 @@ import type {
   MeetupBody,
   MeetupWeek,
   SharedClub,
+  UserReportRow,
 } from './api-types.ts';
 import { config } from './config.ts';
 import { sessionStore } from './session.ts';
@@ -689,11 +691,13 @@ export const devicesApi = {
 };
 
 /**
- * The platform moderation queue: reports raised in direct messages.
+ * The two platform moderation queues: reports raised in direct messages, and reports about people.
  *
  * A DM has no admins, so PRD/14 rule 7 routes its reports here instead - read by accounts
- * carrying the platform-moderator flag, and by **no club admin ever**. Every call refuses with a
- * 404 for anybody else, the same answer they would get for a queue that did not exist.
+ * carrying the platform-moderator flag, and by **no club admin ever**. A report about a *person*
+ * comes here too, and always: it has no channel to route by, so there is no scope switch and no
+ * club branch to add later (ADR-0035). Every call refuses with a 404 for anybody else, the same
+ * answer they would get for a queue that did not exist.
  */
 export const moderationApi = {
   /** Metadata only. See `DmReportRow` for why there are no message bodies in it. */
@@ -701,6 +705,30 @@ export const moderationApi = {
     apiFetch<{ reports: DmReportRow[] }>(
       `/moderation/dm-reports${includeDismissed ? '?all=true' : ''}`,
     ),
+
+  /**
+   * The person queue.
+   *
+   * Its own read rather than rows mixed into `queue()` above, because the two lead somewhere
+   * different: that one opens onto an audited window into a conversation, and this one has no
+   * conversation to open. What a moderator can act on here is the account.
+   */
+  userReports: (includeDismissed = false) =>
+    apiFetch<{ reports: UserReportRow[] }>(
+      `/moderation/user-reports${includeDismissed ? '?all=true' : ''}`,
+    ),
+
+  /**
+   * Close every open report about one person.
+   *
+   * Takes the SUBJECT's user id, not a report id: the decision is about the account, and the
+   * reporters are the evidence for it rather than separate work items.
+   */
+  dismissUserReport: (userId: string) =>
+    apiFetch<{ dismissed: number }>(`/moderation/user-reports/${userId}/dismiss`, {
+      method: 'POST',
+      body: {},
+    }),
 
   /**
    * The audit-logged read.
@@ -771,9 +799,28 @@ export const accountApi = {
    * draws its controls from the same response that drew the card.
    */
   profile: (userId: string, clubId?: string) =>
-    apiFetch<{ profile: Profile; club?: ProfileClubActions }>(
-      clubId === undefined ? `/users/${userId}` : `/users/${userId}?clubId=${clubId}`,
-    ),
+    apiFetch<{
+      profile: Profile;
+      club?: ProfileClubActions;
+      /** Absent unless a conversation already exists. See `ProfileDmActions`. */
+      dm?: ProfileDmActions;
+      canReport: boolean;
+    }>(clubId === undefined ? `/users/${userId}` : `/users/${userId}?clubId=${clubId}`),
+
+  /**
+   * Report a person.
+   *
+   * Every refusal is a 404, including "you may not report them" - a distinguishable code would
+   * turn this into a way to test whether a uuid is a real member.
+   *
+   * `alreadyReported` is still a success: the outcome the reporter wanted is true, and the client
+   * says so rather than implying a second report was filed.
+   */
+  reportUser: (userId: string) =>
+    apiFetch<{ alreadyReported: boolean }>(`/users/${userId}/report`, {
+      method: 'POST',
+      body: {},
+    }),
 
   /** Self only. There is deliberately no route that takes somebody else's id. */
   saveProfile: (body: {

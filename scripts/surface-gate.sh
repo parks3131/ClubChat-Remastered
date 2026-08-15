@@ -193,6 +193,23 @@ d=json.load(open('/tmp/gate_body'))
 print("ok   dob withheld from another member" if 'dob' not in d['profile'] else "FAIL dob leaked to another member")
 PY
 check 404 "PATCH /users/:id does not exist" -X PATCH "${AO[@]}" "${JSON[@]}" -d '{"name":"Hijack"}' "$API/users/$MEMBER_ID"
+
+# Reporting a person, and the queue it does NOT reach.
+#
+# The refusals are the point here, exactly as they are everywhere else in this gate. A club Owner
+# holds every authority there is over both parties and still gets nothing from the person queue -
+# that is ADR-0034 stated as a request rather than as prose, and it is the one claim a reader of
+# the policy module cannot confirm by reading it.
+echo "== reporting a person =="
+check 201 "report a member you share a club with" -X POST "${AO[@]}" "$API/users/$MEMBER_ID/report"
+check 201 "reporting twice is a no-op, and still a success" -X POST "${AO[@]}" "$API/users/$MEMBER_ID/report"
+check 404 "report yourself" -X POST "${AM[@]}" "$API/users/$MEMBER_ID/report"
+check 404 "report somebody you share no club with" -X POST "${AX[@]}" "$API/users/$MEMBER_ID/report"
+check 404 "report a malformed id" -X POST "${AO[@]}" "$API/users/not-a-uuid/report"
+check 404 "the Owner cannot read the person queue" "${AO[@]}" "$API/moderation/user-reports"
+check 404 "an outsider cannot read the person queue" "${AX[@]}" "$API/moderation/user-reports"
+check 404 "the Owner cannot dismiss a person report" -X POST "${AO[@]}" "$API/moderation/user-reports/$MEMBER_ID/dismiss"
+
 check 409 "DELETE /me while owning a club"  -X DELETE "${AO[@]}" "$API/me"
 check 200 "DELETE /me as a plain member"    -X DELETE "${AM[@]}" "$API/me"
 check 401 "the deleted account's token is dead" "${AM[@]}" "$API/clubs"

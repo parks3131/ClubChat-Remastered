@@ -27,7 +27,7 @@ type AccessContext = {
   // Per thread: the peer, and whether the pair still shares a club. NOT a bare Set - see below.
   dmThreads: Map<DmId, { otherUserId: UserId; sharesClub: boolean }>
   blockedEither: Set<UserId>      // blocked BY me, or blocking me - symmetric on purpose
-  isPlatformModerator: boolean    // gates the DM report queue and nothing else
+  isPlatformModerator: boolean    // gates the two report queues, DM and person, and nothing else
   signinBlocked: boolean          // account revoked; re-asked on EVERY request. See below
 }
 
@@ -66,6 +66,13 @@ const canPinInChannel  = (ctx, ch) => ch.scope === 'dm'
                                     ? isDmParticipant(ctx, ch.scopeId) : isChannelAdmin(ctx, ch)
 const canReadReports   = (ctx, ch) => ch.scope === 'dm'
                                     ? ctx.isPlatformModerator : isChannelAdmin(ctx, ch)
+
+// Reporting a PERSON. No channel, so no scope switch and never a club's admins - ADR-0035.
+// Its own predicate rather than an alias of the dm branch above: the two agree today and are
+// answers to different questions.
+const canReportUser      = (ctx, subject) => subject.userId !== ctx.userId
+                                          && canViewProfile(ctx, subject)
+const canReadUserReports = (ctx) => ctx.isPlatformModerator
 
 // Acting on a DM report - the two powers ADR-0023 adds. Both are the platform's rather than a
 // participant's, and both are scoped to a message somebody actually reported.
@@ -332,6 +339,30 @@ Two rules that follow, and both matter for a product including minors:
 The blocking path is deliberately separate from the reporting path: **blocking is instant and
 self-service, reporting is reviewed.** A member protecting themselves must never have to wait on
 a moderator.
+
+### Where a report about a PERSON goes
+
+Added 2026-08-15 with Report on the [member card](../DESIGN/10-member-card.md). The table above
+routes on the reported message's channel scope, and a person report has no channel - so it needs
+its own answer rather than a fallback, for the second time.
+
+**Every person report goes to platform moderators, and to no club's admins**
+([ADR-0035](../decisions/0035-a-person-is-reported-to-platform-moderators.md)). There is no scope
+switch and no `club_id` column to grow one on. `canReadUserReports` is `is_platform_moderator` and
+nothing else, defined separately from `canReadReports` rather than aliased to its `dm` branch.
+
+Three things follow, and the third is the one that surprises:
+
+1. **The rows live in `user_reports`, keyed `(reporter_id, subject_id)`.** "Reporting twice is a
+   no-op" is the primary key here exactly as it is for a message, and reporting yourself is a
+   check constraint rather than a handler rule.
+2. **The queue is its own, beside the DM queue rather than merged into it**, because one leads to
+   an audited window onto a conversation and the other has nowhere to lead.
+3. **A person report opens no door.** It carries no message, so there is no context read, no
+   `moderation_reads` row, and nothing for a moderator to look at beyond the account and how many
+   people named it. That is deliberately less than a message report gives a reviewer, and it is
+   the reason the routing goes to the platform: an accusation with no evidence is a thing to weigh
+   against a pattern, and a club officer holds Remove and Ban already.
 
 ### Rate limiting
 

@@ -41,6 +41,7 @@ below therefore describes a destination, not a stored string.
 | **Announcement** | An admin posts an announcement in any chat | Everyone with access to that chat | That chat | Inbox is opened |
 | **Mentioned** | Someone @mentions a member | The mentioned member, **only if they can access that chat** | That chat | Inbox is opened |
 | **Message reported** | A member reports a message | **Whoever reviews reports in that channel**: club admins; race admins **on that roster**; platform moderators for a DM. Never the reporter. **Eboard has no reporting**, so it never produces one | The Reports tab for that channel, or the platform queue | Inbox is opened |
+| **Person reported** | A member reports a *person* from their card | **Platform moderators, always** - never a club's admins, not even of the club it was raised in. Never the reporter, never the reported member | The platform queue | Inbox is opened |
 | **Car-group Incharge left** | A group's Incharge leaves or is removed | Every Owner and Admin **on that race's roster** | That race's car groups | Inbox is opened |
 | **Chat caught up** | A member opens a chat that had unread messages | That member only | That chat | Recorded already-read, as history |
 | *(push only)* **Direct message** | Somebody sends a direct message | The other participant | That conversation | **Never a row.** Its inbox representation is the chat-unread row below |

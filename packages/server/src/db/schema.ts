@@ -1645,6 +1645,57 @@ export const messageReports = pgTable(
 );
 
 /**
+ * A reported person.
+ *
+ * > **The same shape as `message_reports`, one noun over, and deliberately with one reader
+ * > instead of two.** A message report routes by the reported message's channel scope; this one
+ * > has no channel to route by, and inventing a club to route to would mean a report filed from a
+ * > DM landing on a club admin's desk - which PRD/14 rule 7 refuses. So every person report goes
+ * > to platform moderators. See ADR-0035.
+ *
+ * The primary key IS the "reporting twice is a no-op" rule, exactly as it is one table up. Both
+ * columns are NOT NULL, so there is no NULL for Postgres to treat as distinct and let a second
+ * report through - the trap `message_reports` records having avoided for the same reason.
+ *
+ * **No `club_id`, not even a nullable one.** The routing has a single answer, and a column that
+ * could only ever be null is an invitation to grow a second one later.
+ *
+ * There is deliberately no counterpart to `moderation_reads` here. A moderator opening a message
+ * report gets an audited window onto the conversation; a person report has no message, so there
+ * is nothing to open and no read to log. What a moderator can act on is the account itself, which
+ * `moderation_actions` already records.
+ */
+export const userReports = pgTable(
+  'user_reports',
+  {
+    reporterId: uuid('reporter_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    subjectId: uuid('subject_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Set when a moderator has dealt with it. Kept, never deleted. */
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+    dismissedBy: uuid('dismissed_by').references(() => users.id, { onDelete: 'set null' }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.reporterId, t.subjectId] }),
+    // Reporting yourself is not a thing anybody means to do, and a row for it would sit in the
+    // queue forever waiting for a moderator to work out what it was.
+    check('user_reports_not_self', sql`reporter_id <> subject_id`),
+    // The queue reads open reports newest-first, so the index is partial on exactly those - the
+    // same shape as `message_reports_open`.
+    index('user_reports_open')
+      .on(t.createdAt.desc())
+      .where(sql`dismissed_at is null`),
+    // "Every open report about this person", which is how the queue groups. The primary key
+    // serves the reporter side and this serves the subject side.
+    index('user_reports_by_subject').on(t.subjectId),
+  ],
+);
+
+/**
  * Every time a platform moderator read into a private conversation.
  *
  * > **Moderation is not a licence to browse private conversations.** TECH/05 grants a

@@ -840,6 +840,39 @@ SELECT pg_temp.assert_accepted(
     VALUES ('e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1e1',
             '33333333-3333-4333-8333-333333333333')$$);
 
+INSERT INTO user_reports (reporter_id, subject_id) VALUES
+  ('22222222-2222-4222-8222-222222222222', '11111111-1111-4111-8111-111111111111');
+
+-- The same rule as message_reports one block up, for the other noun: reporting twice is a no-op,
+-- enforced by the key rather than by the handler.
+SELECT pg_temp.assert_rejected(
+  'user reports - the same reporter reporting the same person twice',
+  $$INSERT INTO user_reports (reporter_id, subject_id)
+    VALUES ('22222222-2222-4222-8222-222222222222',
+            '11111111-1111-4111-8111-111111111111')$$);
+
+SELECT pg_temp.assert_accepted(
+  'user reports - a second person reporting the same member is a separate report',
+  $$INSERT INTO user_reports (reporter_id, subject_id)
+    VALUES ('33333333-3333-4333-8333-333333333333',
+            '11111111-1111-4111-8111-111111111111')$$);
+
+-- Note this is the OPPOSITE of the member_blocks case above, and the pair is worth reading
+-- together: a mutual block is two legitimate rows, so no unordered-pair key may exist there.
+-- Two people reporting each other is likewise two rows, and the key is ordered for that reason.
+SELECT pg_temp.assert_accepted(
+  'user reports - the reverse report is a separate row',
+  $$INSERT INTO user_reports (reporter_id, subject_id)
+    VALUES ('11111111-1111-4111-8111-111111111111',
+            '22222222-2222-4222-8222-222222222222')$$);
+
+-- A self-report would sit in the queue forever waiting for a moderator to work out what it was.
+SELECT pg_temp.assert_rejected(
+  'user reports - reporting yourself',
+  $$INSERT INTO user_reports (reporter_id, subject_id)
+    VALUES ('11111111-1111-4111-8111-111111111111',
+            '11111111-1111-4111-8111-111111111111')$$);
+
 -- The audit log's window has to be a window. An inverted one would record a read that could
 -- not have happened, which makes the log useless as evidence.
 SELECT pg_temp.assert_rejected(

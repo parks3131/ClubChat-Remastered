@@ -85,6 +85,13 @@ multiple times and are restated as invariants:
    prevents new messages, so a message that exists was authorized when it was written and its
    recipient is entitled to know about it. The actor is excluded as everywhere else, which leaves
    exactly one recipient without needing a scope-specific branch.
+5. **Two audiences resolve to people who are members of nothing.** A report raised in a DM, and
+   `user.reported` - a report about a *person*, which has no channel at all
+   ([ADR-0035](../decisions/0035-a-person-is-reported-to-platform-moderators.md)). Neither can be
+   found by any membership query, which is why `platformModerators` exists beside the per-channel
+   audience rather than as a branch inside it. Note what rule 3 asks of this pair: the predicate
+   is written **once**, and `channelModerationAudienceById` reads the same column - so a future
+   change to who moderates cannot land in one and miss the other.
 
 Also: **an approval must not produce both "your request was approved" and "you were added".**
 The approval path suppresses the membership-added notification for that transaction.

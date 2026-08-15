@@ -189,6 +189,29 @@ second is a feature the whole product would have to bend around. Threads remain 
     [Direct messages](14-direct-messages.md) rule 7. Reporting is gated on being able to *read*
     the conversation rather than on being able to post in it, so a member who has just blocked
     somebody can still report what was said to them.
+10b. **A member can also report a *person* rather than a message, and that report goes to
+    ClubChat's own moderators every time.** Offered where somebody's card can be opened, which
+    today is the club roster.
+
+    **Who may file one is exactly who may see the card**, and that is deliberately not restated as
+    its own rule: sharing a club with them, or holding a conversation with them, which is the
+    second case [Direct messages](14-direct-messages.md) rule 3 keeps alive after a last shared
+    club goes. Anything narrower would put a Report control on a surface where it sometimes
+    refuses, which teaches people the button is broken rather than that they are ineligible.
+
+    **It never reaches a club's admins**, even the admins of the club the card was opened from,
+    and even though those same admins can Remove and Ban from the same card. A person report has no
+    message behind it, so the routing above has nothing to route on and a club officer would be
+    weighing an accusation about their own member with no evidence attached. See
+    [ADR-0035](../decisions/0035-a-person-is-reported-to-platform-moderators.md), which records
+    what that costs.
+
+    Everything rule 10 says still holds: reporting twice is a no-op, reporting yourself is refused,
+    a block in either direction does not close the path, and **the reported member is never told**.
+    The notification names the reporter and nothing else, for the same lock-screen reason.
+
+    What a moderator sees is the account, and **how many people have reported it**. There is
+    nothing to read, because there is nothing attached - which is why the count is the report.
 10a. **A small set of language is refused when the member presses send, and a second set posts
     and is queued for review.** Both sets target hate speech and explicit self-harm direction, in
     the sense App Review guideline 1.1.1 defines: content aimed at somebody for their religion,

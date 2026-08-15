@@ -199,9 +199,35 @@ export async function channelModerationAudienceById(
                               AND cm.club_id = ch.club_id
                               AND cm.role = ANY(${adminTier}::text[])
     UNION
-    -- DM: nobody in the conversation reviews it. Platform moderators do.
+    -- DM: nobody in the conversation reviews it. Platform moderators do. Inlined rather than
+    -- calling platformModerators below, because it is one branch of a single UNION that must
+    -- stay one round trip - the extraction there exists for the callers that want the list on
+    -- its own, and both read the same column on the same table. (No backtick in this comment:
+    -- it would end the template string, which is the trap this file's other comment records.)
     SELECT u.id FROM users u, ch
      WHERE ch.scope = 'dm' AND u.is_platform_moderator
+  `);
+  return rows.rows.map((r) => r.user_id);
+}
+
+/**
+ * Every platform moderator.
+ *
+ * > **The list form of `ctx.isPlatformModerator`, and the audience for anything that has no
+ * > channel to route by.** `channelModerationAudienceById` answers "who reviews a report *here*";
+ * > this answers "who reviews a report at all", which is what a report about a person needs -
+ * > there is no channel, so the scope switch has nothing to switch on. See ADR-0035.
+ *
+ * Extracted the second time this predicate was needed rather than the third, which is the rule
+ * failure mode 9 asks for: the copies of "which channels can this user reach" stayed individually
+ * correct while a whole scope went missing from all four of them, and nothing could fail.
+ *
+ * `is_platform_moderator` is reconciled from configuration at boot and never written from inside
+ * the app (ADR-0022), so this list is small and changes only on a deploy.
+ */
+export async function platformModerators(db: Db): Promise<string[]> {
+  const rows = await db.execute<{ user_id: string }>(sql`
+    SELECT id::text AS user_id FROM users WHERE is_platform_moderator
   `);
   return rows.rows.map((r) => r.user_id);
 }

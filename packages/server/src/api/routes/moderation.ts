@@ -1,20 +1,28 @@
 /**
- * Reporting, the per-space Reports tab, and the platform moderation queue.
+ * Reporting, the per-space Reports tab, and the two platform moderation queues.
  *
  * Grouped by where a report *goes* rather than by which path it starts from, because the
  * routing rule is the whole point: a club report reaches that club's admins, and a DM report
  * reaches a platform moderator and no club admin ever (PRD/14 rule 7).
+ *
+ * **`POST /users/:uid/report` lives here despite not carrying the prefix**, and that is the file
+ * grouping earning its keep: a report about a person routes to platform moderators and to nobody
+ * else (ADR-0035), so it belongs beside the queue that receives it rather than beside the profile
+ * read that shares its path.
  */
 
 import type { FastifyInstance } from 'fastify';
 import {
   dismissReport,
+  dismissUserReport,
   listChannelReports,
   listDmReportQueue,
   listModerationReads,
+  listUserReportQueue,
   readReportedContext,
   removeReportedMessage,
   reportMessage,
+  reportUser,
   setAccountSuspended,
 } from '../../domain/moderation.ts';
 import { getChannelRef } from '../../domain/reads.ts';
@@ -37,6 +45,59 @@ export function registerModerationRoutes(app: FastifyInstance, deps: AppDeps): v
         return reply.code(result.code === 'forbidden' ? 403 : 404).send({ error: result.code });
       }
       return reply.code(201).send(result);
+    },
+  );
+
+  /**
+   * Report a **person**, from their member card.
+   *
+   * `POST /users/:uid/report` rather than anything under `/moderation`, because the caller is an
+   * ordinary member and the path a member uses should name what they are acting on. The
+   * `/moderation` prefix is for the reviewing half, which this is not.
+   *
+   * Every refusal is `not_found`, including "you may not report this person": a distinguishable
+   * code would turn the route into a way to test whether a uuid is a real member, which is the
+   * same reasoning `GET /users/:id` records.
+   */
+  app.post<{ Params: { uid: string } }>('/users/:uid/report', async (request, reply) => {
+    if (!isUuid(request.params.uid)) return reply.code(404).send({ error: 'not_found' });
+
+    const result = await reportUser(deps.db, request.access!, request.params.uid);
+    if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+    return reply.code(201).send(result);
+  });
+
+  /**
+   * The person report queue. Platform moderators only.
+   *
+   * Separate from `/moderation/dm-reports` rather than merged into it, because the two carry
+   * different things and are worked differently: that one leads to an audited read of a
+   * conversation, and this one has no conversation to read. One list mixing them would have to
+   * explain per row which of those it is.
+   */
+  app.get('/moderation/user-reports', async (request, reply) => {
+    const result = await listUserReportQueue(deps.db, request.access!, {
+      includeDismissed: (request.query as { all?: string }).all === 'true',
+    });
+    if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+    return result;
+  });
+
+  /**
+   * Close every open report about one person.
+   *
+   * Addressed by the SUBJECT, not by a report id, which is the same shape as dismissing a message
+   * report by its message: the decision is about the account, and the reporters are evidence for
+   * it rather than separate work items.
+   */
+  app.post<{ Params: { uid: string } }>(
+    '/moderation/user-reports/:uid/dismiss',
+    async (request, reply) => {
+      if (!isUuid(request.params.uid)) return reply.code(404).send({ error: 'not_found' });
+
+      const result = await dismissUserReport(deps.db, request.access!, request.params.uid);
+      if (!result.ok) return reply.code(404).send({ error: 'not_found' });
+      return result;
     },
   );
 

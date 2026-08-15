@@ -43,15 +43,17 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       Nothing else in Weekly Meetups is outstanding: Nudge shipped and was verified on a device on
       2026-08-14, notification included.
 
-- [ ] **The member card's other three actions, and its other two entry points.** The card
-      ([`DESIGN/10`](SPEC/DESIGN/10-member-card.md)) ships with Message, Remove and Ban. Still to
-      come, all agreed on 2026-08-14 and deliberately not built in that pass: **Mute** and **Clear
-      chat**, which act on a conversation and so appear only once one exists - note `channel_mutes`
-      and `channel_clears` both exist already, so this is likely wiring rather than schema; and
-      **Report a person**, which has no server surface at all today, since reports are per message
-      and the moderation queue is keyed by `messageId`. The second entry point is a DM: tapping
-      through to the person should raise the same card, which is also the moment to decide whether
-      it absorbs `dm/[channelId]/profile` or leaves it as the thread's own screen.
+- [ ] **The member card's three new actions want one pass on iOS.** Mute, Clear chat and Report
+      shipped 2026-08-15 and are verified on web and against the database, but **not on the
+      Simulator** - and this is the surface where that gap has bitten twice
+      ([`AGENTS.md`](AGENTS.md) failure modes 29 and 30). The two new confirmations sit in the same
+      `overlay` slot with the same `hosted` prop as the ban confirmation that *was* verified there,
+      so the risk is low and it is not zero. Do it in the same pass as the item below.
+
+      Two decisions came out of building it and neither is outstanding: **the DM entry point is
+      declined** - `dm/[channelId]/profile` is about the conversation and keeps its gallery, see
+      `DESIGN/10` - and **person reports go to platform moderators only**
+      ([ADR-0035](SPEC/decisions/0035-a-person-is-reported-to-platform-moderators.md)).
 - [ ] **The repaired card has not been back on the physical phone.** The first build reached it and
       was broken there ([`AGENTS.md`](AGENTS.md) failure modes 29 and 30); the fixes are proved on
       the iOS Simulator, which is the same UIKit and was enough to catch both. One pass on the
@@ -67,11 +69,15 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
 
 ## Known broken, or quietly wrong
 
-- [ ] **Watch the first few CI runs for testcontainer flake.** `test/harness.ts` records a
-      10-second ceiling on binding a container's port, and the suite starts one Postgres per file
-      on a runner that is smaller and busier than a laptop. If it flakes, the standing fix is
-      already written down in [`PRD/17`](SPEC/PRD/17-roadmap-and-open-questions.md): one container
-      for the suite instead of one per file. Do that rather than raising the timeout.
+- [ ] **The testcontainer flake is real, and it has now been seen on a laptop.** `test/harness.ts`
+      records a 10-second ceiling on binding a container's port, and the suite starts one Postgres
+      per file. On 2026-08-15 one `npm test` run reported **1 file failed, 20 tests skipped** with
+      three clean runs either side of it - the shape of a container that never bound rather than an
+      assertion that failed. The machine was busy: three dev stacks and two agents. That makes it
+      more likely on CI, not less. The standing fix is already written down in
+      [`PRD/17`](SPEC/PRD/17-roadmap-and-open-questions.md): **one container for the suite instead
+      of one per file. Do that rather than raising the timeout** - and note this is now a known
+      flake rather than a predicted one, so `AGENTS.md` standing instruction 6 applies to it.
 - [ ] **A club must still declare a `sport`, and nothing reads it.** Required on create, free
       text, validated by nothing, displayed on the club profile - and it now asks a chess club
       what sport it plays.

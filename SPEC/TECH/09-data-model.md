@@ -172,6 +172,22 @@ message_reports       message_id, reporter_id, created_at, dismissed_at, dismiss
                       -- the row differs. See [Authorization](05-authorization.md).
                       -- Arrived in Phase 3.5, with the scope that needed the second
                       -- reader; it was specified here from Phase 0 and unbuilt until then.
+user_reports          reporter_id, subject_id, created_at, dismissed_at, dismissed_by
+                      PK (reporter_id, subject_id)                  ← reporting twice is a no-op
+                      CHECK (reporter_id <> subject_id)
+                      INDEX (created_at DESC) WHERE dismissed_at IS NULL
+                      INDEX (subject_id)                            ← the queue groups by subject
+                      -- The same shape as message_reports one noun over, with ONE reader
+                      -- instead of two: a person report has no channel to route by, so
+                      -- every one goes to platform moderators. Hence NO club_id, not even
+                      -- a nullable one - a column that could only ever be null is an
+                      -- invitation to route on it later. ADR-0035.
+                      -- Note the contrast with member_blocks: a mutual block is two
+                      -- legitimate rows, and so is a mutual report, which is why both
+                      -- keys are ORDERED rather than over the unordered pair.
+                      -- No moderation_reads counterpart. There is no message, so there is
+                      -- no window to open and no read to log.
+                      -- Built 2026-08-15, with Report on the member card.
 read_cursors          user_id, channel_id, last_read_seq, updated_at  PK (user_id, channel_id)
 ```
 

@@ -17,6 +17,7 @@
 
 import { eq, sql, type SQL } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
+import { muteInForce } from '../db/sql-helpers.ts';
 import {
   channelClears,
   channelMutes,
@@ -65,8 +66,16 @@ export type DmResult<T> = ({ ok: true } & T) | DmRefusal;
  *
  * Returns null for a user who does not exist **or** has been anonymised. A deleted account's
  * history stays readable, but nobody may start a new conversation with it.
+ *
+ * **Exported despite living in the DM module**, because `DmCandidate` is the argument shape of
+ * every predicate that asks "can this person reach that one" - `canOpenDm`, `canBlock`,
+ * `canViewProfile` and now `canReportUser` - and only the first of those is about a DM. The
+ * alternative was a third hand-written copy of this query, which is failure mode 9 with a join
+ * that no type error and no failing test could ever find. There is a second copy in
+ * `readProfile`, deliberately, and that one says why: it needs the whole user row anyway, so
+ * calling this would buy one definition at the cost of a second round trip on the hottest read.
  */
-async function loadCandidate(db: Db, userId: string): Promise<DmCandidate | null> {
+export async function loadCandidate(db: Db, userId: string): Promise<DmCandidate | null> {
   const rows = await db.execute<{ id: string; club_ids: string[] | null }>(sql`
     SELECT u.id::text AS id,
            ARRAY(
@@ -291,7 +300,7 @@ export async function listDmThreads(db: Db, ctx: AccessContext): Promise<DmThrea
       LEFT JOIN channel_mutes mute
              ON mute.channel_id = ch.id
             AND mute.user_id = ${ctx.userId}
-            AND (mute.muted_until IS NULL OR mute.muted_until > now())
+            AND ${muteInForce('mute')}
       LEFT JOIN LATERAL (
         SELECT m.body, m.seq, m.created_at
           FROM messages m
@@ -490,7 +499,7 @@ export async function readChannelMeta(
       LEFT JOIN channel_mutes mute
              ON mute.channel_id = c.id
             AND mute.user_id = ${ctx.userId}
-            AND (mute.muted_until IS NULL OR mute.muted_until > now())
+            AND ${muteInForce('mute')}
       LEFT JOIN channel_pins pin
              ON pin.channel_id = c.id AND pin.user_id = ${ctx.userId}
      WHERE c.id = ${channelId}

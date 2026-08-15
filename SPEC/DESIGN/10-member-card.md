@@ -9,10 +9,17 @@ tap from being back.
 
 ## Where it appears
 
-The club roster, on a row tap. Deliberately **not** yet on the race or Eboard rosters, which have
-no club authority to offer and would show the plain screen's content in a panel for no gain; and
-deliberately **not** yet in a direct message, where the card would want conversation actions
-(mute, clear) that this pass does not carry.
+The club roster, on a row tap. Deliberately **not** on the race or Eboard rosters, which have no
+club authority to offer and would show the plain screen's content in a panel for no gain.
+
+**And deliberately not in a direct message**, which was reconsidered on 2026-08-15 and decided the
+other way round from how it looked. The card now carries the conversation actions it was missing,
+so the obvious move was to raise it from a DM as well and let it absorb
+`dm/[channelId]/profile`. That screen turns out to be about a different noun: its own header says
+it carries *the conversation* rather than the person, and the clearest evidence is its **gallery** -
+this conversation's photographs, which mean nothing on a panel a roster also opens. Two surfaces,
+each about one thing, rather than one surface that changes what it is depending on where it came
+from.
 
 `/users/:id` is not replaced. It stays the addressable record - what a notification, a pasted link
 and a tap on a chat bubble's avatar all open - and it is what a banned row would have opened if a
@@ -29,6 +36,7 @@ was already looking at, with a navigation charged for it.
 | Part | What it is |
 |---|---|
 | Panel | The rounded card that travels up from the bottom edge, hugging its content |
+| Menu | Mute and Clear chat when a conversation exists, then Report, then the club authority the server grants: Remove, Ban, Lift ban |
 | Scrim | The dimming over the list behind, which fades **in place** and never travels |
 | Grabber | The short bar at the panel's top, saying where this came from |
 | Identity | Avatar, name, and the standing this person holds in the club it was opened from |
@@ -36,7 +44,7 @@ was already looking at, with a navigation charged for it.
 | Menu button | The "..." in the panel's own top corner, which opens the context menu |
 | Details | Description, City, School - each absent when unset, never "Not set" |
 | Shared clubs | What the two of you have in common, as a sentence and a stack of faces |
-| Full-profile link | The way to everything the card does not carry |
+| Notice | What a write that stays on the card reports back, where a refusal already goes |
 
 ## Rules that must survive
 
@@ -55,6 +63,20 @@ was already looking at, with a navigation charged for it.
    client re-deriving either is a second definition of a rule that has exactly one.
 5. **An empty menu means no menu button.** A "..." that opens onto nothing reads as broken; an
    absent one reads as "you may not do anything here".
+
+5a. **A control that acts on a conversation appears only once one exists.** Mute and Clear chat
+   are drawn from a `dm` block on the profile read, which the server sends only when the pair
+   already has a thread - so a roster row you have never messaged offers neither. **The card must
+   never resolve the channel itself**: opening a DM is idempotent-create, so asking "which channel
+   is this" in order to mute it would bring a conversation into being as a side effect. Rule 5 then
+   does the rest, and a plain member looking at a plain member gets no "..." at all.
+
+5b. **Report is the server's answer too, and it is the one action that needs no conversation and
+   no club standing.** It goes to ClubChat's moderators every time
+   ([ADR-0035](../decisions/0035-a-person-is-reported-to-platform-moderators.md)), which is what
+   lets the confirmation say who will see it in one sentence that stays true wherever the card was
+   opened. The dialog says that, and says the reported person is never told, because those are the
+   two things somebody hesitating actually wants to know.
 6. **Everything raised from the card belongs to the card's own modal, never to a new one.** The
    menu, the ban confirmation and the shared-clubs list are `hosted` inside `RisingSheet`'s
    `overlay`. **iOS presents one modal per view controller and silently refuses the second**, so
@@ -116,6 +138,9 @@ The role tag under the name is colour-distinguished but never colour-only: it sa
 | Alternative | What actually happened |
 |---|---|
 | Push `/users/:id` from the roster, as before | It is a navigation each way for a question answered in two seconds, and it loses the list's scroll position |
+| Absorb `dm/[channelId]/profile` into this card | Considered on 2026-08-15 once the card carried Mute and Clear chat, and declined - see Where it appears. That screen is about the conversation, and its gallery is the proof |
+| Offer Mute and Clear chat always, opening a conversation if there is not one | Muting somebody you have never messaged would create the conversation in order to mute it, so the list of people you have talked to would grow every time an admin worked down a roster |
+| Show Mute and Clear chat greyed out when there is no conversation | Two permanently dead rows on the card of every member an admin has not messaged, which is most of them. Rule 5 already says an empty menu is no menu; a menu of disabled things is worse than either |
 | Give the card its own menu component | A second popover treatment in one product. It uses the same context menu the roster's long press already opens, now with a `hosted` mode so the markup stays one copy |
 | Leave the shared-clubs block flat, with no list behind it | Shipped that way and reported dead from the device within the hour. The block has looked pressable everywhere else in the product since it existed; consistency beat the "no panel inside a panel" argument |
 | Raise the menu and the confirmation as their own modals | The obvious shape, and it works on web. On iOS neither ever appeared - see rule 6 |
@@ -125,7 +150,7 @@ The role tag under the name is colour-distinguished but never colour-only: it sa
 
 | Platform | When | By what |
 |---|---|---|
-| iOS, Simulator | 2026-08-14 | Open, dismiss, the "..." menu, the shared-clubs list, the ban confirmation and the ban itself - proved against the database - plus the exit recorded and read frame by frame |
+| iOS, Simulator | 2026-08-14 | Open, dismiss, the "..." menu, the shared-clubs list, the ban confirmation and the ban itself - proved against the database - plus the exit recorded and read frame by frame. **The three 2026-08-15 actions have not been run here.** They add two `ConfirmDialog`s into the same `overlay` slot, with the same `hosted` prop, as the ban confirmation that was verified - so rule 6 is satisfied by construction rather than by observation, which is a weaker claim and is why it is written down |
 | iOS, physical device | 2026-08-14, **the broken build only** | The founder's report is what found failure modes 29 and 30. The repaired build has not been back on the phone |
 | Android | **never** | - |
-| Web | 2026-08-14 | Open, dismiss, role tag, own-card, banned row, and both writes proved against the database. It could not see either native defect |
+| Web | 2026-08-14, and again 2026-08-15 | 2026-08-14: open, dismiss, role tag, own-card, banned row, and both writes proved against the database. 2026-08-15: the menu with and without a conversation (three items, then five), Mute writing through and the menu redrawing as Unmute on the server's answer, and Report through its confirmation to the row in `user_reports` - with the club Owner refused the queue it lands in. Console clean. It could not see either native defect |

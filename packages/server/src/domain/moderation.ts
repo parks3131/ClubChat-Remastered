@@ -1,17 +1,19 @@
 /**
- * Reporting a message, and the two places a report can go.
+ * Reporting, and the three places a report can go.
  *
- * > **Every other scope answers "who sees a report?" with "that space's admins". A DM has
- * > none, so the question needs its own answer rather than a fallback.**
+ * > **Every group scope answers "who sees a report?" with "that space's admins". A DM has none,
+ * > and a report about a *person* has no channel at all, so neither can fall back to that.**
  * >
- * > | Channel scope | Report visible to |
+ * > | What was reported | Visible to |
  * > |---|---|
- * > | club / race / eboard | admins of that space, in the Highlights Reports tab |
- * > | **dm** | **platform moderators, in a separate queue** |
+ * > | a message in club / race / eboard chat | admins of that space, in the Highlights Reports tab |
+ * > | a message in a **dm** | **platform moderators, in a separate queue** |
+ * > | a **person** | **platform moderators, always** - ADR-0035 |
  *
- * Mechanically it is the same `message_reports` row either way; only the reader differs, and
- * the reader is selected by the reported message's channel scope. `canReadReports` is the one
- * place that selection happens.
+ * For the first two it is mechanically the same `message_reports` row and only the reader
+ * differs, selected by the reported message's channel scope; `canReadReports` is the one place
+ * that selection happens. The third is a `user_reports` row with no scope to select on, which is
+ * why it has one destination rather than a switch - see `reportUser` and `canReadUserReports`.
  *
  * The blocking path is deliberately separate from this one: **blocking is instant and
  * self-service, reporting is reviewed.** A member protecting themselves must never have to
@@ -27,18 +29,23 @@ import {
   moderationActions,
   moderationReads,
   outbox,
+  userReports,
 } from '../db/schema.ts';
 import type { AccessContext } from '../policy/context.ts';
 import {
   canDismissReport,
+  canDismissUserReport,
   canReadReports,
+  canReadUserReports,
   canReinstateAccount,
   canRemoveReportedMessage,
   canReportMessage,
+  canReportUser,
   canSuspendAccount,
   type ChannelRef,
 } from '../policy/predicates.ts';
 import { accessibleChannelPredicate } from './channel-access.ts';
+import { loadCandidate } from './dm.ts';
 import { fileReport } from './file-report.ts';
 import { getChannelRef } from './reads.ts';
 import { reactionsForMessages } from './reactions.ts';
@@ -130,6 +137,75 @@ export async function reportMessage(
     // client can say "already reported" rather than implying a second one was filed.
     alreadyReported: !created,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Filing a report about a PERSON
+// ---------------------------------------------------------------------------
+
+/**
+ * Report a member.
+ *
+ * > **The other noun, and the reason it is not the same function with the message left out.** A
+ * > message report points at evidence and routes by that evidence's channel scope. This points at
+ * > an account, has no channel, and therefore has one destination: platform moderators, always.
+ * > See ADR-0035 for the club-admin routing that was rejected and why.
+ *
+ * **Idempotent by the primary key**, exactly as `reportMessage` is, so the same person reported
+ * twice by the same reporter is one entry in the queue rather than two. A second reporter is a
+ * separate row and deliberately so - "three people reported this account" is the signal a queue
+ * with no message body has instead of a transcript.
+ *
+ * **Emits `user.reported` in the same transaction as the row**, for ADR-0006's reason: a report
+ * can never sit in the table with nobody told, and a notification can never point at a report that
+ * was rolled back. Only a report that was actually created emits one, so a double tap cannot buzz
+ * a moderator twice.
+ *
+ * Nobody tells the reported member, and that is a rule rather than an omission - PRD/05 rule 10
+ * and PRD/14 rule 7 both keep reporting invisible to its subject, and the notification's params
+ * are shaped so it cannot carry them.
+ */
+export async function reportUser(
+  db: Db,
+  ctx: AccessContext,
+  subjectUserId: string,
+): Promise<ModerationResult<{ alreadyReported: boolean }>> {
+  const subject = await loadCandidate(db, subjectUserId);
+  /*
+   * `not_found` for an ineligible subject as well as an absent one, matching every other refusal
+   * in this API. A caller with no standing must not learn that an account exists, and here that
+   * matters twice over: a distinguishable refusal would turn this endpoint into a way to test
+   * whether a given uuid is a real member.
+   */
+  if (!subject || !canReportUser(ctx, subject)) return { ok: false, code: 'not_found' };
+
+  const created = await db.transaction(async (tx) => {
+    const rows = await tx
+      .insert(userReports)
+      .values({ reporterId: ctx.userId, subjectId: subjectUserId })
+      // Named, never bare. An untargeted clause claims every current and future unique constraint
+      // on the table means "ignore this write" - the defect that silently swallowed the
+      // one-car-group-per-race invariant, and the reason `pinChannel` says so too.
+      .onConflictDoNothing({ target: [userReports.reporterId, userReports.subjectId] })
+      .returning({ subjectId: userReports.subjectId });
+
+    if (rows.length === 0) return false;
+
+    await tx.insert(outbox).values({
+      // Partitioned by the SUBJECT, so several reports about one person are ordered against each
+      // other. There is no channel to partition by, which is the whole difference from
+      // `message.reported`.
+      partitionKey: subjectUserId,
+      eventType: 'user.reported',
+      payload: { subjectId: subjectUserId, reporterId: ctx.userId },
+    });
+
+    return true;
+  });
+
+  // Reported already. Still a success - the outcome the reporter wanted is true - but the client
+  // can say so rather than implying a second report was filed.
+  return { ok: true, alreadyReported: !created };
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +419,95 @@ export async function listDmReportQueue(
       senderName: row.sender_name,
       senderSuspended: row.sender_suspended === true,
       removed: row.removed === true,
+      reporters: row.reporters.map((r) => ({
+        userId: r.userId,
+        name: r.name,
+        createdAt: new Date(r.createdAt).toISOString(),
+      })),
+      dismissedAt: row.dismissed_at === null ? null : new Date(row.dismissed_at).toISOString(),
+      createdAt: new Date(row.created_at).toISOString(),
+    })),
+  };
+}
+
+/**
+ * The person report queue.
+ *
+ * Grouped by the reported member, one row each, exactly as the DM queue groups by message: the
+ * moderator's decision is about the account, and several people reporting the same person is the
+ * strongest single fact this queue carries.
+ *
+ * > **Metadata only, and here that is all there is.** The DM queue withholds message bodies
+ * > because reading them is a separate, audited act; this one withholds nothing, because a person
+ * > report has no content to withhold. Naming the subject is the point of the queue - it is the
+ * > access-checked place where an accusation may be read, which is exactly why the notification
+ * > that brought the moderator here does not name them.
+ *
+ * `subjectSuspended` is answered here rather than worked out by the screen, for the reason every
+ * capability flag on a read is: it decides whether to offer Suspend or Reinstate, and a screen
+ * that guessed would be a second definition of a rule that has one.
+ *
+ * Gated on `is_platform_moderator` and on nothing else. There is no club branch to add, ever -
+ * that is ADR-0035's decision rather than this function's shortcut.
+ */
+export async function listUserReportQueue(
+  db: Db,
+  ctx: AccessContext,
+  opts: { includeDismissed?: boolean | undefined; limit?: number | undefined } = {},
+): Promise<
+  ModerationResult<{
+    reports: Array<{
+      subjectId: string;
+      subjectName: string;
+      subjectImage: string | null;
+      subjectSuspended: boolean;
+      reporters: Array<{ userId: string; name: string; createdAt: string }>;
+      dismissedAt: string | null;
+      createdAt: string;
+    }>;
+  }>
+> {
+  if (!canReadUserReports(ctx)) return { ok: false, code: 'not_found' };
+
+  const limit = Math.min(opts.limit ?? 50, 200);
+
+  const rows = await db.execute<{
+    subject_id: string;
+    subject_name: string;
+    subject_image: string | null;
+    subject_suspended: boolean;
+    dismissed_at: string | null;
+    created_at: string;
+    reporters: Array<{ userId: string; name: string; createdAt: string }>;
+  }>(sql`
+    SELECT subject.id::text AS subject_id,
+           subject.full_name AS subject_name,
+           subject.image AS subject_image,
+           (subject.signin_blocked_at IS NOT NULL) AS subject_suspended,
+           MAX(r.dismissed_at)::text AS dismissed_at,
+           MIN(r.created_at)::text AS created_at,
+           json_agg(
+             json_build_object('userId', reporter.id::text,
+                               'name', reporter.full_name,
+                               'createdAt', r.created_at)
+             ORDER BY r.created_at
+           ) AS reporters
+      FROM user_reports r
+      JOIN users subject ON subject.id = r.subject_id
+      JOIN users reporter ON reporter.id = r.reporter_id
+     ${opts.includeDismissed ? sql`` : sql`WHERE r.dismissed_at IS NULL`}
+     GROUP BY subject.id, subject.full_name, subject.image, subject.signin_blocked_at
+     ORDER BY MIN(r.created_at) DESC
+     LIMIT ${limit}
+  `);
+
+  return {
+    ok: true,
+    reports: rows.rows.map((row) => ({
+      subjectId: row.subject_id,
+      subjectName: row.subject_name,
+      subjectImage: row.subject_image,
+      subjectSuspended: row.subject_suspended === true,
       reporters: row.reporters.map((r) => ({
         userId: r.userId,
         name: r.name,
@@ -833,6 +998,34 @@ export async function dismissReport(
     .set({ dismissedAt: new Date(), dismissedBy: ctx.userId })
     .where(and(eq(messageReports.messageId, messageId), sql`dismissed_at IS NULL`))
     .returning({ reporterId: messageReports.reporterId });
+
+  return { ok: true, dismissed: updated.length };
+}
+
+/**
+ * Dismiss every open report about a person.
+ *
+ * All of them, not one reporter's, on the same reasoning as the message version above: the
+ * moderator's decision is about the account and not about who complained. That matters more here,
+ * because the count of reporters is the only evidence this queue carries - clearing them one at a
+ * time would leave a row saying "two people reported this" that has already been judged.
+ *
+ * **Dismissal is not an action against the account.** Suspending goes through
+ * `setAccountSuspended`, which writes a `moderation_actions` row; this only closes the work item,
+ * and the reports are kept rather than deleted so a pattern of them stays visible.
+ */
+export async function dismissUserReport(
+  db: Db,
+  ctx: AccessContext,
+  subjectUserId: string,
+): Promise<ModerationResult<{ dismissed: number }>> {
+  if (!canDismissUserReport(ctx)) return { ok: false, code: 'not_found' };
+
+  const updated = await db
+    .update(userReports)
+    .set({ dismissedAt: new Date(), dismissedBy: ctx.userId })
+    .where(and(eq(userReports.subjectId, subjectUserId), sql`dismissed_at IS NULL`))
+    .returning({ reporterId: userReports.reporterId });
 
   return { ok: true, dismissed: updated.length };
 }

@@ -13,6 +13,77 @@ Newest first.
 
 ---
 
+## 2026-08-15 - The card learns three verbs, and a report finds a second noun
+
+The member card shipped on 2026-08-14 carrying Message, Remove and Ban, with Mute, Clear chat and
+Report listed as the next pass. Two of those turned out to be wiring and the third was not a
+feature at all until a decision was made.
+
+**Mute and Clear chat were already built, twice over.** `muteChannel`, `unmuteChannel` and
+`clearChannel` have worked on every scope since 2026-08-06, with routes, predicates and a client
+API; the chat header and the inbox row swipe both call them. What was missing was the one fact the
+card could not have: **does a conversation with this person exist?** `openDm` is idempotent-create,
+so a card that resolved the channel by asking to open one would bring a conversation into being as
+a side effect of muting it - and an admin working down a roster would grow a DM thread per person
+they checked. So the profile read grew a `dm` block that is present only when a thread is already
+there, and `DESIGN/10` rule 5 does the rest: no thread, no rows, no "..." at all for a plain member
+looking at a plain member.
+
+**Report needed a decision before it needed code.** Every report in the product is keyed by
+`message_id` - the primary key, the per-space tab, the DM queue, the audited context read, the
+removal, the dismissal and `moderation_actions` all resolve through one - and the routing rule
+selects a reader by *the reported message's channel scope*. A person report has no channel, so the
+rule has nothing to route on.
+
+The obvious answer was to mirror it: a card opened from a roster goes to that club's admins, one
+opened from a DM goes to platform moderators. It fails on what the reporter is *told*. The
+confirmation dialog has to say who will see this, and under that rule the answer changes depending
+on which screen they tapped from - so somebody reporting the same person twice, once from each
+place, sends it to two different sets of people and is never told that happened. **Person reports
+therefore go to platform moderators, always** ([ADR-0035](SPEC/decisions/0035-a-person-is-reported-to-platform-moderators.md)),
+which is what lets the dialog say it in one sentence. The cost is real and is written into the ADR:
+a club admin cannot act on a report about their own member, and the answer is that Remove and Ban
+are already on the same card.
+
+`user_reports` is `message_reports` one noun over - PK `(reporter_id, subject_id)` carrying
+"reporting twice is a no-op", both columns NOT NULL so no NULL is distinct, a check refusing a
+self-report, and deliberately **no `club_id` even as a nullable column**, because one that could
+only ever be null is an invitation to route on it later. There is no `moderation_reads`
+counterpart: no message means no window to open and no read to log, which is exactly why the queue
+carries the *count of reporters* instead - one person is an opinion, four is a pattern.
+
+**Two things got extracted on the way, both because the next line of code would have been the
+seventh copy.** `muted_until IS NULL OR muted_until > now()` had been hand-written in the DM thread
+list, the channel meta read, the push audience, the race list and the chat list; the member card's
+mute lookup would have been the sixth site and the seventh copy. It is `muteInForce` now. And
+`platformModerators` came out of `channelModerationAudienceById`'s `dm` branch, because the person
+audience needed the same set with no channel to ask it through. Both are failure mode 9's rule
+applied before the fact rather than after it - every existing copy was individually correct, which
+is the whole problem with that class.
+
+`loadCandidate` was exported from the DM module for the same reason. `DmCandidate` is the argument
+of every predicate that asks "can this person reach that one" and only one of those is about a DM;
+the alternative was a third hand-written copy of the club-ids join.
+
+**Verification, and what it did not cover.** 1,331 tests (27 new, all through the real HTTP stack),
+four new constraint proofs, and the surface gate at 97 checks - eight of them refusals, including
+the club Owner being handed a 404 by the person queue, which is ADR-0035 stated as a request rather
+than as prose. On web: the menu with and without a conversation, Mute writing through and the menu
+redrawing as Unmute from the server's answer, and Report through its confirmation to the row.
+**Not run on the Simulator**, and `DESIGN/10` says so - the two new confirmations are `hosted` in
+the card's own `overlay` exactly as the ban confirmation is, so rule 6 holds by construction, which
+is a weaker claim than having watched it.
+
+Three smaller things, each of which cost a few minutes and is the reason they are here.
+`fileReport` carried a bare `onConflictDoNothing()`; the table has one unique constraint today,
+which is precisely the state the car-group defect was in before somebody added the second. A
+backtick inside a SQL template comment ended the string - in the one file whose *other* comment
+warns about exactly that. And starting a server with `PORT=3100` instead of `API_PORT` produced
+failure mode 15 on the first try: it read 3000 from `.env`, lost to a server another agent already
+owned, and would have run the whole gate against somebody else's code if the log had not been read.
+
+---
+
 ## 2026-08-15 - The crop frame can be grabbed, and shows what it will send
 
 The crop shipped that morning cut exactly the right pixels and was reported back within the hour:
