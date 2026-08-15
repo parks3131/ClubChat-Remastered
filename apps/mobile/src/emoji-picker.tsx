@@ -125,6 +125,16 @@ function toRows(group: string, items: readonly CatalogEmoji[]): Row[] {
  */
 const VIEWABILITY = { itemVisiblePercentThreshold: 1 } as const;
 
+/**
+ * How tall a heading is, in points, derived from the style rather than guessed at.
+ *
+ * `type.label` carries an explicit `lineHeight`, and the two margins are tokens, so this is the
+ * real number rather than an estimate - and the heading is always one line, because the titles
+ * are two words at most. It is a constant so that `getItemLayout` and the style cannot disagree;
+ * see `styles.heading`, which states the same height rather than letting text decide it.
+ */
+const HEADING_HEIGHT = type.label.lineHeight + space.md + space.xs;
+
 export function EmojiPicker({
   onPick,
   onDismiss,
@@ -136,6 +146,14 @@ export function EmojiPicker({
   const [recents, setRecents] = useState<string[]>([]);
   const listRef = useRef<FlatList<Row>>(null);
   const [activeGroup, setActiveGroup] = useState<string>(GROUPS[1]!.key);
+  /** The list's own width, which is what an emoji row's height is a seventh of. */
+  const [listWidth, setListWidth] = useState(0);
+  /*
+   * A heading's full footprint, taken from the first one drawn rather than trusted from the
+   * constant. `HEADING_HEIGHT` is right until somebody turns up the system font size, which
+   * scales the line and would put every offset below it slightly out.
+   */
+  const [headingHeight, setHeadingHeight] = useState(HEADING_HEIGHT);
   const insets = useSafeAreaInsets();
 
   /*
@@ -207,13 +225,48 @@ export function EmojiPicker({
     return map;
   }, [rows]);
 
+  /*
+   * Where every row starts, in points. A running total over `rows`, which is the whole reason the
+   * jump can be exact.
+   *
+   * > **The picker used to walk to a category instead of going there, and this is why.** The jump
+   * > was `scrollToIndex` on a row virtualization had never measured, so `onScrollToIndexFailed`
+   * > fired and guessed an offset from `averageItemLength` - an average of two DIFFERENT heights,
+   * > a heading and an emoji row, so it was never right. The guess landed mid-list, which rendered
+   * > rows, which fired `onViewableItemsChanged`, which lit whichever category had just appeared;
+   * > then the retry failed again, guessed again, landed again. Tapping Flags visibly stepped
+   * > through every category on the way down. Reported from the phone on 2026-08-15: "it start
+   * > clicking every category and then it reaches it".
+   * >
+   * > Both heights are knowable, so nothing has to be guessed. A heading is `HEADING_HEIGHT`; an
+   * > emoji row is one seventh of the list's own width, measured rather than assumed and ROUNDED,
+   * > so that a couple of hundred rows cannot accumulate a fraction of a point each into a visible
+   * > drift.
+   */
+  const rowHeight = listWidth === 0 ? 0 : Math.round(listWidth / PER_ROW);
+  const offsets = useMemo(() => {
+    const table: number[] = [];
+    let running = 0;
+    for (const row of rows) {
+      table.push(running);
+      running += row.kind === 'heading' ? headingHeight : rowHeight;
+    }
+    return table;
+  }, [rows, rowHeight, headingHeight]);
+
   const jumpTo = (groupKey: string) => {
     const index = headingIndex.get(`h-${groupKey}`);
-    if (index === undefined) return;
+    const offset = offsets[index ?? -1];
+    if (index === undefined || offset === undefined) return;
     // Set immediately rather than waiting for the scroll to report back: the button must light up
     // under the finger, not a frame after the list settles.
     setActiveGroup(groupKey);
-    listRef.current?.scrollToIndex({ index, viewPosition: 0, animated: false });
+    /*
+     * `scrollToOffset` with a distance we computed, never `scrollToIndex`. The index form has to
+     * ask the list where that row is and cannot answer for a row it has not rendered; this form
+     * has nothing to look up and nothing to fail at, so there is no retry and nothing to watch.
+     */
+    listRef.current?.scrollToOffset({ offset, animated: false });
   };
 
   /*
@@ -310,29 +363,42 @@ export function EmojiPicker({
             keyboardShouldPersistTaps="handled"
             onViewableItemsChanged={onViewable}
             viewabilityConfig={VIEWABILITY}
+            // One seventh of this is an emoji row's height, and it is the only measurement the
+            // list's arithmetic needs.
+            onLayout={(event) => setListWidth(event.nativeEvent.layout.width)}
             /*
-              Rows are variable height - a heading is not an emoji row - so `scrollToIndex` can
-              land beyond what has been measured. Rather than declare a `getItemLayout` that would
-              be a lie, jump roughly there and let the list settle, then ask again.
+              Rows are two heights rather than variable ones, and both are known: a heading is a
+              constant, an emoji row is a seventh of the width above. So the list is told where
+              every row is rather than being asked to find out, which is what makes a jump land in
+              one movement. This replaced an `onScrollToIndexFailed` that guessed from an average
+              of the two heights, retried, guessed again, and visibly walked down the list.
             */
-            onScrollToIndexFailed={(info) => {
-              listRef.current?.scrollToOffset({
-                offset: info.averageItemLength * info.index,
-                animated: false,
-              });
-              setTimeout(() => {
-                listRef.current?.scrollToIndex({
-                  index: info.index,
-                  viewPosition: 0,
-                  animated: false,
-                });
-              }, 60);
-            }}
+            getItemLayout={
+              rowHeight === 0
+                ? undefined
+                : (_data, index) => ({
+                    length: rows[index]?.kind === 'heading' ? headingHeight : rowHeight,
+                    offset: offsets[index] ?? 0,
+                    index,
+                  })
+            }
             renderItem={({ item }) =>
               item.kind === 'heading' ? (
-                <Text style={styles.heading}>{item.title}</Text>
+                <Text
+                  style={styles.heading}
+                  // What the arithmetic above assumes, checked against what was actually drawn.
+                  // The margins are outside the text box and belong to the row's footprint.
+                  onLayout={(event) => {
+                    const drawn = event.nativeEvent.layout.height + space.md + space.xs;
+                    setHeadingHeight((held) => (Math.abs(held - drawn) < 0.5 ? held : drawn));
+                  }}
+                >
+                  {item.title}
+                </Text>
               ) : (
-                <View style={styles.row}>
+                // The height is stated rather than left to `aspectRatio` on the cells, so that the
+                // number here and the number `getItemLayout` reports are the same number.
+                <View style={[styles.row, { height: rowHeight }]}>
                   {item.items.map((e) => (
                     <Pressable
                       key={e.emoji}
@@ -437,7 +503,7 @@ const styles = StyleSheet.create({
   },
   row: { flexDirection: 'row' },
   /*
-    A FIXED fraction of the row, never `flex: 1`.
+    A FIXED fraction of the row, never `flex: 1`, and the row owns the height.
 
     > **`flex: 1` was the first version and it was wrong in a way only a short row shows.** With
     > eight cells it looks perfect; with two search results each cell takes half the width, and
@@ -445,11 +511,14 @@ const styles = StyleSheet.create({
     > an enormous white gap, and a Recent row holding one emoji was a full-width square. Reported
     > from the phone with both screenshots.
 
-    One eighth regardless of how many are in the row, so a partial row is simply short.
+    One seventh regardless of how many are in the row, so a partial row is simply short. The
+    height moved from `aspectRatio` here to an explicit height on the row on 2026-08-15, so that
+    the height the list is TOLD each row is and the height each row actually takes are one number
+    rather than two that agree by arithmetic. A jump lands on the row it names because of it.
   */
   cell: {
     width: `${100 / PER_ROW}%`,
-    aspectRatio: 1,
+    height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
   },

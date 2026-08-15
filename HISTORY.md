@@ -13,6 +13,48 @@ Newest first.
 
 ---
 
+## 2026-08-15 - The emoji picker walked to a category instead of going there
+
+Reported from the phone with a video: "I just click the flag symbol in the down, like, flag
+category. I just click that, but automatically, it start clicking every category, and then it
+reaches it." The video is unambiguous - tap Flags, and the strip lights Smileys, then People, then
+Animals, all the way down, while the list hops in stages behind it.
+
+Nothing was clicking anything. **Two mechanisms compounded, and neither is in the tap handler.**
+
+`jumpTo` called `scrollToIndex` on a heading row. A `FlatList` cannot answer where a row is until
+it has rendered it, and the flags heading is two hundred rows below anything that had ever been
+drawn - so `onScrollToIndexFailed` fired. That handler did what the documentation suggests: guess
+an offset from `info.averageItemLength`, then retry a moment later. But an average is only useful
+over one height, and this list has two - a 36 point heading and a 52 point emoji row. The guess
+therefore landed somewhere in the middle, from where the target was STILL unmeasured, so it failed
+again, guessed again, landed again.
+
+Each landing rendered rows, which fired `onViewableItemsChanged`, whose job is to light the
+category the reader is looking at. It was doing that faithfully. **The strip was not misbehaving;
+it was accurately reporting a list that was walking down the screen in stages.** That is the part
+worth keeping: the visible symptom was in the one piece of code that was completely correct.
+
+The fix was to stop asking. Both heights are knowable - a heading from `type.label`'s explicit
+`lineHeight` plus its two margin tokens, an emoji row as one seventh of the list's own measured
+width - so the picker now keeps a running total of where every row starts and calls
+`scrollToOffset` with a distance it computed itself. There is nothing to look up, so there is no
+failure callback and no retry. `getItemLayout` hands the same table to the list, which is what
+lets it render the destination window directly rather than filling in from wherever it was.
+
+Three things that would have made the naive version drift, all of which cost nothing to get right
+and would each have been invisible until somebody scrolled to the bottom:
+
+- The row height is **rounded to a whole point**. A fraction of a point per row is nothing; two
+  hundred and forty of them is a heading landing visibly off the top.
+- The height moved off `aspectRatio` on the cells and onto the row explicitly, so the height the
+  list is TOLD and the height the row TAKES are one number rather than two that agree by
+  arithmetic. The short-row fix that `aspectRatio` was there for survives untouched, because the
+  cells were always a fixed seventh of the width and still are.
+- The heading height is measured from the first one drawn and replaces the constant if they
+  differ, which they do the moment somebody raises the system font size: that scales the line and
+  would otherwise push every offset below it out by a few points each.
+
 ## 2026-08-15 - The card learns three verbs, and a report finds a second noun
 
 The member card shipped on 2026-08-14 carrying Message, Remove and Ban, with Mute, Clear chat and
