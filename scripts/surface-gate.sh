@@ -135,12 +135,17 @@ check 400 "news reaction, skin-tone variant" -X POST "${AM[@]}" "${JSON[@]}" -d 
 check 400 "news reaction that is not emoji"  -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"nope"}' "$API/news/$NEWS/reactions"
 check 200 "news reaction, plain in catalog"  -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"👏"}' "$API/news/$NEWS/reactions"
 check 200 "news reaction, once in the six"   -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"🔥"}' "$API/news/$NEWS/reactions"
-check 201 "POST meetup" -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30","location":"Memorial Park gate"}' "$API/clubs/$CLUB/meetups"
-check 400 "meetup with no place"      -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30"}' "$API/clubs/$CLUB/meetups"
+# A meetup is named rather than placed since 2026-08-15: the form asks for a link, not a place,
+# so the NAME is what a blank is refused for. This gate is what caught the rename reaching every
+# test and none of the callers - `npm test` was green while CI was red, because the gate goes over
+# TCP against a running server and a test does not.
+check 201 "POST meetup" -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30","title":"Practice","location":"Memorial Park gate"}' "$API/clubs/$CLUB/meetups"
+check 400 "meetup with no name"       -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30"}' "$API/clubs/$CLUB/meetups"
+check 400 "meetup with a blank name"  -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30","title":"   "}' "$API/clubs/$CLUB/meetups"
 check 400 "meetups without a monday"  "${AO[@]}" "$API/clubs/$CLUB/meetups"
 # Only TODAY's meetups are nudgeable, so these are made on today's date rather than a fixed one.
 TODAY=$(date -u +%Y-%m-%d)
-mk() { curl -sS -X POST "${AO[@]}" "${JSON[@]}" -d "{\"meetupDate\":\"$1\",\"meetupTime\":\"$2\",\"location\":\"$3\"}" "$API/clubs/$CLUB/meetups" | python3 -c 'import json,sys;print(json.load(sys.stdin)["meetupId"])'; }
+mk() { curl -sS -X POST "${AO[@]}" "${JSON[@]}" -d "{\"meetupDate\":\"$1\",\"meetupTime\":\"$2\",\"title\":\"$3\"}" "$API/clubs/$CLUB/meetups" | python3 -c 'import json,sys;print(json.load(sys.stdin)["meetupId"])'; }
 MEETUP=$(mk "$TODAY" 07:00 Track)
 OTHER=$(mk "$TODAY" 19:00 "The Anchor")
 PAST=$(mk 2020-05-06 07:00 Gone)

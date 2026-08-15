@@ -75,9 +75,23 @@ field and why one should not be added back.*
 6. **Creating one opens on the day that was tapped and asks it as a question** - *"Where should we
    meet on Friday 14 August?"* - with the place as the first and largest field. The screen is
    phrased as the question a member opens it to answer, not as a form to be filled in.
-7. **It cannot be saved until the place and the time are filled in.** A club that has not decided
-   yet types "TBC", which tells a member something; a blank tells them nothing, and the whole
-   surface exists to answer where and when.
+7. **It cannot be saved until the name and the moment are filled in**, and **the moment can only
+   be now or later**. The picker offers today onwards, and on today only the hours and minutes
+   still ahead - so a meetup cannot be authored into a day that has gone.
+
+   > **The place was the required field until 2026-08-15** and is no longer collected at all; the
+   > name took its place, because with no place nothing else identifies a meetup. The
+   > no-past-moment rule arrived the same day, in the founder's words: *"just show dates from
+   > today and the time after right now so that people don't have a chance to create an old
+   > event"*.
+   >
+   > **Editing an existing meetup still offers its own date**, even a past one, so a meetup last
+   > Tuesday stays correctable. What is refused is authoring a new one backwards.
+   >
+   > **This lives in the picker and not on the server.** `createMeetup` accepts any date, and
+   > deliberately so for now: past meetups are a normal thing for the product to hold - every
+   > meetup becomes one - and the nudge rules are proved by making one. Worth revisiting if it
+   > ever matters.
 8. **There is no activity type, category or kind anywhere** - not a dropdown, not a required first
    step, not an icon. What the club is doing is the third field, in their own words. The reasoning
    and the fully-designed alternative that was rejected are in

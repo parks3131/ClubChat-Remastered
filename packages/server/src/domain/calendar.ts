@@ -94,7 +94,14 @@ export type FeedItem = {
    * check reads it, and the only ordering that touches it is between two meetups on one day.
    */
   timeOfDay: string | null;
-  /** Whether this belongs in Upcoming or Past. */
+  /**
+   * Whether this belongs in Upcoming or Past.
+   *
+   * **A dated thing is upcoming for the whole of its day**, not until midnight UTC. That sounds
+   * obvious and was not true until 2026-08-15: every all-day row was compared as an instant, and
+   * `new Date('2026-08-15')` is UTC midnight, so a meetup at seven in the evening was filed under
+   * Past from four in the morning. See the comparison in `readCalendarFeed`.
+   */
   upcoming: boolean;
   /** True when the viewer can enter it. A race they cannot enter still appears. */
   accessible: boolean;
@@ -208,6 +215,30 @@ export async function readCalendarFeed(
 
   const now = Date.now();
 
+  /*
+   * Today, as a date rather than an instant, for the rows whose `at` is a day.
+   *
+   * > **This is the fix for the bug that produced this comment**, reported from the phone on
+   * > 2026-08-15 at 16:01 with two meetups sitting under Past that had not happened yet - one at
+   * > 18:00 and one at 19:00, the same evening. `upcoming` compared every row the same way,
+   * > `new Date(at).getTime() >= now`, and `new Date('2026-08-15')` is UTC MIDNIGHT. So a
+   * > date-only row went Past twenty hours early, every day, for every reader west of Greenwich.
+   * >
+   * > It is the exact failure `FeedItem.allDay` was introduced to prevent, in the one place the
+   * > flag was never consulted. Races had it too and nobody noticed, because a race carries no
+   * > time to contradict the answer - it took a meetup, which prints "at 19:00" under the word
+   * > Past, to make it visible.
+   *
+   * Built from the server's own local components rather than `toISOString`, which would be UTC's
+   * date and reintroduce a smaller version of the same thing. It is still the SERVER's day, not
+   * the club's: no club carries a timezone (see `meetups` in the schema), so there is no better
+   * answer available here, and a day-level comparison keeps the error to hours rather than a day.
+   */
+  const clock = new Date(now);
+  const today = `${clock.getFullYear()}-${String(clock.getMonth() + 1).padStart(2, '0')}-${String(
+    clock.getDate(),
+  ).padStart(2, '0')}`;
+
   return rows.rows.map((row) => {
     // An all-day value is passed through as the date it already is. Normalising it the way an
     // instant is normalised is what produced the UTC-midnight race - see `FeedItem.allDay`.
@@ -224,7 +255,12 @@ export async function readCalendarFeed(
       // Postgres returns a TIME as HH:MM:SS. A club types minutes, so the seconds are noise that
       // would otherwise reach a screen.
       timeOfDay: row.time_of_day === null ? null : row.time_of_day.slice(0, 5),
-      upcoming: new Date(at).getTime() >= now,
+      /*
+       * Two shapes, two comparisons - which is the whole point of `allDay` and is what this line
+       * used to ignore. A day is compared to today as a STRING, so a thing happening today stays
+       * upcoming until the day is over; an instant is compared to now.
+       */
+      upcoming: row.all_day ? at >= today : new Date(at).getTime() >= now,
       accessible: row.accessible,
     };
   });

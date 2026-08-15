@@ -1272,6 +1272,56 @@ describe('the merged calendar feed', () => {
     expect(theirs.some((i) => i.kind === 'meetup'), 'a meetup leaked to a non-member').toBe(false);
   });
 
+  /*
+   * The bug the founder photographed at 16:01 on 2026-08-15: two meetups that evening, 18:00 and
+   * 19:00, both sitting under Past.
+   *
+   * `upcoming` compared every row as an instant, and `new Date('2026-08-15')` is UTC midnight - so
+   * a date-only row went Past twenty hours early for every reader west of Greenwich. This is the
+   * assertion that fails against that code, and it is deliberately written with TODAY rather than
+   * a fixed date, because a fixed one would pass for the same wrong reason.
+   */
+  it('keeps a thing happening today in Upcoming, all day', async () => {
+    const f = await setup();
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+      now.getDate(),
+    ).padStart(2, '0')}`;
+
+    await createMeetup(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId,
+      meetupDate: todayKey,
+      meetupTime: '23:30',
+      title: 'Tonight',
+      description: null,
+    });
+
+    const feed = await readCalendarFeed(h.db, await ctxFor(f.memberId), { clubId: f.clubId });
+    const tonight = feed.find((i) => i.title === 'Tonight');
+    expect(tonight, 'the meetup did not reach the feed').toBeDefined();
+    expect(tonight!.upcoming, 'a meetup later today was filed as past').toBe(true);
+  });
+
+  it('files a day that has gone as past, whatever the hour', async () => {
+    const f = await setup();
+    const yesterday = new Date(Date.now() - 86_400_000);
+    const key = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(
+      yesterday.getDate(),
+    ).padStart(2, '0')}`;
+
+    await createMeetup(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId,
+      meetupDate: key,
+      meetupTime: '23:30',
+      title: 'Last night',
+      description: null,
+    });
+
+    const feed = await readCalendarFeed(h.db, await ctxFor(f.memberId), { clubId: f.clubId });
+    // The other half of the rule: comparing by day must not make yesterday upcoming.
+    expect(feed.find((i) => i.title === 'Last night')?.upcoming).toBe(false);
+  });
+
   it('marks a month day that has nothing on it but a meetup', async () => {
     // The grid and the list are two views over one read, so a meetup being on the feed has to be
     // the same thing as its day being marked. This is the assertion that fails if anybody

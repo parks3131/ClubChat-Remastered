@@ -482,35 +482,81 @@ function MeetupComposer({
    * starts naming the wrong weekdays.
    */
   const today = new Date();
-  const days = Array.from({ length: DAYS_BACK + DAYS_AHEAD }, (_, index) => {
-    const offset = index - DAYS_BACK;
-    const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset);
-    return {
-      key: toDateKey(date),
-      label:
-        offset === 0
-          ? 'Today'
-          : date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }),
-    };
-  });
-  const hours = Array.from({ length: 24 }, (_, hour) => ({
-    key: String(hour),
-    label: String(hour).padStart(2, '0'),
-  }));
-  const minutes = Array.from({ length: 60 / MINUTE_STEP }, (_, index) => ({
-    key: String(index * MINUTE_STEP),
-    label: String(index * MINUTE_STEP).padStart(2, '0'),
-  }));
+  const todayKey = toDateKey(today);
 
   /*
-   * What the wheel shows while open but unchosen: today, at six in the evening.
+   * The wheel offers today onwards, and never a moment that has already been.
    *
-   * It used to be the day that was tapped, because a plus lived on every day and the tap was how
-   * the composer learned which one. There is one plus for the week now, so nothing has been said
-   * about the day yet - and `when` staying null until the wheel is touched is what keeps "Set
-   * date" from claiming a choice nobody made.
+   * > **Asked for on 2026-08-15: "just show dates from today and the time after right now so that
+   * > people don't have a chance to create an old event".** It used to reach thirty days back,
+   * > which existed for editing a meetup that had already happened - and that is still why the
+   * > column starts EARLIER when this form is editing one. A meetup last Tuesday must remain
+   * > editable on its own date; what must not happen is authoring a new one into the past.
+   *
+   * The columns narrow together and in order: the day decides which hours exist, and the hour
+   * decides which minutes do. Anything else lets 14:00 stay selectable at 15:30 today simply
+   * because it was legal when the wheel opened.
    */
-  const shown = when ?? momentFrom(toDateKey(new Date()), 18, 0);
+  /*
+   * The default moment, and it has to be a legal one.
+   *
+   * Six in the evening while six in the evening is still ahead, and the next step of the clock
+   * otherwise - because a wheel that opens on a time it will not offer is the control
+   * contradicting itself, which is how "it will not save" gets reported.
+   */
+  /*
+   * The soonest moment the wheel may offer: now, rounded UP to the step.
+   *
+   * Rounding up rather than down is what makes "after right now" true - and it may roll into
+   * tomorrow, which is the case that has to be handled rather than clamped. At 23:58 with a
+   * five-minute step there is no legal slot left today, so today stops being offered at all.
+   * Clamping to 23:55 instead would put a time in the past back on the wheel, which is the whole
+   * thing this is here to prevent.
+   */
+  const soonest = new Date(today);
+  soonest.setMinutes(Math.ceil(soonest.getMinutes() / MINUTE_STEP) * MINUTE_STEP, 0, 0);
+  const soonestKey = toDateKey(soonest);
+
+  const defaultMoment = (() => {
+    if (editing.mode === 'edit') return momentFrom(editing.date, 18, 0);
+    const six = momentFrom(soonestKey, 18, 0);
+    return six.getTime() > soonest.getTime() ? six : soonest;
+  })();
+  const shown = when ?? defaultMoment;
+
+  const earliestKey =
+    editing.mode === 'edit' && editing.date < soonestKey ? editing.date : soonestKey;
+  const earliest = fromDateKey(earliestKey);
+  const days = Array.from({ length: DAYS_BACK + DAYS_AHEAD }, (_, index) => {
+    const date = new Date(earliest.getFullYear(), earliest.getMonth(), earliest.getDate() + index);
+    return { date, key: toDateKey(date) };
+  })
+    .filter(({ key }) => key >= earliestKey)
+    .map(({ date, key }) => ({
+      key,
+      label:
+        key === todayKey
+          ? 'Today'
+          : date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }),
+    }));
+
+  /* On the soonest day, the hours that have gone are not offered. On any later one, all of them. */
+  const onToday = toDateKey(shown) === soonestKey;
+  const firstHour = onToday ? soonest.getHours() : 0;
+  const hours = Array.from({ length: 24 - firstHour }, (_, index) => ({
+    key: String(firstHour + index),
+    label: String(firstHour + index).padStart(2, '0'),
+  }));
+
+  /* And within the current hour, the minutes that have gone. Rounded UP to the step. */
+  const firstMinute = onToday && shown.getHours() === soonest.getHours() ? soonest.getMinutes() : 0;
+  const minutes = Array.from(
+    { length: Math.max(1, (60 - firstMinute) / MINUTE_STEP) },
+    (_, index) => ({
+      key: String(firstMinute + index * MINUTE_STEP),
+      label: String(firstMinute + index * MINUTE_STEP).padStart(2, '0'),
+    }),
+  );
 
   const setPart = (part: { dateKey?: string; hour?: number; minute?: number }) => {
     setWhen(
