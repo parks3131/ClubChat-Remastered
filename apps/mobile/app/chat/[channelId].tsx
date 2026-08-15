@@ -42,6 +42,8 @@ import { formatDaySeparator } from "../../src/dates.ts";
 import { channelApi, dmApi, pollApi, type ChannelMeta } from "../../src/api.ts";
 import { DocumentBubble, PhotoBubble, RemoteImage } from "../../src/media-bubble.tsx";
 import { PhotoViewer } from "../../src/photo-viewer.tsx";
+import { PhotoCompose, type ComposedPhoto } from "../../src/photo-compose.tsx";
+import { MentionList } from "../../src/mention-list.tsx";
 import {
   pickDocument,
   pickPhoto,
@@ -2096,6 +2098,14 @@ export default function ChatScreen() {
   const [headerBottom, setHeaderBottom] = useState(0);
   /** True while bytes are in flight, so the "+" cannot start a second upload. */
   const [uploading, setUploading] = useState(false);
+  /**
+   * The photo waiting on the compose sheet, or null.
+   *
+   * The picked asset rather than a boolean, because the sheet is driven entirely by it - and
+   * because clearing it is the only way out, so there is no second flag that can disagree about
+   * whether a photo is in flight.
+   */
+  const [composing, setComposing] = useState<PickedAttachment | null>(null);
   const listRef = useRef<FlatList<Row>>(null);
   /*
    * There is no "am I at the tail" flag any more, and its absence is the fix rather than a
@@ -3102,6 +3112,18 @@ export default function ChatScreen() {
    * retry from the outbox across a reconnect: the object is already durable and already
    * verified, so a retry re-sends an id rather than re-sending bytes.
    */
+  /**
+   * Choose an attachment.
+   *
+   * > **A photo no longer uploads here.** Both photo paths stop at `PhotoCompose` - a look at it
+   * > and a caption - and nothing leaves the phone until Send is pressed there. Picking used to
+   * > upload and post in one breath, so backing out cost a round trip and left an orphan object
+   * > for the nightly sweep to find.
+   *
+   * A document still goes straight out. There is nothing to preview and a filename is not
+   * something anybody wants to sit and look at, so the sheet would be a step that only ever gets
+   * dismissed.
+   */
   const attach = async (
     pick: () => Promise<PickedAttachment | null>,
     // Narrower than `UploadKind`, which also covers avatars - a conversation has no use for one.
@@ -3109,6 +3131,20 @@ export default function ChatScreen() {
   ) => {
     setAttachOpen(false);
     if (!client || !channelId || uploading) return;
+
+    if (kind === 'photo') {
+      try {
+        const picked = await pick();
+        if (!picked) return;
+        setComposing(picked);
+      } catch (error) {
+        // A permission refusal, which has its own sentence and is not a failed send.
+        setNotice(
+          error instanceof UploadError ? error.message : "That photo could not be opened.",
+        );
+      }
+      return;
+    }
 
     setUploading(true);
     try {
@@ -3133,6 +3169,50 @@ export default function ChatScreen() {
         error instanceof UploadError
           ? error.message
           : "The attachment could not be sent. Try again.",
+      );
+    } finally {
+      setUploading(false);
+      await refresh();
+    }
+  };
+
+  /**
+   * Send what the compose sheet produced: the photo and its caption.
+   *
+   * The upload happens HERE rather than in the sheet, so the sheet stays a screen that returns a
+   * decision and this screen keeps owning every write to the conversation. That is also what lets
+   * a failure land on the notice the rest of this screen already uses, instead of the sheet
+   * growing its own error surface for a problem it cannot fix.
+   *
+   * The sheet closes before the upload rather than after it: the send is going to the outbox and
+   * the bubble appears there, so holding a full-screen photo up while it flies reads as a stall.
+   */
+  const sendComposed = async (picked: PickedAttachment, photo: ComposedPhoto) => {
+    if (!client || !channelId) return;
+    setComposing(null);
+    setUploading(true);
+    try {
+      // The crop rectangle rides with the upload and is applied by the server, which already
+      // decodes every photo to prove it is one. Nothing on the phone cuts pixels.
+      const uploaded = await uploadAttachment(
+        channelId,
+        picked,
+        "photo",
+        photo.crop ?? undefined,
+      );
+      scrollToNewest();
+      await client.sendWithRetry(channelId, photo.caption, {
+        type: "photo",
+        mediaId: uploaded.mediaId,
+        localUri: uploaded.localUri,
+        documentSize: uploaded.bytes,
+        ...(photo.mentions.length > 0 ? { mentions: photo.mentions } : {}),
+      });
+    } catch (error) {
+      setNotice(
+        error instanceof UploadError
+          ? error.message
+          : "The photo could not be sent. Try again.",
       );
     } finally {
       setUploading(false);
@@ -4238,26 +4318,27 @@ export default function ChatScreen() {
         panel hovering over the conversation is worse than no panel. It is a plain View rather
         than a modal so the keyboard stays up and typing keeps narrowing it.
       */}
-      {canPost && mentionMatches.length > 0 && (
-        <View style={styles.mentionBar}>
-          <ScrollView
-            keyboardShouldPersistTaps="always"
-            showsVerticalScrollIndicator={false}
-          >
-            {mentionMatches.map((member) => (
-              <Pressable
-                key={member.userId}
-                style={styles.mentionRow}
-                onPress={() => pickMention(member)}
-                accessibilityRole="button"
-                accessibilityLabel={`Mention ${member.name}`}
-              >
-                <Avatar name={member.name} image={member.image} size={28} />
-                <Text style={styles.mentionName}>{member.name}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-        </View>
+      {canPost && <MentionList matches={mentionMatches} onPick={pickMention} />}
+
+      {/*
+        The photo about to be sent: a look at it and a caption.
+
+        Rendered here, last and absolutely positioned, for the same reason the viewer is: it has
+        to cover the composer and the pinned strip rather than appear inside them. Never open at
+        the same time as the viewer - one is a photo already in the conversation, the other is one
+        that has not been sent yet.
+
+        The mentionable list is the composer's own, so a caption offers exactly the people a
+        message would - `PRD/05` rule 17, which is about the chat rather than about the composer.
+      */}
+      {composing !== null && (
+        <PhotoCompose
+          uri={composing.uri}
+          channelName={meta?.name ?? "this chat"}
+          mentionable={mentionable}
+          onCancel={() => setComposing(null)}
+          onSend={(photo) => void sendComposed(composing, photo)}
+        />
       )}
 
       {/*
@@ -4890,25 +4971,7 @@ const styles = StyleSheet.create({
     paddingBottom: space.sm,
   },
 
-  /*
-   * The `@` list. Capped in height so a big club cannot cover the conversation, and anchored to
-   * the composer rather than floating, so it reads as part of what is being typed.
-   */
-  mentionBar: {
-    maxHeight: 200,
-    backgroundColor: color.chrome,
-    borderTopWidth: 1,
-    borderTopColor: color.divider,
-    paddingHorizontal: space.sm,
-  },
-  mentionRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.sm + 2,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.sm,
-  },
-  mentionName: { ...type.body, color: color.textPrimary },
+  /* The `@` list's own styles moved to `MentionList` with it, at its second caller. */
 
   /*
    * The long-press overlay.

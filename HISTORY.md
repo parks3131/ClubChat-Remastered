@@ -13,7 +13,71 @@ Newest first.
 
 ---
 
-## 2026-08-14 (last) - The member card stops offering a door to itself
+## 2026-08-15 (last) - A photo gets a caption, and cropping goes to the server the hard way
+
+The founder sent Instagram's send sheet and asked for the same thing with one tool instead of
+three: a look at the photo, a crop, a caption, an X, a send arrow, in our orange. The caption half
+was straightforward. The crop cost the whole night, and none of it was the crop.
+
+**The caption was capability that already existed and had never been reachable.** The server has
+accepted a `body` alongside a `media_id` since Phase 0; no interface had ever offered one, so every
+photo ever sent went with an empty caption. The sheet also moved the upload from the picker to
+Send, which is the part worth keeping: choosing a photo used to upload and post it in one breath,
+so backing out cost a round trip and left an orphan object for the nightly sweep.
+
+**Then cropping, three times.**
+
+*The first attempt* added `expo-image-manipulator` and imported it at the top of the new screen.
+Metro served that JS to the founder's phone within seconds; his binary was minutes older than the
+module. A native import resolves at **bundle load**, so it did not break the crop - it took the
+whole app down, on a screen he was not using. Moving the import inside the handler was not enough
+either: the package calls `requireNativeModule` while it evaluates, and Metro reports module-init
+failures to LogBox *before* the `catch` sees them, so a caught error still showed a red screen.
+`requireOptionalNativeModule` from `expo-modules-core` answers the same question without loading
+anything that can fail, which is how the tool came to be absent rather than present-and-failing.
+
+*The second attempt* got further and died at launch on both the simulator and the phone, before a
+line of JS ran, with no red screen and no console output - the app simply bounced to the home
+screen. Deleting and reinstalling changed nothing, Metro was healthy and never received a request,
+and the suite was green, because none of it was involved. The answer was in the crash report:
+`Symbol not found: ExpoModulesCore.BaseModule.willDestroy()`, referenced from
+`ExpoImageManipulator.framework`. `expo install` had fetched the newest patch, whose **prebuilt**
+xcframework targets a newer core than this app ships. Pinning it back did not help, because the
+prebuilt at the older version has the same requirement; disabling precompiled modules entirely
+would have worked and makes every Expo module build from source.
+
+Two lessons, both now in `AGENTS.md`: for a launch-time death read
+`~/Library/Logs/DiagnosticReports/<App>-*.ips` **first** - a `Symbol not found` there is always a
+native ABI mismatch and never your code, and I went to the network and the version numbers instead.
+And installing a native dependency commits every running build to a rebuild, which is something to
+say out loud before running the install rather than after somebody's app dies.
+
+*The third attempt* removed the dependency instead of fixing it. The server has had `sharp` since
+Phase 3 and `completeUpload` has decoded every uploaded image since Phase 0 to prove it is one - so
+the phone sends a rectangle and the server extracts from a decode it was already doing. No native
+module, no rebuild, and nothing in the feature can stop the app from launching. `TECH/07` had said
+in as many words that the server "has no part in it and must not grow one"; that objection was
+aimed at a server cropping on its own initiative, which is still refused, and not at executing a
+rectangle the sender drew.
+
+**And then the crop still did not work, for a reason that had nothing to do with any of it.** The
+founder recorded it: the frame drew outside the photo, the shading around it vanished, and the full
+uncropped picture posted. One cause for all three - the frame was stored in **display points**, and
+the drawn size of the picture changes whenever the layout does. It does so on the very tap that
+confirms the crop, because the crop footer is a different height from the caption bar, so the code
+that reset the frame on a layout change was discarding the crop at the exact moment of applying it.
+Storing fractions of the image instead makes the class unrepresentable: a fraction means the same
+thing at every size, and there is no longer any code watching the layout. The geometry moved into
+`crop-rect.ts` as pure functions with a test that asserts a frame names the same source pixels
+after the picture is redrawn at another size - the test that fails against the old code, which is
+why it is the one worth having.
+
+1,286 tests, 16 of them new. The caption and its mentions are verified on the founder's phone; the
+server crop is verified by test, including EXIF-rotated photos and out-of-bounds refusal.
+
+---
+
+## 2026-08-14 - The member card stops offering a door to itself
 
 Three changes to the card the roster raises, and only the second was asked for directly.
 

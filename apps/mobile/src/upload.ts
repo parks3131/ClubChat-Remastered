@@ -291,11 +291,28 @@ export async function uploadAvatar(picked: PickedAttachment): Promise<string> {
   return uploaded.mediaId;
 }
 
+/**
+ * A region of the picture to keep, in the source image's own pixels.
+ *
+ * > **The phone chooses this rectangle and never cuts the bytes**, which is the whole reason
+ * > cropping needs no native image module here. The server already decodes every uploaded photo
+ * > to prove it is one, so extracting from that decode costs it nothing - and this app has twice
+ * > been taken down by a native import that reached Metro before it reached the binaries.
+ */
+export type CropRegion = {
+  originX: number;
+  originY: number;
+  width: number;
+  height: number;
+};
+
 export async function uploadAttachment(
   /** Null for an avatar, which belongs to a person rather than to a conversation. */
   channelId: string | null,
   picked: PickedAttachment,
   kind: UploadKind,
+  /** Absent for a document, an avatar, and any photo sent as it was chosen. */
+  crop?: CropRegion | undefined,
 ): Promise<UploadedAttachment> {
   const blob = await resolveBlob(picked.uri);
   // The blob's own length, never the picker's reported size. `completeUpload` compares the
@@ -338,7 +355,14 @@ export async function uploadAttachment(
     // The step that makes the object real. Until this succeeds the row is `pending` and a send
     // referencing it is refused with `media_not_ready` - which is recoverable, so the client's
     // correct response to that code is to finish the upload rather than give up.
-    await apiFetch(`/media/${intent.mediaId}/complete`, { method: 'POST', body: {} });
+    //
+    // The crop rides on THIS call rather than on the intent, because the intent is issued before
+    // any bytes exist and the rectangle describes the bytes. Completion is also the one moment
+    // the server has the object in hand and decoded, so cutting here costs no extra read.
+    await apiFetch(`/media/${intent.mediaId}/complete`, {
+      method: 'POST',
+      body: crop ? { crop } : {},
+    });
   } catch (error) {
     throw refusalMessage(error);
   }

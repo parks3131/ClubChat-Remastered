@@ -23,6 +23,7 @@ import { mediaObjects, outbox } from '../db/schema.ts';
 import { clearedFloor, type AccessContext } from '../policy/context.ts';
 import { canPostInChannel, isChannelMember, type ChannelRef } from '../policy/predicates.ts';
 import { getChannelRef } from '../domain/reads.ts';
+import sharp from 'sharp';
 import { probeImage } from './probe.ts';
 import {
   DOCUMENT_MIME_ALLOWLIST,
@@ -42,7 +43,15 @@ export type Refusal = {
     | 'not_uploaded'
     | 'mismatch'
     /** The bytes arrived intact by every declared measure and still are not an image. */
-    | 'undecodable';
+    | 'undecodable'
+    /**
+     * The crop rectangle does not fit inside the picture it was measured against.
+     *
+     * Its own code rather than folded into `mismatch`, which is about the bytes disagreeing with
+     * what was declared. This is a caller whose idea of the source's dimensions is wrong, and the
+     * only honest answer is to refuse rather than to cut a region nobody chose.
+     */
+    | 'bad_crop';
 };
 export type Result<T> = ({ ok: true } & T) | Refusal;
 
@@ -171,11 +180,27 @@ export async function createUploadIntent(
  * Only on success does the row become `ready` and the derivation event get written - so a
  * message can never reference an object that was declared and never arrived.
  */
+/**
+ * A region of the uploaded picture to keep, in the source image's own pixels.
+ *
+ * Chosen on the phone by dragging a frame and applied here - see the note at the crop itself for
+ * why the cutting is server-side. All four are integers because they are pixel indices; a
+ * fractional origin is a client that did its arithmetic in display points.
+ */
+export type CropRegion = {
+  originX: number;
+  originY: number;
+  width: number;
+  height: number;
+};
+
 export async function completeUpload(
   db: Db,
   store: MediaStore,
   ctx: AccessContext,
   mediaId: string,
+  /** Absent for the great majority: a photo sent as it was chosen, and every document. */
+  crop?: CropRegion | undefined,
 ): Promise<Result<{ mediaId: string; bytes: number }>> {
   const rows = await db.select().from(mediaObjects).where(eq(mediaObjects.id, mediaId)).limit(1);
   const media = rows[0];
@@ -229,6 +254,9 @@ export async function completeUpload(
    */
   let dimensions: { width: number | null; height: number | null } = { width: null, height: null };
 
+  /** What the object ends up being, which a crop changes and nothing else does. */
+  let storedBytes = head.bytes;
+
   if (media.mime.startsWith('image/')) {
     const bytes = await store.get({ bucket: media.bucket, objectKey: media.objectKey });
     const probe = await probeImage(bytes);
@@ -237,12 +265,70 @@ export async function completeUpload(
     // message may be attached to.
     if (!probe.ok) return { ok: false, code: 'undecodable' };
     dimensions = { width: probe.width, height: probe.height };
+
+    /*
+     * The crop, applied HERE and nowhere else.
+     *
+     * > **The phone chooses the rectangle; the server cuts the pixels.** Doing it on the device
+     * > needs a native image module, and that is what took the app down twice on 2026-08-15 - a
+     * > native import is resolved at bundle load, so it reaches every phone the moment Metro
+     * > serves it while the binaries carrying it are hours behind. This path needs no new
+     * > dependency at all: the bytes are already read and already decoded two lines above,
+     * > because `completeUpload` has always had to prove an upload is really an image.
+     *
+     * Sited after the probe rather than before it, which is the ordering that matters: the crop
+     * is applied to something already known to be a decodable image, and a rectangle that lies
+     * about its bounds is refused by the probe's own dimensions rather than by `sharp` throwing.
+     *
+     * The cropped bytes REPLACE the original. The member chose this picture, so there is nothing
+     * to keep the discarded edges for - and keeping them would mean the gallery, the thumbnail
+     * and the download hop each having to know which version they meant.
+     */
+    if (crop) {
+      const fits =
+        probe.width !== null &&
+        probe.height !== null &&
+        crop.originX + crop.width <= probe.width &&
+        crop.originY + crop.height <= probe.height;
+      // A rectangle outside the picture is a client that measured against something else. Refused
+      // rather than clamped: silently cropping a different region than was chosen is worse than
+      // saying no, and the client can only have got here by disagreeing about the source.
+      if (!fits) return { ok: false, code: 'bad_crop' };
+
+      const cropped = await sharp(Buffer.from(bytes))
+        /*
+         * Before `extract`, and this is the trap the derive path already records: a photo from a
+         * phone carries its rotation in EXIF, so the pixels are sideways until something applies
+         * it. Extracting first would cut a rectangle out of the UNROTATED pixels - the wrong
+         * region entirely, and wrong by ninety degrees rather than by a little.
+         */
+        .rotate()
+        .extract({
+          left: crop.originX,
+          top: crop.originY,
+          width: crop.width,
+          height: crop.height,
+        })
+        .toBuffer();
+
+      await store.put({
+        bucket: media.bucket,
+        objectKey: media.objectKey,
+        body: new Uint8Array(cropped),
+        mime: media.mime,
+      });
+
+      storedBytes = cropped.length;
+      dimensions = { width: crop.width, height: crop.height };
+    }
   }
 
   await db.transaction(async (tx) => {
     await tx
       .update(mediaObjects)
-      .set({ status: 'ready', completedAt: new Date(), ...dimensions })
+      // `bytes` is re-stated because a crop changed the object. Left alone it would keep the
+      // uploaded size, and the row is what the message's own size field is read from.
+      .set({ status: 'ready', completedAt: new Date(), bytes: storedBytes, ...dimensions })
       .where(eq(mediaObjects.id, mediaId));
 
     // Derivation is an effect, not part of the request. Uploading should not wait on
@@ -254,7 +340,7 @@ export async function completeUpload(
     });
   });
 
-  return { ok: true, mediaId, bytes: head.bytes };
+  return { ok: true, mediaId, bytes: storedBytes };
 }
 
 // ---------------------------------------------------------------------------

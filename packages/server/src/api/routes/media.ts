@@ -49,12 +49,37 @@ export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
     return reply.code(201).send(result);
   });
 
+  /**
+   * The region of the picture to keep, when the sender cropped it.
+   *
+   * Optional, and strict about what it accepts: pixel indices are non-negative integers and a
+   * crop of nothing is not a crop. The rectangle is re-checked against the picture's real
+   * dimensions inside `completeUpload` - this only rules out a payload that could not describe a
+   * region of anything.
+   */
+  const CompleteBody = z
+    .object({
+      crop: z
+        .object({
+          originX: z.number().int().nonnegative(),
+          originY: z.number().int().nonnegative(),
+          width: z.number().int().positive(),
+          height: z.number().int().positive(),
+        })
+        .optional(),
+    })
+    .strict();
+
   app.post<{ Params: { id: string } }>('/media/:id/complete', async (request, reply) => {
+    const body = CompleteBody.safeParse(request.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+
     const result = await completeUpload(
       deps.db,
       deps.mediaStore,
       request.access!,
       request.params.id,
+      body.data.crop,
     );
     if (!result.ok) {
       // 422 for bytes that arrived intact and are not an image: the request was well formed and
@@ -67,7 +92,11 @@ export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
             ? 409
             : result.code === 'undecodable'
               ? 422
-              : 404;
+              // A rectangle that does not fit the picture is the caller's arithmetic, not a
+              // missing object - so 422 with the rest of the content-is-wrong family.
+              : result.code === 'bad_crop'
+                ? 422
+                : 404;
       return reply.code(status).send({ error: result.code });
     }
     return result;

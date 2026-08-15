@@ -11,7 +11,7 @@ unless it names an exception, and the exceptions a DM carries are listed in
 |---|---|
 | Text messages | With @mention tagging and autocomplete |
 | Quote replies | A flat quote of one earlier message, tappable to jump to it. **Not threads** - see the out-of-scope note |
-| Photo attachments | Library or camera |
+| Photo attachments | Library or camera, through a preview that offers a crop and a caption |
 | Document attachments | Any file type, shown with filename and size |
 | Emoji reactions | Any emoji in the catalog, from a quick row of six plus a searchable picker. At most four pills show under a message, most-reacted first, with a `+N` chip for the rest. See the reaction rules below |
 | Announcements | Admin-only, visually distinct |
@@ -248,6 +248,29 @@ second is a feature the whole product would have to bend around. Threads remain 
     > channel**. The screen asks that once and never re-derives it per scope, which is what stops
     > the three from drifting apart.
 
+11c. **A photo is previewed before it is sent, and the preview is where a crop and a caption
+    happen.** Choosing from the library or taking one with the camera both land on a full-screen
+    look at the picture, with a close, a **Crop**, a caption field and send.
+
+    **Nothing leaves the phone until send is pressed.** Picking used to upload and post in one
+    breath, so backing out cost a round trip and left an object behind with no message pointing at
+    it. Cancelling now costs nothing and posts nothing.
+
+    **The camera comes through the same preview**, and it is the path that needs it most: a shot
+    you cannot re-check before it posts is worse than a library pick you can.
+
+    **The crop is free-form and keeps the picture's own proportions.** A chat photo is shown at
+    whatever shape it is, so cropping it to a square would throw away most of what somebody chose
+    to send. The frame opens on the whole picture, because a frame that starts smaller has already
+    cropped it.
+
+    **A caption is a message body and behaves like one**: it @mentions from the same list the
+    composer offers, it is filtered by rule 10a like any other text, and it renders under the
+    photo as the message's text - because that is what it is.
+
+    **A document has no preview.** There is nothing to look at and nothing to crop, so the step
+    would only ever be dismissed.
+
 11a. **The header's grid menu is quick-nav and is NOT role-gated.** Every member of the scope
     sees the same entries - club: Members, Poll, Meetups, Events; race: Members, Meet
     Information, Polls, Car Assignments and Groups; Eboard: Members, Meetings, Polls. Being
@@ -320,6 +343,8 @@ it, and the reports it would contain belong to the platform moderation queue.
 | Loading | Spinner; the composer is not shown until the channel resolves |
 | Offline / send failure | The send fails **visibly** rather than silently dropping the message |
 | Photo or document upload fails | The message is not posted and the failure is surfaced |
+| Photo preview cancelled | Nothing is uploaded and nothing is posted |
+| Crop rectangle does not fit the picture | Refused rather than trimmed, so no region nobody chose is ever sent |
 | Deleted message | Tombstone; reactions and pin state cleared |
 | Edited message | Corrected text with an "Edited" label; reactions and pin state kept |
 | Edit window expired while typing | The save is refused and says the message can no longer be edited, offering to send a new one |
@@ -338,6 +363,12 @@ it, and the reports it would contain belong to the platform moderation queue.
 - [ ] Photos and documents round-trip: upload and appear. *(Opening full screen waits on the
       viewer - see [Media and galleries](13-media-and-galleries.md).)*
 - [ ] A document bubble shows its filename and size.
+- [ ] Choosing a photo opens a preview; cancelling it posts nothing and uploads nothing.
+- [ ] A photo sent with a caption shows that caption under it, and an @mention in the caption
+      notifies that person.
+- [ ] Cropping a photo sends the cropped picture, at its own proportions rather than a square.
+- [ ] A crop survives the keyboard opening and the Done tap, rather than reverting to the whole picture.
+- [ ] A photo taken with the camera reaches the same preview as one chosen from the library.
 - [ ] Reactions toggle on and off and are visible to everyone.
 - [ ] Holding a pill lists everyone who reacted, by name and picture, filterable to one emoji.
 - [ ] A reaction added on one device appears on another in realtime, without a refresh.

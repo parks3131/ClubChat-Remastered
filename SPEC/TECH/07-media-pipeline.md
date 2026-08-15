@@ -7,32 +7,50 @@
 | **Identity** | user/club/race/eboard avatars | public | CDN, stable path, `?v=` cache-bust on replace |
 | **Content** | chat photos, documents, news photos | **private** | authorized redirect → CDN (below) |
 
-### Cropping happens on the client, before any of this
+### Cropping: fixed-frame media on the client, a chat photo on the server
 
-An obligation promoted here from [`DESIGN/02-avatar`](../DESIGN/02-avatar.md), because a per-surface
-design file is not where somebody adding an upload path will look.
+Two different jobs that used to be one rule. The first is an obligation promoted here from
+[`DESIGN/02-avatar`](../DESIGN/02-avatar.md), because a per-surface design file is not where
+somebody adding an upload path will look.
 
-> **A picture destined for a fixed frame is cropped to that frame before it is uploaded, not
-> after.** Every avatar - user, club, race, Eboard - and a news photo. The crop frame and the
-> display frame must be the same frame, or the renderer's `cover` crops a second time and what
-> gets stored is not what the person chose.
+> **A picture destined for a FIXED frame is cropped to that frame before it is uploaded.** Every
+> avatar - user, club, race, Eboard - and a news photo. The crop frame and the display frame must
+> be the same frame, or the renderer's `cover` crops a second time and what gets stored is not
+> what the person chose. That crop produces a new file, so the byte count declared at intent must
+> be measured from the cropped copy: declaring the original's length is a guaranteed `mismatch`.
 
-The server has no part in it and must not grow one: it re-verifies bytes and type at `complete`
-and stores what it is given. Cropping server-side would mean decoding and re-encoding an image in
-a request path, and would make the stored object disagree with the one the uploader saw.
+**A chat photo is the other case, and it is cropped at `complete`, by the server.** It has no fixed
+frame - it is displayed at its own proportions - so there is nothing to crop it *to*, and it is
+cropped only when the sender chooses to. The phone sends a rectangle and never cuts pixels.
 
-Two consequences worth stating, because both are invisible from the server:
+This reverses a line that stood here until 2026-08-15: *"the server has no part in it and must not
+grow one ... cropping server-side would mean decoding and re-encoding an image in a request
+path."* The objection was aimed at a server that crops **on its own initiative**, which is still
+refused - a resize nobody asked for is choosing a crop the person did not. It does not apply to
+executing a rectangle the sender drew. And the cost it warns about is already being paid:
+`completeUpload` has decoded every uploaded image since Phase 0, to prove it is one. The extract
+adds a re-encode to a read that was already happening.
 
-- **A chat photo is deliberately NOT cropped.** It is displayed at its own proportions, so there
-  is no fixed frame to crop to and a forced square would discard most of what was sent. The rule
-  is *crop where the frame is fixed*, which is not the same as *crop identity media* - news is
-  content and is still cropped.
-- **The crop produces a new file**, so the byte count declared at intent must be measured from the
-  cropped copy. Declaring the original's length is a guaranteed `mismatch` at `complete`, which
-  compares against the object's real length with no tolerance.
+What made the choice rather than merely allowing it: cropping on the device needs a native image
+module, and adding one **took the app down twice in an hour**. A native import resolves at bundle
+load, so JS importing it reaches every phone the moment Metro serves it while the binaries are
+hours behind; and the prebuilt framework targeted a newer `ExpoModulesCore` than the app ships,
+which is a launch-time `Symbol not found` no JavaScript can catch. See
+[`AGENTS.md`](../../AGENTS.md) failure modes 8 and 32.
 
-`MEDIA_URL_MODE=cdn` does not change any of this, and neither does a future transformation layer:
-a server-side resize would still be choosing a crop the person did not.
+Four things the server crop owes, each asserted in `media-crop.test.ts`:
+
+- **Rotate before extracting.** A phone photo carries its rotation in EXIF, so cutting first takes
+  the region out of sideways pixels - wrong by ninety degrees rather than by a little.
+- **Replace the stored object.** The gallery, the thumbnail and the download hop read one key; a
+  surviving original under it would leave them disagreeing about which picture they meant.
+- **Re-state `bytes` and the dimensions on the row**, which now describe the object that exists.
+- **Refuse a rectangle that does not fit** rather than clamping it. Cutting a region nobody chose
+  is worse than saying no, and the upload is left untouched so a corrected retry completes against
+  the same bytes.
+
+An uncropped upload is not decoded-and-re-encoded at all: the member's own file is stored, rather
+than a recompressed copy of itself.
 
 ### Upload - pre-signed, as the transcript describes
 
