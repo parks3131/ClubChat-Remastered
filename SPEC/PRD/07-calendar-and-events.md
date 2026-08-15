@@ -7,8 +7,16 @@ Two views over **one merged feed**: a month grid for "what is happening when", a
 
 1. **The month grid marks any day carrying a calendar event, a race, or an Eboard meeting.**
    Tapping a marked day opens a popup listing that day's items; tapping an item opens it.
-2. **Polls are excluded from the month grid** but included in the Upcoming/Past list - a poll
-   has a closing deadline, not a day it happens on.
+2. **Polls are not on the calendar at all** - not the grid, and not the Upcoming/Past list. A
+   poll has a closing deadline, not a day it happens on, and this surface answers "what is
+   happening when". Polls are reached from the poll list in their own scope.
+
+   > **Widened 2026-08-15**, at the founder's request. This rule kept polls off the grid and on
+   > the list, and the half-exception was carried by every field of the feed: a nullable date, an
+   > "open" flag, an Upcoming rule that read open/closed instead of comparing a date, and a row
+   > with no date chip. Removing the half removed all four. Same shape as the DM reversal in
+   > [`00`](00-overview.md) and the editing one in [`05`](05-chat.md): a rule that was right about
+   > the grid and had been extended to the list by association.
 3. **Filler days from adjacent months are never marked or tappable**, so a marker always
    belongs to the month on screen.
 
@@ -33,10 +41,12 @@ Two views over **one merged feed**: a month grid for "what is happening when", a
    went. Stepping the year alone changes nothing until a month is picked, so a stray tap costs
    nothing. The year is a stepper rather than a list of years because a club calendar is used a
    season either side of today; that is the assumption to revisit first if people jump further.
-4. The Upcoming/Past list is one merged, sorted feed across events, races, meetings, and
-   polls. Past items are faded, most-recent-first.
-5. **A poll is "upcoming" while it is still open**, not by comparing its date - an open-ended
-   poll must never fall into Past.
+4. The Upcoming/Past list is one merged, sorted feed across events, races and meetings. Past
+   items are faded, most-recent-first. **Every row is dated**, so Upcoming and Past are decided
+   by one date comparison and nothing sorts into an undated tail.
+5. ~~**A poll is "upcoming" while it is still open**, not by comparing its date.~~ **Gone
+   2026-08-15 with rule 2**, since nothing on this feed is a poll any more. The slot is kept
+   rather than renumbered because these rules are cited by number.
 6. **The Calendar shows the active club's feed if the user is inside a club, and a merged
    cross-club feed otherwise.** In merged mode every row is tagged with its club and no
    create action is offered.
@@ -79,7 +89,10 @@ while its detail screen is open returns the user to the list. Direct route acces
 create/edit as a non-admin redirects.
 
 **Rejected alternatives.** One screen with grid above list (explicit founder request: the
-calendar should be just the grid). Polls on the grid by closing date (cluttered it). A
+calendar should be just the grid). Polls on the grid by closing date (cluttered it), and then
+polls on the list at all (rule 2). Hiding polls in the client while the server kept serving them
+- the rows had no other reader, so the exception would have stayed in the query, the wire and
+four call sites to no end. A
 separate calendar table everything writes into (a second copy would drift; a merged read
 cannot go stale). Hiding races the viewer cannot access (members need to know a race exists
 in order to ask to join it). A club picker on the global calendar (creation is club-scoped;

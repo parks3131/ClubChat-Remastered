@@ -200,22 +200,18 @@ function badgeTint(kind: FeedItem['kind']): { background: string; text: string }
       return { background: color.accent, text: color.onAccent };
     case 'meeting':
       return { background: color.inverseSurface, text: color.onInverseSurface };
-    case 'poll':
-      return { background: color.secondaryContainer, text: color.onSecondarySoft };
     case 'event':
       return { background: color.tertiarySoft, text: color.onTertiarySoft };
   }
 }
 
-/** Every kind on this feed now has somewhere to land, so this returns a string in every case. */
+/** Every kind on this feed has somewhere to land, so this returns a string in every case. */
 function targetFor(item: FeedItem): string {
-  return item.kind === 'poll'
-    ? `/polls/${item.id}`
-    : item.kind === 'race'
-      ? `/races/${item.id}`
-      : item.kind === 'meeting'
-        ? `/meetings/${item.id}`
-        : `/events/${item.id}`;
+  return item.kind === 'race'
+    ? `/races/${item.id}`
+    : item.kind === 'meeting'
+      ? `/meetings/${item.id}`
+      : `/events/${item.id}`;
 }
 
 /** One item under the selected day. */
@@ -240,9 +236,7 @@ function DayRow({ item, showClub }: { item: FeedItem; showClub: boolean }) {
         race's date read as an instant is UTC midnight, so every race carried a confident "7:00 PM"
         that was really the previous evening in New York.
       */}
-      {item.at !== null && !item.allDay && (
-        <Text style={styles.meta}>{formatTimeOfDay(item.at)}</Text>
-      )}
+      {!item.allDay && <Text style={styles.meta}>{formatTimeOfDay(item.at)}</Text>}
     </>
   );
 

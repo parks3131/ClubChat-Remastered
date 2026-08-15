@@ -649,7 +649,8 @@ ClubChat-Remastered/
 ├── SPEC/
 │   ├── PRD/                     product truth: 19 documents
 │   ├── TECH/                    system truth: 18 documents
-│   ├── decisions/               27 ADRs, immutable once accepted
+│   ├── DESIGN/                  what a surface looks like: 11 surfaces
+│   ├── decisions/               34 ADRs, immutable once accepted
 │   └── templates/               feature spec, migration checklist, authorization checklist
 ├── scripts/                     surface gate, service waiters, repo lint
 ├── AGENTS.md                    the working agreement this repo is built under
@@ -738,7 +739,7 @@ The repository is written against a spec rather than the other way around.
 - [`SPEC/TECH/`](SPEC/TECH/) is **system truth**: connection layer, channel log, message flows,
   effects engine, authorization, push, media, client architecture, data model, wire protocol,
   failure modes, and a catalogue of every server-side event.
-- [`SPEC/decisions/`](SPEC/decisions/) holds **27 ADRs**, immutable once accepted, each recording
+- [`SPEC/decisions/`](SPEC/decisions/) holds **34 ADRs**, immutable once accepted, each recording
   the alternative that was rejected and why. Reversals are recorded as new decisions rather than
   by editing the old one, which is how ADR-0009 reads today.
 - [`SPEC/TECH/14-engineering-pitfalls.md`](SPEC/TECH/14-engineering-pitfalls.md) is the v1

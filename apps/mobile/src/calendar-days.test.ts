@@ -19,7 +19,7 @@ const at = (year: number, month: number, day: number, hour: number, minute = 0):
 const item = (
   kind: FeedItem['kind'],
   id: string,
-  when: string | null,
+  when: string,
   allDay = false,
 ): FeedItem => ({
   kind,
@@ -62,14 +62,22 @@ describe('bucketing a feed into days', () => {
     expect([...byDay.keys()]).toEqual(['2026-09-23']);
   });
 
-  it('keeps polls and undated items off the grid', () => {
+  it('buckets every kind on the feed, none of which can be undated', () => {
+    // This asserted the opposite until 2026-08-15: polls and undated rows were skipped here,
+    // mirroring the server's markers query. Polls left the feed and `at` stopped being nullable
+    // with them, so the skip had nothing left to skip. A meeting is included deliberately - it
+    // is the kind most easily forgotten, being visible only to Eboard members.
     const byDay = bucketByDay([
-      item('poll', 'closes-today', at(2026, 8, 3, 12)),
-      item('event', 'undated', null),
-      item('event', 'real', at(2026, 8, 3, 12)),
+      item('event', 'practice', at(2026, 8, 3, 12)),
+      item('meeting', 'board-sync', at(2026, 8, 3, 18)),
+      item('race', 'invitational', '2026-08-03', true),
     ]);
 
-    expect(byDay.get('2026-08-03')?.map((each) => each.id)).toEqual(['real']);
+    expect(byDay.get('2026-08-03')?.map((each) => each.id)).toEqual([
+      'practice',
+      'board-sync',
+      'invitational',
+    ]);
   });
 });
 

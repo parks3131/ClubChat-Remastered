@@ -1187,20 +1187,29 @@ describe('the merged calendar feed', () => {
     expect(asOwner.some((i) => i.kind === 'meeting')).toBe(true);
   });
 
-  it('keeps an open deadline-less poll in Upcoming, never in Past', async () => {
+  it('carries no poll, whether it has a deadline or not', async () => {
+    // Polls left the feed on 2026-08-15. It answers "what is happening when", and a closing
+    // deadline is not a thing that happens. BOTH shapes are created here: the deadline-less one
+    // is what used to force `at` to be nullable for every other kind on the feed.
     const f = await setup();
     await createPoll(h.db, await ctxFor(f.ownerId), {
       clubId: f.clubId, scope: 'club', scopeId: f.clubId,
       question: 'Open ended', options: ['a', 'b'], closesInMinutes: null,
     });
+    await createPoll(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId, scope: 'club', scopeId: f.clubId,
+      question: 'Closing soon', options: ['a', 'b'], closesInMinutes: 60,
+    });
 
     const feed = await readCalendarFeed(h.db, await ctxFor(f.memberId), { clubId: f.clubId });
-    const poll = feed.find((i) => i.kind === 'poll');
-    expect(poll).toBeDefined();
-    // Bucketed by open/closed, never by date - a date comparison would strand it in Past
-    // where nobody would ever vote.
-    expect(poll?.upcoming, 'an open poll fell into Past').toBe(true);
-    expect(poll?.at).toBeNull();
+    const titles = feed.map((i) => i.title);
+    expect(titles, 'a deadline-less poll reached the feed').not.toContain('Open ended');
+    expect(titles, 'a dated poll reached the feed').not.toContain('Closing soon');
+
+    // And nothing left on the feed can be undated. Asserted at runtime rather than trusted
+    // from the type, because `FeedItem` is a hand-written shape over a raw `db.execute` - the
+    // class of lie AGENTS failure mode 7 is about.
+    expect(feed.every((i) => i.at !== null && i.at.length > 0)).toBe(true);
   });
 
   it('gives a race a date and an event an instant, and never converts one into the other', async () => {
@@ -1225,7 +1234,7 @@ describe('the merged calendar feed', () => {
     expect(event?.at).toBe('2026-04-15T18:00:00.000Z');
   });
 
-  it('excludes polls from the month grid but keeps events and races', async () => {
+  it('marks the day of every event and race, and nothing at all for a poll', async () => {
     const f = await setup();
     await setupRace(f);
     await createEvent(h.db, await ctxFor(f.ownerId), {

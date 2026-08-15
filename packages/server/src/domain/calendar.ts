@@ -5,17 +5,26 @@
  * "what is coming up". There is deliberately no separate calendar table that everything
  * writes into - a second copy would drift, whereas a merged read cannot go stale.
  *
- * Four rules are enforced here rather than in the client, because each is a correctness
+ * Three rules are enforced here rather than in the client, because each is a correctness
  * property rather than a display choice:
  *
  *  1. **Every read respects the viewer's own access.** An Eboard meeting appears only for
- *     Eboard members; a race poll only for race members.
+ *     Eboard members.
  *  2. **Every race is visible to every club member**, whether or not they have race access -
  *     members need to know a race exists in order to ask to join it.
- *  3. **Polls are excluded from the month grid** but included in the list. A poll has a
- *     closing deadline, not a day it happens on.
- *  4. **A poll is "upcoming" while it is still open**, never by comparing its date. An
- *     open-ended poll must never fall into Past.
+ *  3. **Only a race that HAS a date is a calendar item.** The nullable `race_date` is what
+ *     separates a dated race from an ordinary side group, and this query's predicate is the
+ *     only thing enforcing it.
+ *
+ * > **Polls left this feed on 2026-08-15, at the founder's request.** They had never been on
+ * > the grid - a poll has a closing deadline rather than a day it happens on - so they lived
+ * > only in the Upcoming/Past list, and paid for the difference at every stop: a nullable
+ * > `at`, an `open` flag nothing else needed, an "upcoming" rule that read open/closed instead
+ * > of comparing a date, no date chip on the row, and a skip in both the markers query and the
+ * > client's day bucketing. This feed answers "what is happening when", and a deadline is not
+ * > a thing that happens. Removing the branch removed all six exceptions with it, and made a
+ * > null `at` unrepresentable. Polls are reached from their own screen in each scope. See
+ * > `PRD/07`.
  *
  * This is also the least scalable read in the product: one read per feature per club the
  * viewer belongs to. It is expressed as a single query per call for that reason.
@@ -25,7 +34,7 @@ import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import type { AccessContext } from '../policy/context.ts';
 
-export type FeedItemKind = 'event' | 'race' | 'meeting' | 'poll';
+export type FeedItemKind = 'event' | 'race' | 'meeting';
 
 export type FeedItem = {
   kind: FeedItemKind;
@@ -35,13 +44,18 @@ export type FeedItem = {
   clubName: string;
   title: string;
   /**
-   * When it happens. For a poll this is its deadline, which is why polls are off the grid.
+   * When it happens.
+   *
+   * **Never null.** Every source on this feed is dated: `calendar_events.starts_at` and
+   * `meetings.starts_at` are both NOT NULL, and the race branch selects only rows whose
+   * `race_date` is set. That was not true while polls were here, and the nullability cost
+   * every consumer a branch it no longer needs.
    *
    * **Two shapes, told apart by `allDay`**: an ISO instant for something that happens at a time,
    * and a date-only `YYYY-MM-DD` for something that happens on a day. They are NOT interchangeable
    * and flattening one into the other is a dated bug - see `allDay`.
    */
-  at: string | null;
+  at: string;
   /**
    * True when `at` is a day rather than a moment, which today means a race.
    *
@@ -59,8 +73,6 @@ export type FeedItem = {
   allDay: boolean;
   /** Whether this belongs in Upcoming or Past. */
   upcoming: boolean;
-  /** Only meaningful for a poll. */
-  open?: boolean;
   /** True when the viewer can enter it. A race they cannot enter still appears. */
   accessible: boolean;
 };
@@ -78,7 +90,7 @@ export async function readCalendarFeed(
 ): Promise<FeedItem[]> {
   const clubFilter = opts.clubId ?? null;
 
-  // One query, four sources. Note each branch's access predicate is in SQL rather than
+  // One query, three sources. Note each branch's access predicate is in SQL rather than
   // applied afterwards in JS: filtering after the fact would mean loading rows the viewer
   // may not read, and one forgotten filter downstream would leak them.
   const rows = await db.execute<{
@@ -87,9 +99,8 @@ export async function readCalendarFeed(
     club_id: string;
     club_name: string;
     title: string;
-    at: string | null;
+    at: string;
     all_day: boolean;
-    open: boolean | null;
     accessible: boolean;
   }>(sql`
     WITH my_clubs AS (
@@ -106,8 +117,7 @@ export async function readCalendarFeed(
     -- all_day is carried per branch rather than inferred from the kind downstream, so a future
     -- date-only source has to answer the question rather than silently defaulting to an instant.
     SELECT 'event'::text AS kind, e.id::text, e.club_id::text, cl.name AS club_name,
-           e.title, e.starts_at::text AS at, false AS all_day, NULL::boolean AS open,
-           true AS accessible
+           e.title, e.starts_at::text AS at, false AS all_day, true AS accessible
       FROM calendar_events e
       JOIN clubs cl ON cl.id = e.club_id
      WHERE e.club_id IN (SELECT club_id FROM my_clubs)
@@ -123,10 +133,11 @@ export async function readCalendarFeed(
     -- same object serves an actual race and an ordinary side group, and a group has no day.
     -- The null is what keeps it off the calendar, and this predicate is the only thing
     -- enforcing that - without it an undated race lands on the feed with a NULL "at" column,
-    -- which every consumer would then have to defend against.
+    -- which every consumer would then have to defend against. It is also, since polls left on
+    -- 2026-08-15, the only thing keeping FeedItem.at non-null.
     -- (No backticks in this comment: one of those ends the surrounding template literal.)
     SELECT 'race'::text, r.id::text, r.club_id::text, cl.name,
-           r.name, r.race_date::text, true, NULL::boolean,
+           r.name, r.race_date::text, true,
            (r.id IN (SELECT race_id FROM my_races)) AS accessible
       FROM races r
       JOIN clubs cl ON cl.id = r.club_id
@@ -138,55 +149,30 @@ export async function readCalendarFeed(
 
     -- Eboard meetings. Members of that space ONLY.
     SELECT 'meeting'::text, m.id::text, ec.club_id::text, cl.name,
-           m.title, m.starts_at::text, false, NULL::boolean, true
+           m.title, m.starts_at::text, false, true
       FROM meetings m
       JOIN eboard_channels ec ON ec.id = m.eboard_id
       JOIN clubs cl ON cl.id = ec.club_id
      WHERE m.eboard_id IN (SELECT eboard_id FROM my_eboards)
        AND (${clubFilter}::uuid IS NULL OR ec.club_id = ${clubFilter}::uuid)
-
-    UNION ALL
-
-    -- Polls, scoped three ways. A race poll reaches roster members only - never roster
-    -- union club admins, which would notify people about a poll they cannot open.
-    SELECT 'poll'::text, p.id::text, p.club_id::text, cl.name,
-           p.question, p.closes_at::text, false,
-           NOT (p.closed_at IS NOT NULL OR (p.closes_at IS NOT NULL AND p.closes_at < now())) AS open,
-           true
-      FROM polls p
-      JOIN clubs cl ON cl.id = p.club_id
-     WHERE (${clubFilter}::uuid IS NULL OR p.club_id = ${clubFilter}::uuid)
-       AND (
-             (p.scope = 'club'   AND p.club_id  IN (SELECT club_id  FROM my_clubs))
-          OR (p.scope = 'eboard' AND p.scope_id IN (SELECT eboard_id FROM my_eboards))
-          OR (p.scope = 'race'   AND p.scope_id IN (SELECT race_id  FROM my_races))
-           )
   `);
 
   const now = Date.now();
 
   return rows.rows.map((row) => {
-    const kind = row.kind as FeedItemKind;
     // An all-day value is passed through as the date it already is. Normalising it the way an
     // instant is normalised is what produced the UTC-midnight race - see `FeedItem.allDay`.
-    const at =
-      row.at === null ? null : row.all_day ? row.at.slice(0, 10) : new Date(row.at).toISOString();
-
-    // A poll is upcoming while it is OPEN, never by comparing its date. Comparing dates
-    // would drop an open-ended poll into Past, where nobody would ever vote in it.
-    const upcoming =
-      kind === 'poll' ? row.open === true : at !== null && new Date(at).getTime() >= now;
+    const at = row.all_day ? row.at.slice(0, 10) : new Date(row.at).toISOString();
 
     return {
-      kind,
+      kind: row.kind as FeedItemKind,
       id: row.id,
       clubId: row.club_id,
       clubName: row.club_name,
       title: row.title,
       at,
       allDay: row.all_day,
-      upcoming,
-      ...(kind === 'poll' ? { open: row.open === true } : {}),
+      upcoming: new Date(at).getTime() >= now,
       accessible: row.accessible,
     };
   });
@@ -195,11 +181,12 @@ export async function readCalendarFeed(
 /**
  * The days of a month that carry something.
  *
- * **Polls are excluded** - a poll has a deadline, not a day it happens on, and putting them
- * on the grid cluttered it. **Filler days from adjacent months are never marked**, so a
- * marker always belongs to the month on screen; that is the caller's rendering concern, but
- * this returns only dates inside the requested month so a filler day cannot be marked by
- * accident.
+ * **Filler days from adjacent months are never marked**, so a marker always belongs to the
+ * month on screen; that is the caller's rendering concern, but this returns only dates inside
+ * the requested month so a filler day cannot be marked by accident.
+ *
+ * Every row on the feed is now a day this can mark. It used to skip polls, which is the one
+ * thing it did beyond the month filter - see `readCalendarFeed` on why they are gone.
  */
 export async function readMonthMarkers(
   db: Db,
@@ -211,8 +198,6 @@ export async function readMonthMarkers(
 
   const days = new Set<string>();
   for (const item of feed) {
-    if (item.kind === 'poll') continue;
-    if (!item.at) continue;
     const day = item.at.slice(0, 10);
     // Inside the requested month only.
     if (day.startsWith(prefix)) days.add(day);

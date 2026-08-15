@@ -115,6 +115,7 @@ survives the number changing.
 | 08 | [Attachment panel](DESIGN/08-attachment-panel.md) | What the composer's "+" opens, in the keyboard's place, and the swap between them |
 | 09 | [Chat composer](DESIGN/09-chat-composer.md) | The bar you write in, and how it moves with the keyboard |
 | 10 | [Member card](DESIGN/10-member-card.md) | Who somebody is, raised over the roster that asked: the panel travels, the shade stays put |
+| 11 | [Photo compose](DESIGN/11-photo-compose.md) | The step between choosing a photo and sending it: a look at it, a crop stored as fractions, and a caption |
 
 Written as surfaces are worked on rather than backfilled in a pass, since a spec written by reading
 code instead of by looking at a device starts out wrong. See [`DESIGN/README.md`](DESIGN/README.md)
@@ -158,6 +159,8 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0030](decisions/0030-the-nudge-cooldown-is-a-constraint.md) | The Nudge cooldown is an exclusion constraint, not a check in the handler *(superseded by 0031)* |
 | [0031](decisions/0031-the-nudge-cooldown-is-per-meetup.md) | The Nudge cooldown is per meetup, and a past day cannot be nudged |
 | [0032](decisions/0032-every-chat-message-pushes.md) | Every chat message pushes, and still writes no inbox row |
+| [0033](decisions/0033-a-message-may-be-edited-for-five-minutes.md) | A message may be edited by its sender for five minutes |
+| [0034](decisions/0034-the-calendar-carries-only-things-that-happen-on-a-day.md) | The calendar carries only things that happen on a day |
 
 ## Templates
 

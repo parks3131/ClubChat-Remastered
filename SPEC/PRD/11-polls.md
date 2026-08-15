@@ -33,7 +33,8 @@ coming".
    > were themselves a founder decision taken before the composer was designed; he sent a
    > reference with an absolute picker and chose it over keeping them. A duration is fewer taps
    > for "about a day"; a moment is the thing a member can actually check a poll against, and it
-   > says the same thing the card and the calendar say.
+   > says the same thing the card and the poll list say. *(Read "and the calendar" until
+   > 2026-08-15, when polls came off it - rule 15.)*
 9. **Ten minutes before a poll's deadline, everyone who can access it is reminded - including
    the creator.** This fires **once per poll, ever**.
 10. **Creating a poll notifies everyone who can access it except the creator**, and posts a
@@ -57,7 +58,10 @@ coming".
 13. The list has an **ALL POLLS** tab and a **MY VOTES** tab (polls the viewer has voted in).
 14. An open poll is a live card with a countdown when it has a deadline; a closed poll is
     visually muted and labelled CLOSED.
-15. Polls appear in the calendar's events list, bucketed by **open/closed**, never by date.
+15. **Polls are not on the calendar**, in either of its views. Removed 2026-08-15; this rule
+    used to put them in the Upcoming/Past list bucketed by open/closed rather than by date. The
+    poll list in each scope is the only place a poll is enumerated. See
+    [Calendar and events](07-calendar-and-events.md) rule 2.
 
 **Out of scope.** Ranked or weighted voting. Editing a question or options after creation
 (would invalidate cast votes). Adding options after creation, or write-ins. Fully anonymous

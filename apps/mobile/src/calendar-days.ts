@@ -52,22 +52,22 @@ export type DayChoice = { day: string | null } | null;
  * midnight, which is the previous day for every reader in the Americas. That is the same rule
  * `dates.ts` opens with, and the reason the two shapes are told apart rather than normalised.
  */
-export function dayKeyOf(item: FeedItem & { at: string }): string {
+export function dayKeyOf(item: FeedItem): string {
   return item.allDay ? item.at.slice(0, 10) : toDateKey(new Date(item.at));
 }
 
 /**
  * Group a feed into the days the grid marks.
  *
- * **Polls are excluded**, matching the server's markers query: a poll has a closing deadline
- * rather than a day it happens on. They stay in the events list, which is where `PRD/07` puts
- * them. An item with no date is excluded for the same reason.
+ * **Every row belongs on a day**, so nothing is skipped here. This used to drop polls and
+ * undated rows, which were the same exception twice: a poll carried a closing deadline rather
+ * than a day, and an open-ended one carried nothing at all. Polls left the feed on 2026-08-15
+ * and `at` stopped being nullable with them.
  */
 export function bucketByDay(items: readonly FeedItem[]): Map<string, FeedItem[]> {
   const byDay = new Map<string, FeedItem[]>();
   for (const item of items) {
-    if (item.kind === 'poll' || item.at === null) continue;
-    const day = dayKeyOf({ ...item, at: item.at });
+    const day = dayKeyOf(item);
     const bucket = byDay.get(day);
     if (bucket) bucket.push(item);
     else byDay.set(day, [item]);

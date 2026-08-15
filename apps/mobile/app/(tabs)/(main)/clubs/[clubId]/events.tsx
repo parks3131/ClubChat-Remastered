@@ -2,8 +2,13 @@
  * The events list: Upcoming and Past, merged.
  *
  * It reads the same merged calendar feed as the grid rather than an events-only endpoint, which is
- * why races, meetings and polls appear here too - `PRD/07` calls for one merged list, and a separate
+ * why races and meetings appear here too - `PRD/07` calls for one merged list, and a separate
  * events read would be a second source of truth about what is happening.
+ *
+ * **Polls are not on it**, since 2026-08-15. This list and the grid are now the same set of rows
+ * rather than the grid being a subset, which is what the exception cost: a poll has a closing
+ * deadline rather than a day, so it needed a nullable date, no bib, and an "upcoming" rule that
+ * read open/closed. Polls live on the club, race and Eboard poll screens.
  *
  * Creating is admin-only and lives here rather than on the calendar grid, because an event belongs
  * to a club and this screen already has one.
@@ -145,8 +150,6 @@ function tintFor(kind: FeedItem['kind']): { background: string; text: string } {
       return { background: color.accent, text: color.onAccent };
     case 'meeting':
       return { background: color.inverseSurface, text: color.onInverseSurface };
-    case 'poll':
-      return { background: color.secondaryContainer, text: color.onSecondarySoft };
     case 'event':
       return { background: color.tertiarySoft, text: color.onTertiarySoft };
   }
@@ -155,50 +158,39 @@ function tintFor(kind: FeedItem['kind']): { background: string; text: string } {
 /**
  * One row: a date "bib" beside the detail.
  *
- * v1's treatment, and it earns its space - a merged list of races, events, meetings and polls is
- * scanned by date far more often than by kind, and a left-aligned column of days is scannable in a
- * way a date buried in a subtitle is not.
+ * v1's treatment, and it earns its space - a merged list of races, events and meetings is scanned
+ * by date far more often than by kind, and a left-aligned column of days is scannable in a way a
+ * date buried in a subtitle is not.
  *
- * **A poll gets no bib.** Its `at` is a closing deadline rather than a day it happens on, and an
- * open-ended one has no date at all - a day chip would state something untrue.
+ * **Every row carries a bib.** A poll was the one kind that could not: its `at` was a closing
+ * deadline rather than a day it happens on, and an open-ended one had no date at all, so a day
+ * chip would have stated something untrue. Polls left this list on 2026-08-15.
  */
 function EventRow({ item, faded }: { item: FeedItem; faded: boolean }) {
   const router = useRouter();
   const tint = tintFor(item.kind);
-  const bib = item.kind === 'poll' || item.at === null ? null : bibParts(item.at, item.allDay);
-  // Every kind on this merged feed has a screen now, events included - so every row opens.
+  const bib = bibParts(item.at, item.allDay);
+  // Every kind on this merged feed has a screen, events included - so every row opens.
   const target =
-    item.kind === 'poll'
-      ? `/polls/${item.id}`
-      : item.kind === 'race'
-        ? `/races/${item.id}`
-        : item.kind === 'meeting'
-          ? `/meetings/${item.id}`
-          : `/events/${item.id}`;
+    item.kind === 'race'
+      ? `/races/${item.id}`
+      : item.kind === 'meeting'
+        ? `/meetings/${item.id}`
+        : `/events/${item.id}`;
 
   const body = (
     <>
-      {bib === null ? (
-        <View style={[styles.bib, styles.bibEmpty]}>
-          <MaterialIcons name="how-to-vote" size={22} color={color.textSecondary} />
-        </View>
-      ) : (
-        <View style={[styles.bib, { backgroundColor: tint.background }]}>
-          <Text style={[styles.bibDay, { color: tint.text }]}>{bib.day}</Text>
-          <Text style={[styles.bibMonth, { color: tint.text }]}>{bib.month}</Text>
-        </View>
-      )}
+      <View style={[styles.bib, { backgroundColor: tint.background }]}>
+        <Text style={[styles.bibDay, { color: tint.text }]}>{bib.day}</Text>
+        <Text style={[styles.bibMonth, { color: tint.text }]}>{bib.month}</Text>
+      </View>
       <View style={styles.rowBody}>
         <Text style={[styles.badge, { backgroundColor: tint.background, color: tint.text }]}>
           {item.kind.toUpperCase()}
         </Text>
         <Text style={styles.rowTitle}>{item.title}</Text>
         <Text style={styles.meta}>
-          {item.at === null
-            ? 'No deadline'
-            : item.kind === 'race'
-              ? formatDateOnly(item.at)
-              : formatInstant(item.at)}
+          {item.kind === 'race' ? formatDateOnly(item.at) : formatInstant(item.at)}
         </Text>
         {/* A race the viewer can see but not enter still appears, and says so. */}
         {item.kind === 'race' && !item.accessible && (
@@ -497,7 +489,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bibEmpty: { backgroundColor: color.cardSunken },
   bibDay: { ...type.numeric, fontSize: 22, lineHeight: 24 },
   bibMonth: { ...type.label, fontSize: 10, marginTop: 2 },
   rowBody: { flex: 1, gap: space.xs },

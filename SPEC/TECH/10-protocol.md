@@ -212,7 +212,9 @@ GET    /news/:id · PATCH · DELETE            ← any club admin, not only the 
 POST   /news/:id/reactions                   ← the same emoji set as chat, constrained in the column
 
 GET    /calendar?club=:id&when=upcoming|past|all   ← merged feed; omit club for cross-club
-GET    /calendar/markers?club=:id&year=&month=     ← the month grid; polls excluded
+                                                     events, races and meetings. No polls, and
+                                                     every row carries a date (PRD/07 rule 2)
+GET    /calendar/markers?club=:id&year=&month=     ← the month grid; days inside the month only
 
 POST   /media/upload-intent · POST /media/:id/complete
 GET    /media/:id[?variant=thumb|display]   ← authorized redirect, hour-aligned signature

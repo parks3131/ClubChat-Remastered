@@ -44,12 +44,11 @@ export function registerCalendarRoutes(app: FastifyInstance, deps: AppDeps): voi
         : items.filter((item) => item.upcoming === (query.data.when === 'upcoming'));
 
     // Upcoming ascending and Past descending: both put the row the reader opened the tab for
-    // at the top. Items with no date sort last, which is where an open-ended poll belongs.
-    const sorted = [...filtered].sort((a, b) => {
-      if (a.at === null) return b.at === null ? 0 : 1;
-      if (b.at === null) return -1;
-      return query.data.when === 'past' ? b.at.localeCompare(a.at) : a.at.localeCompare(b.at);
-    });
+    // at the top. Every row is dated, so there is no undated tail to sort last - that branch
+    // existed for a deadline-less poll and went with polls on 2026-08-15.
+    const sorted = [...filtered].sort((a, b) =>
+      query.data.when === 'past' ? b.at.localeCompare(a.at) : a.at.localeCompare(b.at),
+    );
 
     return { items: sorted };
   });
@@ -63,9 +62,8 @@ export function registerCalendarRoutes(app: FastifyInstance, deps: AppDeps): voi
   /**
    * Which days of a month carry something.
    *
-   * **Polls are excluded** - a poll has a deadline rather than a day it happens on - and only
-   * days inside the requested month are returned, so a filler day borrowed from an adjacent
-   * month cannot be marked by accident.
+   * Only days inside the requested month are returned, so a filler day borrowed from an
+   * adjacent month cannot be marked by accident.
    */
   app.get('/calendar/markers', async (request, reply) => {
     const query = MarkerQuery.safeParse(request.query);

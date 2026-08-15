@@ -13,6 +13,61 @@ Newest first.
 
 ---
 
+## 2026-08-15 - The calendar stops carrying things that do not happen
+
+The founder asked for the Events Upcoming/Past list to hold only events and races. Polls were on
+it; Eboard meetings were too, and were raised and kept - a meeting is dated club business, it
+already marks a day on the grid, and dropping it from the list alone would have made the two views
+disagree about what exists.
+
+**The interesting part was how far the poll rows reached, and how few readers they had.** The grid
+and the list are two views over one server read, and polls were excluded from the grid in two
+separate places: `readMonthMarkers` on the server, and `bucketByDay` on the client. The day popup
+renders from that same bucketing. So the Upcoming/Past list was the **only** surface in the product
+that had ever displayed a poll from this feed - and taking it off that list left the whole `poll`
+branch of the query with no consumer at all.
+
+That turned a display filter into a deletion, which is the version worth having. One kind with no
+day had been making every other kind pay for the possibility:
+
+| The feed carried | Only because of polls |
+|---|---|
+| `at: string \| null` | An open-ended poll has no deadline |
+| `open?: boolean` | Nothing else has an open/closed state |
+| An `upcoming` rule branching on kind | A poll is upcoming while **open**; everything else compares a date |
+| A sort with an undated tail | Somewhere for a deadline-less poll to land |
+| A row with no date chip, and a vote glyph instead | A day chip would have said something untrue |
+| Two grid skips, server and client | The grid never wanted them |
+
+Six defences against a null that one of four sources could produce. Each was individually correct
+and none named the others - the same shape as failure mode 9, one layer up: not a predicate copied
+and drifted, but a single leak that four separate consumers had each learned to absorb locally.
+`FeedItem.at` is now non-null, and the race branch's `race_date IS NOT NULL` is what holds it.
+
+**PRD/07 rule 5 was struck through rather than deleted.** Its rules are cited by number and rule 10
+is cited from two places, so removing a rule would have silently repointed both. ADR-0034 records
+the decision and the rejected alternatives, the first of which was the one-line client filter.
+
+Verified live rather than by test alone: against the founder's own club, which holds **34 polls, 18
+of them deadline-less**, the running API returned 13 rows - 10 events and 3 races - on all three
+windows, with no null date and no `open` field anywhere. Then the same club in the browser: Upcoming
+showed 6 events and 3 races each with a date bib, Past showed 4 events most-recent-first, the string
+"POLL" appeared nowhere on either, the grid marked the same 11 days as before, and a tapped day
+still shows a time for an event and none for an all-day race.
+
+1,299 tests. The two poll-shaped tests were inverted rather than deleted, because "a poll does not
+reach the feed" is the assertion that fails against the old code.
+
+> **A note on the session, not the change.** Three agents were working in this repo at once. The
+> other two claimed migration `0031` and the whole photo-compose surface, which is why this change
+> deliberately needed neither. Midway through verification the API died, and it was not this work:
+> another agent had saved `channel-access.ts` with `` `platformModerators` `` written in backticks
+> **inside a `sql` template literal**, which ends the literal early - the exact trap the comment in
+> `domain/calendar.ts` warns about in as many words. Failure mode 22 says a watcher runs a
+> half-finished edit; with more than one agent it also runs somebody else's.
+
+---
+
 ## 2026-08-15 (last) - A photo gets a caption, and cropping goes to the server the hard way
 
 The founder sent Instagram's send sheet and asked for the same thing with one tool instead of

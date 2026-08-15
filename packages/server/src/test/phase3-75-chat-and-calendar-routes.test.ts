@@ -616,26 +616,31 @@ describe('the merged calendar', () => {
     expect(past.body.items.map((i: { title: string }) => i.title)).toEqual(['Old practice']);
   });
 
-  it('keeps an open deadline-less poll out of Past', async () => {
+  it('serves no poll on any of the three windows', async () => {
+    // Polls left the feed on 2026-08-15. Both shapes are created: the deadline-less one is the
+    // case that used to need an open/closed rule instead of a date comparison, and it is the
+    // reason `at` was nullable for every other kind.
     const owner = await signUp('CalPollOwner');
     const { clubId } = await createClubAs(owner);
 
-    // No deadline at all, which is the case that a date comparison would drop into Past -
-    // where nobody would ever vote in it.
     await as(owner, 'POST', `/clubs/${clubId}/polls`, {
       question: 'Open ended?',
       options: ['Yes', 'No'],
     });
+    await as(owner, 'POST', `/clubs/${clubId}/polls`, {
+      question: 'Closing soon?',
+      options: ['Yes', 'No'],
+      closesInMinutes: 60,
+    });
 
-    const past = await as(owner, 'GET', `/calendar?club=${clubId}&when=past`);
-    expect(past.body.items.map((i: { title: string }) => i.title)).not.toContain('Open ended?');
-
-    const upcoming = await as(owner, 'GET', `/calendar?club=${clubId}&when=upcoming`);
-    const poll = upcoming.body.items.find((i: { kind: string }) => i.kind === 'poll');
-    expect(poll).toBeTruthy();
-    expect(poll.open).toBe(true);
-    // A poll has a deadline rather than a day, so it sorts last among dated rows.
-    expect(poll.at).toBeNull();
+    for (const when of ['all', 'upcoming', 'past']) {
+      const res = await as(owner, 'GET', `/calendar?club=${clubId}&when=${when}`);
+      expect(res.status).toBe(200);
+      const kinds = res.body.items.map((i: { kind: string }) => i.kind);
+      expect(kinds, `a poll reached when=${when}`).not.toContain('poll');
+      // Every row that IS served is dated, which is what removing polls bought.
+      expect(res.body.items.every((i: { at: string | null }) => i.at !== null)).toBe(true);
+    }
   });
 
   it('hides an Eboard meeting from a non-member and shows every race to everyone', async () => {

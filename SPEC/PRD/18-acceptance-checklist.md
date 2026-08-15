@@ -104,8 +104,8 @@ A remaster is at parity when every line below passes on **iOS, Android, and web*
 - [ ] The heading changes as the swipe crosses halfway, and reverts if the swipe is dragged back.
 - [ ] A swipe does not steal a day tap, and does not block the page's vertical scroll.
 - [ ] Tapping the heading picks any month and year; **This month** returns to today.
-- [ ] The list merges events, races, meetings, and polls into Upcoming/Past.
-- [ ] An open, deadline-less poll never falls into Past.
+- [ ] The list merges events, races and meetings into Upcoming/Past.
+- [ ] **No poll appears in either view**, with or without a deadline - grid, day popup, or list.
 - [ ] Eboard meetings are absent from a non-member's calendar; races are visible to everyone.
 - [ ] The merged cross-club feed tags each row with its club and offers no create action.
 - [ ] The meetups week shows Monday-Sunday, hides past days on the current week, and says
