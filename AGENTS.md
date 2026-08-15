@@ -82,6 +82,11 @@ without being restated. Section 5 is the repo-specific part.
 6. **Every authorization change is proved, not reasoned about.** Attempt the forbidden action
    as the unprivileged actor and watch it be rejected. Reading the rule and concluding it
    looks right is not verification.
+7. **Never run a git command that acts on the whole working tree.** `git add -A`, `git add .`,
+   `git commit -a`, `git stash`, `git reset --hard`, `git checkout -- .`, `git clean`,
+   `git switch`. Somebody else's unfinished work is usually in this directory, and every one of
+   these either destroys it or takes it into your commit without saying so. Name your paths.
+   Section 2.5 has the whole procedure.
 
 ---
 
@@ -140,10 +145,87 @@ Order matters. Each step catches a class the previous one cannot.
 3. **If a decision was architectural and non-obvious, write an ADR**, with the rejected
    alternative recorded.
 4. **Commit only when asked.** No agent co-author line.
-5. **Branch and review policy: solo, direct to main.** Recorded from observed practice rather
-   than chosen freshly - every commit in this repo's history is on `main`. The gate is therefore
-   not review but section 2.3: type check, full suite, and a live smoke test before anything is
-   called done. Revisit if a second person starts committing.
+5. **Branch and review policy: direct to main from the founder's own tree, a branch from
+   anywhere else.** Recorded from observed practice rather than chosen freshly - the whole
+   history is on `main`, and it stayed sound while one agent worked at a time. From 2026-08-15
+   several run at once, so an agent with a worktree of its own commits to its branch and pushes
+   that; only work done in the founder's tree goes straight to `main`. The gate is still not
+   review but section 2.3: type check, full suite, and a live smoke test before anything is
+   called done.
+
+---
+
+## 2.5 Working alongside other agents
+
+Several agents work on this repo at the same time. Sometimes they are each in a worktree of their
+own and sometimes they share the founder's, and the difference decides everything below.
+
+**The point of all of it: make a collision LOUD.** In a shared tree a collision is silent. On
+2026-08-15 two agents edited `apps/mobile/src/api-types.ts` in the same afternoon - one adding a
+feed type, one adding DM and report types - and whichever committed first would have carried the
+other's unfinished work into its commit with no error, no marker, and nothing in the diff to say
+whose it was. On separate branches that identical collision is a merge conflict: it stops you, it
+shows you both sides, and you resolve it once. **A conflict is the good outcome here.** Everything
+in this section is chosen to convert the silent case into the loud one.
+
+1. **Take a worktree unless you need the running stack.** One command:
+
+   ```
+   ./scripts/agent-worktree.sh moderation
+   ```
+
+   It creates the tree, branches, installs, and assigns a free port triple. You may then commit
+   as often as you like without coordinating with anybody.
+
+   **Never symlink `node_modules` into a worktree** - the script's header explains why at length.
+   The workspace links are relative, so `@clubchat/shared` resolves back to the original tree and
+   you typecheck against another agent's half-written code. It produced an error in a file nobody
+   had touched, which is a bad hour.
+
+2. **The running stack and the phone are exclusive, and they are not yours by default.** One tree
+   holds 3000 / 3001 / 8081, the dev database and the iPhone. Everywhere else, `npm test` is
+   self-sufficient - the handler tests start their own throwaway containers. Ask before taking
+   the device or the founder's ports, and never restart a server you did not start.
+
+3. **If you ARE in the shared tree, ask what you own before writing, and make it include the
+   shared files.** Directory ownership is not enough here. Nearly every feature touches
+   `HISTORY.md`, `SPEC/README.md`, `TODO.md` and `PRD/18`, and `api-types.ts` and `schema.ts` sit
+   across feature lines by design. Those have to be assigned by name or they are assigned by
+   whoever saves last.
+
+4. **Commit by pathspec, never by staging:**
+
+   ```
+   git commit -F /tmp/message.txt -- path/one.ts path/two.tsx SPEC/DESIGN/11-whatever.md
+   ```
+
+   The `--` form commits those paths' working-tree content and ignores the index entirely, so
+   nothing another agent stages between your check and your commit can be swept in.
+
+   **The exception is a file that carries two agents' work**, where pathspec takes all of it.
+   There, stage your hunks with `git add -p <file>`, confirm with `git diff --cached --name-only`
+   that the staged set is exactly yours, and commit from the index. If a file you do not
+   recognise is staged, stop and say so rather than unstaging it - it may belong to a commit
+   somebody else is halfway through making.
+
+5. **Commit every green slice immediately.** The exposure is uncommitted work sitting in a shared
+   directory, and it grows with every minute. In your own worktree it is safe indefinitely.
+
+6. **Numbers are claimed, not discovered.** Migration numbers and the failure-mode list in 5.3
+   are both sequential, and two agents appending at once produce a duplicate rather than a
+   conflict - which nothing will catch. Say which number you are taking before you take it, and
+   re-read the highest one immediately before you write. `0031` was claimed by one agent while
+   another was checking for exactly that.
+
+7. **Pushing:** `git fetch origin && git merge --ff-only origin/main` from a shared tree, or a
+   rebase from your own worktree where nobody else's work is at risk. If either refuses, stop and
+   report it. Never force, and never rebase or amend a commit that has been pushed.
+
+8. **A syntax error in a shared file takes down somebody else's server.** Everything runs under
+   `node --watch`, so a half-saved file restarts the founder's API into a crash - a stray backtick
+   inside a `sql` template did exactly that on 2026-08-15. Metro is the same hazard pointed at the
+   phone: an unfinished save is a red screen in his hand. Write imports before usage, and prefer
+   one whole-file write to a sequence of partial ones.
 
 ---
 
@@ -227,6 +309,10 @@ npm run dev:api              # API on :3000
 npm run dev:gateway          # WebSocket gateway on :3001
 npm run dev:worker           # outbox drain
 npm run dev:mobile           # Expo client
+
+# A worktree, branch, install and free port triple for one agent, so several can work at
+# once without sharing a directory. See section 2.5 for why that is the whole game.
+./scripts/agent-worktree.sh moderation
 
 # re-export the system overview image from SPEC/TECH/17-diagrams.md.
 # Run in the same change as any edit to that file's first diagram, or the

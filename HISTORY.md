@@ -13,6 +13,78 @@ Newest first.
 
 ---
 
+## 2026-08-15 - The crop frame can be grabbed, and shows what it will send
+
+The crop shipped that morning cut exactly the right pixels and was reported back within the hour:
+"I love the crop" was not the first sentence. The first was "it is not user friendly so hard the
+crop it just runs or adjust weird". A feature that is correct and unusable, which is a specific and
+awkward class: nothing failed, no test could have gone red, and a screenshot of a finished crop
+looks the same whether it took one gesture or twenty.
+
+**Three causes, none of them in the arithmetic that decides the rectangle.**
+
+The first is the one worth remembering. The four corner handles were **children of the frame**,
+positioned half outside it on negative offsets so they would straddle the corner. A view outside
+its parent's bounds is not reliably hit-tested, so half of every target was never delivered a
+touch, and what remained was a 22-point square exactly on the corner. It was worst in the state
+every crop begins in: the frame opens on the whole picture, so all four corners sit against the
+picture's edge, where the outward half of each target had nowhere to be. The handles looked
+correct in a screenshot and were half absent to a finger.
+
+The second: the resize refused the **entire** gesture whenever either side reached the 48-point
+minimum (`if (width < MIN_SIZE || height < MIN_SIZE) return from`). Pulling a corner in too far
+therefore stopped the frame dead on both axes under a moving finger, which reads as broken rather
+than as strict. And a corner dragged past its opposite was normalised with `Math.abs`, which turns
+the rectangle inside out and throws it across the picture - "it just runs".
+
+The third: every frame of every drag re-rendered the whole compose screen, because the live
+rectangle was the parent's state. The image, the caption bar, the mention list and the keyboard
+avoider were all reconciled sixty times a second to move a one-pixel border.
+
+**The fix moved the geometry rather than tuning the gestures.** Eight grips now instead of four -
+the edges as well, because corners-only makes trimming one side a diagonal drag you have to hold
+straight. Each is 44 points, shrinks with the frame so corners and edges always tile without
+overlapping, and is **pushed inside the picture rather than trimmed at it**, which is what keeps a
+full-size target in the opening state. Each axis clamps independently, so a side that runs out
+pins at the minimum while the other keeps tracking. Corners cannot cross. The overlay became three
+layers - shades, chrome, grips - with the first two `pointerEvents: none`, so what somebody grabs
+is decided by one layer of nine invisible rectangles rather than by which decorated view happens
+to be on top. The drag lives in the overlay and tells the parent once, on release. A second finger
+landing re-baselines instead of teleporting the frame.
+
+All of it went into `crop-rect.ts` beside the conversions, for the reason that module already
+existed: a frame drawn perfectly can still be the wrong rectangle, and nothing on screen would say
+so. The grip layout is now a property a test states out loud - no zone overlaps another, none
+leaves the picture, a pinned axis still tracks, a corner never crosses.
+
+**Then the founder asked for the obvious thing, which had been missing since the crop was built:**
+show the cropped picture before sending it. Finishing a crop had changed nothing on screen. The
+picture returned to its full self and a single word under it changed from "Crop" to "Cropped", so
+the only account of what was about to be sent was that word - on a screen whose entire purpose is
+to be a look at what is about to be sent. The cut happens on the server, so there is no cropped
+file to draw; the stage instead became a window the shape of the region, with the whole picture
+behind it scaled and offset so the chosen part fills it and `overflow: hidden` doing the cutting.
+An untouched crop makes that window the whole picture, so there is one path rather than two. The
+test that matters walks `toSourceRect`'s output - the rectangle the server is actually asked to
+extract - back through the preview layout and lands on the window's own corners, so the preview
+cannot drift from the crop while still looking plausible.
+
+**A note for the next time a gesture "feels wrong".** Both defects survived a code review, a test
+suite and a device test, because every symptom was a feeling and every unit of code was correct.
+The rectangle was right, the conversions were tested, and nothing anywhere asserted on where a
+handle could be *touched* - so there was nothing to fail. `AGENTS.md` failure mode 33 records the
+class. Failure mode 32 was written in the same pass: it had been cited by the previous day's commit
+message and by `DESIGN/11` and had never actually been written down, which is its own small lesson
+about citing a number.
+
+Also settled on the way past: `react-native-gesture-handler`, `react-native-reanimated` and
+`react-native-worklets` are **already compiled into the installed binary**, arriving as transitive
+dependencies of expo-router and appearing in no import and no `package.json` of ours. The rule this
+screen earned the hard way twice - no native module for a gesture - is correct for a package that
+is not in the binary and does not apply to those three. The crop stayed on `PanResponder` anyway,
+because it is the house style and it is fast enough, but the option was ruled out for a reason that
+turned out not to be true.
+
 ## 2026-08-15 - The calendar stops carrying things that do not happen
 
 The founder asked for the Events Upcoming/Past list to hold only events and races. Polls were on
