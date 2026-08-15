@@ -23,11 +23,11 @@ to look at and nothing to crop, so the step would only ever be dismissed.
 | Surface | Full-bleed `inverseSurface`, the same dark ground `PhotoViewer` uses |
 | Close | A circular translucent button, top left. Backs out of the crop first, then out of the sheet |
 | Title | "Send to `<conversation>`", centred. The conversation, never the app |
-| Stage | The picture, fitted to its own proportions with a `radius.lg` corner |
+| Stage | The picture as it will be sent - the cropped region, fitted to ITS proportions with a `radius.lg` corner. The whole picture until something is cropped |
 | Crop | One tool, below the picture. The reference has three; two of them are not this product |
 | Caption bar | A translucent pill field, "Add a caption...", with the composer's accent send disc |
 | Crop footer | Replaces the caption bar while cropping: **Reset** and a filled **Done** |
-| Frame | A draggable rectangle with thirds guides and four accent corner handles, shaded outside |
+| Frame | A draggable rectangle with thirds guides, shaded outside. Four accent corner marks and a pip on each long enough side, for eight grips in all |
 
 ## Rules that must survive
 
@@ -70,14 +70,36 @@ to look at and nothing to crop, so the step would only ever be dismissed.
 9. **The `@` list is the composer's own component**, not a second one. A caption offers exactly the
    people a message would, and a fix to either lands on both.
 
+10. **The stage shows the region, not the picture, the moment one is chosen.** The screen exists to
+    be a look at what is about to be sent, and until 2026-08-15 it stopped being one as soon as
+    somebody cropped: the picture returned to its full self and only the word under it changed from
+    "Crop" to "Cropped". Nothing is cut on the phone (rule 3 still holds) - the region is a window
+    the shape of the crop with the whole picture behind it, scaled and offset so the chosen part
+    fills it. An untouched crop makes that window the whole picture, so there is one treatment
+    rather than two.
+
+11. **What can be grabbed is larger than what is drawn, and it is never outside the picture.** Eight
+    grips: four corners and four edges, each 44pt, shrinking with the frame so they always tile
+    without overlapping, and **pushed inside the picture rather than trimmed at it** - the frame
+    opens on the whole picture, so all four corners start against an edge, and trimming would make
+    the first grab of every crop the smallest target in the interaction. The marks drawn on them are
+    smaller on purpose. See [`AGENTS.md`](../../AGENTS.md) failure mode 33 for what happens when a
+    handle is a child of the frame instead of a sibling.
+
+12. **A resize clamps each axis on its own, and a corner never crosses its opposite.** Refusing the
+    whole drag when either side reaches the minimum stops the frame dead under a moving finger, and
+    normalising a crossed corner with `Math.abs` turns the rectangle inside out and throws it across
+    the picture. Both shipped on 2026-08-15 and both read as the crop being broken rather than
+    strict. `crop-rect.ts` owns this and asserts it.
+
 ## States
 
 | State | Treatment |
 |---|---|
 | Loading | A spinner on the stage while the picture is measured |
 | Ready | Picture, Crop, caption bar, send disc |
-| Cropped | The tool reads "Cropped" rather than "Crop", so the choice is visible without entering the mode |
-| Cropping | Frame with thirds and four accent corner handles; shaded outside; Reset and Done |
+| Cropped | The stage shows the region rather than the picture, and the tool reads "Cropped" rather than "Crop" |
+| Cropping | The whole picture, square-cornered, under a frame with thirds, four corner marks and four edge pips; shaded outside; Reset and Done |
 | Mentioning | The `@` list rises above the caption bar, on the dark treatment |
 | Unreadable picture | A line under the stage rather than a blank surface |
 
@@ -91,8 +113,15 @@ to look at and nothing to crop, so the step would only ever be dismissed.
 ## Accessibility
 
 Every control is labelled by what it does rather than what it is: "Discard this photo", "Crop this
-photo", "Finish cropping", "Send this photo". The crop handles are drag targets of 44pt around a
-22pt drawn corner, so the thing you can hit is larger than the thing you can see.
+photo", "Finish cropping", "Send this photo". The crop's grips are 44pt targets around a 22pt drawn
+corner, so the thing you can hit is larger than the thing you can see - a claim this spec made from
+the day it was written and the code did not honour until 2026-08-15.
+
+**The frame itself cannot be adjusted with VoiceOver**, and is not pretended at: the grips carry no
+labels, because nine unlabelled stops between Crop and Done would be worse than none. A drag is not
+a gesture assistive technology can perform, so cropping by ear needs adjustable controls rather than
+a label on a drag target. The mode can always be entered and left, and Reset undoes a crop, so
+nothing traps anybody and nothing is cut by accident.
 
 ## Rejected alternatives
 

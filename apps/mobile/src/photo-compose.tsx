@@ -54,6 +54,7 @@ import {
 import {
   CropOverlay,
   isWholeImage,
+  previewLayout,
   toNorm,
   toPoints,
   toSourceRect,
@@ -126,18 +127,35 @@ export function PhotoCompose({
   }, [uri]);
 
   /*
-   * Where the picture is drawn, computed rather than left to `resizeMode: contain`.
+   * Where the WHOLE picture is drawn, computed rather than left to `resizeMode: contain`.
    *
    * `contain` letterboxes inside its container, so the drawn image and the container would be
-   * different rectangles. Fitting it here means the container IS the picture - which costs
-   * nothing now and is what a crop frame will need later, since a frame in container points is
-   * then a frame on the image with no letterbox offset to subtract.
+   * different rectangles. Fitting it here means the container IS the picture, so a frame in
+   * container points is a frame on the image with no letterbox offset to subtract.
+   *
+   * This is what the crop mode shows, because a frame can only be dragged over what it is
+   * cutting from.
    */
-  const display = useMemo(() => {
-    if (source === null || box === null) return null;
-    const scale = Math.min(box.width / source.width, box.height / source.height);
-    return { width: source.width * scale, height: source.height * scale };
-  }, [source, box]);
+  const display = useMemo(
+    () => (source === null || box === null ? null : previewLayout(WHOLE, source, box).frame),
+    [source, box],
+  );
+
+  /*
+   * And what everything OUTSIDE the crop mode shows: the chosen region, filling as much of the
+   * stage as its shape allows.
+   *
+   * > **The point of the screen is to be a look at what is about to be sent**, and until this
+   * > existed it stopped being one the moment a crop was chosen: the picture returned to its full
+   * > self and only the word under it changed. Nothing cuts here - the region is a window onto the
+   * > same `Image`, drawn larger and offset behind a box that clips it. See `previewLayout`.
+   *
+   * With an untouched frame this is the whole picture, so there is one path rather than two.
+   */
+  const preview = useMemo(
+    () => (source === null || box === null ? null : previewLayout(norm, source, box)),
+    [source, box, norm],
+  );
 
   const mentionQuery = activeMentionQuery(caption, caret);
   const matches = useMemo(
@@ -222,28 +240,48 @@ export function PhotoCompose({
           );
         }}
       >
-        {display === null ? (
+        {display === null || preview === null ? (
           <ActivityIndicator color={color.accent} />
-        ) : (
+        ) : cropping && frame !== null ? (
+          /*
+            Cropping: the whole picture, square-cornered, with the frame over it. The corner
+            radius comes off here because a rounded preview would hide the very corners the frame
+            is being dragged to.
+          */
           <View style={{ width: display.width, height: display.height }}>
+            <Image source={{ uri }} style={StyleSheet.absoluteFill} accessibilityIgnoresInvertColors />
+            <CropOverlay
+              display={display}
+              rect={frame}
+              // Straight back to fractions, so nothing anywhere holds a rectangle in points.
+              onChange={(next) => setNorm(toNorm(next, display))}
+            />
+          </View>
+        ) : (
+          /*
+            Not cropping: the region, as a window onto the picture rather than a copy of it. The
+            box is the shape of the crop and clips; the image inside is the whole photograph,
+            drawn larger and pushed up and left so the chosen part lands in the box. An untouched
+            crop makes this the whole picture at its own proportions, which is where it started.
+          */
+          <View
+            style={[
+              styles.window,
+              styles.photo,
+              { width: preview.frame.width, height: preview.frame.height },
+            ]}
+          >
             <Image
               source={{ uri }}
-              style={[StyleSheet.absoluteFill, !cropping && styles.photo]}
+              style={{
+                position: 'absolute',
+                left: preview.image.left,
+                top: preview.image.top,
+                width: preview.image.width,
+                height: preview.image.height,
+              }}
               accessibilityIgnoresInvertColors
             />
-            {/*
-              The frame sits over the picture rather than replacing it, and the corner radius
-              comes off while cropping: a rounded preview would hide the very corners the frame
-              is being dragged to.
-            */}
-            {cropping && frame !== null && (
-              <CropOverlay
-                display={display}
-                rect={frame}
-                // Straight back to fractions, so nothing anywhere holds a rectangle in points.
-                onChange={(next) => setNorm(toNorm(next, display))}
-              />
-            )}
           </View>
         )}
       </View>
@@ -368,6 +406,9 @@ const styles = StyleSheet.create({
   /* The picture's room: everything the header and the caption bar do not claim. */
   stage: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.md },
   photo: { borderRadius: radius.lg },
+  /* The window onto the picture. `hidden` is what does the cutting on screen, and the radius has
+     to live here rather than on the image, which is larger than this box and offset inside it. */
+  window: { overflow: 'hidden' },
 
   error: {
     ...type.bodySmall,

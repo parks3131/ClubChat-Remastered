@@ -738,3 +738,43 @@ that records how to recognise the class._
     curve, and give the panel the gentler one. The entrance is deliberately the other way round.
     How to recognise the class: two animations of the same gesture with different durations AND
     different easings, where only the pairing at the endpoints was ever checked.
+
+32. **Installing a native dependency commits every already-running build to a rebuild, and the
+    death is at launch where no `try` can reach it.** Symptom, twice in one afternoon while
+    cropping was being built against `expo-image-manipulator`: first every phone on the LAN broke
+    the moment Metro served the new JS, because a native import resolves at bundle load and the
+    binaries carrying the module were minutes or hours behind; then, once rebuilt, the app died on
+    startup with a `Symbol not found`, because the prebuilt framework targeted a newer
+    `ExpoModulesCore` than this app ships. Reinstalling cannot fix either. **Rule: adding a native
+    module is a rebuild-and-reinstall for every device already running, and it must be said out
+    loud before the import is written** - the JS reaching a phone ahead of its binary is not a
+    mistake anybody makes, it is the default. How to recognise the class: the package installs, the
+    import resolves, typecheck is clean, and the app will not start. **Read the crash report first
+    for a launch-time death** - it names the missing symbol, which is the whole diagnosis, and no
+    amount of reading the JS will produce it. Entry 8 is the same shape one layer up: a resolution
+    failure that our own code never gets to see. The escape used here was to stop needing the
+    module - the phone chooses the rectangle and the server, which decodes every upload anyway,
+    cuts it.
+
+33. **A touch target outside its parent's bounds is not hit-tested, so a control can be half dead
+    while looking entirely correct.** Symptom: the crop frame cut exactly the right pixels and was
+    still reported as "so hard... it just runs or adjusts weird". Three causes, none in the
+    arithmetic that decides the rectangle. Its four corner handles were **children of the frame**
+    hung half outside it on negative offsets, so half of every target was never delivered a touch
+    and what remained was a 22-point square on the corner - worst at the frame the crop opens with,
+    the whole picture, where all four corners sit against an edge. The resize then **refused the
+    entire drag** whenever either side reached the minimum, which stops the frame dead under a
+    moving finger, and a corner dragged past its opposite was normalised with `Math.abs`, which
+    inverts the rectangle and throws it across the picture. And every frame of the drag re-rendered
+    the whole screen, because the live rectangle was the parent's state.
+
+    **Rule: a hit target belongs to the layer that can contain it, not to the thing it decorates**
+    - the grips are siblings of the frame, positioned in the picture's coordinates and pushed
+    inside it rather than trimmed at it. **A constraint clamps per axis; it never refuses the
+    gesture**, because a control that stops responding reads as broken rather than as strict. How
+    to recognise the class, and why it survived a review and a device test: **every symptom is
+    "feels wrong" and every unit of code is correct.** The rectangle was right, the conversions
+    were tested, and the screenshot of a finished crop is indistinguishable from one made easily.
+    Nothing was asserting on where a handle could be touched, so nothing could fail. The fix put
+    the drag arithmetic and the grip layout into `crop-rect.ts` beside the conversions, where both
+    are now properties a test states out loud.
