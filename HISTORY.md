@@ -13,7 +13,85 @@ Newest first.
 
 ---
 
-## 2026-08-14 (last) - The club chat learns to buzz, and a worker that was only pretending
+## 2026-08-14 (last) - A message can be corrected, and append-only turns out to have meant ordering
+
+The founder asked for editing: long press a message sent within five minutes, tap a pencil, fix it.
+The interesting part of the task was not building it - it is one column and one command - but that
+the repo said twice, in writing, that it should not exist.
+
+`SPEC/PRD/05` listed **"editing a sent message"** in the out-of-scope line, alongside threads and
+read receipts. And `MessagePatch` in `client-core/src/store.ts` carried a stronger claim, as a
+contract rather than a preference: *"an update must never be able to rewrite a message's body,
+sender or seq. Those are the log, and the log is append-only."*
+
+**Both turned out to be softer than they read, and for different reasons.**
+
+The PRD entry was guilt by association. A thread is a second conversation the whole product would
+have to bend around; a read receipt is a feature with a privacy argument attached. Correcting a
+typo is neither, and every product ClubChat replaces already does it. The entry had been carried
+forward from the first draft and never re-examined - the same shape as the DM reversal on 07-28 and
+the quote-replies separation on 08-01, both of which are now recorded as dated notes in that file.
+This one joins them.
+
+The `MessagePatch` comment was more interesting, because it named three columns and only two of
+them were load-bearing. **What append-only protects is the ORDERING.** `seq` is the address every
+reply, quote and read cursor points at; `senderId` is attribution. Neither is reachable from an
+edit, and neither ever will be. `body` was in that list by association too - and the giveaway was
+sitting three lines below it, because `deletedAt` has been allowed to blank a body since Phase 0.
+The line was never quite where the comment drew it. ADR-0033 records the reasoning; the comment now
+names the two columns it actually means.
+
+**The `rev` machinery did the hard half for free.** A correction changes a row *below* a connected
+client's local max, which is precisely the class of change the revision counter was built for when
+a tombstone reached only the clients that happened to be online. `editMessage` allocates a revision
+in the same transaction as the update, exactly as `applySoftDelete` does, and a device that was
+offline for the edit gets the new text and its "Edited" stamp together on its next sync. There was
+nothing to design here, which is what a good abstraction looks like from the inside.
+
+**Three decisions where the obvious answer was wrong.**
+
+*An admin cannot edit.* `canDeleteMessage` grants the admin tier a second path - its sender **or**
+an admin of that space - and mirroring that for editing is a one-word change that reads as
+consistency. It is forgery. Deleting somebody's words is moderation and leaves a tombstone the
+whole room can see; replacing them is indistinguishable from that member having said the new thing.
+`edits.test.ts` asserts both halves in the same file, deliberately: the two predicates look like
+they should agree, and a future refactor that unified them would pass every other test in the
+suite.
+
+*An announcement cannot be edited.* It has already pushed to every phone in the space, so a
+correction would leave the lock screen and the conversation disagreeing with nothing able to
+reconcile them. This one was not in the original ask and came out of asking what each message type
+would mean.
+
+*The window is enforced server-side and asked through one shared function.* `withinEditWindow`
+lives in `packages/shared` and is called by the policy predicate **and** by the screen deciding
+whether to draw the pencil. Two copies of `now - created < 300000` in two languages of the same
+codebase is failure mode 9's exact shape, and the version that drifts is always the one nobody
+tests. The client's copy is a courtesy so a member is not offered an action that is already
+refused; the refusal is the fact.
+
+**One defect found while writing it, and it was mine.** The first draft of `editMessage` resolved
+mentions from a stub that returned an empty candidate list, which would have quietly made "notify a
+newly added @mention" - the behaviour the founder had just chosen - never fire at all. The send
+path takes its candidates from the composer and re-checks them; the edit now does the same, unioned
+with whoever was already named so that fixing a typo elsewhere in the sentence does not drop an
+untouched mention. The notification is computed as a **diff**: a name already there is not told
+again, because a phone buzzing twice for one sentence is the failure that rule exists to prevent.
+
+**Two smaller things the shape of the codebase caught.** Adding `editedAt` to `MessageEnvelope`
+without a Zod default made the compiler list all eight construction sites, which is the reason the
+`senderName` comment says to leave the default off - it worked exactly as advertised. And the
+SQLite `patch` needed care that nothing else did: `body` is written by two different frames, a
+tombstone nulls it and an edit replaces it, and both in one `SET` is a duplicate column assignment
+SQLite refuses. They cannot arrive in one frame today; the ordering is written down anyway, with
+the tombstone winning, because a deletion losing to text is a moderation hole rather than a
+rendering bug.
+
+Full suite green at 1,270 tests, 19 of them new.
+
+---
+
+## 2026-08-14 - The club chat learns to buzz, and a worker that was only pretending
 
 The founder tested push the honest way: signed in as a second person on the web, joined a club his
 phone was in, sent a message, and waited. Nothing arrived. "I'm pretty sure we tested those things,

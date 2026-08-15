@@ -19,6 +19,7 @@ import type {
 } from '@clubchat/shared';
 import {
   InMemoryMessageStore,
+  restateQuotedMessage,
   strikeQuotedMessage,
   type MessagePatch,
   type MessageStore,
@@ -66,6 +67,7 @@ type Row = {
   reply_to_seq: number | null;
   reply_to: string | null;
   deleted_at: string | null;
+  edited_at: string | null;
   created_at: string;
 };
 
@@ -131,6 +133,9 @@ const toEnvelope = (row: Row): MessageEnvelope => ({
   // before replies, and right for the majority of messages, which answer nothing in particular.
   replyTo: parseJsonObject<MessageReplyRef>(row.reply_to),
   deletedAt: row.deleted_at,
+  // Null on a row cached before this column existed, which reads as "never edited" - and that is
+  // the true answer for every one of them, since nothing could edit a message before this build.
+  editedAt: row.edited_at,
   createdAt: row.created_at,
 });
 
@@ -218,8 +223,8 @@ class SqliteMessageStore implements MessageStore {
         await this.db.runAsync(
           `INSERT INTO messages
              (channel_id, seq, id, sender_id, sender_name, sender_image, type, body, client_msg_id, pinned, pinned_at, reactions, mentions,
-              media_id, document_name, document_size, linked_poll_id, linked_event_id, linked_meeting_id, reply_to_seq, reply_to, deleted_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              media_id, document_name, document_size, linked_poll_id, linked_event_id, linked_meeting_id, reply_to_seq, reply_to, deleted_at, edited_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (channel_id, seq) DO UPDATE SET
              id = excluded.id,
              sender_id = excluded.sender_id,
@@ -241,6 +246,7 @@ class SqliteMessageStore implements MessageStore {
              reply_to_seq = excluded.reply_to_seq,
              reply_to = excluded.reply_to,
              deleted_at = excluded.deleted_at,
+             edited_at = excluded.edited_at,
              created_at = excluded.created_at`,
           message.channelId,
           message.seq,
@@ -271,6 +277,7 @@ class SqliteMessageStore implements MessageStore {
           // `=== null` so an absent one takes the same branch as an explicit one.
           message.replyTo == null ? null : JSON.stringify(message.replyTo),
           message.deletedAt,
+          message.editedAt,
           message.createdAt,
         );
         }
@@ -311,10 +318,28 @@ class SqliteMessageStore implements MessageStore {
     if (patch.deletedAt !== undefined) {
       assignments.push('deleted_at = ?');
       values.push(patch.deletedAt);
-      // A tombstone loses its body, matching what the server stores. Otherwise the cache
-      // would keep rendering text the server has already discarded.
-      assignments.push('body = CASE WHEN ? IS NULL THEN body ELSE NULL END');
-      values.push(patch.deletedAt);
+    }
+    if (patch.editedAt !== undefined) {
+      assignments.push('edited_at = ?');
+      values.push(patch.editedAt);
+    }
+
+    /*
+     * `body` is assigned exactly once, from whichever of the two frames that can move it applies.
+     *
+     * A tombstone nulls it, matching what the server stores - otherwise the cache keeps rendering
+     * text the server has already discarded. An edit replaces it. **Both in one SET would be a
+     * duplicate column assignment, which SQLite refuses**, so they are decided here rather than
+     * pushed independently. A delete and an edit are separate events with separate publishes so
+     * one frame carrying both cannot arise today; the ordering is written down because if it ever
+     * does, the tombstone must win. A deletion losing to text is a moderation hole.
+     */
+    const deleting = patch.deletedAt !== undefined && patch.deletedAt !== null;
+    if (deleting) {
+      assignments.push('body = NULL');
+    } else if (patch.body !== undefined) {
+      assignments.push('body = ?');
+      values.push(patch.body);
     }
 
     /*
@@ -333,14 +358,20 @@ class SqliteMessageStore implements MessageStore {
       }
 
       /*
-       * A delete also strikes this message out of every quote of it. See `strikeQuotedMessage`.
+       * A delete also strikes this message out of every quote of it, and an edit restates them.
+       * See `strikeQuotedMessage` and `restateQuotedMessage`.
+       *
+       * Both exist because the server joins quotes on read and this cache never re-reads a row it
+       * already holds, so a stale quote box is the one copy of a message's text that nothing else
+       * can reach: deleted words would live on in it, and corrected words would stay wrong.
        *
        * Read-modify-write rather than a `json_set` in SQL: the shape of the stored ref is declared
        * in one place - the shared `MessageReplyRef` - and spelling its keys out in a SQL string
        * would be a second declaration that no compiler is checking. Replies to any one message are
        * few, and `reply_to_seq` is a real column precisely so this finds them by index.
        */
-      if (patch.deletedAt === undefined || patch.deletedAt === null) return;
+      const editing = !deleting && patch.body !== undefined;
+      if (!deleting && !editing) return;
       const quoting = await this.db.getAllAsync<{ seq: number; reply_to: string | null }>(
         'SELECT seq, reply_to FROM messages WHERE channel_id = ? AND reply_to_seq = ?',
         channelId,
@@ -349,9 +380,12 @@ class SqliteMessageStore implements MessageStore {
       for (const row of quoting) {
         const ref = parseJsonObject<MessageReplyRef>(row.reply_to);
         if (ref === null) continue;
+        const next = deleting
+          ? strikeQuotedMessage(ref)
+          : restateQuotedMessage(ref, patch.body ?? null);
         await this.db.runAsync(
           'UPDATE messages SET reply_to = ? WHERE channel_id = ? AND seq = ?',
-          JSON.stringify(strikeQuotedMessage(ref)),
+          JSON.stringify(next),
           channelId,
           row.seq,
         );

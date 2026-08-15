@@ -23,7 +23,8 @@ bottom of the screen is made of.
 | `attachButton` | The "+", which becomes a keyboard glyph. See [Attachment panel](08-attachment-panel.md). |
 | `input` | The message field: a white pill. |
 | `announceButton` | The admin's announcement toggle. Fills when armed. |
-| `sendButton` | An accent disc, present only when there is something to send. |
+| `sendButton` | An accent disc, present only when there is something to send. Carries a check instead of an arrow while an edit is being saved. |
+| `replyBar` | The line of context directly above the row, shared by the reply quote and the editing label. One bar, never two: what it says is what the send will do. |
 
 ## Rules that must survive
 
@@ -74,7 +75,15 @@ bottom of the screen is made of.
 | Uploading | The "+" becomes a spinner and is disabled, so a second tap cannot start a concurrent upload |
 | Panel open | The "+" is a keyboard glyph; the floor hands its space to the panel |
 | Announcement armed | The toggle fills, and the field's placeholder says "Announcement" |
+| Replying | A quote of the answered message sits in the bar above, with its own cancel |
+| Editing | "Editing message" sits in that same bar, with its own cancel, and the send disc becomes a check |
 | Read-only | The whole row is replaced by the reason, which is stated rather than implied |
+
+**Editing and replying are one slot, and cannot both be occupied.** The bar above the row says
+what the send will do, so two of them stacked would be a composer answering one message while
+rewriting another. The glyph on the disc is the only thing carrying "this replaces what you said
+rather than adding to it" - an arrow there would be the composer's one lie, because send means a
+new message everywhere else in the product.
 
 ## Obligations it creates elsewhere
 

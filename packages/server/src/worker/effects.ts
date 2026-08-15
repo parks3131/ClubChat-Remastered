@@ -544,6 +544,22 @@ async function mentionedUsers(db: Db, channelId: string, seq: number): Promise<s
 }
 
 /**
+ * Who sent the message at this address, or null if it is gone.
+ *
+ * Read from the row rather than carried on the event, unlike `message.created`, which is handed
+ * its sender. An edit is only ever made by the sender, so the row already knows - and re-reading
+ * keeps this handler's whole input to an address, which is what makes a redelivery harmless.
+ */
+async function senderOf(db: Db, channelId: string, seq: number): Promise<string | null> {
+  const rows = await db.execute<{ sender_id: string }>(sql`
+    SELECT sender_id FROM messages
+     WHERE channel_id = ${channelId}::uuid AND seq = ${seq}
+     LIMIT 1
+  `);
+  return rows.rows[0]?.sender_id ?? null;
+}
+
+/**
  * The channel's club and display name.
  *
  * The name is what a push notification's title shows, so it comes from the owning club,
@@ -1829,6 +1845,128 @@ export const handlers: Record<string, EffectHandler> = {
       deletedAt: new Date().toISOString(),
     });
     deps.log('info', 'message.deleted published', { eventId: event.id, channelId, seq });
+  },
+
+  /**
+   * A message was corrected by its sender inside the edit window.
+   *
+   * Two halves, and they answer different audiences. Everyone with the conversation open gets the
+   * new text as a `msg.update`; only somebody the edit newly @named gets a notification, and only
+   * them - see the `addedMentions` note below.
+   *
+   * **Re-read at publish time rather than published from the payload**, the same choice
+   * `message.pinned` and `message.reacted` make, and here it buys the same idempotency: two edits
+   * a second apart are two events, and a redelivery of the first would otherwise republish its
+   * snapshot over the second and put the older text back on every screen. Reading the row means a
+   * redelivered event republishes current truth, so there is no ordering to get right.
+   *
+   * `editedAt` travels with `body` and is not inferred from the frame carrying one. A client that
+   * received corrected text with no edit stamp would render it with no label - the message would
+   * silently become something else, which is exactly what rule 9a exists to prevent.
+   */
+  'message.edited': async (event, deps) => {
+    const channelId = String(event.payload['channelId'] ?? event.partitionKey);
+    const seq = Number(event.payload['seq']);
+
+    const rows = await deps.db.execute<{ body: string | null; edited_at: string | null }>(sql`
+      SELECT body, edited_at
+        FROM messages
+       WHERE channel_id = ${channelId}::uuid AND seq = ${seq}
+       LIMIT 1
+    `);
+    const row = rows.rows[0];
+    // Deleted between the edit and this handler running. The delete published its own update
+    // carrying the tombstone, and republishing the edited text over it would resurrect words
+    // somebody has already removed.
+    if (!row || row.edited_at === null) return;
+
+    await publishUpdate(deps.redis, channelId, {
+      channelId,
+      seq,
+      body: row.body,
+      // `db.execute` does no column coercion, so a timestamptz arrives as the driver's string -
+      // AGENTS.md 5.3 entry 7. Normalised through Date so the wire gets ISO-8601 with a `Z`,
+      // which is what the schema validates.
+      editedAt: new Date(row.edited_at).toISOString(),
+    });
+
+    /*
+     * Only the names the edit ADDED.
+     *
+     * Carried on the event rather than re-derived, because by the time this runs the previous
+     * mention set has already been replaced - the diff is the one fact about an edit that cannot
+     * be recovered by reading the row. Notifying everyone named in the final text instead would
+     * buzz the same person again every time the sender fixed a typo in a message that already
+     * mentioned them.
+     */
+    const added = Array.isArray(event.payload['addedMentions'])
+      ? (event.payload['addedMentions'] as unknown[]).map(String).filter((id) => id.length > 0)
+      : [];
+    if (added.length === 0) {
+      deps.log('info', 'message.edited published', { eventId: event.id, channelId, seq });
+      return;
+    }
+
+    const context = await channelContext(deps.db, channelId);
+    if (!context) {
+      deps.log('warn', 'message.edited for a channel that no longer exists', { channelId });
+      return;
+    }
+
+    const senderId = await senderOf(deps.db, channelId, seq);
+    const params = {
+      clubId: context.clubId,
+      channelId,
+      channelName: context.name,
+      seq,
+      // Truncated to the same 140 the send path uses, so a push about an edited mention reads
+      // identically to one about a fresh mention. Only text is editable, so the null branch is
+      // unreachable rather than a case with its own copy.
+      preview: (row.body ?? '').slice(0, 140),
+      actorName: senderId ? await displayName(deps.db, senderId) : 'Someone',
+    };
+
+    /*
+     * Through `resolveAudience` rather than straight to the list, so the same reachability rule
+     * that guards a mention on the send path guards one added by an edit. `editMessage` already
+     * filtered to the channel audience; this is the second gate, and it is the one that also
+     * drops the sender if they somehow named themselves.
+     */
+    const recipients = await resolveAudience(deps.db, {
+      type: 'mentioned',
+      actorId: senderId,
+      clubId: context.clubId,
+      channelId,
+      explicitRecipients: added,
+    });
+
+    await writeNotifications(deps.db, {
+      outboxEventId: notificationKey(event.id, 0),
+      type: 'mentioned',
+      params,
+      recipients,
+      actorId: senderId,
+      clubId: context.clubId,
+    });
+
+    schedule(deps, async () => {
+      const outcome = await dispatchPush(deps.db, deps.push, {
+        outboxEventId: notificationKey(event.id, 0),
+        type: 'mentioned',
+        params,
+        recipients,
+        channelId,
+        seq,
+      });
+      deps.log('info', 'edit mention push dispatched', { eventId: event.id, ...outcome });
+    });
+
+    deps.log('info', 'message.edited published', {
+      eventId: event.id,
+      channelId,
+      seq,
+      addedMentions: added.length,
+    });
   },
 
   /**

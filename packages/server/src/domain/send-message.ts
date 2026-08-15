@@ -27,6 +27,7 @@ import type { AccessContext } from '../policy/context.ts';
 import {
   canAnnounceInChannel,
   canDeleteMessage,
+  canEditMessage,
   canPinInChannel,
   canPostInChannel,
   type ChannelRef,
@@ -362,6 +363,7 @@ function toEnvelope(
     linkedEventId: row.linkedEventId,
     linkedMeetingId: row.linkedMeetingId,
     deletedAt: row.deletedAt?.toISOString() ?? null,
+    editedAt: row.editedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -504,6 +506,190 @@ export async function applySoftDelete(
   });
 
   return rows[0] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Editing, which is the third command over a message and not a mode of the first two
+// ---------------------------------------------------------------------------
+
+export type EditRefusal = {
+  ok: false;
+  /**
+   * `forbidden` covers all four ways `canEditMessage` says no - not the sender, past the window,
+   * not a text message, already deleted - and deliberately does not distinguish them. The client
+   * only offers the pencil when it believes all four hold, so a refusal here means its belief was
+   * stale; which of the four went stale changes nothing it can do about it. `content_refused` is
+   * the filter's, and is terminal exactly as it is on the send path.
+   */
+  code: 'forbidden' | 'not_found' | 'content_refused' | 'empty_body';
+};
+export type EditResult =
+  | { ok: true; message: MessageEnvelope; addedMentions: string[] }
+  | EditRefusal;
+
+/**
+ * Correct what you just said, inside the five-minute window.
+ *
+ * > **A third command over a message, sitting beside `setPinned` and `softDeleteMessage` rather
+ * > than joining them into one `PATCH`.** The comment on those two records why: a single route
+ * > taking a partial body is what let a member pin their own message and retro-flip it into an
+ * > announcement in v1. The same argument applies with more force here, because this is the one
+ * > command that changes what a message SAYS - a payload that could carry `type` alongside `body`
+ * > would let a member edit their text into an announcement that notifies the whole club.
+ *
+ * Note what is deliberately absent from the `SET`: `type`, `pinned`, `seq`, `sender_id`,
+ * `created_at`. The message keeps its address, its author and its place in the conversation, and
+ * only its text moves. That is the whole of what ADR-0033 relaxed.
+ *
+ * Reactions and pin state survive an edit, unlike a delete. Five minutes is short enough that
+ * anything reacted to is very close to what was reacted to, and clearing the pills would punish
+ * the reactors for the sender's typo. A delete clears them because there is nothing left to have
+ * a verdict about; an edit still has text.
+ */
+export async function editMessage(
+  db: Db,
+  ctx: AccessContext,
+  channel: ChannelRef,
+  seq: number,
+  body: string,
+  /** Who the composer thinks is named, as on the send path. Re-checked, never trusted. */
+  candidates?: readonly string[] | undefined,
+  now: Date = new Date(),
+): Promise<EditResult> {
+  const existing = await loadMessage(db, channel.id, seq);
+  if (!existing) return { ok: false, code: 'not_found' };
+
+  if (!canEditMessage(ctx, channel, existing, now)) return { ok: false, code: 'forbidden' };
+
+  /*
+   * An edit cannot empty a message.
+   *
+   * Deleting is the way to take a message back, and it leaves a tombstone saying so. An edit to
+   * the empty string would be a delete that left the bubble looking like a rendering bug instead
+   * - and it would strand every reply quoting text that is now nothing at all.
+   */
+  const trimmed = body.trim();
+  if (trimmed.length === 0) return { ok: false, code: 'empty_body' };
+
+  /*
+   * The filter runs on the edit exactly as it runs on the send, and it has to.
+   *
+   * Otherwise the window is a hole straight through it: post "hello", wait a second, edit it into
+   * the thing the filter would have refused. Same function, same two verdicts, and `refuse` still
+   * means nothing is written - the member keeps their text in the composer and fixes it.
+   */
+  const verdict = classifyContent(trimmed);
+  if (verdict.action === 'refuse') return { ok: false, code: 'content_refused' };
+
+  /*
+   * Who was named before, so the notification can be about what the edit ADDED.
+   *
+   * Read before the write, inside the same command, because the diff is the only thing that makes
+   * an edit notify honestly: re-notifying every name in the final text would buzz the same person
+   * again for a message they were already told about, every time the sender fixes a typo after
+   * mentioning them.
+   */
+  const before = await db
+    .select({ userId: messageMentions.userId })
+    .from(messageMentions)
+    .where(eq(messageMentions.messageId, existing.id));
+  const namedBefore = new Set(before.map((row) => row.userId));
+
+  /*
+   * The candidate set is the client's picks UNION whoever was already named.
+   *
+   * The picks half mirrors the send path exactly - the composer offers the same autocomplete
+   * while editing, so a newly typed `@name` arrives the same way it would in a new message, and
+   * `resolveMentions` applies the same two gates to it: reachable in this channel, and actually
+   * present in the final text.
+   *
+   * The union half is what keeps an untouched mention alive. A member who fixes a typo elsewhere
+   * in the sentence sends no picks at all, and without the previous set every existing mention
+   * would be resolved out of the message by an edit that never touched it.
+   */
+  const mentions = await resolveMentions(
+    db,
+    channel,
+    [...namedBefore, ...(candidates ?? [])],
+    trimmed,
+  );
+  const addedMentions = mentions.map((m) => m.userId).filter((id) => !namedBefore.has(id));
+
+  /*
+   * The text, the edit stamp and the revision commit together.
+   *
+   * `rev` is what carries this to a device that was offline when it happened - sync asks
+   * `rev > mine`, and without the bump an edited message would reach only the clients that
+   * happened to be connected, leaving everyone else holding the original text forever. Exactly
+   * the hole `applySoftDelete` documents, and the same fix.
+   */
+  const row = await db.transaction(async (tx) => {
+    const rev = await nextRevision(tx, channel.id);
+    if (rev === null) return undefined;
+
+    const updated = await tx
+      .update(messages)
+      // `type` is not in this SET, for the reason the header gives. Neither is `pinned`.
+      .set({ body: trimmed, editedAt: now, rev })
+      .where(and(eq(messages.channelId, channel.id), eq(messages.seq, seq)))
+      .returning();
+
+    /*
+     * Mentions are replaced rather than merged, so deleting a name out of the text takes its
+     * mention with it - the same rule `resolveMentions` already enforces at send time, stated
+     * here as a delete-then-insert because there is a previous set to replace.
+     */
+    await tx.delete(messageMentions).where(eq(messageMentions.messageId, existing.id));
+    if (mentions.length > 0) {
+      await tx.insert(messageMentions).values(
+        mentions.map((mention) => ({
+          messageId: existing.id,
+          userId: mention.userId,
+          name: mention.name,
+        })),
+      );
+    }
+
+    await tx.insert(outbox).values({
+      partitionKey: channel.id,
+      eventType: 'message.edited',
+      // The added names ride on the event rather than being re-derived by the worker, because by
+      // the time it runs the "before" set is gone - the rows have already been replaced. This is
+      // the one thing about an edit that cannot be recovered by re-reading, which is why it is
+      // also the only field here that is not just an address.
+      payload: { channelId: channel.id, seq, messageId: existing.id, addedMentions },
+    });
+
+    return updated[0];
+  });
+
+  if (!row) return { ok: false, code: 'not_found' };
+
+  /*
+   * The flag tier, filed after the write for the same reason the send path files it after the
+   * append: this write is not worth holding a transaction open for, and a lost second opinion is
+   * acceptable where a lost member-pressed report would not be.
+   *
+   * An edited message can be reported twice this way - once for what it said, once for what it
+   * says now - and `fileReport` absorbs the duplicate, which is the right answer: one message,
+   * one row in the queue, whichever version drew attention to it.
+   */
+  if (verdict.action === 'flag') {
+    await db.transaction((tx) =>
+      fileReport(tx, {
+        messageId: existing.id,
+        reporterId: SYSTEM_ACTOR_ID,
+        channelId: channel.id,
+        seq,
+      }),
+    );
+  }
+
+  return {
+    ok: true,
+    message: toEnvelope(row, await senderIdentityOf(db, row.senderId)),
+    addedMentions,
+  };
 }
 
 /**

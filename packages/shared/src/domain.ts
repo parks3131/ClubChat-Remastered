@@ -174,6 +174,40 @@ export type MessageMention = z.infer<typeof MessageMention>;
 export const REPLY_PREVIEW_CHARS = 140;
 
 /**
+ * How long a sender may correct what they just said.
+ *
+ * Five minutes, and the number lives here rather than on either side because BOTH need it and
+ * they need the same one. The server is the enforcement - a client clock cannot be the authority
+ * on a deadline, and a phone with a fast clock would otherwise be told no by a route that offered
+ * it the button. The client uses it only to decide whether to draw the pencil, so a member is not
+ * offered an action that is already refused.
+ *
+ * Short on purpose. An edit window is a correction window, not a revision history: long enough to
+ * fix a typo or a wrong time, too short to rewrite what a conversation has already answered. See
+ * ADR-0033.
+ */
+export const MESSAGE_EDIT_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * Is this message still inside its edit window?
+ *
+ * One function, both sides, for the same reason the constant is shared: the client asks it to
+ * decide whether the pencil appears and the server asks it to decide whether the write is
+ * allowed, and two copies of `now - created < 5 minutes` is exactly the shape that drifts by a
+ * unit. Takes `now` rather than reading the clock so it is testable at a boundary.
+ *
+ * Non-strict (`<=`) is deliberate: the boundary belongs to the member, not to the refusal.
+ */
+export function withinEditWindow(createdAt: string | Date, now: Date): boolean {
+  const created = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  const age = now.getTime() - created.getTime();
+  // A negative age is a message whose timestamp is ahead of this clock, which says the clocks
+  // disagree rather than that the message is from the future. Inside the window is the honest
+  // answer: it was certainly just sent.
+  return age <= MESSAGE_EDIT_WINDOW_MS;
+}
+
+/**
  * The message a reply is answering, resolved for drawing.
  *
  * > **Joined at read time from `reply_to_seq`, never stored as a snapshot**, and the deciding
@@ -372,6 +406,25 @@ export const MessageEnvelope = z.object({
    */
   replyTo: MessageReplyRef.nullable().default(null),
   deletedAt: z.string().datetime().nullable(),
+  /**
+   * When the sender last corrected this message, or null if they never did.
+   *
+   * > **The label is the whole reason this is on the wire.** An edit that arrived silently would
+   * > let a message become something different from what somebody replied to or reacted to, with
+   * > nothing on screen admitting it changed - which is the same dishonesty the tombstone exists
+   * > to prevent, one step milder. `PRD/05` rule 9a: nothing is hidden without the row saying so.
+   *
+   * A timestamp rather than a boolean, and not because anything draws the time today. The
+   * distinction that matters is `null` versus "at this moment": a flag can only ever say that an
+   * edit happened, while this can also answer when - which is what a later "edited 3m ago", an
+   * ordering, or a moderator looking at a reported message would need. It costs the same column.
+   *
+   * The previous text is NOT kept. See ADR-0033: a five-minute typo fix is a correction, and
+   * storing what somebody meant to unsay turns a correction into a record.
+   *
+   * Defaulted, so an envelope from a producer that predates this field still parses.
+   */
+  editedAt: z.string().datetime().nullable().default(null),
   createdAt: z.string().datetime(),
 });
 export type MessageEnvelope = z.infer<typeof MessageEnvelope>;

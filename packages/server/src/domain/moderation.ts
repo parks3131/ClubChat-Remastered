@@ -466,6 +466,7 @@ export async function readReportedContext(
       reply_document_name: string | null;
       reply_deleted: boolean | null;
       deleted_at: string | null;
+      edited_at: string | null;
       created_at: string;
     }>(sql`
       SELECT m.id::text AS id, m.channel_id::text AS channel_id, m.seq,
@@ -489,7 +490,12 @@ export async function readReportedContext(
              q.media_id::text AS reply_media_id,
              q.document_name AS reply_document_name,
              (q.deleted_at IS NOT NULL) AS reply_deleted,
-             m.deleted_at::text AS deleted_at, m.created_at::text AS created_at
+             m.deleted_at::text AS deleted_at,
+             -- Whether it was corrected, which IS evidence, unlike the pin above. A moderator
+             -- reading a reported message needs to know its text moved after it was said - the
+             -- report may well be about words the window no longer contains.
+             m.edited_at::text AS edited_at,
+             m.created_at::text AS created_at
         FROM messages m
         LEFT JOIN users u ON u.id = m.sender_id
         -- Matched on the channel as well as the seq, which is the pair the foreign key uses.
@@ -559,6 +565,7 @@ export async function readReportedContext(
       // Strings, not Dates: db.execute does not apply Drizzle's column coercion, so a row type
       // claiming Date here would typecheck and fail at the call site.
       deletedAt: row.deleted_at === null ? null : new Date(row.deleted_at).toISOString(),
+      editedAt: row.edited_at === null ? null : new Date(row.edited_at).toISOString(),
       createdAt: new Date(row.created_at).toISOString(),
     })),
   };

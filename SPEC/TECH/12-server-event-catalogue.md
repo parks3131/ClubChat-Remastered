@@ -39,6 +39,30 @@ Posted into the **club's main channel** (or the race's / Eboard's own channel wh
 
 Deleting the underlying object removes its card.
 
+### Message mutations that must reach every open client
+
+A pin, a soft delete, a reaction and now an **edit** all change a row **below** the sequence a
+connected client already holds, so none of them can be delivered by "give me what is newer than
+my last seq". Each writes an outbox event, and the worker republishes the change as a `msg.update`
+frame after **re-reading the row** rather than trusting its own payload - which is what makes a
+redelivered event republish current truth instead of an older snapshot.
+
+| Event | Republished as | Notifies |
+|---|---|---|
+| `message.pinned` | `pinned`, `pinnedAt` | nobody - a pin is reference, not interruption |
+| `message.deleted` | `deletedAt`, cleared reactions, `pinned: false` | nobody |
+| `message.reacted` | the full reaction set | nobody |
+| `message.edited` | `body`, `editedAt` | only somebody the edit **newly** @named |
+
+`message.edited` is the one whose payload carries something that cannot be recovered by re-reading:
+**which mentions the edit added**. By the time the worker runs, the previous mention set has
+already been replaced, so the diff travels on the event. Notifying everyone named in the final
+text instead would buzz the same person again every time the sender fixed a typo.
+
+All four also bump the channel's `rev`, in the same transaction as the change, which is what
+carries them to a device that was **offline** when they happened - see
+[Channel log](02-channel-log.md).
+
 ### Notification fan-out
 
 Every notification in [Notifications](../PRD/12-notifications.md) is written server-side, on the data change,

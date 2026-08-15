@@ -198,6 +198,7 @@ describe('upgrading a device that already has a cache', () => {
       'pinned_at',
       'reply_to_seq',
       'reply_to',
+      'edited_at',
     ]);
 
     migrate(db);

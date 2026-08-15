@@ -8,7 +8,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { ReactionEmoji } from '@clubchat/shared';
+import { ReactionEmoji, Uuid } from '@clubchat/shared';
 import {
   clearChannel,
   muteChannel,
@@ -27,7 +27,7 @@ import {
   readHighlights,
   readHistory,
 } from '../../domain/reads.ts';
-import { setPinned, softDeleteMessage } from '../../domain/send-message.ts';
+import { editMessage, setPinned, softDeleteMessage } from '../../domain/send-message.ts';
 import { authorizeChannel, type AppDeps } from '../plumbing.ts';
 
 export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
@@ -321,6 +321,74 @@ export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
         return reply.code(result.code === 'forbidden' ? 403 : 404).send({ error: result.code });
       }
       return result;
+    },
+  );
+
+  /**
+   * Correct what you just said. The sender alone, inside five minutes.
+   *
+   * `/body` rather than a `PATCH` on the message, and that is the same choice the two routes
+   * above make for the same reason: a partial update over the whole message is the shape that
+   * lets a caller who may change one column send a payload carrying another. Here the stakes are
+   * the highest of the three - a body edit that could carry `type` would let a member rewrite
+   * their own text into an announcement and notify the entire club.
+   *
+   * `.strict()` on the body is the second half of that. Zod strips unknown keys by default, so a
+   * payload carrying `type` or `pinned` alongside `body` would be quietly accepted and quietly
+   * dropped; strict refuses it out loud, which is what makes "this route changes exactly one
+   * column" provable by attempting the other rather than by reading the handler.
+   */
+  const EditBody = z
+    .object({
+      body: z.string().min(1).max(8000),
+      /** Who the composer thinks is named, exactly as on the send path. Re-checked server-side. */
+      mentions: z.array(Uuid).max(64).optional(),
+    })
+    .strict();
+
+  app.post<{ Params: { id: string; seq: string } }>(
+    '/channels/:id/messages/:seq/body',
+    async (request, reply) => {
+      const seq = Number(request.params.seq);
+      if (!Number.isInteger(seq) || seq <= 0) {
+        return reply.code(400).send({ error: 'invalid_seq' });
+      }
+
+      const body = EditBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
+
+      const guard = await authorizeChannel(deps, request, request.params.id);
+      if (!guard.ok) return reply.code(guard.code).send({ error: 'not_found' });
+
+      const result = await editMessage(
+        deps.db,
+        request.access!,
+        guard.channel,
+        seq,
+        body.data.body,
+        body.data.mentions,
+      );
+      if (!result.ok) {
+        /*
+         * 403 for a refusal the channel guard has already let past, so there is nothing left to
+         * hide - and PRD/05 rule 9a wants "you cannot edit somebody else's message, and you
+         * cannot edit your own after five minutes" to be provable by attempting it.
+         *
+         * 422 for the content filter, matching the send path: the request was well-formed and
+         * the caller is allowed, and it is the CONTENT that is refused. A 400 would say they
+         * built the request wrong, and a retry of the identical body can only fail again.
+         */
+        const status =
+          result.code === 'forbidden'
+            ? 403
+            : result.code === 'not_found'
+              ? 404
+              : result.code === 'content_refused'
+                ? 422
+                : 400;
+        return reply.code(status).send({ error: result.code });
+      }
+      return { message: result.message };
     },
   );
 

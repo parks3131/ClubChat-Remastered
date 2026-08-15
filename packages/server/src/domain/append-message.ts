@@ -131,6 +131,10 @@ function toEnvelope(
      */
     replyTo,
     deletedAt: row.deletedAt?.toISOString() ?? null,
+    // Always null here: this is the envelope for a message being appended, and nothing has had
+    // the chance to correct it yet. Written out rather than defaulted so the compiler keeps
+    // forcing every construction site to answer, which is how all of them were found.
+    editedAt: null,
     createdAt: row.createdAt.toISOString(),
   };
 }

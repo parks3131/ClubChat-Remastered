@@ -93,6 +93,7 @@ function envelope(seq: number, overrides: Partial<MessageEnvelope> = {}): Messag
     documentName: null,
     documentSize: null,
     deletedAt: null,
+    editedAt: null,
     createdAt: new Date(2026, 0, 1, 0, 0, seq).toISOString(),
     ...overrides,
   };

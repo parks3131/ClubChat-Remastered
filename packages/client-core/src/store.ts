@@ -8,6 +8,7 @@
  * over both, so it is written once against this interface and exercised by both.
  */
 
+import { replyPreview } from '@clubchat/shared';
 import type { MessageEnvelope, MessageReaction, MessageReplyRef } from '@clubchat/shared';
 
 export type PendingSend = {
@@ -87,10 +88,38 @@ export function strikeQuotedMessage(ref: MessageReplyRef): MessageReplyRef {
 }
 
 /**
+ * What a quote of a since-edited message becomes.
+ *
+ * > **The same hole as `strikeQuotedMessage`, one step milder, and reachable the same way.** The
+ * > server joins quotes on every read, so a fresh read of a reply already shows the corrected
+ * > text - but a client holding that reply in its cache never fetches the row again, because sync
+ * > pulls strictly ABOVE the local max. Without this, a quote box would keep showing the typo its
+ * > author corrected, on that device, until something else evicted the row.
+ *
+ * Through `replyPreview` rather than storing the whole body, so the cached quote is truncated to
+ * exactly what the server would have joined. Only the preview moves: who said it, its type and
+ * its attachment identity are unchanged by an edit, which can only touch text.
+ */
+export function restateQuotedMessage(ref: MessageReplyRef, body: string | null): MessageReplyRef {
+  // A tombstone stays a tombstone. An edit cannot reach a deleted message - the server refuses
+  // it - but a frame arriving out of order must not be able to put words back into one.
+  if (ref.deleted) return ref;
+  return { ...ref, preview: replyPreview(body) };
+}
+
+/**
  * The fields a `msg.update` frame can change on a message already held locally.
  *
- * Deliberately a narrow subset rather than a partial envelope: an update must never be able
- * to rewrite a message's body, sender or seq. Those are the log, and the log is append-only.
+ * Deliberately a narrow subset rather than a partial envelope: an update must never be able to
+ * rewrite a message's **sender or seq**. Those are the log - `seq` is the address every reply,
+ * quote and read cursor points at, and `senderId` is attribution - and neither is reachable from
+ * here.
+ *
+ * > **`body` used to be on that list, and this comment used to say the log was append-only.**
+ * > What append-only was protecting is the ORDERING, and correcting text does not touch it: the
+ * > message keeps its place, its address and its author. The line was never quite where the
+ * > comment drew it either, since `deletedAt` has been allowed to blank a body since Phase 0.
+ * > Widened on 2026-08-14 for the five-minute edit window - see ADR-0033.
  */
 export type MessagePatch = {
   pinned?: boolean;
@@ -104,6 +133,15 @@ export type MessagePatch = {
   pinnedAt?: string | null;
   reactions?: MessageReaction[];
   deletedAt?: string | null;
+  /**
+   * The corrected text, and when it was corrected.
+   *
+   * Kept as two fields for the reason `pinnedAt` records above: a cache that stores half a change
+   * looks current and is wrong. Text that arrived without its edit stamp would render with no
+   * "Edited" label, so the message would silently become something other than what was replied to.
+   */
+  body?: string | null;
+  editedAt?: string | null;
 };
 
 export interface MessageStore {
@@ -206,17 +244,28 @@ export class InMemoryMessageStore implements MessageStore {
 
     /*
      * A delete reaches further than the row it names: every quote OF that message goes with it.
+     * So does an edit, for the same reason and by the same route - a cached reply is never
+     * re-fetched, so its quote box would keep showing text that has since been corrected.
      *
      * Run even when the message itself is not held. A client can hold a reply without holding
      * what it answers - the quote travels on the reply, which is the whole point of it - and
      * that is precisely the case where nothing else would ever correct the quote.
+     *
+     * Deletion is checked first and wins: a tombstone must never lose to text.
      */
-    if (patch.deletedAt === undefined || patch.deletedAt === null) return;
+    const deleting = patch.deletedAt !== undefined && patch.deletedAt !== null;
+    const editing = !deleting && patch.body !== undefined;
+    if (!deleting && !editing) return;
     const channel = this.byChannel.get(channelId);
     if (!channel) return;
     for (const [heldSeq, message] of channel) {
       if (message.replyTo === null || message.replyTo.seq !== seq) continue;
-      channel.set(heldSeq, { ...message, replyTo: strikeQuotedMessage(message.replyTo) });
+      channel.set(heldSeq, {
+        ...message,
+        replyTo: deleting
+          ? strikeQuotedMessage(message.replyTo)
+          : restateQuotedMessage(message.replyTo, patch.body ?? null),
+      });
     }
   }
 

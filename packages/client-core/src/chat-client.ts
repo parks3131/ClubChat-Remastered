@@ -456,6 +456,9 @@ export class ChatClient {
             // at when they replied - so their bubble draws it now rather than when it re-syncs.
             replyTo: this.outbox.get(clientMsgId)?.replyTo ?? null,
             deletedAt: null,
+            // A message being acknowledged has not been corrected: the window opens the moment
+            // it lands, and an edit travels as its own msg.update.
+            editedAt: null,
             createdAt: frame.d.createdAt,
           },
           channelId,
@@ -517,6 +520,11 @@ export class ChatClient {
         if (frame.d.pinnedAt !== undefined) patch.pinnedAt = frame.d.pinnedAt;
         if (frame.d.reactions !== undefined) patch.reactions = frame.d.reactions;
         if (frame.d.deletedAt !== undefined) patch.deletedAt = frame.d.deletedAt;
+        // The edit pair, each checked separately for the same reason as the pin pair: they are
+        // separately optional on the wire, and a store that took one without the other would
+        // render corrected text with no label saying it was corrected.
+        if (frame.d.body !== undefined) patch.body = frame.d.body;
+        if (frame.d.editedAt !== undefined) patch.editedAt = frame.d.editedAt;
 
         // Serialized per channel like message application, so an update and an arriving
         // message cannot interleave a read-then-write on the same row.

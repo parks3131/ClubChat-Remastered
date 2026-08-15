@@ -166,6 +166,22 @@ check 200 "GET announcements" "${AO[@]}" "$API/channels/$CHAN/announcements"
 check 400 "around without a seq" "${AO[@]}" "$API/channels/$CHAN/messages/around"
 check 404 "pinned as outsider" "${AX[@]}" "$API/channels/$CHAN/pinned"
 
+# Editing a message. Sends go over the socket rather than HTTP, so this gate has no message of
+# its own to correct - but every REFUSAL the route owns is reachable without one, and the
+# refusals are the half worth gating. The success path is covered by `edits.test.ts`.
+echo "== editing a message =="
+EDIT="$API/channels/$CHAN/messages"
+check 400 "edit with an empty body"   -X POST "${AO[@]}" "${JSON[@]}" -d '{"body":""}' "$EDIT/1/body"
+# `.strict()` is what stops this route becoming the omnibus PATCH that v1's column-level
+# authority trap needed: a payload carrying `type` alongside `body` is refused out loud rather
+# than silently stripped, which is the difference between a member being unable to retro-flip
+# their message into an announcement and merely appearing unable to.
+check 400 "edit carrying a stray type field" -X POST "${AO[@]}" "${JSON[@]}" \
+  -d '{"body":"hi","type":"announcement"}' "$EDIT/1/body"
+check 400 "edit with a non-numeric seq" -X POST "${AO[@]}" "${JSON[@]}" -d '{"body":"hi"}' "$EDIT/abc/body"
+check 404 "edit a seq that does not exist" -X POST "${AO[@]}" "${JSON[@]}" -d '{"body":"hi"}' "$EDIT/999999/body"
+check 404 "edit as an outsider" -X POST "${AX[@]}" "${JSON[@]}" -d '{"body":"hi"}' "$EDIT/1/body"
+
 echo "== profile and deletion =="
 check 200 "PATCH own profile" -X PATCH "${AM[@]}" "${JSON[@]}" -d '{"name":"Gate Member","dob":"1999-04-01"}' "$API/me/profile"
 check 400 "PATCH dob as timestamp" -X PATCH "${AM[@]}" "${JSON[@]}" -d '{"dob":"1999-04-01T00:00:00Z"}' "$API/me/profile"

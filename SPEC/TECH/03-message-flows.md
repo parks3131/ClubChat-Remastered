@@ -189,3 +189,34 @@ Three consequences worth stating, because each has a way to look correct while b
    draws a quote, which is the shape of failure mode 9.
 
 Replies notify nobody. See [Chat](../PRD/05-chat.md) rule 19 for why.
+
+### 6.6 Edits, and the three things they must not become
+
+A correction is a `POST /channels/:id/messages/:seq/body`, and `domain/send-message.ts` writes
+`body`, `edited_at` and `rev` in one transaction. **Nothing else is in that `SET`** - not `type`,
+not `pinned`, not `seq`, not `sender_id`. See
+[ADR-0033](../decisions/0033-a-message-may-be-edited-for-five-minutes.md); the product rules are
+[Chat](../PRD/05-chat.md) rule 9a.
+
+Three things it would be easy to let this become, and what stops each:
+
+1. **A second way to post an announcement.** v1's column-level authority trap was a single
+   row-level rule over the whole message, which let a member pin their own message and then
+   retro-flip its `type`. That is why editing is its own command with its own predicate and its
+   own path segment, and why the route's body schema is `.strict()`: a payload carrying `type`
+   alongside `body` is refused out loud rather than silently stripped. Asserted against the table
+   in `edits.test.ts`, not against the handler.
+2. **A change only connected clients see.** A correction mutates a row **below** the client's
+   local max, and `syncChannel` pulls strictly above it - the same hole the tombstone had. The
+   `rev` bump is inside the transaction, so a correction cannot exist without the revision that
+   advertises it, and a device that was offline gets the new text and the "Edited" stamp together
+   on its next sync.
+3. **A stale quote.** The quote box is joined on read, so a fresh read is already right - but a
+   cached reply is never re-fetched, which makes that box the one copy of the text nothing else
+   can reach. `MessageStore.patch` therefore restates every quote of an edited message
+   (`restateQuotedMessage`), in exactly the place it already strikes every quote of a deleted one.
+
+The window itself is one shared constant asked through one shared function (`withinEditWindow`),
+so the client's decision to draw the pencil and the server's decision to refuse are the same rule
+rather than two copies of an arithmetic - failure mode 9's shape. The server is the enforcement;
+the client's copy only avoids offering an action that is already refused.

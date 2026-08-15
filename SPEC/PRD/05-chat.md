@@ -27,12 +27,19 @@ unless it names an exception, and the exceptions a DM carries are listed in
 | Gallery | Every photo ever posted in that chat, as a grid |
 | Quick-nav | A header menu into that space's other features |
 
-**Out of scope:** **threads**, editing a sent message, typing indicators, read
+| Editing | A sender may correct their own text message for five minutes, and the bubble says it was edited |
+
+**Out of scope:** **threads**, typing indicators, read
 receipts, presence, voice notes, video calls, message search, and paging *newer* beyond
 a jump window (chat only pages upward from the live tail).
 
 *(DMs were listed here as out of scope until 2026-07-28, when that position was reversed. See
 [ADR-0009](../decisions/0009-direct-messages-as-fourth-channel-scope.md).)*
+
+*(Editing was listed here as out of scope until 2026-08-14, when that position was reversed. It
+sat in better company than it deserved: a thread is a second conversation the product would have
+to bend around and a read receipt is a privacy question, while correcting a typo is neither. See
+rule 9a and [ADR-0033](../decisions/0033-a-message-may-be-edited-for-five-minutes.md).)*
 
 *(Quote replies were out of scope alongside threads until 2026-08-01, when the two were
 separated. A quote is a **flat** reference to one earlier message and stays in the main
@@ -118,6 +125,41 @@ second is a feature the whole product would have to bend around. Threads remain 
 9. **A message can be deleted by its sender or by an admin of that space.** Deletion leaves a
    "This message was deleted" tombstone rather than removing it from history. Reactions and
    pin state are cleared with it.
+9a. **A sender may correct their own text message for five minutes, and only their own.** Long
+    press, then the pencil. The words return to the composer with a bar above it saying so, and
+    the send control becomes a check.
+
+    **An admin may not**, in any scope, and that is the deliberate half. Rule 9 gives an admin a
+    second path into deleting anybody's message, because removing words somebody objects to is
+    moderation and it leaves a tombstone the whole room can see. Putting *different* words in
+    somebody's mouth is forgery, and it would be indistinguishable from them having said it. An
+    admin who objects to a message deletes it.
+
+    **The bubble says "Edited".** Nothing changes silently: a message that could become something
+    other than what was replied to or reacted to, with nothing on screen admitting it, is the same
+    dishonesty the tombstone exists to prevent one step milder. **The previous text is not kept**
+    anywhere - a five-minute typo fix should not become a permanent record of what somebody meant
+    to unsay.
+
+    Only plain text. **An announcement cannot be edited**, because it has already buzzed every
+    phone in the space, so a correction would leave the lock screen and the conversation
+    disagreeing with nothing able to reconcile them. Neither can a card, a system message or a
+    tombstone. An edit to nothing at all is refused rather than treated as a delete - deleting is
+    how a message is taken back, and it says so.
+
+    Reactions and pin state **survive** an edit, unlike a delete. Five minutes is short enough
+    that what was reacted to is very close to what remains, and clearing the pills would punish
+    the reactors for the sender's typo. A quote of an edited message shows the corrected text,
+    everywhere at once, exactly as a quote of a deleted one shows the tombstone.
+
+    **The refusal is the server's.** The pencil is hidden after five minutes as a courtesy, not as
+    the rule - a deadline that lives only in the interface is not a deadline.
+
+    **A name the edit adds is notified, once.** Adding an `@mention` by editing must reach that
+    person or the mention is broken; a name that was already there is not told again, because a
+    phone buzzing twice for one sentence is what the diff exists to prevent. Removing a name from
+    the text removes its mention, which is rule 8 applied unchanged. The language filter in rule
+    10a runs on the edit too - otherwise the window is a hole straight through it.
 10. **Anyone can report a message they did not send, except in Eboard chat.** Reporting twice is
     a no-op, and the second one notifies nobody either.
 
@@ -279,6 +321,9 @@ it, and the reports it would contain belong to the platform moderation queue.
 | Offline / send failure | The send fails **visibly** rather than silently dropping the message |
 | Photo or document upload fails | The message is not posted and the failure is surfaced |
 | Deleted message | Tombstone; reactions and pin state cleared |
+| Edited message | Corrected text with an "Edited" label; reactions and pin state kept |
+| Edit window expired while typing | The save is refused and says the message can no longer be edited, offering to send a new one |
+| Message deleted by an admin mid-edit | The editing bar disappears; the composer reverts to writing a new message |
 | Deleted poll/event/meeting | Its chat card disappears |
 | Jump target far back in history | A window of history around that message is loaded; scroll-up paging continues from there |
 | Realtime message arrives while reading old history | It merges in, but the view is **not** yanked to the bottom |
@@ -316,6 +361,14 @@ it, and the reports it would contain belong to the platform moderation queue.
 - [ ] Sending, attaching, or creating a poll/event/meeting returns the reader to the newest message.
 - [ ] Scrolling to the top loads older messages without losing scroll position, and **does not fire spuriously on open**.
 - [ ] Deleting a message leaves a tombstone for every other member.
+- [ ] A sender can correct their own text message within five minutes, and the bubble then says "Edited".
+- [ ] The correction appears on another device in realtime, **and on one that was offline when it happened**.
+- [ ] The pencil is absent after five minutes, and the save is refused by the server even if it is attempted anyway.
+- [ ] An admin has no pencil on somebody else's message, and is refused if the request is made directly.
+- [ ] An announcement, a card and a tombstone offer no pencil.
+- [ ] An edited message keeps its reactions and its pin.
+- [ ] A quote of an edited message shows the corrected text, including on a client that already had the reply on screen.
+- [ ] Adding an @mention by editing notifies that person; fixing a typo in a message that already mentioned them does not notify them again.
 - [ ] A reply shows a quote of the message it answers, and tapping the quote jumps to it.
 - [ ] Deleting a quoted message turns every quote of it into "This message was deleted",
       including on a client that already had the reply on screen.

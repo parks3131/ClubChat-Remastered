@@ -96,9 +96,16 @@ channels              id, club_id NULL, scope ∈ {club,race,eboard,dm}, scope_i
                       -- club_id is nullable ONLY for dm. The check stops the other three
                       -- scopes from ever exploiting the relaxed column. See [Channel log](02-channel-log.md).
 messages              id, channel_id, seq, sender_id NOT NULL, type, body, media_id,
-                      document_name, document_size, pinned, deleted_at,
+                      document_name, document_size, pinned, deleted_at, edited_at,
                       client_msg_id NOT NULL, reply_to_seq,
                       linked_poll_id, linked_event_id, linked_meeting_id, created_at
+                      -- edited_at is set when the sender corrects their own text inside
+                      -- the five-minute window, and is what makes the bubble say "Edited".
+                      -- The previous text is deliberately NOT stored: there is no revision
+                      -- table and no previous_body, because a correction window should not
+                      -- become a permanent record of what somebody meant to unsay. The edit
+                      -- command's UPDATE touches body, edited_at and rev and nothing else -
+                      -- never type, pinned, seq or sender_id. See [ADR-0033](../decisions/0033-a-message-may-be-edited-for-five-minutes.md).
                       UNIQUE (channel_id, seq)
                       UNIQUE (channel_id, sender_id, client_msg_id)
                       -- both columns NOT NULL is load-bearing: Postgres treats NULLs as

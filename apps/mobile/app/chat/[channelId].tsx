@@ -23,6 +23,7 @@ import {
   quoteOf,
   quickReactions,
   reactionSummary,
+  withinEditWindow,
   VISIBLE_REACTION_PILLS,
   SYSTEM_ACTOR_ID,
   type MessageEnvelope,
@@ -409,6 +410,7 @@ function MessageActions({
   canPin,
   canReport,
   canDelete,
+  canEdit,
   poll,
   anchor,
   onDismiss,
@@ -419,6 +421,7 @@ function MessageActions({
   onPin,
   onReport,
   onDelete,
+  onEdit,
   onSetPollClosed,
   onDeletePoll,
 }: {
@@ -428,6 +431,14 @@ function MessageActions({
   /** Whether this conversation has reporting at all. False for the whole Eboard scope. */
   canReport: boolean;
   canDelete: boolean;
+  /**
+   * Whether the pencil appears: your own text message, inside the five-minute window.
+   *
+   * Decided by the caller from `withinEditWindow`, the same function the server refuses with, so
+   * the button and the rule cannot drift. The server is still the authority - this only keeps a
+   * member from being offered something that is already refused.
+   */
+  canEdit: boolean;
   /**
    * The poll this card is about, when the viewer is the one who asked it.
    *
@@ -447,6 +458,7 @@ function MessageActions({
   onPin: () => void;
   onReport: () => void;
   onDelete: () => void;
+  onEdit: () => void;
   onSetPollClosed: (closed: boolean) => void;
   onDeletePoll: () => void;
 }) {
@@ -459,6 +471,17 @@ function MessageActions({
     destructive?: boolean;
   }> = [
     { label: "Reply", icon: "reply", onPress: onReply },
+    /*
+      Edit, and it appears only for the sender, only on a text message, and only for five
+      minutes - all three folded into `canEdit` by the caller rather than re-derived here.
+
+      Above Copy rather than below it because the two read as a pair on your own message and
+      correcting it is the likelier intent; below Reply because replying is the one action every
+      message in every scope offers, and moving it would reshuffle a menu people have muscle
+      memory for. Nowhere near the destructive block at the bottom: an edit is not a deletion,
+      and the only thing worse than a hard-to-find pencil is one next to Delete.
+    */
+    ...(canEdit ? [{ label: "Edit", icon: "edit" as const, onPress: onEdit }] : []),
     // Copy is offered only when there is text to copy - a photo has nothing to put on the
     // clipboard, and an item that silently does nothing is worse than an absent one.
     ...(hasText ? [{ label: "Copy", icon: "content-copy" as const, onPress: onCopy }] : []),
@@ -1704,8 +1727,20 @@ const MessageRow = memo(function MessageRow({
             `alignSelf` on the last child of the bubble's column: that is what "bottom
             right" means here, and it needs no second style for `mine` because both
             bubbles put it in the same corner.
+
+            > **"Edited" rides in the same Text rather than beside it**, which is what keeps it
+            > free: a sibling would be a second element in a column whose last child is
+            > positioned by `alignSelf`, so it would either claim its own line or need a row
+            > wrapper, and both change the height of every bubble in the conversation to
+            > accommodate a label almost none of them carry.
+
+            `PRD/05` rule 9a: a corrected message says so. The time it was corrected is on the
+            envelope and is deliberately not drawn - the bubble already carries one timestamp,
+            and a second one invites the reader to work out a difference that means nothing to
+            them. What they need to know is that the words moved.
           */}
           <Text style={styles.bubbleTime}>
+            {message.editedAt !== null ? "Edited  " : ""}
             {new Date(message.createdAt).toLocaleTimeString([], {
               hour: "2-digit",
               minute: "2-digit",
@@ -1811,6 +1846,19 @@ export default function ChatScreen() {
    * deleted while you are still typing shows the tombstone rather than words that are gone.
    */
   const [replyingToSeq, setReplyingToSeq] = useState<number | null>(null);
+  /**
+   * The message being corrected, by seq. Null when writing a new one.
+   *
+   * A seq rather than the text, for the same reason `replyingToSeq` is one: the bar over the
+   * composer resolves the live message, so a message deleted by an admin while its sender is
+   * mid-edit stops being editable rather than being saved back from a stale copy.
+   *
+   * **Mutually exclusive with `replyingToSeq`**, and enforced where each is set rather than by a
+   * combined piece of state. Editing is changing a message that exists; replying is writing a new
+   * one. A composer holding both would have to decide which the send meant, and every answer to
+   * that is a surprise to somebody.
+   */
+  const [editingSeq, setEditingSeq] = useState<number | null>(null);
   /** Set once Report is tapped, so the confirmation is a second deliberate step. */
   const [confirmingReport, setConfirmingReport] = useState<number | null>(null);
   /**
@@ -2621,6 +2669,16 @@ export default function ChatScreen() {
   /** The message the composer is answering, resolved the same way and for the same reasons. */
   const replyingTo = useMemo(() => messageAt(rows, replyingToSeq), [rows, replyingToSeq]);
 
+  /**
+   * The message the composer is correcting, resolved the same way.
+   *
+   * Live rather than a snapshot taken when Edit was tapped, which matters for one case: an admin
+   * deleting the message mid-edit. `editingIsLive` goes false, the bar disappears, and the send
+   * falls back to writing a new message rather than saving text into a tombstone.
+   */
+  const editing = useMemo(() => messageAt(rows, editingSeq), [rows, editingSeq]);
+  const editingIsLive = editing !== null && editing.deletedAt === null;
+
   /*
    * The `@` list's contents, derived from the draft and the caret rather than held in state.
    *
@@ -2798,9 +2856,69 @@ export default function ChatScreen() {
     );
   };
 
+  /**
+   * Save a correction instead of sending a new message.
+   *
+   * Split out rather than branched inside `send` because almost none of what `send` does applies:
+   * there is no optimistic bubble to draw, no outbox entry to retry, no announcement toggle to
+   * disarm, no reply to clear, and no scroll to the newest message - the message being corrected
+   * is already where the reader is looking, and yanking them to the bottom to show them a typo
+   * fix is exactly the movement `PRD/05` rule 3 spends a page ruling out.
+   *
+   * No optimistic patch either. The server's own answer is written to the store, which is what
+   * `setPinned` does and for the same reason: it is already in hand, so guessing at it locally
+   * would be a second opinion about a fact that has arrived.
+   */
+  const saveEdit = async (seq: number, body: string) => {
+    if (!channelId) return;
+    const picks = mentionIdsInBody(mentionPicks, body);
+    try {
+      const result = await channelApi.editMessage(channelId, seq, body, picks);
+      if (client) await client.store.upsert([result.message]);
+      setEditingSeq(null);
+      setDraft("");
+      setMentionPicks([]);
+    } catch (error) {
+      /*
+       * The filter refused it, exactly as it can refuse a send - the window would otherwise be a
+       * hole straight through it. The text stays in the composer and the bar stays up, so this
+       * is an edit to fix rather than a correction that vanished.
+       */
+      const code = error instanceof Error ? error.message : "";
+      if (code === "content_refused") {
+        setNotice(
+          "That edit was not saved. It contains language this app does not allow. Change it and try again.",
+        );
+      } else if (code === "forbidden") {
+        /*
+         * The five minutes ran out while they were typing, or the message stopped being theirs
+         * to change. The client hid the pencil on its own clock; the server refused on its own,
+         * and its answer is the one that counts. Naming the likely cause beats a generic
+         * failure, because the way out - send it as a new message - is not obvious otherwise.
+         */
+        setEditingSeq(null);
+        setNotice("That message can no longer be edited. You can send a new one instead.");
+      } else {
+        setNotice("Could not save that edit. Try again.");
+      }
+    }
+    await refresh();
+  };
+
   const send = async () => {
     const body = draft.trim();
     if (body.length === 0 || !client || !channelId || !canPost) return;
+
+    /*
+     * Correcting takes precedence over sending, and cannot be reached by accident: the two pieces
+     * of state are mutually exclusive where they are set, and the check button that arms this
+     * only appears while the editing bar is up.
+     */
+    if (editingSeq !== null && editingIsLive) {
+      await saveEdit(editingSeq, body);
+      return;
+    }
+
     setDraft("");
     /*
       Sending is a deliberate return to the newest message, wherever the reader had scrolled to.
@@ -3744,6 +3862,26 @@ export default function ChatScreen() {
             canDelete={
               selectedMessage.senderId === userId || meta?.canDeleteAnyMessage === true
             }
+            /*
+              The four conditions the server will apply, asked here so the pencil is not offered
+              for something already refused - and asked through the SAME `withinEditWindow` the
+              refusal uses, rather than a second `Date.now() - created < 300000` written out here.
+              That arithmetic in two places is the shape AGENTS.md failure mode 9 is about.
+
+              Note `canPost` and not membership: a DM participant who has been blocked, or whose
+              thread went read-only, may not edit either. Editing is writing into a conversation.
+
+              Evaluated when the menu opens rather than on a ticking clock. The deadline can pass
+              while the menu is up, and nothing here notices - the server refuses, `saveEdit`
+              explains, and a five-minute-old menu is not a case worth a timer for.
+            */
+            canEdit={
+              canPost &&
+              selectedMessage.senderId === userId &&
+              selectedMessage.type === "text" &&
+              selectedMessage.deletedAt === null &&
+              withinEditWindow(selectedMessage.createdAt, new Date())
+            }
             onDismiss={() => setSelected(null)}
             onReact={(emoji) => {
               setSelected(null);
@@ -3751,6 +3889,32 @@ export default function ChatScreen() {
             }}
             onReply={() => {
               setReplyingToSeq(selectedMessage.seq);
+              // Replying and editing are mutually exclusive, enforced here and in `onEdit` rather
+              // than by combined state: a composer holding both would have to guess what the
+              // send meant.
+              setEditingSeq(null);
+              setSelected(null);
+            }}
+            /*
+              The pencil loads the words back into the composer, where they were written.
+
+              The existing draft is discarded rather than merged or stashed. Merging would put
+              two unrelated sentences in one field; stashing would need a way to say a draft is
+              waiting, which is a whole affordance for a case that ends the moment they press
+              cancel. What is lost is at most a half-typed message, and the bar that appears says
+              plainly that a different one is being edited.
+            */
+            onEdit={() => {
+              setEditingSeq(selectedMessage.seq);
+              setReplyingToSeq(null);
+              setDraft(selectedMessage.body ?? "");
+              /*
+                The mention picks start empty, and that is not a loss: the server keeps whoever
+                was already named unless the edit removes them from the text, so an untouched
+                mention survives with no picks at all. Picks accumulate again from the
+                autocomplete if this edit adds a new name.
+              */
+              setMentionPicks([]);
               setSelected(null);
             }}
             onCopy={() => {
@@ -4164,6 +4328,40 @@ export default function ChatScreen() {
         </View>
       )}
 
+      {/*
+        The editing bar, in the reply bar's slot and deliberately so.
+
+        The composer is one strip of screen with a line of context above it, and what that line
+        says is what the send will do. Two bars stacking would be a composer that is answering one
+        message while rewriting another, which is a state this screen does not have - `editingSeq`
+        and `replyingToSeq` clear each other where they are set.
+
+        Its own cancel, matching the reply bar's, and for the sharper version of that bar's
+        reason: an edit you cannot get out of leaves your original words in a text field with no
+        way back to them, because the field is now the only copy on screen that is not the
+        message itself. Cancelling restores nothing and does not need to - the message was never
+        changed, and the draft it displaced was at most half a sentence.
+      */}
+      {canPost && editingIsLive && (
+        <View style={styles.replyBar}>
+          <MaterialIcons name="edit" size={16} color={color.accent} />
+          <Text style={styles.editingBarLabel}>Editing message</Text>
+          <Pressable
+            onPress={() => {
+              setEditingSeq(null);
+              setDraft("");
+              setMentionPicks([]);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Stop editing this message"
+            hitSlop={space.sm}
+            style={styles.replyBarCancel}
+          >
+            <MaterialIcons name="close" size={18} color={color.textSecondary} />
+          </Pressable>
+        </View>
+      )}
+
       {canPost ? (
         /*
           A `BlurView`, like the header and the pinned strip, so the bar is a translucent layer
@@ -4291,9 +4489,21 @@ export default function ChatScreen() {
               style={styles.sendButton}
               onPress={() => void send()}
               accessibilityRole="button"
-              accessibilityLabel="Send message"
+              /*
+                A check, not an arrow, while editing - and the label says so too.
+
+                The disc is the same size, in the same place, and armed by the same rule, so the
+                only thing carrying "this will replace what you said rather than add to it" is the
+                glyph. An arrow there would be the composer's one lie: send means a new message
+                everywhere else in the app.
+              */
+              accessibilityLabel={editingIsLive ? "Save this edit" : "Send message"}
             >
-              <MaterialIcons name="send" size={18} color={color.onAccent} />
+              <MaterialIcons
+                name={editingIsLive ? "check" : "send"}
+                size={18}
+                color={color.onAccent}
+              />
             </Pressable>
           )}
           </View>
@@ -4658,6 +4868,27 @@ const styles = StyleSheet.create({
   },
   replyBarQuote: { flex: 1 },
   replyBarCancel: { padding: space.xs },
+  /*
+   * "Editing message", in the reply bar's row.
+   *
+   * `flex: 1` so the cancel stays hard against the right edge exactly as it does beside a quote,
+   * which is what lets the two bars share `replyBar` rather than fork it: the reply bar's own
+   * spacer is `replyBarQuote`, and this is the same job for a line of text.
+   *
+   * Bottom padding, which the quote does not need - `QuotedMessage` brings its own box and its
+   * own inset, and a bare Text in that slot would sit flush against the composer.
+   */
+  editingBarLabel: {
+    /*
+     * `bodySmallStrong`, which is the role for "small text that has to be read before the body
+     * beside it" - the same one the sender's name over a bubble uses. This line has to be read
+     * before the words in the field below it, because it is what changes their meaning.
+     */
+    ...type.bodySmallStrong,
+    color: color.accent,
+    flex: 1,
+    paddingBottom: space.sm,
+  },
 
   /*
    * The `@` list. Capped in height so a big club cannot cover the conversation, and anchored to

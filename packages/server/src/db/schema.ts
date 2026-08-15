@@ -521,6 +521,22 @@ export const messages = pgTable(
     // Soft delete with a tombstone, never a removal: a message vanishing
     // mid-conversation makes the replies unreadable (domain invariant 7).
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    /**
+     * When the sender last corrected this message. Null for the great majority.
+     *
+     * > **Set is what makes the bubble say "Edited".** An edit that changed the text and left no
+     * > trace would let a message become something other than what was replied to or reacted to,
+     * > with nothing on screen admitting it - `PRD/05` rule 9a.
+     *
+     * The old text is deliberately not kept anywhere. There is no `message_revisions` table and
+     * no `previous_body` column, because a five-minute correction window is for fixing a typo,
+     * and a stored history would turn every one of them into a permanent record of what somebody
+     * meant to unsay. See ADR-0033.
+     *
+     * Nullable with no default, so every row that predates edits reads "never edited" rather
+     * than "edited at the moment of the migration".
+     */
+    editedAt: timestamp('edited_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     /**
      * The channel revision at which this row last changed. See `channels.lastRev`.

@@ -43,6 +43,7 @@ function message(seq: number, overrides: Partial<MessageEnvelope> = {}): Message
     linkedMeetingId: null,
     replyTo: null,
     deletedAt: null,
+    editedAt: null,
     createdAt: '2026-08-01T00:00:00.000Z',
     ...overrides,
   };

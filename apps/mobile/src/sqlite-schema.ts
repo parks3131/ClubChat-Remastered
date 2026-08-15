@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS messages (
   reply_to_seq   INTEGER,
   reply_to       TEXT,
   deleted_at     TEXT,
+  edited_at      TEXT,
   created_at     TEXT NOT NULL,
   PRIMARY KEY (channel_id, seq)
 );
@@ -178,6 +179,18 @@ export const MIGRATIONS: ReadonlyArray<{ column: string; statements: readonly st
    */
   { column: 'reply_to_seq', statements: [`ALTER TABLE messages ADD COLUMN reply_to_seq INTEGER`] },
   { column: 'reply_to', statements: [`ALTER TABLE messages ADD COLUMN reply_to TEXT`] },
+  /*
+   * No wipe, following `pinned_at` rather than `sender_name`.
+   *
+   * A null `edited_at` on a cached row reads as "never edited", which is the correct answer for
+   * every message that existed before this build - none of them could have been edited, because
+   * there was nothing to edit them with. So unlike the missing-name case there is no wrong
+   * rendering to correct, and a full backfill would buy nothing.
+   *
+   * The rows that DO gain an edit are the ones being edited from now on, and those arrive as a
+   * `msg.update` carrying both the text and the stamp rather than through a sync.
+   */
+  { column: 'edited_at', statements: [`ALTER TABLE messages ADD COLUMN edited_at TEXT`] },
 ];
 
 /**

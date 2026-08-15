@@ -9,7 +9,7 @@
  * See SPEC/TECH/05-authorization.md and SPEC/PRD/02-roles-and-permissions.md.
  */
 
-import { ADMIN_TIER, SYSTEM_ACTOR_ID, type ClubRole } from '@clubchat/shared';
+import { ADMIN_TIER, SYSTEM_ACTOR_ID, withinEditWindow, type ClubRole } from '@clubchat/shared';
 import type { AccessContext } from './context.ts';
 
 /** Just enough of a channel to authorize against, without loading the whole row. */
@@ -371,6 +371,46 @@ export const canDeleteMessage = (
 ): boolean => {
   if (!isChannelMember(ctx, ch)) return false;
   return message.senderId === ctx.userId || canDeleteOthersMessages(ctx, ch);
+};
+
+/**
+ * May this user edit this message?
+ *
+ * Four conditions, and the interesting one is who is NOT here: **an admin cannot edit anybody
+ * else's message, in any scope.** `canDeleteMessage` grants the admin tier a second path because
+ * removing somebody's words is moderation; putting different words in their mouth is forgery, and
+ * a club admin quietly rewriting a member's sentence is indistinguishable from that member having
+ * said it. An admin who objects to a message deletes it, which leaves a tombstone everyone can
+ * see. So this predicate deliberately does **not** mirror the delete rule, and the asymmetry is
+ * the point rather than an oversight - see ADR-0033.
+ *
+ * The rest:
+ *
+ *  - **`canPostInChannel`, not `isChannelMember`.** A DM participant who has been blocked, or
+ *    whose thread went read-only, may not edit either. Editing is writing into a conversation,
+ *    exactly as `canReactInChannel` argues about reacting - a correction landing in a thread
+ *    somebody has been shut out of is still them putting text into it.
+ *  - **Inside the window**, asked through `withinEditWindow` so the client's pencil and this
+ *    refusal are the same rule rather than two copies of an arithmetic.
+ *  - **Text only, and not a tombstone.** An announcement is excluded because it already pushed
+ *    to every phone in the space, so editing it would leave the lock screen and the conversation
+ *    disagreeing with no way to reconcile them; cards and system messages are written by the
+ *    worker and have no author to correct them. A deleted message has no body left to edit.
+ *
+ * `now` is passed rather than read here so the boundary is testable, which is the only way to
+ * assert a deadline without sleeping through it.
+ */
+export const canEditMessage = (
+  ctx: AccessContext,
+  ch: ChannelRef,
+  message: { senderId: string; type: string; createdAt: Date; deletedAt: Date | null },
+  now: Date,
+): boolean => {
+  if (!canPostInChannel(ctx, ch)) return false;
+  if (message.senderId !== ctx.userId) return false;
+  if (message.type !== 'text') return false;
+  if (message.deletedAt !== null) return false;
+  return withinEditWindow(message.createdAt, now);
 };
 
 /**

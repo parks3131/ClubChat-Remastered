@@ -180,6 +180,10 @@ function toEnvelope(row: MessageRow): MessageEnvelope {
             deleted: row.quoted.deletedAt !== null,
           },
     deletedAt: row.deletedAt?.toISOString() ?? null,
+    // What makes a re-read bubble still say "Edited". Sync carries the same field, so a device
+    // that was offline for the edit gets the corrected text and the label together rather than
+    // the text alone.
+    editedAt: row.editedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   };
 }

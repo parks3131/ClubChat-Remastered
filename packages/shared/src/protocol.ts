@@ -220,6 +220,27 @@ export const MsgUpdate = z.object({
   pinnedAt: z.string().datetime().nullable().optional(),
   reactions: z.array(MessageReaction).optional(),
   deletedAt: z.string().datetime().nullable().optional(),
+  /**
+   * The corrected text, and when it was corrected. Both only on an edit.
+   *
+   * > **This is the one field on this frame that rewrites what a message SAYS**, and until
+   * > 2026-08-14 the contract said it never could - "an update must never be able to rewrite a
+   * > message's body, sender or seq. Those are the log, and the log is append-only." Two of those
+   * > three still hold, and they are the two that matter: `seq` is the address every reply, quote
+   * > and read cursor points at, and `senderId` is attribution. Neither is reachable from here.
+   * >
+   * > What changed is the argument about `body`. Append-only was protecting the ORDERING, and a
+   * > correction to text does not touch it - the message keeps its place, its address and its
+   * > author. `deletedAt` has been allowed to blank a body since Phase 0 for exactly this reason,
+   * > so the line was never where the comment drew it. See ADR-0033.
+   *
+   * `editedAt` travels WITH `body` rather than being inferred from its presence, and the pinned
+   * strip is the precedent: `pinned` arrived without `pinnedAt`, clients stored half the change,
+   * and the newest pin sorted to the end of the strip. A body with no edit time would store text
+   * that changed with nothing saying it had.
+   */
+  body: z.string().nullable().optional(),
+  editedAt: z.string().datetime().nullable().optional(),
 });
 export type MsgUpdate = z.infer<typeof MsgUpdate>;
 

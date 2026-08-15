@@ -903,6 +903,20 @@ export const channelApi = {
     apiFetch<{ message: MessageEnvelope }>(`/channels/${channelId}/messages/${seq}`, {
       method: 'DELETE',
     }),
+
+  /**
+   * Correct a message inside the five-minute window.
+   *
+   * `/body` rather than a PATCH over the message, matching the route: this command can change
+   * exactly one column, and the path says which. `mentions` travels for the same reason it does
+   * on the send path - the composer knows who was picked from the autocomplete, and the server
+   * re-checks every one of them against the channel and against the final text.
+   */
+  editMessage: (channelId: string, seq: number, body: string, mentions?: readonly string[]) =>
+    apiFetch<{ message: MessageEnvelope }>(`/channels/${channelId}/messages/${seq}/body`, {
+      method: 'POST',
+      body: { body, ...(mentions && mentions.length > 0 ? { mentions } : {}) },
+    }),
 };
 
 // ---------------------------------------------------------------------------
