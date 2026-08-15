@@ -39,13 +39,38 @@ field and why one should not be added back.*
 4. **A day holds as many meetups as the club needs**, listed in time order. A morning session and
    an evening social are two meetups; the day simply gets taller. Nothing anywhere limits a day to
    one.
-5. **A meetup answers three questions, and only these three:**
+5. **A meetup answers these questions and no others:**
 
    | | | |
    |---|---|---|
+   | **What it is called** | A name - "Morning Miles", "morning book reading", "swim practice night" | Optional |
    | **Where** | A place, in the club's own words - "Memorial Park gate", "Room 204" | Required |
    | **When** | A date and a time of day | Required |
    | **What** | Free text: what they will actually be doing | Optional |
+   | **How to find us** | Location notes: "the wooden archway; parking is tight" | Optional |
+   | **A map link** | A pasted Google or Apple Maps URL. Becomes a Directions button | Optional |
+
+   > **The name and the last two arrived 2026-08-15** ([ADR-0037](../decisions/0037-a-meetup-carries-a-name-and-a-pasted-map-link.md)).
+   > The name is what lets this feature belong to a club that is not a running club, which is the
+   > same generalisation [ADR-0029](../decisions/0029-a-meetup-answers-where-when-and-what.md)
+   > made when it deleted the activity-type catalog. **Without a name the location is the
+   > headline**, exactly as this shipped, so a club that only wants a place and a time is
+   > unaffected.
+   >
+   > **Still not a field: distance, difficulty, pace, or anything else describing the session as
+   > training.** A mockup carried "5.2 mi" and it was left out - see the non-goals in
+   > [`00`](00-overview.md), which rule out training detail in three separate rows.
+   >
+   > **A map link is a LINK, never a coordinate.** The server reads the point out of it, follows
+   > the short link the Google Maps app shares, and refuses to store a URL whose host is not a
+   > map - because a stored URL becomes a button that opens it.
+   >
+   > **A pasted link becomes a Directions button on the meetup's screen, and nothing else.** There
+   > is no map picture: one was built on 2026-08-15 and taken back out the same afternoon, because
+   > a Google "share a place" link carries no coordinates at any hop, so drawing a pin meant either
+   > asking an admin to place one by hand or paying for a Places key - to draw a place the button
+   > already opens. **No link means no button**, rather than a button that hands Maps a text search
+   > for "Bimini".
 
 6. **Creating one opens on the day that was tapped and asks it as a question** - *"Where should we
    meet on Friday 14 August?"* - with the place as the first and largest field. The screen is
@@ -66,9 +91,14 @@ field and why one should not be added back.*
     sending itself.)*
 12. **A meetup appears on the club calendar, with the same standing as an event or a race.** It
     marks its day on the month grid, it is listed under a tapped day with its time, and it is in
-    the Upcoming/Past list. **Tapping it opens this screen on the week that holds it** - a meetup
-    has no detail screen of its own, because the week is where it is read, edited, removed and
-    nudged from, and landing on any other week would be landing somewhere it is not.
+    the Upcoming/Past list. **Tapping it opens the meetup's own screen**, which carries the name,
+    the place, the notes, what the club is doing and a map when one has been pasted.
+
+    > For a few hours on 2026-08-15 it opened this week instead, because a meetup had no screen -
+    > see [ADR-0037](../decisions/0037-a-meetup-carries-a-name-and-a-pasted-map-link.md) for what
+    > changed. The week is still where a meetup is edited, removed and nudged from, and its rows
+    > now open the same screen - so **a member can open a meetup at all**, which they could not
+    > before: the row was pressable only for admins, because the only thing behind it was a menu.
 
     **This reverses what this rule said until 2026-08-15**, which was that meetups stay off the
     calendar because a club meeting three times a week would mark almost every square and drown
@@ -114,9 +144,16 @@ field and why one should not be added back.*
     nudged", or "someone already nudged this, you can nudge again at 10:00". A control that
     vanishes on other days appears and disappears down the week, which reads as a rendering fault
     rather than a rule; one that does nothing when pressed is indistinguishable from broken.
-16b. **Tapping the notification opens the club's week.** A nudge that buzzes a phone and goes
-    nowhere when tapped is the failure this rule exists to name; it happened once, on 2026-08-14,
-    and [Notifications](12-notifications.md) carries the general form.
+16b. **Tapping the notification opens the meetup that was nudged.** A nudge that buzzes a phone
+    and goes nowhere when tapped is the failure this rule exists to name; it happened once, on
+    2026-08-14, and [Notifications](12-notifications.md) carries the general form.
+
+    > **It opened the club's WEEK until 2026-08-15**, which was the best available answer while a
+    > meetup had no screen of its own. It got one that afternoon (rule 12), and a nudge is about
+    > one meetup rather than about the week it sits in. The destination is derived from the
+    > notification's stored parameters at read time, and the meetup's id has been among them since
+    > the nudge shipped - so the nudges already sitting in an inbox point at the meetup too,
+    > without anything being rewritten.
 17. **A nudge posts nothing to chat.** The point is to reach a phone that is not currently looking
     at the app, and rule 11 keeps meetups out of the conversation. Putting one there would be a
     separate decision.

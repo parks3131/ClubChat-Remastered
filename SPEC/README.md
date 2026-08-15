@@ -116,6 +116,7 @@ survives the number changing.
 | 09 | [Chat composer](DESIGN/09-chat-composer.md) | The bar you write in, and how it moves with the keyboard |
 | 10 | [Member card](DESIGN/10-member-card.md) | Who somebody is, raised over the roster that asked: the panel travels, the shade stays put |
 | 11 | [Photo compose](DESIGN/11-photo-compose.md) | The step between choosing a photo and sending it: a look at it, a crop stored as fractions, and a caption |
+| 12 | [Meetup detail](DESIGN/12-meetup-detail.md) | One meetup on its own screen: name, place, notes, and the map from a pasted link |
 
 Written as surfaces are worked on rather than backfilled in a pass, since a spec written by reading
 code instead of by looking at a device starts out wrong. See [`DESIGN/README.md`](DESIGN/README.md)
@@ -163,6 +164,7 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0034](decisions/0034-the-calendar-carries-only-things-that-happen-on-a-day.md) | The calendar carries only things that happen on a day |
 | [0035](decisions/0035-a-person-is-reported-to-platform-moderators.md) | A person is reported to platform moderators, and never to a club's admins |
 | [0036](decisions/0036-a-meetup-is-a-calendar-kind.md) | A meetup is a calendar kind, reversing PRD/08 rule 12 |
+| [0037](decisions/0037-a-meetup-carries-a-name-and-a-pasted-map-link.md) | A meetup carries a name, and its map comes from a pasted link |
 
 ## Templates
 

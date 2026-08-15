@@ -462,8 +462,20 @@ export type NotificationTarget =
   | { kind: 'event'; eventId: string }
   | { kind: 'meeting'; meetingId: string }
   | { kind: 'news'; clubId: string }
-  /** The club's week. A nudge is about one meetup, but the week is where a meetup is read. */
-  | { kind: 'meetups'; clubId: string }
+  /**
+   * The meetup that was nudged, on its own screen.
+   *
+   * > **This pointed at the club's WEEK until 2026-08-15**, on the reasoning that a meetup is read
+   * > in its week - which was true, because a meetup had no screen of its own. It got one that
+   * > afternoon (`ADR-0037`), and the founder said what a deep link is for: *"it should take me to
+   * > the actual meetup, which has notified"*. A nudge is about one meetup, and now there is
+   * > somewhere to land.
+   *
+   * The target is derived from the notification's stored params at read time rather than written
+   * with the row, and `meetupId` has been in those params since the nudge shipped - so the
+   * notifications already sitting in somebody's inbox point at the meetup too, with no backfill.
+   */
+  | { kind: 'meetup'; meetupId: string }
   /**
    * The Reports tab of a channel's Highlights, which is where a group-scope report is worked.
    *
@@ -521,7 +533,7 @@ export function notificationTarget(n: {
     case 'news_post_created':
       return { kind: 'news', clubId: p['clubId']! };
     case 'meetup_nudged':
-      return { kind: 'meetups', clubId: p['clubId']! };
+      return { kind: 'meetup', meetupId: p['meetupId']! };
 
     // Straight to the message, which is what makes a push deep-link land on the right
     // one rather than merely opening the conversation.

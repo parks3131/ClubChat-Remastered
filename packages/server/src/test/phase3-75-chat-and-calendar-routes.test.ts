@@ -628,12 +628,12 @@ describe('the merged calendar', () => {
     await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
       meetupDate: '2099-05-04',
       meetupTime: '18:30',
-      location: 'Evening social',
+      title: 'Evening social',
     });
     await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
       meetupDate: '2099-05-04',
       meetupTime: '06:45',
-      location: 'Morning session',
+      title: 'Morning session',
     });
 
     const upcoming = await as(owner, 'GET', `/calendar?club=${clubId}&when=upcoming`);

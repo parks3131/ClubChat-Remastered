@@ -225,6 +225,20 @@
       "when": 1786802022200,
       "tag": "0031_user_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1786814759231,
+      "tag": "0032_meetup_name_and_map",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1786821176843,
+      "tag": "0033_meetup_name_replaces_place",
+      "breakpoints": true
     }
   ]
 }

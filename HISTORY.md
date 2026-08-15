@@ -13,6 +13,132 @@ Newest first.
 
 ---
 
+## 2026-08-15 - A meetup gets a name, a screen, and a map from a pasted link
+
+Meetups reached the calendar in the morning, which made them findable and immediately showed what
+they lack: tapping one arrived at a place and a time and nothing else. The founder designed two
+screens in Stitch and asked for them.
+
+**The name is the important half, and it is not decoration.** In his words: *"it can be morning
+book reading or swim practice night"*. A meetup identified only by its place reads as a running
+club's fixture; one with a name belongs to a chess club, a choir or a reading group. That is the
+same generalisation `ADR-0029` made when it deleted the per-club activity-type catalog, arriving
+from the other side - free text rather than a taxonomy - and `TODO.md` already flags "Races and
+Meets" as the next name with the same problem. It is optional, so a club that wants a place and a
+time is unaffected and the location stays the headline.
+
+**One thing in the design was refused, and that is the decision worth recording.** The mockup
+carried "12 Attending" and an RSVP button. `PRD/00` lists *"RSVP or attendance, anywhere"* as a
+deliberate non-goal, next to *"Weekly Meetups is a plan, not a checklist"*. Put to the founder
+directly, he chose to leave it standing rather than reverse it from a picture. It can still be
+reversed later, on use - which is how DMs were reversed, and the difference is evidence.
+
+### The map, and why the point comes from a pasted link
+
+A meetup's place is free text - "Bimini", "Vibing", "the wooden archway entrance" - and no
+geocoder turns those into a coordinate. That killed every option that starts from an address. The
+founder's own answer was the right one: *"the link will be pasted... from that you can take the
+coordinates"*. A human has already found the spot on a map, and the link is the record of that. No
+geocoder, no API key, and it handles the entrance to a park that has no address at all.
+
+Three properties came out of building it, in ascending order of how easy each was to get wrong:
+
+- **The client sends a link and never a coordinate.** The server reads the point out, so a phone
+  cannot put a pin somewhere the link does not go and every client gets the same answer.
+- **The Google Maps app shares a SHORT link** - `maps.app.goo.gl/XYZ` - which contains no
+  coordinate, no place name and nothing else. That is the common case, not an edge one, so the
+  server follows it.
+- **The host allowlist is re-checked at every redirect hop**, not just on the pasted URL. A
+  shortener's entire purpose is to point somewhere else, so checking only what was pasted checks
+  the one hop that was never in doubt. With automatic following, a pasted short link would have
+  been a way to make the server GET an arbitrary address and hand back what came out.
+
+**A test caught the ordering bug, and it is the kind nothing on a screen would ever show.**
+`resolveMapPoint` read the coordinate before checking the host, so
+`maps.google.com.evil.test/?q=1,1` produced a perfectly good point - a parser is not a gatekeeper,
+and `parseMapLink` will happily read a pair out of any query string. No fetch happened, so nothing
+was exposed, but the URL would have been stored and put behind a Directions button that opens it.
+The check moved above the parse.
+
+### The native module, handled the way this app learned to
+
+`react-native-maps`, which this SDK bundles a version of, on Apple Maps - so no API key, and no
+raising the deployment target from 16.4, which `expo-maps` would have needed for iOS 17.
+
+It is a native module, and this app has been taken down twice by exactly that. So the import is a
+`require` inside the component rather than at the top of a file, which is the pattern `AGENTS.md`
+failure mode 8 already prescribes for a module that is not on every platform - here the platform
+that might not have it is **an older build of this same app**. It was verified in that state
+before the rebuild: Metro built the whole bundle at 200 with `react-native-maps` not installed at
+all, and the screen renders the place, the notes and Directions with no picture. Then the binary
+was rebuilt and installed, and the map arrived.
+
+### What else changed on the way
+
+`ADR-0036` had said a meetup has no detail screen and is not getting one. That was correct while a
+meetup was three facts a row could hold, and it stopped being correct hours later when it held
+six. The ADR is amended rather than rewritten - what was believed on the way here is the useful
+part - and the calendar's rows now open the meetup instead of the club's week, which removes the
+one exception on that feed.
+
+**A member can now open a meetup at all.** The week's rows were pressable only for admins, because
+the only thing behind them was an admin menu. That was invisible as a gap for as long as there was
+nothing to open.
+
+**Then the device found the thing the tests could not.** "why is the map not visible" - and the
+answer was an assumption baked into the tests themselves. The short-link follow was built against
+a stub that redirected to `@lat,lng`, which is what a Google **dropped-pin** share produces. A
+Google **"share a place"** share - the natural one, the one anybody actually taps - carries no
+coordinates at all. Followed with three different user agents, every hop resolves to the same
+thing: a place name and a feature id.
+
+```
+maps.google.com/maps?q=Appalachian+Dining+Hall+at+Mountainview,+Vestal,+NY+13850&ftid=0x89daef42...
+```
+
+So `parseMapLink` was right to return null; there is genuinely no point in it. Apple Maps shares,
+Google dropped-pin shares and desktop URL-bar links all carry one and all worked from the start.
+**This is the shape of a stub agreeing with you.** The test asserted the redirect chain resolves to
+a coordinate, which is true of the link the test invented and false of the link a person sends.
+
+Two rescues were tried and rejected before the one that works. **Geocoding the address Google
+hands back**: OpenStreetMap finds "Vestal, NY 13850" and not "Appalachian Dining Hall", so the pin
+would land on the town centre two kilometres away - a confidently wrong map, which is worse than no
+map and is the exact failure this feature keeps guarding against. **Decoding the `ftid`**: its
+first half is an S2 cell id and really does encode a position, but it is an undocumented identifier
+and the decode is Hilbert-curve arithmetic that draws a plausible wrong pin if it is slightly off.
+Not something a member should rely on to find where their club meets.
+
+What shipped instead is the option that had been offered and declined an hour earlier, and which
+now complements pasting rather than replacing it: **the admin taps the map to place the pin.**
+Free, exact, works for a campus building no geocoder has heard of, and it needed nothing new -
+`react-native-maps` was already installed. The link still drives Directions, so it stays the exact
+record of the place; the tap is only about drawing it. The tap wins over the link when both exist,
+because a link is a guess about where somebody meant and a tap is somebody saying it.
+
+**And then the map came out.** The founder, an hour after the pin picker landed: *"I don't want the
+map feature for now. Just keep it. Instead we can have the direction. If someone [pastes] the link,
+then direction will pop up."* Which is right, and is the sort of thing only using it tells you: the
+map was never the feature. Getting a member to the place was, and the pasted link does that on its
+own - it opens the exact spot in Maps, including the ones no geocoder can resolve. The picture was a
+nicety that turned out to cost either a hand-placed pin or a paid key to draw a place the button
+already opened.
+
+So a meetup with a link shows a Directions button and a meetup without one shows nothing -
+deliberately not a text search on the location, because handing Maps "Bimini" sends somebody
+wherever it guesses that means. `react-native-maps` stays installed, and `ADR-0037` is where that
+is written down, since an unused native dependency is otherwise a future mystery: the pod and the
+device rebuild are the expensive half, and keeping them means the map can return without another
+install on every phone. The columns stay too, for one nullable pair.
+
+Four hours, four positions on the same question - no map, a real map, a map plus a hand-placed pin,
+and finally a button - and only the last one was decided with the thing in hand. Each turn was
+cheap because the link was always the record and the picture was always the ornament.
+
+1,366 tests with 29 new, typecheck, runtime, em dash and the constraint proof all clean. The
+proof is where the coordinate pair is actually held: both halves or neither, and on the earth -
+`map-link.ts` refusing an out-of-range pair is the kind refusal, not the only one.
+
 ## 2026-08-15 - A meetup becomes a calendar kind, and a rule gets overruled
 
 Meetups were the only dated club activity invisible outside their own screen. Events, races and

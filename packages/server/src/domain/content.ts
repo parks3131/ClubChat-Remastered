@@ -19,8 +19,10 @@
  */
 
 import { and, eq, sql } from 'drizzle-orm';
+import { isMapLink } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { isoUtc } from '../db/sql-helpers.ts';
+import { resolveMapPoint } from '../maps.ts';
 import {
   calendarEvents,
   meetings,
@@ -291,10 +293,109 @@ type MeetupInput = {
   meetupDate: string;
   /** Wall-clock `HH:MM`, in the club's own day. Required. */
   meetupTime: string;
-  /** Required. "TBC" is a real answer; a blank is not. */
-  location: string;
+  /**
+   * The place as free text. **Optional since 2026-08-15, and the form no longer asks for it.**
+   *
+   * The founder replaced it with a pasted map link - "the link is the place". Still accepted so
+   * an older client and the 80 meetups that already carry text keep working.
+   */
+  location?: string | null | undefined;
   description?: string | null | undefined;
+  /**
+   * What the club calls this one. **Required**, since the place stopped being.
+   *
+   * Something has to name a meetup, and this is the only thing left that can. It is also what
+   * lets the feature belong to a club that is not a running club - "morning book reading", "swim
+   * practice night".
+   */
+  title: string;
+  /** How to find the club once you are there. The map pin cannot say "the wooden archway". */
+  locationNotes?: string | null | undefined;
+  /**
+   * A Google or Apple Maps link, pasted.
+   *
+   * The client sends a LINK and never a coordinate. The server reads the point out of it - see
+   * `resolveMapPoint` - so a phone cannot put a pin wherever it likes, and a link on a host that
+   * is not a map is dropped rather than stored, because whatever is stored here ends up behind a
+   * Directions button that opens it.
+   */
+  mapUrl?: string | null | undefined;
+  /**
+   * A point the admin placed by hand, when a link could not supply one.
+   *
+   * > **This exists because a Google "share a place" link carries no coordinates at all.** Found
+   * > on the device on 2026-08-15: the short link resolves, at every hop, to a place NAME and a
+   * > feature id - never a point. Apple Maps links and Google dropped-pin links do carry one, so
+   * > those still need no tap. See `ADR-0037`.
+   *
+   * When both are present the TAP wins: somebody chose it deliberately, on a map, while looking
+   * at where the club meets. The range is still checked here and again by a CHECK constraint,
+   * because a coordinate arriving from a client is a coordinate arriving from a client.
+   */
+  mapLat?: number | null | undefined;
+  mapLng?: number | null | undefined;
 };
+
+/**
+ * What a pasted link becomes on the way into the row: the link if it is a map link at all, and
+ * the point if one can be found.
+ *
+ * Both halves are decided here rather than at either call site, so create and edit cannot drift -
+ * the shape of bug `AGENTS.md` failure mode 31 is about, where two statements that must always
+ * happen together eventually become one.
+ */
+/**
+ * The stored pair, back into a point for the wire.
+ *
+ * `numeric` arrives as a string, and both halves are present or neither - the database holds that
+ * with a CHECK rather than this function trusting it, but this is still written to require both,
+ * because half a coordinate reaching a map centres it on the wrong line rather than failing.
+ */
+function toPoint(lat: string | null, lng: string | null): { lat: number; lng: number } | null {
+  if (lat === null || lng === null) return null;
+  const point = { lat: Number(lat), lng: Number(lng) };
+  return Number.isFinite(point.lat) && Number.isFinite(point.lng) ? point : null;
+}
+
+async function mapFields(
+  raw: string | null | undefined,
+  placed?: { lat?: number | null | undefined; lng?: number | null | undefined },
+): Promise<{ mapUrl: string | null; mapLat: string | null; mapLng: string | null }> {
+  const link = typeof raw === 'string' ? raw.trim() : '';
+  const url = link.length > 0 && isMapLink(link) ? link : null;
+
+  /*
+   * A hand-placed pin wins over whatever the link says.
+   *
+   * Deliberate, and the order is the decision: a link is a guess about where somebody meant, and a
+   * tap on a map is somebody saying it. The range check is here AND on the column, because this
+   * value now arrives from a client rather than from a URL the server read.
+   */
+  const lat = placed?.lat ?? null;
+  const lng = placed?.lng ?? null;
+  if (
+    typeof lat === 'number' &&
+    typeof lng === 'number' &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    Math.abs(lat) <= 90 &&
+    Math.abs(lng) <= 180
+  ) {
+    return { mapUrl: url, mapLat: String(lat), mapLng: String(lng) };
+  }
+
+  // Not a map link: not stored at all. A Directions button must never open an arbitrary URL.
+  if (url === null) return { mapUrl: null, mapLat: null, mapLng: null };
+
+  const point = await resolveMapPoint(url);
+  return {
+    mapUrl: url,
+    // `numeric` columns are read and written as strings, which is the point of them: a coordinate
+    // that round-trips through a float comes back as 42.088699999999996.
+    mapLat: point === null ? null : String(point.lat),
+    mapLng: point === null ? null : String(point.lng),
+  };
+}
 
 /**
  * Create a meetup. Any club admin, and **it notifies nobody and posts nothing**.
@@ -317,8 +418,11 @@ export async function createMeetup(
       clubId: input.clubId,
       meetupDate: input.meetupDate,
       meetupTime: input.meetupTime,
-      location: input.location,
+      location: input.location ?? null,
       description: input.description ?? null,
+      title: input.title,
+      locationNotes: input.locationNotes ?? null,
+      ...(await mapFields(input.mapUrl, { lat: input.mapLat, lng: input.mapLng })),
       createdBy: ctx.userId,
     })
     .returning();
@@ -352,12 +456,103 @@ export async function updateMeetup(
     .set({
       meetupDate: input.meetupDate,
       meetupTime: input.meetupTime,
-      location: input.location,
+      location: input.location ?? null,
       description: input.description ?? null,
+      title: input.title,
+      locationNotes: input.locationNotes ?? null,
+      // Re-resolved rather than kept: an edit that changes the link has to change the point with
+      // it, and an edit that clears the link has to clear the pin. Leaving the old coordinates
+      // behind would draw a map of where the club used to meet.
+      ...(await mapFields(input.mapUrl, { lat: input.mapLat, lng: input.mapLng })),
     })
     .where(eq(meetups.id, meetupId));
   return { ok: true, updated: true };
 }
+
+/**
+ * One meetup, for its own screen.
+ *
+ * > **A meetup had no detail screen until 2026-08-15, and `ADR-0036` said it was not getting
+ * > one** - the week carried every action, so a row that opened a screen about itself would have
+ * > been a second place to read the same four lines. What changed is what a meetup holds: a name,
+ * > location notes and a map do not fit a row, and the founder's mockup put them on a screen.
+ *
+ * Read access is club membership, the same as the week - `canReadClubContent`. The club's name
+ * comes back with it because the screen leads with it and a second round trip for one string is
+ * the kind of thing that makes a screen feel slow.
+ */
+export async function readMeetup(
+  db: Db,
+  ctx: AccessContext,
+  meetupId: string,
+): Promise<Result<{ meetup: MeetupDetail }>> {
+  const rows = await db.execute<{
+    id: string;
+    club_id: string;
+    club_name: string;
+    meetup_date: string;
+    meetup_time: string;
+    location: string;
+    description: string | null;
+    title: string;
+    location_notes: string | null;
+    map_url: string | null;
+    map_lat: string | null;
+    map_lng: string | null;
+  }>(sql`
+    SELECT m.id, m.club_id, cl.name AS club_name, m.meetup_date, m.meetup_time,
+           m.location, m.description, m.title, m.location_notes,
+           m.map_url, m.map_lat::text, m.map_lng::text
+      FROM meetups m
+      JOIN clubs cl ON cl.id = m.club_id
+     WHERE m.id = ${meetupId}
+     LIMIT 1
+  `);
+
+  const row = rows.rows[0];
+  if (!row) return { ok: false, code: 'not_found' };
+  /*
+   * Not `forbidden`. A meetup in a club the viewer is not in must not be distinguishable from a
+   * meetup that does not exist - the same shape every other read in this module uses, so an id
+   * cannot be probed for whether it names something real.
+   */
+  if (!canReadClubContent(ctx, row.club_id)) return { ok: false, code: 'not_found' };
+
+  return {
+    ok: true,
+    meetup: {
+      id: row.id,
+      clubId: row.club_id,
+      clubName: row.club_name,
+      // Split, never parsed: a date-only value read as an instant is UTC midnight and renders a
+      // day early west of Greenwich.
+      date: String(row.meetup_date).slice(0, 10),
+      time: String(row.meetup_time).slice(0, 5),
+      location: row.location,
+      description: row.description,
+      title: row.title,
+      locationNotes: row.location_notes,
+      mapUrl: row.map_url,
+      mapPoint: toPoint(row.map_lat, row.map_lng),
+    },
+  };
+}
+
+export type MeetupDetail = {
+  id: string;
+  clubId: string;
+  clubName: string;
+  /** `YYYY-MM-DD`, the club's own day. */
+  date: string;
+  /** `HH:MM`, the club's own clock. */
+  time: string;
+  location: string | null;
+  description: string | null;
+  title: string;
+  locationNotes: string | null;
+  mapUrl: string | null;
+  mapPoint: { lat: number; lng: number } | null;
+};
 
 /** Any admin can delete any meetup, not only its author. */
 export async function deleteMeetup(
@@ -510,8 +705,22 @@ export type WeekDay = {
     id: string;
     /** `HH:MM`. Wall-clock in the club's day, never converted to the reader's zone. */
     time: string;
-    location: string;
+    /** The place as text, for the meetups that carry it. New ones do not - see the schema. */
+    location: string | null;
     description: string | null;
+    /** What the club calls it. The headline, everywhere, and required since 2026-08-15. */
+    title: string;
+    /** How to find the club once you are there. */
+    locationNotes: string | null;
+    /** The pasted Google or Apple Maps link, or null. Opens in Maps; see `mapPoint` for the pin. */
+    mapUrl: string | null;
+    /**
+     * The point read out of `mapUrl`, or null when it had none.
+     *
+     * Null with a `mapUrl` present is an ordinary state, not a failure: a link to a named place
+     * with no coordinates still opens in Maps, it just cannot be drawn.
+     */
+    mapPoint: { lat: number; lng: number } | null;
     /**
      * When THIS meetup's bell comes back, or null if it is live.
      *
@@ -569,9 +778,15 @@ export async function readMeetupWeek(
     meetup_time: string;
     location: string;
     description: string | null;
+    title: string;
+    location_notes: string | null;
+    map_url: string | null;
+    map_lat: string | null;
+    map_lng: string | null;
     cooldown_until: string | null;
   }>(sql`
     SELECT m.id, m.meetup_date, m.meetup_time, m.location, m.description,
+           m.title, m.location_notes, m.map_url, m.map_lat::text, m.map_lng::text,
            ${isoUtc('n.cooldown_until')} AS cooldown_until
       FROM meetups m
       LEFT JOIN LATERAL (
@@ -603,6 +818,10 @@ export async function readMeetupWeek(
       time: String(row.meetup_time).slice(0, 5),
       location: row.location,
       description: row.description,
+      title: row.title,
+      locationNotes: row.location_notes,
+      mapUrl: row.map_url,
+      mapPoint: toPoint(row.map_lat, row.map_lng),
       nudgeBlockedUntil: row.cooldown_until,
       // Today only, and decided here so the client cannot reach a different answer.
       nudgeable: key === today,

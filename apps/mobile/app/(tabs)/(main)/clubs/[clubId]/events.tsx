@@ -174,19 +174,15 @@ function EventRow({ item, faded }: { item: FeedItem; faded: boolean }) {
   const router = useRouter();
   const tint = tintFor(item.kind);
   const bib = bibParts(item.at, item.allDay);
-  /*
-   * Every kind on this merged feed opens something. A meetup is the one that does not open a
-   * screen of ITS OWN, because it has none: the club's week is where a meetup is read, edited,
-   * removed and nudged from, so that is where the row goes.
-   */
+  // Every kind on this merged feed opens a screen about itself, meetups included since they got
+  // one on 2026-08-15. See the calendar's copy of this.
   const target =
     item.kind === 'race'
       ? `/races/${item.id}`
       : item.kind === 'meeting'
         ? `/meetings/${item.id}`
         : item.kind === 'meetup'
-          ? // With the day, so the week that opens holds this meetup. See the calendar's copy.
-            `/clubs/${item.clubId}/weekly-meetups?date=${item.at}`
+          ? `/meetups/${item.id}`
           : `/events/${item.id}`;
 
   const body = (

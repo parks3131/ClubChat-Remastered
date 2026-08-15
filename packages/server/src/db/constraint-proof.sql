@@ -621,21 +621,45 @@ SELECT pg_temp.assert_rejected(
 -- Weekly Meetups has no activity-type CHECK left to prove. ADR-0029 deleted the field rather
 -- than generalising it, so the invariants that remain are that a meetup answers WHERE and WHEN.
 -- The absence of a type assertion here is the decision, not a dropped test.
+-- The place stopped being required on 2026-08-15 and the NAME took its place: the form asks for
+-- a link rather than a place, and something still has to name a meetup. So the assertion that
+-- used to be here - an insert with no location is rejected - is deliberately gone rather than
+-- dropped, and this is the same invariant pointed at the column that now carries it.
 SELECT pg_temp.assert_rejected(
-  'meetups - no place',
-  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, location)
+  'meetups - no name',
+  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, title)
     VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '18:00', NULL)$$);
 
 SELECT pg_temp.assert_rejected(
   'meetups - no time',
-  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, location)
-    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', NULL, 'Track')$$);
+  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, title)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', NULL, 'Track session')$$);
+
+-- A map point is both halves or neither. Half a coordinate is not a place, and the screen would
+-- centre on a latitude with no longitude - a confident map of the wrong line.
+SELECT pg_temp.assert_rejected(
+  'meetups - a latitude with no longitude',
+  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, title, map_lat)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '18:00', 'Track', 42.0887)$$);
+
+-- And it has to be on the earth. `map-link.ts` refuses an out-of-range pair when a link is pasted,
+-- and this is deliberately the second place rather than the only one: the parser is where a bad
+-- paste is caught kindly, this is where it cannot get in at all.
+SELECT pg_temp.assert_rejected(
+  'meetups - a point off the earth',
+  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, title, map_lat, map_lng)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '18:00', 'Track', 91, 0)$$);
+
+SELECT pg_temp.assert_rejected(
+  'meetups - a longitude past the antimeridian',
+  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, title, map_lat, map_lng)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '18:00', 'Track', 0, 181)$$);
 
 -- Nudge is rate limited by an EXCLUDE constraint, not by a check in a handler, because two
 -- admins tapping the bell in the same second is exactly what a read-then-write loses (ADR-0030).
 -- The window is per MEETUP since ADR-0031, which is what the second and third inserts prove
 -- together: the same meetup twice is refused, a different meetup in the same hour is not.
-INSERT INTO meetups (id, club_id, meetup_date, meetup_time, location) VALUES
+INSERT INTO meetups (id, club_id, meetup_date, meetup_time, title) VALUES
   ('dddddddd-dddd-4ddd-8ddd-dddddddddddd',
    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '06:30', 'Track'),
   ('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
@@ -671,9 +695,9 @@ SELECT pg_temp.assert_accepted(
 -- on one day must both be accepted.
 SELECT pg_temp.assert_accepted(
   'meetups - two on the same day',
-  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, location) VALUES
-      ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '06:30', 'Track'),
-      ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '19:00', 'The Anchor')$$);
+  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, title) VALUES
+      ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '06:30', 'Morning miles'),
+      ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '19:00', 'Evening social')$$);
 
 SELECT pg_temp.assert_rejected(
   'calendar - an invented event type',

@@ -50,6 +50,7 @@ import type {
   RaceRoster,
   ReportRow,
   MeetupBody,
+  MeetupDetail,
   MeetupWeek,
   SharedClub,
   UserReportRow,
@@ -551,6 +552,10 @@ export const contentApi = {
   /** The Monday is required: "this week" is a question about the caller's timezone. */
   meetups: (clubId: string, monday: string) =>
     apiFetch<MeetupWeek>(`/clubs/${clubId}/meetups${query({ monday })}`),
+
+  /** One meetup, for its own screen. A club you are not in answers 404 rather than 403. */
+  meetup: (meetupId: string) =>
+    apiFetch<{ meetup: MeetupDetail }>(`/meetups/${meetupId}`),
 
   createMeetup: (clubId: string, body: MeetupBody) =>
     apiFetch<{ meetupId: string }>(`/clubs/${clubId}/meetups`, { method: 'POST', body }),

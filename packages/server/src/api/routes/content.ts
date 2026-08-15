@@ -26,6 +26,7 @@ import {
   readNewsFeed,
   readNewsPost,
   nudgeMeetup,
+  readMeetup,
   readMeetupWeek,
   updateMeetup,
   toggleNewsReaction,
@@ -207,8 +208,28 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
       .string()
       .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'expected HH:MM')
       .describe('Wall-clock in the club own day. Never an instant - see ADR-0029.'),
-    location: z.string().trim().min(1).max(300),
+    /**
+     * **Required since 2026-08-15**, when the place stopped being collected. Something has to
+     * name a meetup, and with no place this is the only thing that can.
+     */
+    title: z.string().trim().min(1).max(120),
+    /** Optional, and no longer asked for: the pasted link is the place. */
+    location: z.string().trim().max(300).nullish(),
     description: z.string().max(5_000).nullish(),
+    locationNotes: z.string().max(2_000).nullish(),
+    /*
+     * A LINK, never a coordinate. The domain reads the point out of it, so a client cannot put a
+     * pin somewhere the link does not go - and a link on a host that is not a map is dropped
+     * rather than stored, because whatever is stored ends up behind a button that opens it.
+     */
+    mapUrl: z.string().trim().max(2_000).nullish(),
+    /*
+     * A pin the admin placed by hand, for the case a link cannot answer: a Google "share a place"
+     * link carries no coordinates at any hop, only a name and a feature id. Range-checked here,
+     * and again by a CHECK constraint on the column.
+     */
+    mapLat: z.number().min(-90).max(90).nullish(),
+    mapLng: z.number().min(-180).max(180).nullish(),
   });
 
   /** Notifies nobody and posts nothing. A meetup is reference material, not an event. */
@@ -271,6 +292,14 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
    * The Monday is required rather than defaulted, because "this week" is a question about the
    * caller's timezone and the server has no business guessing it.
    */
+  // One meetup, for its own screen. Club membership reads it; a club you are not in answers 404
+  // rather than 403, so an id cannot be probed for whether it names something real.
+  app.get<{ Params: { id: string } }>('/meetups/:id', async (request, reply) => {
+    const result = await readMeetup(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
   app.get<{ Params: { id: string } }>('/clubs/:id/meetups', async (request, reply) => {
     const query = WeekQuery.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_query' });

@@ -191,10 +191,15 @@ export async function readCalendarFeed(
     -- The DAY travels in "at" and the TIME travels beside it, never combined. meetup_date is a
     -- DATE and meetup_time a TIME on purpose - a club's week is local wall-clock and no club
     -- carries a timezone, so an instant built from the two would put Tuesday's meetup on Monday
-    -- for a member reading from another country. The title is the place, because that is what a
-    -- meetup is called on its own screen: a club meets somewhere at a time, and it has no name.
+    -- for a member reading from another country.
+    --
+    -- The title is the meetup's NAME, falling back to its place. A name is optional and arrived on
+    -- 2026-08-15 to let this feature belong to a club that is not a running club - "morning book
+    -- reading" rather than a location standing in for one. COALESCE rather than a branch in JS so
+    -- the sort and the search see the same string the reader does.
     SELECT 'meetup'::text, mu.id::text, mu.club_id::text, cl.name,
-           mu.location, mu.meetup_date::text, true, mu.meetup_time::text, true
+           COALESCE(NULLIF(mu.title, ''), mu.location),
+           mu.meetup_date::text, true, mu.meetup_time::text, true
       FROM meetups mu
       JOIN clubs cl ON cl.id = mu.club_id
      WHERE mu.club_id IN (SELECT club_id FROM my_clubs)

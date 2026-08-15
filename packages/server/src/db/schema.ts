@@ -22,6 +22,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   text,
@@ -1410,12 +1411,75 @@ export const meetups = pgTable(
       .references(() => clubs.id, { onDelete: 'cascade' }),
     meetupDate: date('meetup_date').notNull(),
     meetupTime: time('meetup_time').notNull(),
-    location: text('location').notNull(),
+    /**
+     * The place, as free text. **Optional since 2026-08-15, and no longer collected.**
+     *
+     * It was required, and it was the headline. The founder's redesign replaced it with a pasted
+     * map link - "the link is the place" - so the form no longer asks for one and new rows carry
+     * null. The column stays because 80 meetups already hold real text in it and a member reading
+     * one back should still see where the club met.
+     */
+    location: text('location'),
     description: text('description'),
+    /**
+     * What the club calls this one. Optional, and the reason it exists is reach rather than
+     * decoration.
+     *
+     * A meetup with only a place reads as a running club's fixture. A meetup with a name is any
+     * club's: "morning book reading", "swim practice night" - the founder's own examples on
+     * 2026-08-15. Optional because an admin in a hurry should still be able to type a place and a
+     * time and be done. **Required since 2026-08-15**, when the place stopped being collected:
+     * something has to name a meetup, and with the place gone this is the only thing left that
+     * can. The migration backfilled it from `location`, which is exactly what the headline used
+     * to be. See ADR-0029, which removed a per-club activity-type catalog: this is the same
+     * generalisation reached from the other side, with free text instead of a taxonomy.
+     */
+    title: text('title').notNull(),
+    /**
+     * Where to stand once you are there. Separate from `description`, which is the session.
+     *
+     * "Meet exactly at the wooden archway entrance. Parking can be tight, so carpool from the
+     * union" is not what the club is doing, it is how to find them - and a map pin cannot say it.
+     */
+    locationNotes: text('location_notes'),
+    /**
+     * The Google or Apple Maps link an admin pasted, kept verbatim.
+     *
+     * Stored even when no point could be read out of it, because it still opens in Maps and is
+     * still the best answer to "where is this". The point below is derived FROM it, so the link
+     * is the record and the coordinates are the cache.
+     */
+    mapUrl: text('map_url'),
+    /**
+     * The point read out of `map_url`, in degrees. Both or neither.
+     *
+     * `numeric` rather than a float: a coordinate is a decimal quantity that gets compared and
+     * displayed, and binary floating point turns 42.0887 into 42.088699999999996 on the way back.
+     * The pair is constrained to the earth in `constraint-proof.sql` rather than only in
+     * `map-link.ts`, because a handler races and a constraint does not.
+     */
+    mapLat: numeric('map_lat', { precision: 9, scale: 6 }),
+    mapLng: numeric('map_lng', { precision: 9, scale: 6 }),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('meetups_by_club').on(t.clubId, t.meetupDate, t.meetupTime)],
+  (t) => [
+    index('meetups_by_club').on(t.clubId, t.meetupDate, t.meetupTime),
+    /*
+     * A point is both halves or neither. Half a coordinate is not a place, and the screen that
+     * draws it would centre on a latitude with no longitude, which is a map of the wrong line.
+     */
+    check('meetup_point_is_whole', sql`(map_lat IS NULL) = (map_lng IS NULL)`),
+    /*
+     * And on the earth. `map-link.ts` refuses an out-of-range pair too, and this is deliberately
+     * the second place rather than the only one: the parser is where a bad paste is caught kindly,
+     * this is where it cannot get in at all. A handler races; a constraint does not.
+     */
+    check(
+      'meetup_point_on_earth',
+      sql`map_lat IS NULL OR (map_lat BETWEEN -90 AND 90 AND map_lng BETWEEN -180 AND 180)`,
+    ),
+  ],
 );
 
 /**

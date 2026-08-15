@@ -77,12 +77,17 @@ describe('the inbox kind', () => {
   });
 });
 
-describe('the nudge lands on the week', () => {
-  it('opens the club whose meetup was nudged', () => {
-    // The whole point of the bug this file exists for: a member tapping the push has to arrive at
-    // the week, not at the inbox and not at nothing.
-    expect(hrefFor(notificationTarget({ type: 'meetup_nudged', params }))).toBe(
-      `/clubs/${CLUB}/weekly-meetups`,
-    );
+describe('the nudge lands on the meetup that was nudged', () => {
+  it('opens that meetup, not the week it sits in', () => {
+    /*
+     * The whole point of the bug this file exists for: a member tapping the push has to arrive
+     * somewhere, not at the inbox and not at nothing. It arrived at the club's WEEK until
+     * 2026-08-15, because a meetup had no screen of its own - and the founder said what a deep
+     * link is for once it did: "it should take me to the actual meetup, which has notified".
+     *
+     * The id comes from the notification's own params, which have carried `meetupId` since the
+     * nudge shipped - so this is also true of the nudges already sitting in somebody's inbox.
+     */
+    expect(hrefFor(notificationTarget({ type: 'meetup_nudged', params }))).toBe(`/meetups/${THING}`);
   });
 });

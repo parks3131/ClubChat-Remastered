@@ -212,9 +212,9 @@ function badgeTint(kind: FeedItem['kind']): { background: string; text: string }
 /**
  * Every kind on this feed has somewhere to land, so this returns a string in every case.
  *
- * A meetup is the exception to "one row, one screen": it opens the club's week rather than a
- * screen of its own, because it does not have one. The week is where a meetup is read, edited,
- * removed and nudged from.
+ * **A meetup opened the club's WEEK for a few hours on 2026-08-15**, because it had no screen of
+ * its own. It has one now - a name, location notes and a map do not fit a week row - so the
+ * exception is gone and every kind opens a screen about itself again.
  */
 function targetFor(item: FeedItem): string {
   return item.kind === 'race'
@@ -222,10 +222,7 @@ function targetFor(item: FeedItem): string {
     : item.kind === 'meeting'
       ? `/meetings/${item.id}`
       : item.kind === 'meetup'
-        ? // The day goes with it, so the week that opens is the one holding this meetup rather
-          // than whichever week today falls in. `at` is date-only for a meetup, so it is already
-          // the key that screen wants.
-          `/clubs/${item.clubId}/weekly-meetups?date=${item.at}`
+        ? `/meetups/${item.id}`
         : `/events/${item.id}`;
 }
 

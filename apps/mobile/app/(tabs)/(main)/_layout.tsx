@@ -522,6 +522,18 @@ export default function MainStackLayout() {
           headerLeft: () => <BackTo href="/calendar" label="Calendar" variant="icon" />,
         }}
       />
+      {/*
+        A meetup is reached from the calendar, the club's Upcoming/Past list and the week, so like
+        an event it falls back to the Calendar rather than guessing which. Its club is only known
+        once the read lands, and the back control has to exist before that.
+      */}
+      <Stack.Screen
+        name="meetups/[meetupId]"
+        options={{
+          title: 'Meetup',
+          headerLeft: () => <BackTo href="/calendar" label="Calendar" variant="icon" />,
+        }}
+      />
       <Stack.Screen
         name="news/[postId]"
         options={{

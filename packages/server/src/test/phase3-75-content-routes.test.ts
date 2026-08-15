@@ -446,6 +446,7 @@ describe('weekly meetups', () => {
     const created = await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
       meetupDate: '2027-05-03',
       meetupTime: '18:30',
+      title: 'Practice',
       location: 'Memorial Park gate',
       description: '8 x 400m, then a cool-down loop',
     });
@@ -470,12 +471,13 @@ describe('weekly meetups', () => {
       (await as(member, 'POST', `/clubs/${clubId}/meetups`, {
         meetupDate: '2027-05-04',
         meetupTime: '09:00',
+        title: 'Practice',
         location: 'No',
       })).status,
     ).toBe(404);
     expect(
       (await as(member, 'PATCH', `/meetups/${created.body.meetupId}`, {
-        meetupDate: '2027-05-04', meetupTime: '09:00', location: 'No',
+        meetupDate: '2027-05-04', meetupTime: '09:00', title: 'Practice', location: 'No',
       })).status,
     ).toBe(404);
     expect((await as(member, 'DELETE', `/meetups/${created.body.meetupId}`)).status).toBe(404);
@@ -483,7 +485,7 @@ describe('weekly meetups', () => {
     // Any admin edits any meetup, not only its author.
     expect(
       (await as(owner, 'PATCH', `/meetups/${created.body.meetupId}`, {
-        meetupDate: '2027-05-03', meetupTime: '06:30', location: 'Track',
+        meetupDate: '2027-05-03', meetupTime: '06:30', title: 'Practice', location: 'Track',
       })).status,
     ).toBe(200);
     expect((await as(owner, 'DELETE', `/meetups/${created.body.meetupId}`)).status).toBe(200);
@@ -497,7 +499,7 @@ describe('weekly meetups', () => {
 
     const made = async (meetupDate: string, meetupTime: string) =>
       (await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
-        meetupDate, meetupTime, location: 'Memorial Park gate',
+        meetupDate, meetupTime, title: 'Practice', location: 'Memorial Park gate',
       })).body.meetupId as string;
 
     // Today: only today's meetups are nudgeable, so a fixed date would pass until it did not.
@@ -562,6 +564,153 @@ describe('weekly meetups', () => {
     expect(days.find((d) => d.date === today)?.past).toBe(false);
   });
 
+  /*
+   * A name, location notes and a map link, added 2026-08-15 so this feature belongs to a club that
+   * is not a running club. The assertions worth having are about the LINK: the client sends one
+   * and never a coordinate, so the server is the only thing that decides where the pin goes.
+   */
+  it('takes a name, notes and a map link, and reads the point out of the link itself', async () => {
+    const owner = await signUp('MapOwner');
+    const member = await signUp('MapMember');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, member);
+
+    const created = await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+      meetupDate: '2027-06-01',
+      meetupTime: '06:30',
+      title: 'Morning Miles',
+      location: 'Nature Preserve Entrance',
+      locationNotes: 'Meet at the wooden archway. Parking is tight.',
+      mapUrl: 'https://www.google.com/maps/place/Preserve/@42.0887,-75.9698,17z',
+    });
+    expect(created.status).toBe(201);
+
+    const detail = await as(member, 'GET', `/meetups/${created.body.meetupId}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.meetup.title).toBe('Morning Miles');
+    expect(detail.body.meetup.location).toBe('Nature Preserve Entrance');
+    expect(detail.body.meetup.locationNotes).toContain('wooden archway');
+    // The point came from the link. Nothing in the request said 42.0887.
+    expect(detail.body.meetup.mapPoint).toEqual({ lat: 42.0887, lng: -75.9698 });
+    // The date and clock still travel apart.
+    expect(detail.body.meetup.date).toBe('2027-06-01');
+    expect(detail.body.meetup.time).toBe('06:30');
+  });
+
+  it('drops a link that is not a map, since whatever is stored gets opened', async () => {
+    const owner = await signUp('BadLinkOwner');
+    const { clubId } = await createClubAs(owner);
+
+    const created = await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+      meetupDate: '2027-06-02',
+      meetupTime: '18:00',
+      title: 'Practice',
+      location: 'Track',
+      // A lookalike host, which parses as a coordinate perfectly well and must still be refused:
+      // the stored URL ends up behind a Directions button that opens it.
+      mapUrl: 'https://maps.google.com.evil.test/?q=42.0887,-75.9698',
+    });
+    expect(created.status).toBe(201);
+
+    const detail = await as(owner, 'GET', `/meetups/${created.body.meetupId}`);
+    expect(detail.body.meetup.mapUrl).toBeNull();
+    expect(detail.body.meetup.mapPoint).toBeNull();
+  });
+
+  it('clears the pin when an edit clears the link', async () => {
+    // Otherwise the map keeps drawing where the club used to meet, which is worse than no map.
+    const owner = await signUp('EditMapOwner');
+    const { clubId } = await createClubAs(owner);
+
+    const id = (
+      await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+        meetupDate: '2027-06-03',
+        meetupTime: '18:00',
+        title: 'Practice',
+        location: 'Track',
+        mapUrl: 'https://maps.apple.com/?ll=42.0887,-75.9698',
+      })
+    ).body.meetupId as string;
+
+    expect((await as(owner, 'GET', `/meetups/${id}`)).body.meetup.mapPoint).not.toBeNull();
+
+    await as(owner, 'PATCH', `/meetups/${id}`, {
+      meetupDate: '2027-06-03',
+      meetupTime: '18:00',
+      title: 'Practice',
+      location: 'Track',
+      mapUrl: null,
+    });
+
+    const after = await as(owner, 'GET', `/meetups/${id}`);
+    expect(after.body.meetup.mapUrl).toBeNull();
+    expect(after.body.meetup.mapPoint).toBeNull();
+  });
+
+  it('hides a meetup in a club the reader is not in, as a 404 rather than a 403', async () => {
+    const owner = await signUp('PrivateMapOwner');
+    const stranger = await signUp('MapStranger');
+    const { clubId } = await createClubAs(owner);
+
+    const id = (
+      await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+        meetupDate: '2027-06-04',
+        meetupTime: '18:00',
+        title: 'Practice',
+        location: 'Track',
+      })
+    ).body.meetupId as string;
+
+    // 404, not 403: an id must not be probeable for whether it names something real.
+    expect((await as(stranger, 'GET', `/meetups/${id}`)).status).toBe(404);
+  });
+
+  /*
+   * The pin an admin places by hand, which exists because a Google "share a place" link carries no
+   * coordinates at any hop - found on the device, not in a test, because the test stubbed the
+   * redirect with the shape a DROPPED-PIN share produces.
+   */
+  it('takes a hand-placed pin, and lets it win over the link', async () => {
+    const owner = await signUp('PinOwner');
+    const { clubId } = await createClubAs(owner);
+
+    const id = (
+      await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+        meetupDate: '2027-07-01',
+        meetupTime: '18:00',
+        title: 'Practice',
+        location: 'Appalachian Dining Hall',
+        // A real Google place-share resolves to this shape: a name, and no point anywhere.
+        mapUrl: 'https://maps.google.com/maps?q=Appalachian+Dining+Hall,+Vestal,+NY',
+        mapLat: 42.0887,
+        mapLng: -75.9698,
+      })
+    ).body.meetupId as string;
+
+    const detail = await as(owner, 'GET', `/meetups/${id}`);
+    expect(detail.body.meetup.mapPoint).toEqual({ lat: 42.0887, lng: -75.9698 });
+    // The link is still stored, because it is still the exact record of the place and it is what
+    // Directions opens.
+    expect(detail.body.meetup.mapUrl).toContain('maps.google.com');
+  });
+
+  it('refuses a pin that is not on the earth', async () => {
+    const owner = await signUp('BadPinOwner');
+    const { clubId } = await createClubAs(owner);
+
+    const refused = await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+      meetupDate: '2027-07-02',
+      meetupTime: '18:00',
+      title: 'Practice',
+      location: 'Track',
+      mapLat: 91,
+      mapLng: 0,
+    });
+    // Refused at the edge rather than clamped: a coordinate from a client is a coordinate from a
+    // client, and the column's CHECK is the second line rather than the only one.
+    expect(refused.status).toBe(400);
+  });
+
   it('refuses to nudge any day but today, in both directions', async () => {
     // A nudge means "we are meeting, today". Next Tuesday is premature, not early.
     const owner = await signUp('OtherDayOwner');
@@ -569,7 +718,7 @@ describe('weekly meetups', () => {
 
     for (const date of ['2020-05-04', '2099-05-04']) {
       const id = (await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
-        meetupDate: date, meetupTime: '18:30', location: 'Track',
+        meetupDate: date, meetupTime: '18:30', title: 'Practice', location: 'Track',
       })).body.meetupId as string;
 
       const refused = await as(owner, 'POST', `/meetups/${id}/nudge`);
@@ -585,17 +734,25 @@ describe('weekly meetups', () => {
     }
   });
 
-  it('refuses a meetup with no place or no time', async () => {
-    // The surface exists to answer where and when. "TBC" is a real answer; a blank is not.
+  it('refuses a meetup with no name or no time', async () => {
+    /*
+     * The surface exists to answer WHAT and WHEN since 2026-08-15, having answered WHERE and when
+     * before that. The place became optional the day the form stopped asking for one - the pasted
+     * link is the place now - so the name is what a blank is refused for. The shape of the rule is
+     * unchanged: something must identify a meetup, and whitespace does not.
+     */
     const owner = await signUp('BlankOwner');
     const { clubId } = await createClubAs(owner);
 
     for (const payload of [
+      // No name at all, and a name of nothing but spaces.
       { meetupDate: '2027-05-03', meetupTime: '18:30' },
-      { meetupDate: '2027-05-03', location: 'Track' },
-      { meetupDate: '2027-05-03', meetupTime: '18:30', location: '   ' },
-      { meetupDate: '2027-05-03', meetupTime: '25:00', location: 'Track' },
-      { meetupDate: '2027-05-03', meetupTime: '6:30pm', location: 'Track' },
+      { meetupDate: '2027-05-03', meetupTime: '18:30', title: '   ' },
+      // No time.
+      { meetupDate: '2027-05-03', title: 'Practice' },
+      // A time that is not one, in both the shapes a person types.
+      { meetupDate: '2027-05-03', meetupTime: '25:00', title: 'Practice' },
+      { meetupDate: '2027-05-03', meetupTime: '6:30pm', title: 'Practice' },
     ]) {
       const response = await as(owner, 'POST', `/clubs/${clubId}/meetups`, payload);
       expect(response.status, JSON.stringify(payload)).toBe(400);
@@ -612,7 +769,7 @@ describe('weekly meetups', () => {
     ] as const) {
       expect(
         (await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
-          meetupDate: '2027-05-04', meetupTime, location,
+          meetupDate: '2027-05-04', meetupTime, title: location,
         })).status,
       ).toBe(201);
     }

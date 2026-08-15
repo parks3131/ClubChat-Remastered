@@ -50,9 +50,13 @@ export function hrefFor(target: NotificationTarget): string | undefined {
       return `/meetings/${target.meetingId}`;
     case 'news':
       return `/clubs/${target.clubId}/news`;
-    // The club's week. A nudge is about one meetup, but a meetup is read in its week.
-    case 'meetups':
-      return `/clubs/${target.clubId}/weekly-meetups`;
+    /*
+      The meetup itself. It was the club's week until 2026-08-15, because a meetup had no screen -
+      "it should take me to the actual meetup, which has notified". The week is still where a
+      meetup is edited and nudged from; it is just no longer where a notification lands.
+    */
+    case 'meetup':
+      return `/meetups/${target.meetupId}`;
     // The Reports tab of that channel's Highlights, opened ON that tab rather than on Pinned -
     // the reviewer was sent here by a report, so landing them anywhere else is a second tap.
     case 'chat_reports':

@@ -728,7 +728,7 @@ describe('content notification behaviour', () => {
     for (let i = 0; i < 7; i += 1) {
       await createMeetup(h.db, await ctxFor(f.ownerId), {
         clubId: f.clubId, meetupDate: `2026-04-0${i + 1}`,
-        meetupTime: '18:00', location: 'Memorial Park gate',
+        meetupTime: '18:00', title: 'Practice', location: 'Memorial Park gate',
       });
     }
     await drainAll();
@@ -994,7 +994,7 @@ describe('the meetup week', () => {
     // A past week, so no days are hidden.
     await createMeetup(h.db, await ctxFor(f.ownerId), {
       clubId: f.clubId, meetupDate: '2026-01-06', meetupTime: '18:30',
-      location: 'Track', description: '8 x 400m',
+      title: 'Practice', location: 'Track', description: '8 x 400m',
     });
 
     const week = await readMeetupWeek(h.db, await ctxFor(f.memberId), f.clubId, '2026-01-05');
@@ -1025,7 +1025,8 @@ describe('the meetup week', () => {
     const created = await createMeetup(h.db, await ctxFor(f.ownerId), {
       // Today, not a fixed date: a nudge is refused for a day that has been, so a hardcoded
       // date would pass until it did not.
-      clubId: f.clubId, meetupDate: todayKey(), meetupTime: '18:30', location: 'Track',
+      clubId: f.clubId, meetupDate: todayKey(), meetupTime: '18:30', title: 'Practice',
+      location: 'Track',
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -1059,7 +1060,7 @@ describe('the meetup week', () => {
     // things to tell people about, so nudging one must not silence the rest. Same DAY, because
     // only today's are nudgeable at all.
     const other = await createMeetup(h.db, await ctxFor(f.ownerId), {
-      clubId: f.clubId, meetupDate: todayKey(), meetupTime: '07:00', location: 'The Anchor',
+      clubId: f.clubId, meetupDate: todayKey(), meetupTime: '07:00', title: 'Practice', location: 'The Anchor',
     });
     expect(other.ok).toBe(true);
     if (!other.ok) return;
@@ -1077,7 +1078,7 @@ describe('the meetup week', () => {
     const f = await setup();
     for (const [label, date] of [['a day that has been', '2020-01-06'], ['a future day', tomorrow()]] as const) {
       const made = await createMeetup(h.db, await ctxFor(f.ownerId), {
-        clubId: f.clubId, meetupDate: date, meetupTime: '18:30', location: 'Track',
+        clubId: f.clubId, meetupDate: date, meetupTime: '18:30', title: 'Practice', location: 'Track',
       });
       expect(made.ok, label).toBe(true);
       if (!made.ok) return;
@@ -1092,7 +1093,7 @@ describe('the meetup week', () => {
     const f = await setup();
     for (const date of [todayKey(), tomorrow()]) {
       await createMeetup(h.db, await ctxFor(f.ownerId), {
-        clubId: f.clubId, meetupDate: date, meetupTime: '18:30', location: 'Track',
+        clubId: f.clubId, meetupDate: date, meetupTime: '18:30', title: 'Practice', location: 'Track',
       });
     }
     const week = await readMeetupWeek(h.db, await ctxFor(f.memberId), f.clubId, mondayOfToday());
@@ -1111,7 +1112,7 @@ describe('the meetup week', () => {
      */
     const f = await setup();
     const created = await createMeetup(h.db, await ctxFor(f.ownerId), {
-      clubId: f.clubId, meetupDate: todayKey(), meetupTime: '19:00', location: 'Room 204',
+      clubId: f.clubId, meetupDate: todayKey(), meetupTime: '19:00', title: 'Practice', location: 'Room 204',
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -1146,7 +1147,8 @@ describe('the meetup week', () => {
       ['06:30', 'Track'],
     ] as const) {
       await createMeetup(h.db, await ctxFor(f.ownerId), {
-        clubId: f.clubId, meetupDate: '2026-01-07', meetupTime: time, location,
+        clubId: f.clubId, meetupDate: '2026-01-07', meetupTime: time,
+        title: location, location,
       });
     }
 
@@ -1225,6 +1227,7 @@ describe('the merged calendar feed', () => {
       clubId: f.clubId,
       meetupDate: '2027-03-09',
       meetupTime: '18:30',
+      title: 'Practice',
       location: 'Track, west gate',
       description: null,
     });
@@ -1233,8 +1236,13 @@ describe('the merged calendar feed', () => {
     const meetup = feed.find((i) => i.kind === 'meetup');
 
     expect(meetup, 'a meetup did not reach the feed').toBeDefined();
-    // The place is the title: a meetup has no name, it has somewhere to be.
-    expect(meetup!.title).toBe('Track, west gate');
+    /*
+     * The NAME is the title. It was the place until 2026-08-15, when the form stopped asking for
+     * a place at all and the name became required in its stead - so the feed's COALESCE now
+     * matters only for the meetups that existed before, whose names were backfilled FROM their
+     * places by migration 0033.
+     */
+    expect(meetup!.title).toBe('Practice');
     // Verbatim. Not an instant, not shifted, not normalised through a Date.
     expect(meetup!.at).toBe('2027-03-09');
     expect(meetup!.allDay).toBe(true);
@@ -1249,6 +1257,7 @@ describe('the merged calendar feed', () => {
       clubId: f.clubId,
       meetupDate: '2027-03-10',
       meetupTime: '07:00',
+      title: 'Practice',
       location: 'Boathouse',
       description: null,
     });
@@ -1256,13 +1265,11 @@ describe('the merged calendar feed', () => {
     // A plain member sees it: reading meetups is club membership and nothing more, which is
     // exactly what the meetups screen's own route checks.
     const member = await readCalendarFeed(h.db, await ctxFor(f.memberId), { clubId: f.clubId });
-    expect(member.some((i) => i.title === 'Boathouse')).toBe(true);
+    expect(member.some((i) => i.kind === 'meetup' && i.title === 'Practice')).toBe(true);
 
     const outsider = await makeUser('Outsider');
     const theirs = await readCalendarFeed(h.db, await ctxFor(outsider));
-    expect(theirs.some((i) => i.title === 'Boathouse'), 'a meetup leaked to a non-member').toBe(
-      false,
-    );
+    expect(theirs.some((i) => i.kind === 'meetup'), 'a meetup leaked to a non-member').toBe(false);
   });
 
   it('marks a month day that has nothing on it but a meetup', async () => {
@@ -1274,6 +1281,7 @@ describe('the merged calendar feed', () => {
       clubId: f.clubId,
       meetupDate: '2027-04-14',
       meetupTime: '19:00',
+      title: 'Practice',
       location: 'Somewhere',
       description: null,
     });

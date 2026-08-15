@@ -4,7 +4,10 @@ Date: 2026-08-15
 
 ## Status
 
-Accepted. Supersedes the calendar consequence recorded in
+Accepted, and **partly superseded the same day by
+[ADR-0037](0037-a-meetup-carries-a-name-and-a-pasted-map-link.md)**, which gives a meetup a name
+and a screen of its own - reversing consequences 2 and 3 below while leaving the calendar decision
+itself intact. Supersedes the calendar consequence recorded in
 [ADR-0029](0029-a-meetup-answers-where-when-and-what.md) and replaces
 [PRD/08](../PRD/08-weekly-meetups.md) rule 12. Extends
 [ADR-0034](0034-the-calendar-carries-only-things-that-happen-on-a-day.md) rather than narrowing it.
@@ -50,9 +53,15 @@ Three consequences follow from what a meetup already is, rather than from prefer
    for a member reading from another country. So the feed carries the date verbatim with
    `allDay: true`, and the club's own `HH:MM` alongside it, printed and never parsed.
 
-2. **A meetup's row opens the club's week, on the week that holds it.** It has no detail screen
-   and is not getting one: the week is where a meetup is already read, edited, removed and nudged
-   from. This is the one kind on the feed whose row does not open a screen about that row.
+2. **A meetup's row opens the club's week, on the week that holds it.** It has no detail screen:
+   the week is where a meetup is already read, edited, removed and nudged from, so a screen would
+   be a second place to read the same three facts.
+
+   > **Superseded the same afternoon by [ADR-0037](0037-a-meetup-carries-a-name-and-a-pasted-map-link.md).**
+   > A meetup gained a name, location notes and a map, which a week row cannot hold, so it has a
+   > screen of its own after all and the calendar's rows open it. The reasoning above was right
+   > about what a meetup was; it stopped being right about what a meetup holds. Left standing
+   > rather than rewritten, because what was believed on the way here is the useful part.
 
    **And the week had to change to receive it.** It hid the days of the current week that had
    gone - `PRD/08` rule 2, "the week is a plan, not a record" - which meant a meetup on a past day
@@ -70,6 +79,11 @@ Three consequences follow from what a meetup already is, rather than from prefer
 3. **The title is the location.** A meetup has no name - `ADR-0029` settled that it answers where,
    when and what, and "what" is a free-text description rather than a title. The place is what the
    week screen leads with, so it is what the calendar leads with.
+
+   > **Superseded by [ADR-0037](0037-a-meetup-carries-a-name-and-a-pasted-map-link.md)**, which
+   > gave a meetup an optional name, so the feed's title is the name and falls back to the place.
+   > The fallback is why this paragraph is still true of every meetup that has no name - which is
+   > all of them until somebody types one.
 
 ## Consequences
 
@@ -100,6 +114,6 @@ grid and the day list back into disagreement about what the calendar holds.
 | **A quieter or second marker for meetup days**, honouring rule 12's intent while still showing them | Put to the founder and declined in favour of full parity. It also asks the grid to draw two kinds of dot to solve a crowding problem the data does not show. |
 | **The day popup only, with no dot on the grid** | Put to the founder and declined. It would mean the grid saying a day is empty while tapping that day shows a meetup, and it needs exactly the per-kind skip in the markers query that ADR-0034 removed. |
 | **Fold the date and time into one instant**, so a meetup is an ordinary timed row | The schema forbids it for a stated reason, and the reason is a real bug: an instant needs a zone, no club has one, and a member abroad would read Tuesday's meetup as Monday's. |
-| **A meetup detail screen**, so every kind's row opens a screen about that row | Put to the founder and declined as the largest piece of new work here. The week already carries every action a meetup has. |
+| **A meetup detail screen**, so every kind's row opens a screen about that row | Put to the founder and declined as the largest piece of new work here. The week already carries every action a meetup has. **Reversed hours later in ADR-0037**, once a meetup carried a name, notes and a map - which the week's row cannot hold. |
 | **Keep past meetups off the calendar**, so a tap can never land on a day the week will not show | Put to the founder and declined. It would be a per-kind rule on a feed that had just finished removing its last one, and the Past list would silently omit a kind it displays for every other. |
 | **Show past days only when the screen was opened from the calendar** | Declined: the week would behave two different ways depending on how somebody arrived, and nothing on screen would say which. |

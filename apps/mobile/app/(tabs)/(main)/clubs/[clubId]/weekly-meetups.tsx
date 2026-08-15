@@ -10,8 +10,11 @@
  *  - **A day with nothing on it says "Nothing planned", explicitly.** An empty day is otherwise
  *    ambiguous between "nothing is happening" and "nobody has posted yet", so the flag comes
  *    from the server rather than from an absence in the list.
- *  - **On the current week, past days are hidden.** The week is a plan, not a record. Paging
- *    back shows all seven, and the server decides which - this screen renders what it gets.
+ *  - **All seven days are shown, and a past one carries no Add row.** The week stopped hiding the
+ *    days that had gone on 2026-08-15, when the calendar started pointing at any day of it: a
+ *    meetup on a past day could be tapped and then not shown, and paging could not reach it
+ *    because the day sits inside the current week. The server marks a day `past`; this screen
+ *    renders what it gets and only withholds the control.
  *  - **A day may hold several meetups**, already in time order. A morning session and an evening
  *    social are two rows, and the day simply gets taller.
  *
@@ -36,10 +39,10 @@
 import { useRef, useState } from 'react';
 import { Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { clubApi, contentApi } from '../../../../../src/api.ts';
-import type { Meetup } from '../../../../../src/api-types.ts';
+import { meetupHeadline, type Meetup } from '../../../../../src/api-types.ts';
 import {
   formatDayTitle,
   formatTimeOfDay,
@@ -48,7 +51,6 @@ import {
   toDateKey,
 } from '../../../../../src/dates.ts';
 import {
-  AddRow,
   ComposerField,
   HeaderAction,
   SectionLabel,
@@ -59,12 +61,13 @@ import {
 } from '../../../../../src/composer-kit.tsx';
 import { KeyboardAvoider } from '../../../../../src/keyboard-avoider.tsx';
 import { longPressFeedback } from '../../../../../src/haptics.ts';
-import { color, space, type } from '../../../../../src/theme.ts';
+import { color, radius, space, type } from '../../../../../src/theme.ts';
 import {
   Action,
   ComposerHeader,
   ContextMenu,
   DataScreen,
+  Fab,
   measureRow,
   type PressAnchor,
 } from '../../../../../src/ui.tsx';
@@ -100,7 +103,7 @@ function momentFrom(dateKey: string, hour: number, minute: number): Date {
 
 /** What the form is doing: adding to a given day, or editing one that exists. */
 type Editing =
-  | { mode: 'add'; date: string }
+  | { mode: 'add' }
   | { mode: 'edit'; date: string; meetup: Meetup };
 
 export default function WeeklyMeetupsScreen() {
@@ -212,25 +215,6 @@ export default function WeeklyMeetupsScreen() {
                   />
                 ))}
 
-                {/*
-                  Not on a day that has gone. The week can be READ backwards - it has to be, now
-                  that the calendar points at any day of it - but it is still not a diary you
-                  write into backwards.
-
-                  > **This is the ONLY thing enforcing that, and it is a missing button.**
-                  > `createMeetup` accepts any date, past included; the rule was never a server
-                  > rule, it was a consequence of the week hiding the days it would have applied
-                  > to. Hiding those days is exactly what stopped on 2026-08-15, so the rule now
-                  > rests on this condition alone. Flagged to the founder rather than fixed here,
-                  > because refusing a past date on the server is a decision about the API and not
-                  > about this screen.
-                */}
-                {isAdmin && !day.past && (
-                  <AddRow
-                    label="Add a meetup"
-                    onPress={() => setEditing({ mode: 'add', date: day.date })}
-                  />
-                )}
               </View>
             ))}
 
@@ -243,6 +227,20 @@ export default function WeeklyMeetupsScreen() {
           </ScrollView>
         )}
       </DataScreen>
+
+      {/*
+        One plus for the whole week, the same control the club's events list uses, rather than an
+        "Add a meetup" row under all seven days.
+
+        > **The founder asked for this on 2026-08-15: "I don't want to add meetup on everywhere...
+        > we have a small plus symbol on the right corner, so I want the same in this page too."**
+        > Seven identical rows down a screen is seven times the same offer, and it pushed the days
+        > apart so the week read as a form rather than as a plan.
+        >
+        > It works now because the composer asks for the date itself - "Set date" - which it could
+        > not do while each row's plus was the only thing that knew which day was meant.
+      */}
+      {isAdmin && <Fab onPress={() => setEditing({ mode: 'add' })} accessibilityLabel="Add a meetup" />}
 
       {menuFor !== null && (
         <ContextMenu
@@ -283,6 +281,22 @@ export default function WeeklyMeetupsScreen() {
  * often. Edit and Remove are behind a long press: they were inline text links, and two meetups a
  * day turned the week into a wall of repeated words.
  */
+/**
+ * `18:30` as `6P`, for the chip.
+ *
+ * Deliberately not `formatWallClock`, which produces "6:30 PM" - that does not fit a circle, and
+ * the circle is what makes a week scannable. The minutes are dropped only when they are zero, so
+ * `6:30` stays `630P` rather than claiming a meetup is at six.
+ */
+function shortClock(hhmm: string): string {
+  const [rawHour, rawMinute] = hhmm.split(':').map(Number);
+  const hour = rawHour ?? 0;
+  const minute = rawMinute ?? 0;
+  const suffix = hour < 12 ? 'A' : 'P';
+  const twelve = hour % 12 === 0 ? 12 : hour % 12;
+  return minute === 0 ? `${twelve}${suffix}` : `${twelve}:${String(minute).padStart(2, '0')}`;
+}
+
 function MeetupRow({
   meetup,
   isAdmin,
@@ -300,6 +314,7 @@ function MeetupRow({
   onLongPress: (anchor: PressAnchor) => void;
 }) {
   const ref = useRef<View>(null);
+  const router = useRouter();
   /*
    * This meetup's own clock. Four meetups in a day are four bells, so none of this comes from
    * the screen - nudging the morning run must leave the evening social's bell alone.
@@ -331,20 +346,41 @@ function MeetupRow({
           onLongPress,
         )
       }
-      /* Members have no menu behind the press, so they must not get the press either. */
-      disabled={!isAdmin}
-      accessibilityRole={isAdmin ? 'button' : undefined}
-      accessibilityLabel={
-        isAdmin ? `${meetup.location} at ${formatWallClock(meetup.time)}. Hold for options` : undefined
-      }
+      /*
+        Everybody can open it now. Until 2026-08-15 a member could not press this row at all -
+        there was nothing behind it, because a meetup had no screen. It has one, so the row leads
+        there for everybody and the long press stays what it always was: an admin's shortcut.
+      */
+      onPress={() => router.push(`/meetups/${meetup.id}`)}
+      accessibilityRole="button"
+      accessibilityLabel={`${meetupHeadline(meetup)} at ${formatWallClock(meetup.time)}${
+        isAdmin ? '. Hold for options' : ''
+      }`}
     >
+      {/*
+        The time as a chip rather than a prefix on the headline, from the founder's design.
+        It is the thing scanned for down a week - "what is at six" - and as a prefix it competed
+        with the name for the start of the line.
+      */}
+      <View style={styles.clock}>
+        <Text style={styles.clockText}>{shortClock(meetup.time)}</Text>
+      </View>
+
       <View style={styles.meetupText}>
-        {/* Where and when are the headline; what they are doing sits under it. */}
-        <Text style={styles.headline}>
-          {formatWallClock(meetup.time)} · {meetup.location}
-        </Text>
+        {/*
+          The NAME is the headline, and the place sits under it. Without a name the place is the
+          headline and there is no second line - `meetupHeadline` owns that fallback so every
+          surface makes the same choice.
+        */}
+        <Text style={styles.headline}>{meetupHeadline(meetup)}</Text>
+        {/* Only the meetups made before the place stopped being collected still carry one. */}
+        {meetup.location !== null && meetup.location.trim().length > 0 && (
+          <Text style={styles.description}>{meetup.location}</Text>
+        )}
         {meetup.description !== null && (
-          <Text style={styles.description}>{meetup.description}</Text>
+          <Text style={styles.description} numberOfLines={2}>
+            {meetup.description}
+          </Text>
         )}
       </View>
 
@@ -373,7 +409,7 @@ function MeetupRow({
             style={[styles.bell, greyReason !== null && styles.bellOff]}
             accessibilityRole="button"
             accessibilityLabel={
-              greyReason ?? `Nudge the club about the meetup at ${meetup.location}`
+              greyReason ?? `Nudge the club about ${meetupHeadline(meetup)}`
             }
           >
             <MaterialIcons
@@ -409,21 +445,30 @@ function MeetupComposer({
   onSaved: () => void;
 }) {
   const existing = editing.mode === 'edit' ? editing.meetup : null;
-  const [location, setLocation] = useState(existing?.location ?? '');
   const [description, setDescription] = useState(existing?.description ?? '');
+  /*
+   * The name, and it is FIRST on the form rather than last.
+   *
+   * Optional, so the form still saves with a place and a time alone - which is how this shipped
+   * and how somebody in a hurry uses it. It leads because it is what the week and the calendar
+   * show as the headline, and because it is what lets this belong to a club that is not a running
+   * club: "morning book reading", "swim practice night".
+   */
+  const [title, setTitle] = useState(existing?.title ?? '');
+  const [mapUrl, setMapUrl] = useState(existing?.mapUrl ?? '');
   /*
    * Null until the wheel is opened, because the time is REQUIRED and a default is not a choice.
    * PRD/08 rule 7 refuses to save without one, so pre-filling would let an admin post a time
    * nobody picked.
    */
   const [when, setWhen] = useState<Date | null>(
-    existing === null
-      ? null
-      : momentFrom(
+    editing.mode === 'edit'
+      ? momentFrom(
           editing.date,
-          Number(existing.time.slice(0, 2)),
-          Number(existing.time.slice(3, 5)),
-        ),
+          Number(editing.meetup.time.slice(0, 2)),
+          Number(editing.meetup.time.slice(3, 5)),
+        )
+      : null,
   );
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -457,8 +502,15 @@ function MeetupComposer({
     label: String(index * MINUTE_STEP).padStart(2, '0'),
   }));
 
-  /* What the wheel shows while open but unchosen: the day that was tapped, at six in the evening. */
-  const shown = when ?? momentFrom(editing.date, 18, 0);
+  /*
+   * What the wheel shows while open but unchosen: today, at six in the evening.
+   *
+   * It used to be the day that was tapped, because a plus lived on every day and the tap was how
+   * the composer learned which one. There is one plus for the week now, so nothing has been said
+   * about the day yet - and `when` staying null until the wheel is touched is what keeps "Set
+   * date" from claiming a choice nobody made.
+   */
+  const shown = when ?? momentFrom(toDateKey(new Date()), 18, 0);
 
   const setPart = (part: { dateKey?: string; hour?: number; minute?: number }) => {
     setWhen(
@@ -470,8 +522,13 @@ function MeetupComposer({
     );
   };
 
-  // Where and when are both required. "TBC" is a real answer for a place; a blank is not.
-  const valid = location.trim().length > 0 && when !== null;
+  /*
+   * A name and a moment. **The place stopped being required on 2026-08-15** and stopped being
+   * asked for at all - the founder's redesign replaced it with a pasted link, "the link is the
+   * place" - so the name is what a blank is refused for now. The shape of the rule did not
+   * change: something has to identify a meetup, and whitespace does not.
+   */
+  const valid = title.trim().length > 0 && when !== null;
 
   const submit = async () => {
     if (when === null) return;
@@ -482,8 +539,19 @@ function MeetupComposer({
       // instant, because a club's week is its own day and not the reader's - see ADR-0029.
       meetupDate: toDateKey(when),
       meetupTime: `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`,
-      location: location.trim(),
+      title: title.trim(),
+      /*
+       * Blank is null, not "". An empty string is a value the row would then hold, and every
+       * reader downstream would have to know that "" means the same as absent.
+       */
       description: description.trim().length > 0 ? description.trim() : null,
+      /*
+       * The link, and no coordinates. This client places no pin: the map picture was taken out on
+       * 2026-08-15 and Directions opens the link itself, which is exact. The server still reads a
+       * point out of a link that carries one, and the route still accepts a hand-placed pair - see
+       * `ADR-0037` - so the map can return without touching either end.
+       */
+      mapUrl: mapUrl.trim().length > 0 ? mapUrl.trim() : null,
     };
     try {
       if (existing === null) await contentApi.createMeetup(clubId, body);
@@ -505,8 +573,9 @@ function MeetupComposer({
         dismiss="close"
         action={
           <HeaderAction
-            label="Save"
-            busyLabel="Saving"
+            /* "Create" on a new one, from the founder's sketch. Editing still saves. */
+            label={existing === null ? 'Create' : 'Save'}
+            busyLabel={existing === null ? 'Creating' : 'Saving'}
             busy={busy}
             disabled={!valid}
             onPress={() => void submit()}
@@ -526,20 +595,23 @@ function MeetupComposer({
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
       >
-        {/* No label above it. The placeholder says what it is, and a form whose first field is
-            labelled "Place" above a box reading "Where should we meet?" says it twice. */}
+        {/* No label above either. The placeholder says what it is, and a form whose first field
+            is labelled "Place" above a box reading "Where should we meet?" says it twice. */}
         <ComposerField
-          value={location}
-          onChangeText={setLocation}
-          placeholder="Where should we meet?"
-          accessibilityLabel="Where the club is meeting"
+          value={title}
+          onChangeText={setTitle}
+          placeholder="Untitled"
+          accessibilityLabel="What this meetup is called"
           filled
         />
 
-        <SectionLabel>When</SectionLabel>
-
+        {/*
+          "Set date", one row with a chevron, from the founder's sketch on 2026-08-15. It carries
+          no section label above it: the form is four controls now, and a heading over a single
+          row names the row twice.
+        */}
         <SettingRow
-          label="Time"
+          label="Set date"
           /*
             Opening COMMITS the moment the wheel is showing (`DESIGN/06` rule 11). Without it the
             row reads "Pick a time" while the wheel underneath highlights six in the evening - the
@@ -562,12 +634,14 @@ function MeetupComposer({
             setPicking(true);
           }}
           accessibilityLabel={
-            when === null ? 'Time: not set. Pick one' : `Meeting at ${formatTimeOfDay(when.toISOString())}. Change`
+            when === null
+              ? 'Date and time: not set. Pick them'
+              : `Meeting at ${formatTimeOfDay(when.toISOString())}. Change`
           }
         >
           <SettingValue muted={when === null}>
             {when === null
-              ? 'Pick a time'
+              ? 'Not set'
               : `${days.find((d) => d.key === toDateKey(when))?.label ?? toDateKey(when)}, ${formatTimeOfDay(when.toISOString())}`}
           </SettingValue>
         </SettingRow>
@@ -624,6 +698,28 @@ function MeetupComposer({
           </Pressable>
         )}
 
+        {/*
+          The place, as a link. It is LABELLED even though the field above it is not, and that is
+          the lesson from the morning: a placeholder is the only thing naming a field and it
+          vanishes the moment anybody types. The founder pasted a maps link into two adjacent
+          unlabelled boxes and then asked why the meetup had two links on it. A field holding
+          something opaque - a URL rather than a sentence - has to say what it is even when full.
+        */}
+        <SectionLabel>Location link</SectionLabel>
+
+        <SettingNote>
+          Paste a link from Google or Apple Maps. It becomes a Directions button on the meetup.
+        </SettingNote>
+
+        <ComposerField
+          value={mapUrl}
+          onChangeText={setMapUrl}
+          placeholder="Add a location link"
+          accessibilityLabel="A map link for this place"
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+
         {/* One note, at the end of its section. */}
         <SettingNote>
           Adding a meetup notifies nobody. Use Nudge on the week to tell the club.
@@ -662,8 +758,22 @@ const styles = StyleSheet.create({
     gap: space.sm,
     paddingVertical: space.sm,
   },
+  /*
+    The time, as a circle down the left of the week.
+    Fixed width so every row's text starts on the same line, which is the whole reason the chip
+    beats a prefix: a column of names is scannable and a column of "6:00 PM · " is not.
+  */
+  clock: {
+    width: 46,
+    height: 46,
+    borderRadius: radius.pill,
+    backgroundColor: color.cardSunken,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clockText: { ...type.bodySmallStrong, color: color.textPrimary },
   meetupText: { flex: 1, gap: space.xs },
-  headline: { ...type.body, color: color.textPrimary },
+  headline: { ...type.headline, color: color.textPrimary },
   description: { ...type.bodySmall, color: color.textSecondary },
   bellWrap: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
   bellTime: { ...type.bodySmall, color: color.textSecondary },

@@ -80,6 +80,8 @@ export function ComposerField({
   filled = false,
   multiline = false,
   trailing,
+  autoCapitalize = 'sentences',
+  autoCorrect = true,
 }: {
   value: string;
   onChangeText: (next: string) => void;
@@ -89,6 +91,15 @@ export function ComposerField({
   multiline?: boolean;
   /** A control at the field's right edge, such as remove-this-choice. */
   trailing?: ReactNode;
+  /**
+   * Off for a field holding something the keyboard must not help with.
+   *
+   * A pasted URL is the case that needed it: iOS capitalises the first letter and autocorrects
+   * what it takes for words, and a link that arrives as "Https://Maps.app.goo.gl" is a link the
+   * server will not recognise. Everything else keeps the default.
+   */
+  autoCapitalize?: 'none' | 'sentences';
+  autoCorrect?: boolean;
 }) {
   return (
     <View style={[styles.field, filled ? styles.fieldFilled : styles.fieldOutlined]}>
@@ -99,6 +110,8 @@ export function ComposerField({
         placeholder={placeholder}
         placeholderTextColor={color.textSecondary}
         multiline={multiline}
+        autoCapitalize={autoCapitalize}
+        autoCorrect={autoCorrect}
         accessibilityLabel={accessibilityLabel}
       />
       {trailing}

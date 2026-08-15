@@ -7,3 +7,9 @@ export * from './domain.ts';
 export * from './emoji-catalog.generated.ts';
 export * from './protocol.ts';
 export * from './notifications.ts';
+/*
+  Reading a point out of a map link somebody pasted. In shared because both ends need it: the
+  server resolves the link when a meetup is saved, and the client wants to know whether what was
+  just pasted will work before waiting for a round trip.
+*/
+export * from './map-link.ts';
