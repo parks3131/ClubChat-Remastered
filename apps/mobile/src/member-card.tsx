@@ -389,25 +389,20 @@ export function MemberCardSheet({
                   )}
 
                   {/*
-                    The way to everything this card does not carry. A card is a glance; the screen
-                    is the whole record, and it is also what a notification or a pasted link opens.
+                    > **There is no "View full profile" row, and its absence is the point.**
+                    >
+                    > It was the last thing on this card until 2026-08-14, on the reasoning that a
+                    > card is a glance and the screen is the whole record. That stopped being true
+                    > while the card was being built: the shared-clubs block arrived, then the DM
+                    > action, then the admin menu, and by the end the card carried description,
+                    > city, school, shared clubs, Send message, Remove, Ban and Lift ban - which is
+                    > every part of the screen. The row was offering a second copy of what the
+                    > reader was already looking at, and charging a navigation for it.
+                    >
+                    > `/users/:id` is untouched and still the addressable record: a notification, a
+                    > pasted link and a tap on a chat bubble's avatar all land there. What went is
+                    > only the way from this card into a screen showing the same thing.
                   */}
-                  <Pressable
-                    style={styles.full}
-                    onPress={() => {
-                      setPendingHref(
-                        clubId === undefined
-                          ? `/users/${userId}`
-                          : `/users/${userId}?clubId=${clubId}`,
-                      );
-                      close();
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Open ${name || 'this member'}'s full profile`}
-                  >
-                    <Text style={styles.fullLabel}>View full profile</Text>
-                    <MaterialIcons name="chevron-right" size={20} color={color.textSecondary} />
-                  </Pressable>
                 </>
               )}
             </ScrollView>
@@ -445,9 +440,21 @@ export function SharedClubsBlock({
   since: string;
   onOpen?: () => void;
 }) {
-  const shown = clubs.slice(0, FACE_LIMIT);
-  const rest = clubs.length - shown.length;
   const first = clubs[0];
+  /*
+   * The faces are the clubs the sentence has NOT already named, which is why this slices from 1.
+   *
+   * > **It sliced from 0, so the stack led with the club named directly above it.** The line reads
+   *  "and these other clubs" and pointed at a row whose first face was Binghamton Running Club -
+   * the club it had just said you were both in. Reported from the device on 2026-08-14. The count
+   * was wrong the same way: a `+N` chip computed against the whole set overstated what was left.
+   *
+   * The full list sheet still shows every shared club, and that is not the same claim - it is
+   * titled "Shared clubs" rather than introduced by a sentence naming one of them.
+   */
+  const others = clubs.slice(1);
+  const shown = others.slice(0, FACE_LIMIT);
+  const rest = others.length - shown.length;
 
   const body = (
     <>
@@ -455,31 +462,47 @@ export function SharedClubsBlock({
         {"You're both in "}
         <Text style={styles.sharedClubName}>{first?.name}</Text>
       </Text>
-      {clubs.length > 1 && <Text style={styles.sharedMore}>and these other clubs</Text>}
+      {/*
+        Counted and pluralised, where it used to be the fixed string "and these other clubs" -
+        which said "clubs" about a single one for anybody sharing exactly two, the commonest case
+        after sharing one. A line that miscounts what is directly beneath it is worse than no line.
+      */}
+      {others.length > 0 && (
+        <Text style={styles.sharedMore}>
+          and {others.length} other {others.length === 1 ? 'club' : 'clubs'}
+        </Text>
+      )}
 
-      <View style={styles.faces}>
-        {shown.map((club, index) => (
-          <View
-            key={club.clubId}
-            // Each face laps the one before it. The first sits flush so the stack starts where
-            // the block does rather than half a face in.
-            style={[styles.face, index > 0 && styles.faceOverlap]}
-          >
-            <Avatar
-              name={club.name}
-              image={club.image}
-              size={FACE_SIZE}
-              kind="group"
-              tintId={club.clubId}
-            />
-          </View>
-        ))}
-        {rest > 0 && (
-          <View style={[styles.face, styles.faceOverlap, styles.faceRest]}>
-            <Text style={styles.faceRestLabel}>+{rest}</Text>
-          </View>
-        )}
-      </View>
+      {/*
+        Absent rather than empty when there is nothing left to show. An always-rendered row keeps
+        its own gap, which would leave a band of nothing under every profile sharing exactly one
+        club - the same hidden-thing-still-occupying-room defect as `DESIGN/03` rule 4.
+      */}
+      {shown.length > 0 && (
+        <View style={styles.faces}>
+          {shown.map((club, index) => (
+            <View
+              key={club.clubId}
+              // Each face laps the one before it. The first sits flush so the stack starts where
+              // the block does rather than half a face in.
+              style={[styles.face, index > 0 && styles.faceOverlap]}
+            >
+              <Avatar
+                name={club.name}
+                image={club.image}
+                size={FACE_SIZE}
+                kind="group"
+                tintId={club.clubId}
+              />
+            </View>
+          ))}
+          {rest > 0 && (
+            <View style={[styles.face, styles.faceOverlap, styles.faceRest]}>
+              <Text style={styles.faceRestLabel}>+{rest}</Text>
+            </View>
+          )}
+        </View>
+      )}
 
       {/*
         When they joined ClubChat - the profile's own `createdAt`, which is the only "since" the
@@ -596,8 +619,19 @@ const styles = StyleSheet.create({
   /*
    * The corner button. `zIndex` rather than source order, because it is drawn before the scroller
    * that fills the card and would otherwise sit underneath it.
+   *
+   * > **Inset by the gutter rather than pinned to the corner.** It sat at `top: 0, right: 0`, and
+   * > the sheet's top corners are `radius.xl` - so a 36pt disc was placed entirely inside a 24pt
+   * > arc, in the one part of the card where the edge is curving away from it. Two rounded shapes
+   * > with no space between them read as one badly cut shape: reported from the device on
+   * > 2026-08-14 as the button looking "unshaped", and it looks like it is spilling off the card
+   * > because the card's own edge is receding behind it.
+   *
+   * `space.md` on both axes, which is the gutter the rest of the product insets by, so the disc
+   * clears the arc and lines up with content rather than floating at a number chosen to look
+   * right. A corner control needs the corner to have finished being a corner first.
    */
-  menuHost: { position: 'absolute', top: 0, right: 0, zIndex: 2 },
+  menuHost: { position: 'absolute', top: space.md, right: space.md, zIndex: 2 },
   menuButton: {
     width: 36,
     height: 36,
@@ -633,15 +667,6 @@ const styles = StyleSheet.create({
 
   details: { width: '100%', gap: space.sm },
   error: { ...type.bodySmall, color: color.error, textAlign: 'center' },
-
-  full: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: space.xs,
-    paddingVertical: space.sm,
-  },
-  fullLabel: { ...type.body, color: color.textSecondary },
 
   /*
    * The shared-clubs block: centred under the name, because it is a statement about the two of

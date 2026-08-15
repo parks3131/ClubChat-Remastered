@@ -25,9 +25,12 @@
  *
  * **This screen is no longer how a roster shows somebody.** A club roster opens `MemberCardSheet`
  * over itself instead - a list you are working down should not become a navigation each way. What
- * this stays is the whole record and the addressable one: a notification, a pasted link, and the
- * card's own "View full profile" all land here, so it keeps every part the card leaves out. The
- * shared-clubs block is imported from the card rather than written twice.
+ * this stays is the addressable one: a notification, a pasted link and a tap on a chat bubble's
+ * avatar all land here. The shared-clubs block is imported from the card rather than written twice.
+ *
+ * **The card no longer links here**, as of 2026-08-14. It ended up carrying every part of this
+ * screen, so the row offering it was a second copy of what the reader already had. This screen is
+ * unchanged and still reachable by every route above; what went is only the door from the card.
  */
 
 import { useState } from 'react';

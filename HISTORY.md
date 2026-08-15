@@ -13,7 +13,47 @@ Newest first.
 
 ---
 
-## 2026-08-14 (last) - A message can be corrected, and append-only turns out to have meant ordering
+## 2026-08-14 (last) - The member card stops offering a door to itself
+
+Three changes to the card the roster raises, and only the second was asked for directly.
+
+**"View full profile" is gone.** It was the last row on the card, from when a card was a glance
+and `/users/:id` was the whole record. The card outgrew that during its own build: the
+shared-clubs block arrived, then Send message, then the admin menu, and by the end it carried
+description, city, school, shared clubs, Message, Remove, Ban and Lift ban - every part of the
+screen it was offering to open. Checked before cutting, because the row's own comment claimed it
+led to "everything this card does not carry", and by then that set was empty. `/users/:id` is
+untouched and still opens from a notification, a pasted link and a chat bubble's avatar.
+
+**The "..." was inside the sheet's corner rather than inside the sheet.** Reported from the phone
+as looking "unshaped". It sat at `top: 0, right: 0`, and the sheet's top corners are `radius.xl` -
+so a 36pt disc was pinned entirely inside a 24pt arc, in the one place where the card's edge
+curves away underneath it. Two rounded shapes with nothing between them read as one badly cut
+shape, and the button appears to spill off a card whose edge is receding behind it. Inset by the
+gutter on both axes.
+
+**And a bug the founder's screenshot exposed without either of us looking for it.** The
+shared-clubs block said "and these other **clubs**" from a fixed string whenever more than one was
+shared, so sharing exactly two announced "clubs" about one. Underneath it the face stack sliced
+from index 0, so the first face was the club the sentence had just named, and the `+N` chip
+counted against the whole set rather than the remainder. The line, the faces and the count were
+three different answers to the same question. The faces are now the others only, counted and
+pluralised, and the stack is absent rather than empty when there are none.
+
+Verified on the Simulator against real data: the card now reads "You're both in Binghamton Running
+Club" and stops, because that viewer shares exactly one club.
+
+**Four things were found in the same pass and deliberately not fixed**, all now in `TODO.md`: an
+accent-tinted shape escaping the pinned strip's cards (reproducible - it travels with them when
+the strip scrolls), a padlock on every roster row for anybody who is not an admin, three chat
+overlays that dim the background three different ways, and a chat header that reads "ClubChat"
+under every conversation name whenever the socket is healthy. The third is the one worth naming:
+nothing is broken and the lighter treatment may well be right for a small anchored dropdown, but
+the reasoning is not written down anywhere, which is the only reason it got raised at all.
+
+---
+
+## 2026-08-14 - A message can be corrected, and append-only turns out to have meant ordering
 
 The founder asked for editing: long press a message sent within five minutes, tap a pencil, fix it.
 The interesting part of the task was not building it - it is one column and one command - but that

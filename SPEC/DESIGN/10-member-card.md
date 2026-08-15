@@ -14,9 +14,15 @@ no club authority to offer and would show the plain screen's content in a panel 
 deliberately **not** yet in a direct message, where the card would want conversation actions
 (mute, clear) that this pass does not carry.
 
-`/users/:id` is not replaced. It stays the addressable, complete record - what a notification, a
-pasted link and the card's own **View full profile** all open - and it is what a banned row would
-have opened if a banned row opened anything.
+`/users/:id` is not replaced. It stays the addressable record - what a notification, a pasted link
+and a tap on a chat bubble's avatar all open - and it is what a banned row would have opened if a
+banned row opened anything.
+
+**The card no longer offers a way to it.** A **View full profile** row sat at the bottom until
+2026-08-14, from when the card was a glance and the screen was the whole record. The card outgrew
+that during its own build: the shared-clubs block arrived, then Send message, then the admin menu,
+and it ended up carrying every part of the screen. The row was a second copy of what the reader
+was already looking at, with a navigation charged for it.
 
 ## Anatomy
 

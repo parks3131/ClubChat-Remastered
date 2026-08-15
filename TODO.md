@@ -13,6 +13,32 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
 
 ## Next up
 
+- [ ] **Something is escaping the pinned strip's notice cards.** An accent-tinted rounded shape
+      sits below the front card, offset right, cut off where the next card overlaps it. Found on
+      the Simulator on 2026-08-14 and **reproducible**: it travels with the cards when the strip is
+      scrolled horizontally, so it belongs to a card rather than to the background. Not the
+      horizontal scroll indicator (disabled) and not a shadow (none declared on those styles).
+      Localised to the strip, not diagnosed further. Suspect the `BlurView` + `borderRadius` +
+      `overflow: hidden` combination on `pinnedCard`, which is where iOS clips children unreliably.
+
+- [ ] **A plain member sees a padlock on every roster row.** The lock renders when
+      `actions.length === 0`, which reads as deliberate for an admin who has actions on most rows
+      and as a wall of locks for everybody else - and the same glyph already means "you cannot
+      reach this race" on the club hub. Decide whether "nothing to do here" deserves a glyph at all
+      for a viewer who has nothing to do on ANY row.
+
+- [ ] **The three chat overlays dim the background three different ways.** The message long-press
+      menu blurs the whole screen, the member card dims it, and the header quick-nav dropdown does
+      nothing at all - its `gridScrim` is a transparent tap-catcher with no `backgroundColor`.
+      Nothing is broken and the lighter treatment may be right for a small anchored dropdown;
+      **the decision just is not written down anywhere**, which is why it got re-flagged on
+      2026-08-14. Either dim it or record in [`DESIGN/09`](SPEC/DESIGN/09-chat-composer.md) why it
+      stays lighter than the other two.
+
+- [ ] **Every chat header reads "ClubChat" under the conversation name.** It is hardcoded, and
+      swaps to "Reconnecting" when the socket drops - so a status line shows the app's own name
+      whenever nothing is wrong. Decide what it should say when healthy, or drop it.
+
 - [ ] **Recurrence** is the next real feature, and is deferred rather than pending - see below.
       Nothing else in Weekly Meetups is outstanding: Nudge shipped and was verified on a device on
       2026-08-14, notification included.
