@@ -238,7 +238,22 @@ in this section is chosen to convert the silent case into the loud one.
    The `--` form commits those paths' working-tree content and ignores the index entirely, so
    nothing another agent stages between your check and your commit can be swept in.
 
-   **The exception is a file that carries two agents' work**, where pathspec takes all of it.
+   **A file git has never seen has to be staged first, and the rule read as though it did not.**
+   A pathspec is matched against tracked files and the index, so `git commit -- new-file.ts`
+   fails outright on anything new - a migration, an ADR, a new test file. Stage exactly those:
+
+   ```
+   git add SPEC/decisions/0031-whatever.md packages/server/src/db/migrations/0031_x.sql
+   git diff --cached --name-only          # nothing but the new files you just named
+   git commit -F /tmp/message.txt -- <every path, the new ones included>
+   ```
+
+   That staging step is narrow by construction - it names only files that did not exist before,
+   so it cannot pick up another agent's edit to an existing one - but confirm the staged set
+   anyway, because the index is shared. Found on 2026-08-15 by the agent it stopped, and worth
+   recording as written rather than as understood: the rule was obeyed exactly and did not work.
+
+   **The other exception is a file that carries two agents' work**, where pathspec takes all of it.
    There, stage your hunks with `git add -p <file>`, confirm with `git diff --cached --name-only`
    that the staged set is exactly yours, and commit from the index. If a file you do not
    recognise is staged, stop and say so rather than unstaging it - it may belong to a commit
