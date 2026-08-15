@@ -13,6 +13,97 @@ Newest first.
 
 ---
 
+## 2026-08-15 - A meetup becomes a calendar kind, and a rule gets overruled
+
+Meetups were the only dated club activity invisible outside their own screen. Events, races and
+Eboard meetings all reached the merged calendar feed; a meetup did not, so a member reading the
+month had no way to see that the club meets on Tuesday, and no way to get from a day to it.
+
+**That was not an oversight - it was a written rule, and the first work was reversing it.**
+`PRD/08` rule 12: *"Meetups do not appear on the club calendar. A club meeting three times a week
+would mark almost every square of the month grid, and the race everybody needs to see would stop
+standing out."* `ADR-0029` carried the same line. The reasoning was sound and had never been
+checked against a real club. It was checked before answering:
+
+| | This month |
+|---|---|
+| Days carrying a meetup | 5 |
+| Days carrying an event | 11 |
+| Days carrying a race | 0 |
+
+Five squares out of thirty-one, against eleven the grid was already marking. The dense recurring
+club the rule imagined is not what a meetup turned out to be in practice. `ADR-0036` records the
+reversal; the rule was replaced rather than deleted, and the ADR supersedes rather than edits, so
+what was believed on the way here is still readable.
+
+It also passes the test `ADR-0034` had set the day before, on that decision's own terms. That one
+drew the line at things that **happen on a day** - a poll's closing deadline is not one, so polls
+left the feed. A meetup is a club being somewhere at a time. It is the most literally-happening
+thing on there.
+
+**The interesting constraint was the clock.** `meetups` stores a DATE and a TIME rather than one
+timestamp, on purpose: a club's week is local wall-clock, no club carries a timezone, and an
+instant built from the two would move a Tuesday evening meetup to Monday for a member reading from
+another country. So the feed carries the day in `at` with `allDay: true`, and the club's own
+`HH:MM` beside it in a new `timeOfDay` - printed, never parsed.
+
+Adding a field to `FeedItem` deserved the scrutiny it got, because `ADR-0034` had just finished
+removing one. They are not the same kind of addition, and the difference is worth keeping:
+`open?` was a **state**, and the upcoming rule, the sort and the row all branched on it, so four
+kinds paid for one kind's shape. Nothing branches on `timeOfDay`. No predicate reads it, no access
+check reads it, and the only ordering that consults it is between two meetups on one day.
+
+**Adding the kind found a latent bug that no test would have.** The Upcoming/Past row formatted its
+date with `item.kind === 'race' ? formatDateOnly : formatInstant` - branching on the kind where
+`allDay` was the actual question. Those were the same thing for exactly as long as a race was the
+only date-only kind on the feed, and a meetup would have been read as UTC midnight and printed a
+day early west of Greenwich. That is the precise failure `allDay` was introduced to prevent, and it
+had been quietly reintroduced one line at a time. The row branches on the flag now.
+
+The grid needed no work at all, which is worth noticing: `readMonthMarkers` derives from the feed,
+so a meetup on the feed is a marked day with no code saying so. That property was bought the day
+before by deleting the poll skips, and it paid for itself immediately.
+
+The founder chose full parity over a quieter marker or a popup-only appearance, and chose the
+club's week on the current week as the tap target over a per-meetup screen. A meetup is the one
+kind on the feed whose row does not open a screen about itself, because it does not have one - the
+week is where a meetup is read, edited, removed and nudged from.
+
+**Then the device answered within the hour, and the answer was a dead end.** A video: tap a meetup
+under Friday 14 August, arrive at the club's week - correct club, correct week, "Week of
+2026-08-10" - and the screen shows only Saturday 15 and Sunday 16. The thing that had just been
+tapped was not on it.
+
+`PRD/08` rule 2, doing exactly what it said: *"On the current week, only today and future days are
+shown. The week is a plan, not a record. Paging back shows all seven days."* Sound on its own
+terms, and it had never had to survive something pointing at it. **And it is the one case paging
+cannot rescue**, which is what made it worth fixing rather than explaining: the 14th sits inside
+the current week, so Previous jumps to the week before and steps over it. No sequence of taps
+reached the meetup the calendar had just offered.
+
+The week now returns all seven days with the past ones marked, and a past day carries no "Add a
+meetup" row - the plan-not-a-record intent kept as a missing control rather than a missing day.
+The founder also reversed the tap target he had chosen an hour earlier: a meetup opens the week
+that holds it, not the week today falls in.
+
+**And a rule turned out not to exist.** The founder's report opened with "meetups can only be
+created current and future days", which is how the product behaves and is not a rule anywhere:
+`createMeetup` accepts any date, and the repo's own nudge test creates one on 2020-05-04 to prove
+a past meetup cannot be nudged. The restriction was entirely a consequence of the week hiding the
+days an Add button would have appeared on - so removing the hiding left the rule resting on a
+single client condition. Flagged rather than fixed, because refusing a past date is a decision
+about the API rather than about this screen.
+
+Two smaller things fell out. `isoPlusDays` existed only to answer "is this the current week" for
+the hiding rule and had no other caller, so it went with it. And "This week is over. Page back to
+see it." - the Sunday-evening message for when every day had been hidden - is now a sentence
+nobody can reach.
+
+1,337 tests with 7 new, typecheck, runtime and em dash clean. The server tests assert against the
+exact characters that went in: `at` equal to `meetup_date` verbatim, `timeOfDay` equal to the
+club's clock, two meetups on one day in time order, and every day of the current week returned
+with `past` set by comparison rather than by omission.
+
 ## 2026-08-15 - The emoji picker walked to a category instead of going there
 
 Reported from the phone with a video: "I just click the flag symbol in the down, like, flag

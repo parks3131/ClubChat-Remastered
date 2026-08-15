@@ -104,10 +104,26 @@ type Editing =
   | { mode: 'edit'; date: string; meetup: Meetup };
 
 export default function WeeklyMeetupsScreen() {
-  const { clubId } = useLocalSearchParams<{ clubId: string }>();
+  const { clubId, date } = useLocalSearchParams<{ clubId: string; date?: string }>();
   // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
   useDeclareClub(clubId);
-  const [monday, setMonday] = useState(() => mondayOf(new Date()));
+  /*
+   * The week to open on: the one holding `date` when the caller named a day, otherwise this one.
+   *
+   * > **The calendar is the caller that needs it.** A meetup's row there opens this screen, and
+   * > until 2026-08-15 it always opened on the current week - so tapping something three weeks out
+   * > landed on a week that did not contain it and left the reader to page. Reported from the
+   * > phone with a video.
+   *
+   * Validated rather than trusted: a parameter is a string from a URL, and `fromDateKey` on
+   * something that is not `YYYY-MM-DD` yields an Invalid Date, which would put the screen on a
+   * week called "Week of NaN-NaN-NaN" with no way back but the arrows.
+   */
+  const [monday, setMonday] = useState(() =>
+    typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
+      ? mondayOf(fromDateKey(date))
+      : mondayOf(new Date()),
+  );
   const [editing, setEditing] = useState<Editing | null>(null);
   const [nudgeNote, setNudgeNote] = useState<string | null>(null);
   const [nudging, setNudging] = useState(false);
@@ -196,7 +212,20 @@ export default function WeeklyMeetupsScreen() {
                   />
                 ))}
 
-                {isAdmin && (
+                {/*
+                  Not on a day that has gone. The week can be READ backwards - it has to be, now
+                  that the calendar points at any day of it - but it is still not a diary you
+                  write into backwards.
+
+                  > **This is the ONLY thing enforcing that, and it is a missing button.**
+                  > `createMeetup` accepts any date, past included; the rule was never a server
+                  > rule, it was a consequence of the week hiding the days it would have applied
+                  > to. Hiding those days is exactly what stopped on 2026-08-15, so the rule now
+                  > rests on this condition alone. Flagged to the founder rather than fixed here,
+                  > because refusing a past date on the server is a decision about the API and not
+                  > about this screen.
+                */}
+                {isAdmin && !day.past && (
                   <AddRow
                     label="Add a meetup"
                     onPress={() => setEditing({ mode: 'add', date: day.date })}
@@ -205,9 +234,12 @@ export default function WeeklyMeetupsScreen() {
               </View>
             ))}
 
-            {data.days.length === 0 && (
-              <Text style={styles.empty}>This week is over. Page back to see it.</Text>
-            )}
+            {/*
+              "This week is over. Page back to see it." used to live here, for the Sunday evening
+              when every day of the current week had been hidden and the screen was blank. The
+              week returns all seven days since 2026-08-15, so there is no empty case left to
+              explain - and the message would now be a sentence nobody can ever reach.
+            */}
           </ScrollView>
         )}
       </DataScreen>

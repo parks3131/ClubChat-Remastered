@@ -24,8 +24,16 @@ field and why one should not be added back.*
 
 1. The screen shows **one real calendar week, Monday through Sunday** - not a repeating
    template.
-2. **On the current week, only today and future days are shown.** The week is a plan, not a
-   record. Paging back shows all seven days.
+2. **All seven days are shown, and a day that has gone cannot be added to.** It carries no "Add a
+   meetup" row; it is readable and nothing else.
+
+   > **Until 2026-08-15 the current week hid the days that had gone**, on the reasoning that the
+   > week is a plan rather than a record. That became untenable the same day meetups reached the
+   > calendar (rule 12): the calendar shows every day, so tapping a meetup on a past day opened
+   > this screen onto a week that structurally could not show it - and it was the one case paging
+   > could not rescue, because the day sits INSIDE the current week, so Previous steps over it.
+   > Reported from the phone with a video. The plan-not-a-record intent survives as the missing
+   > Add row rather than as a missing day.
 3. **A day with nothing on it says "Nothing planned"**, explicitly - never omitted or blank. An
    empty day is otherwise ambiguous between "nothing is happening" and "nobody has posted yet".
 4. **A day holds as many meetups as the club needs**, listed in time order. A morning session and
@@ -56,9 +64,19 @@ field and why one should not be added back.*
     *(Settled 2026-08-08, and the reason this surface is separate from the calendar. The one
     deliberate exception is Nudge, below, which is a person choosing to send one - not a meetup
     sending itself.)*
-12. **Meetups do not appear on the club calendar.** A club meeting three times a week would mark
-    almost every square of the month grid, and the race everybody needs to see would stop standing
-    out. The calendar keeps the sparse one-off things; the week keeps the dense recurring ones.
+12. **A meetup appears on the club calendar, with the same standing as an event or a race.** It
+    marks its day on the month grid, it is listed under a tapped day with its time, and it is in
+    the Upcoming/Past list. **Tapping it opens this screen on the week that holds it** - a meetup
+    has no detail screen of its own, because the week is where it is read, edited, removed and
+    nudged from, and landing on any other week would be landing somewhere it is not.
+
+    **This reverses what this rule said until 2026-08-15**, which was that meetups stay off the
+    calendar because a club meeting three times a week would mark almost every square and drown
+    the race everybody needs to see. That was never tested against a real club, and when it was,
+    the crowding was not there: five meetup days that month against eleven event days. The cost of
+    the old rule was concrete - a member reading the month could not see that the club meets on
+    Tuesday. See [ADR-0036](../decisions/0036-a-meetup-is-a-calendar-kind.md), which also records
+    why the date and the time reach the calendar separately rather than as one instant.
 
 ### Nudge
 

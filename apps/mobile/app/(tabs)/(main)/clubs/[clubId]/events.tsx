@@ -152,6 +152,10 @@ function tintFor(kind: FeedItem['kind']): { background: string; text: string } {
       return { background: color.inverseSurface, text: color.onInverseSurface };
     case 'event':
       return { background: color.tertiarySoft, text: color.onTertiarySoft };
+    // The quietest of the four: a meetup is the routine thing and appears most often, so the
+    // accent stays with the race. Same vocabulary as the calendar's day list.
+    case 'meetup':
+      return { background: color.secondaryContainer, text: color.onSecondarySoft };
   }
 }
 
@@ -170,13 +174,20 @@ function EventRow({ item, faded }: { item: FeedItem; faded: boolean }) {
   const router = useRouter();
   const tint = tintFor(item.kind);
   const bib = bibParts(item.at, item.allDay);
-  // Every kind on this merged feed has a screen, events included - so every row opens.
+  /*
+   * Every kind on this merged feed opens something. A meetup is the one that does not open a
+   * screen of ITS OWN, because it has none: the club's week is where a meetup is read, edited,
+   * removed and nudged from, so that is where the row goes.
+   */
   const target =
     item.kind === 'race'
       ? `/races/${item.id}`
       : item.kind === 'meeting'
         ? `/meetings/${item.id}`
-        : `/events/${item.id}`;
+        : item.kind === 'meetup'
+          ? // With the day, so the week that opens holds this meetup. See the calendar's copy.
+            `/clubs/${item.clubId}/weekly-meetups?date=${item.at}`
+          : `/events/${item.id}`;
 
   const body = (
     <>
@@ -189,8 +200,16 @@ function EventRow({ item, faded }: { item: FeedItem; faded: boolean }) {
           {item.kind.toUpperCase()}
         </Text>
         <Text style={styles.rowTitle}>{item.title}</Text>
+        {/*
+          Branched on `allDay`, NOT on the kind. Those were the same thing for as long as a race
+          was the only date-only kind, and stopped being the same thing the moment a meetup
+          arrived: `formatInstant` on a date-only value reads it as UTC midnight, which is the
+          dated bug `FeedItem.allDay` exists to prevent. A meetup adds its own clock after the
+          date, printed as the club typed it.
+        */}
         <Text style={styles.meta}>
-          {item.kind === 'race' ? formatDateOnly(item.at) : formatInstant(item.at)}
+          {item.allDay ? formatDateOnly(item.at) : formatInstant(item.at)}
+          {item.timeOfDay !== null && ` at ${item.timeOfDay}`}
         </Text>
         {/* A race the viewer can see but not enter still appears, and says so. */}
         {item.kind === 'race' && !item.accessible && (

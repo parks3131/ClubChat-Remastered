@@ -202,16 +202,31 @@ function badgeTint(kind: FeedItem['kind']): { background: string; text: string }
       return { background: color.inverseSurface, text: color.onInverseSurface };
     case 'event':
       return { background: color.tertiarySoft, text: color.onTertiarySoft };
+    // The quietest of the four, and deliberately so: a meetup is the routine thing, and it is the
+    // one most likely to appear several times in a week. The accent stays with the race.
+    case 'meetup':
+      return { background: color.secondaryContainer, text: color.onSecondarySoft };
   }
 }
 
-/** Every kind on this feed has somewhere to land, so this returns a string in every case. */
+/**
+ * Every kind on this feed has somewhere to land, so this returns a string in every case.
+ *
+ * A meetup is the exception to "one row, one screen": it opens the club's week rather than a
+ * screen of its own, because it does not have one. The week is where a meetup is read, edited,
+ * removed and nudged from.
+ */
 function targetFor(item: FeedItem): string {
   return item.kind === 'race'
     ? `/races/${item.id}`
     : item.kind === 'meeting'
       ? `/meetings/${item.id}`
-      : `/events/${item.id}`;
+      : item.kind === 'meetup'
+        ? // The day goes with it, so the week that opens is the one holding this meetup rather
+          // than whichever week today falls in. `at` is date-only for a meetup, so it is already
+          // the key that screen wants.
+          `/clubs/${item.clubId}/weekly-meetups?date=${item.at}`
+        : `/events/${item.id}`;
 }
 
 /** One item under the selected day. */
@@ -232,11 +247,16 @@ function DayRow({ item, showClub }: { item: FeedItem; showClub: boolean }) {
       </View>
       <Text style={styles.dayRowTitle}>{item.title}</Text>
       {/*
-        An all-day item has no time to show, and inventing one is worse than showing nothing: a
-        race's date read as an instant is UTC midnight, so every race carried a confident "7:00 PM"
-        that was really the previous evening in New York.
+        Three cases, not two. An instant is formatted in the reader's own zone. An all-day item
+        with no clock shows nothing, because inventing one is worse than silence: a race's date
+        read as an instant is UTC midnight, so every race once carried a confident "7:00 PM" that
+        was really the previous evening in New York. And a meetup is all-day WITH a clock, which
+        is printed exactly as the club typed it and never parsed.
       */}
       {!item.allDay && <Text style={styles.meta}>{formatTimeOfDay(item.at)}</Text>}
+      {item.allDay && item.timeOfDay !== null && (
+        <Text style={styles.meta}>{item.timeOfDay}</Text>
+      )}
     </>
   );
 

@@ -21,6 +21,7 @@ const item = (
   id: string,
   when: string,
   allDay = false,
+  timeOfDay: string | null = null,
 ): FeedItem => ({
   kind,
   id,
@@ -29,6 +30,7 @@ const item = (
   title: id,
   at: when,
   allDay,
+  timeOfDay,
   upcoming: true,
   accessible: true,
 });
@@ -43,6 +45,19 @@ describe('bucketing a feed into days', () => {
 
     expect([...byDay.keys()]).toEqual(['2026-08-08', '2026-09-23']);
     expect(byDay.get('2026-08-08')?.map((each) => each.id)).toEqual(['morning', 'afternoon']);
+  });
+
+  it('files a meetup on the day the club typed, in any timezone', () => {
+    /*
+     * A meetup carries a day AND a clock, and the clock is the trap. It is stored apart from the
+     * date on purpose, so bucketing has to key on the date alone - if the two were ever folded
+     * into an instant, an evening meetup would land on the next square west of Greenwich, which
+     * is the same failure the late-evening event test below is about.
+     */
+    const byDay = bucketByDay([item('meetup', 'track', '2026-08-18', true, '18:30')]);
+
+    expect([...byDay.keys()]).toEqual(['2026-08-18']);
+    expect(byDay.get('2026-08-18')?.[0]?.timeOfDay).toBe('18:30');
   });
 
   it('files a late-evening event on the day it is actually on', () => {

@@ -531,6 +531,37 @@ describe('weekly meetups', () => {
     }
   });
 
+  /*
+   * The current week returns all seven days, past ones marked rather than dropped.
+   *
+   * It used to drop them, and that became unreachable the moment meetups joined the calendar on
+   * 2026-08-15 (ADR-0036): tapping a meetup on a past day opened this week, which then could not
+   * show it - and it is the one case paging cannot fix, because the day is INSIDE the current
+   * week so PREVIOUS jumps over it. Reported from the phone with a video.
+   *
+   * Skipped on a Monday, when the current week has no past day to assert on. That is honest about
+   * what is being tested rather than asserting something weaker every seventh run.
+   */
+  it('returns the whole current week, marking the days that have gone', async () => {
+    const owner = await signUp('PastWeekOwner');
+    const { clubId } = await createClubAs(owner);
+    const today = new Date().toISOString().slice(0, 10);
+    const monday = mondayOf(today);
+
+    const week = await as(owner, 'GET', `/clubs/${clubId}/meetups?monday=${monday}`);
+    expect(week.status).toBe(200);
+    // Seven, always. The old behaviour returned fewer as the week wore on.
+    expect(week.body.days).toHaveLength(7);
+    expect(week.body.days[0].date).toBe(monday);
+
+    const days = week.body.days as Array<{ date: string; past: boolean }>;
+    for (const day of days) {
+      expect([day.date, day.past]).toEqual([day.date, day.date < today]);
+    }
+    // Today is never past, whatever the clock says.
+    expect(days.find((d) => d.date === today)?.past).toBe(false);
+  });
+
   it('refuses to nudge any day but today, in both directions', async () => {
     // A nudge means "we are meeting, today". Next Tuesday is premature, not early.
     const owner = await signUp('OtherDayOwner');

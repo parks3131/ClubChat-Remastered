@@ -5,8 +5,16 @@ Two views over **one merged feed**: a month grid for "what is happening when", a
 
 **Behaviour rules**
 
-1. **The month grid marks any day carrying a calendar event, a race, or an Eboard meeting.**
-   Tapping a marked day opens a popup listing that day's items; tapping an item opens it.
+1. **The month grid marks any day carrying a calendar event, a race, an Eboard meeting, or a
+   meetup.** Tapping a marked day opens a popup listing that day's items; tapping an item opens
+   it.
+
+   > **Meetups joined on 2026-08-15**, reversing [`08`](08-weekly-meetups.md) rule 12, which had
+   > kept them off on the grounds that a club meeting three times a week would drown the grid.
+   > The club's own month showed five meetup days against eleven event days, so the crowding was
+   > not there. A meetup is the one kind whose row does not open a screen about itself - it opens
+   > the club's week, which is where a meetup is read and changed. See
+   > [ADR-0036](../decisions/0036-a-meetup-is-a-calendar-kind.md).
 2. **Polls are not on the calendar at all** - not the grid, and not the Upcoming/Past list. A
    poll has a closing deadline, not a day it happens on, and this surface answers "what is
    happening when". Polls are reached from the poll list in their own scope.
@@ -41,9 +49,10 @@ Two views over **one merged feed**: a month grid for "what is happening when", a
    went. Stepping the year alone changes nothing until a month is picked, so a stray tap costs
    nothing. The year is a stepper rather than a list of years because a club calendar is used a
    season either side of today; that is the assumption to revisit first if people jump further.
-4. The Upcoming/Past list is one merged, sorted feed across events, races and meetings. Past
-   items are faded, most-recent-first. **Every row is dated**, so Upcoming and Past are decided
-   by one date comparison and nothing sorts into an undated tail.
+4. The Upcoming/Past list is one merged, sorted feed across events, races, meetings and meetups.
+   Past items are faded, most-recent-first. **Every row is dated**, so Upcoming and Past are
+   decided by one date comparison and nothing sorts into an undated tail. **A meetup carries a
+   clock as well as a day**, and two on the same day are in time order.
 5. ~~**A poll is "upcoming" while it is still open**, not by comparing its date.~~ **Gone
    2026-08-15 with rule 2**, since nothing on this feed is a poll any more. The slot is kept
    rather than renumbered because these rules are cited by number.

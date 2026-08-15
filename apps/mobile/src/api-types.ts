@@ -319,6 +319,14 @@ export type MeetupDay = {
   meetups: Meetup[];
   /** Rendered as "Nothing planned", never as an empty absence. */
   empty: boolean;
+  /**
+   * A day that has already gone. Readable, and never addable to.
+   *
+   * The current week used to omit these entirely. It stopped on 2026-08-15, when the calendar
+   * started pointing at meetups: a past day inside the current week was the one place a tap could
+   * land and find nothing, and paging could not reach it either.
+   */
+  past: boolean;
 };
 
 export type EventType = 'race' | 'practice' | 'team_bonding' | 'volunteer' | 'other';
@@ -351,7 +359,7 @@ export type EventDetail = {
  * here - see the server's `domain/calendar.ts` for the six exceptions that went with them.
  */
 export type FeedItem = {
-  kind: 'event' | 'race' | 'meeting';
+  kind: 'event' | 'race' | 'meeting' | 'meetup';
   id: string;
   clubId: string;
   clubName: string;
@@ -363,8 +371,17 @@ export type FeedItem = {
    * which - that is the whole point of the flag beside it.
    */
   at: string;
-  /** True when `at` is a day rather than a moment, which today means a race. */
+  /** True when `at` is a day rather than a moment, which means a race or a meetup. */
   allDay: boolean;
+  /**
+   * The club's own wall clock, `HH:MM`, for a kind that has a time but not an instant. Today that
+   * is a meetup and only a meetup; null on everything else.
+   *
+   * **Print it, never parse it.** It is the characters the club typed, deliberately not folded
+   * into `at` - a meetup's date and time are stored apart precisely so that Tuesday evening does
+   * not become Monday for somebody reading from another country.
+   */
+  timeOfDay: string | null;
   upcoming: boolean;
   /** False for a race the viewer can see but not enter. Still shown.  */
   accessible: boolean;

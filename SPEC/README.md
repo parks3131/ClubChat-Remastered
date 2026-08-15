@@ -162,6 +162,7 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0033](decisions/0033-a-message-may-be-edited-for-five-minutes.md) | A message may be edited by its sender for five minutes |
 | [0034](decisions/0034-the-calendar-carries-only-things-that-happen-on-a-day.md) | The calendar carries only things that happen on a day |
 | [0035](decisions/0035-a-person-is-reported-to-platform-moderators.md) | A person is reported to platform moderators, and never to a club's admins |
+| [0036](decisions/0036-a-meetup-is-a-calendar-kind.md) | A meetup is a calendar kind, reversing PRD/08 rule 12 |
 
 ## Templates
 

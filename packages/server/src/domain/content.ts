@@ -494,8 +494,10 @@ async function openCooldown(db: Db, meetupId: string): Promise<string | null> {
 /**
  * Today, as the club's own calendar date.
  *
- * The same expression `readMeetupWeek` uses to decide which days of the current week to hide, and
- * deliberately the same: a meetup the week has stopped showing must not still be nudgeable.
+ * The same expression `readMeetupWeek` uses to mark a day past, and deliberately the same: a day
+ * the week draws as gone must not carry a live bell. The two were coupled more tightly still when
+ * the week HID those days; now that it shows them, this comparison is the only thing refusing a
+ * nudge on one, which is why `nudgeMeetup` makes it again rather than trusting the read.
  */
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -523,6 +525,14 @@ export type WeekDay = {
   }>;
   /** True when nothing is planned. Rendered explicitly as "Nothing planned", never omitted. */
   empty: boolean;
+  /**
+   * A day that has already gone. Shown, and not addable to.
+   *
+   * This is what replaced hiding those days outright. The week still refuses to be a diary you
+   * write into backwards - `createMeetup` and the client both stop at today - but it can be read
+   * backwards, which it has to be now that the calendar can point a member at any day of it.
+   */
+  past: boolean;
 };
 
 /**
@@ -533,8 +543,10 @@ export type WeekDay = {
  *  - **A day with nothing on it is empty, explicitly.** An empty day is otherwise ambiguous
  *    between "nothing is happening" and "nobody has posted yet", so the flag is returned rather
  *    than left for the client to infer from an absence.
- *  - **On the current week, only today and future days are shown.** The week is a plan, not a
- *    record. Paging back shows all seven days.
+ *  - **All seven days are returned, and a past one is marked rather than dropped.** Until
+ *    2026-08-15 the current week hid the days that had gone, which made a past meetup on the
+ *    calendar unreachable - see the loop below. `past` is what carries the old rule's intent now:
+ *    the day is readable and cannot be added to.
  *  - **A day may hold several meetups**, ordered by time. Nothing here limits it to one.
  */
 export async function readMeetupWeek(
@@ -606,21 +618,30 @@ export async function readMeetupWeek(
     day.setUTCDate(monday.getUTCDate() + offset);
     const iso = day.toISOString().slice(0, 10);
 
-    // Hide past days of the CURRENT week only. A past week shows all seven.
-    const isCurrentWeek = today >= mondayIso && today < isoPlusDays(mondayIso, 7);
-    if (isCurrentWeek && iso < today) continue;
-
+    /*
+     * Every day of the week is returned, past ones included, and marked rather than dropped.
+     *
+     * > **This used to skip past days of the current week**, on the reasoning that the week is a
+     * > plan rather than a record. That stopped being tenable on 2026-08-15, when meetups joined
+     * > the calendar (`ADR-0036`): the calendar shows every day, so tapping a meetup on a past
+     * > day opened this screen onto a week that structurally could not show it. Worse, it was the
+     * > one case no amount of paging could reach - the day is inside the current week, so PREVIOUS
+     * > jumps past it. Reported from the phone with a video the same afternoon.
+     *
+     * The flag is what keeps "a plan, not a record" true where it matters: a past day is shown
+     * and cannot be added to. Nudging a past meetup is refused independently, by `nudgeMeetup`
+     * comparing its own date - not by this day being absent.
+     */
     const dayMeetups = byDate.get(iso) ?? [];
-    days.push({ date: iso, meetups: dayMeetups, empty: dayMeetups.length === 0 });
+    days.push({
+      date: iso,
+      meetups: dayMeetups,
+      empty: dayMeetups.length === 0,
+      past: iso < today,
+    });
   }
 
   return { ok: true, days };
-}
-
-function isoPlusDays(iso: string, days: number): string {
-  const date = new Date(`${iso}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
 }
 
 // ---------------------------------------------------------------------------

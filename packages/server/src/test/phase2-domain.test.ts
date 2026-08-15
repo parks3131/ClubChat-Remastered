@@ -1212,6 +1212,80 @@ describe('the merged calendar feed', () => {
     expect(feed.every((i) => i.at !== null && i.at.length > 0)).toBe(true);
   });
 
+  /*
+   * Meetups joined the feed on 2026-08-15, reversing PRD/08 rule 12 - see ADR-0036. The
+   * assertions that matter are the two about the date and the clock: a meetup stores a DATE and a
+   * TIME deliberately rather than one timestamp, and the moment anybody combines them, a club
+   * meeting on Tuesday evening lands on Monday for a member reading from another country. Both
+   * are checked against the exact characters that went in.
+   */
+  it('carries a meetup, with the day and the clock kept apart', async () => {
+    const f = await setup();
+    await createMeetup(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId,
+      meetupDate: '2027-03-09',
+      meetupTime: '18:30',
+      location: 'Track, west gate',
+      description: null,
+    });
+
+    const feed = await readCalendarFeed(h.db, await ctxFor(f.memberId), { clubId: f.clubId });
+    const meetup = feed.find((i) => i.kind === 'meetup');
+
+    expect(meetup, 'a meetup did not reach the feed').toBeDefined();
+    // The place is the title: a meetup has no name, it has somewhere to be.
+    expect(meetup!.title).toBe('Track, west gate');
+    // Verbatim. Not an instant, not shifted, not normalised through a Date.
+    expect(meetup!.at).toBe('2027-03-09');
+    expect(meetup!.allDay).toBe(true);
+    // The club's own clock, minutes only, whatever timezone the reader or the server is in.
+    expect(meetup!.timeOfDay).toBe('18:30');
+    expect(meetup!.accessible).toBe(true);
+  });
+
+  it('shows a meetup to every club member and to nobody outside the club', async () => {
+    const f = await setup();
+    await createMeetup(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId,
+      meetupDate: '2027-03-10',
+      meetupTime: '07:00',
+      location: 'Boathouse',
+      description: null,
+    });
+
+    // A plain member sees it: reading meetups is club membership and nothing more, which is
+    // exactly what the meetups screen's own route checks.
+    const member = await readCalendarFeed(h.db, await ctxFor(f.memberId), { clubId: f.clubId });
+    expect(member.some((i) => i.title === 'Boathouse')).toBe(true);
+
+    const outsider = await makeUser('Outsider');
+    const theirs = await readCalendarFeed(h.db, await ctxFor(outsider));
+    expect(theirs.some((i) => i.title === 'Boathouse'), 'a meetup leaked to a non-member').toBe(
+      false,
+    );
+  });
+
+  it('marks a month day that has nothing on it but a meetup', async () => {
+    // The grid and the list are two views over one read, so a meetup being on the feed has to be
+    // the same thing as its day being marked. This is the assertion that fails if anybody
+    // reintroduces a per-kind skip in the markers query.
+    const f = await setup();
+    await createMeetup(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId,
+      meetupDate: '2027-04-14',
+      meetupTime: '19:00',
+      location: 'Somewhere',
+      description: null,
+    });
+
+    const days = await readMonthMarkers(h.db, await ctxFor(f.memberId), {
+      clubId: f.clubId,
+      year: 2027,
+      month: 4,
+    });
+    expect(days).toContain('2027-04-14');
+  });
+
   it('gives a race a date and an event an instant, and never converts one into the other', async () => {
     // A race's date pushed through toISOString became UTC midnight, which the client could only
     // read back as an instant: it printed a time of day under every race and could not ask which

@@ -616,6 +616,41 @@ describe('the merged calendar', () => {
     expect(past.body.items.map((i: { title: string }) => i.title)).toEqual(['Old practice']);
   });
 
+  /*
+   * Meetups joined the feed on 2026-08-15 - ADR-0036. The ordering is the part worth a route test
+   * rather than a domain one: two meetups on one day share an `at`, because `at` is the day, so
+   * the clock has to be part of the sort key or the union's own order decides which comes first.
+   */
+  it('serves meetups in time order within a day, and carries the clock unconverted', async () => {
+    const owner = await signUp('MeetupCalOwner');
+    const { clubId } = await createClubAs(owner);
+
+    await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+      meetupDate: '2099-05-04',
+      meetupTime: '18:30',
+      location: 'Evening social',
+    });
+    await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+      meetupDate: '2099-05-04',
+      meetupTime: '06:45',
+      location: 'Morning session',
+    });
+
+    const upcoming = await as(owner, 'GET', `/calendar?club=${clubId}&when=upcoming`);
+    expect(upcoming.status).toBe(200);
+    const rows = upcoming.body.items.filter((i: { kind: string }) => i.kind === 'meetup');
+
+    expect(rows.map((i: { title: string }) => i.title)).toEqual([
+      'Morning session',
+      'Evening social',
+    ]);
+    // The day, and the clock beside it. Never one instant: an instant built from these two would
+    // move a Tuesday evening meetup to Monday for a reader in another country.
+    expect(rows[0].at).toBe('2099-05-04');
+    expect(rows[0].allDay).toBe(true);
+    expect(rows.map((i: { timeOfDay: string }) => i.timeOfDay)).toEqual(['06:45', '18:30']);
+  });
+
   it('serves no poll on any of the three windows', async () => {
     // Polls left the feed on 2026-08-15. Both shapes are created: the deadline-less one is the
     // case that used to need an open/closed rule instead of a date comparison, and it is the

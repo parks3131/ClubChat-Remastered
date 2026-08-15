@@ -16,6 +16,13 @@
  *     separates a dated race from an ordinary side group, and this query's predicate is the
  *     only thing enforcing it.
  *
+ * > **Meetups joined this feed on 2026-08-15, reversing `PRD/08` rule 12.** That rule kept them
+ * > off on the grounds that a club meeting three times a week would mark almost every square and
+ * > drown the race everybody needs to see. The founder overruled it, and the club's own numbers
+ * > did not support the fear: five meetup days that month against eleven event days. It also
+ * > passes `ADR-0034`'s test on that decision's own terms - a meetup is a thing that happens on a
+ * > day. See `ADR-0036`, which supersedes the calendar line in `ADR-0029`.
+ *
  * > **Polls left this feed on 2026-08-15, at the founder's request.** They had never been on
  * > the grid - a poll has a closing deadline rather than a day it happens on - so they lived
  * > only in the Upcoming/Past list, and paid for the difference at every stop: a nullable
@@ -34,7 +41,7 @@ import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import type { AccessContext } from '../policy/context.ts';
 
-export type FeedItemKind = 'event' | 'race' | 'meeting';
+export type FeedItemKind = 'event' | 'race' | 'meeting' | 'meetup';
 
 export type FeedItem = {
   kind: FeedItemKind;
@@ -71,6 +78,22 @@ export type FeedItem = {
    * wrong one for a date - which is exactly what the client now asks.
    */
   allDay: boolean;
+  /**
+   * The club's own wall clock, `HH:MM`, for a kind that has a time but not an instant. Null
+   * everywhere else.
+   *
+   * > **This exists because a meetup's time cannot go into `at`.** `meetups` stores a DATE and a
+   * > TIME deliberately rather than one timestamp - a club's week is local wall-clock and no club
+   * > carries a timezone, so combining them would put Tuesday's meetup on Monday for a member
+   * > reading from another country. See `schema.ts`. So the day travels in `at`, where it means
+   * > the same thing to everybody, and the time travels here as the characters the club typed.
+   *
+   * **Inert on purpose, and that is what makes it different from the `open` flag that polls used
+   * to carry.** `open` was a state: the upcoming rule, the sort and the row all branched on it,
+   * and every other kind paid for it. Nothing branches on this. No predicate reads it, no access
+   * check reads it, and the only ordering that touches it is between two meetups on one day.
+   */
+  timeOfDay: string | null;
   /** Whether this belongs in Upcoming or Past. */
   upcoming: boolean;
   /** True when the viewer can enter it. A race they cannot enter still appears. */
@@ -101,6 +124,7 @@ export async function readCalendarFeed(
     title: string;
     at: string;
     all_day: boolean;
+    time_of_day: string | null;
     accessible: boolean;
   }>(sql`
     WITH my_clubs AS (
@@ -114,10 +138,13 @@ export async function readCalendarFeed(
     )
 
     -- Club events. Every club member.
-    -- all_day is carried per branch rather than inferred from the kind downstream, so a future
-    -- date-only source has to answer the question rather than silently defaulting to an instant.
+    -- all_day and time_of_day are carried per branch rather than inferred from the kind
+    -- downstream, so a new source has to answer both questions rather than silently defaulting to
+    -- an instant with no clock. That is why three branches state a NULL time rather than omitting
+    -- the column.
     SELECT 'event'::text AS kind, e.id::text, e.club_id::text, cl.name AS club_name,
-           e.title, e.starts_at::text AS at, false AS all_day, true AS accessible
+           e.title, e.starts_at::text AS at, false AS all_day,
+           NULL::text AS time_of_day, true AS accessible
       FROM calendar_events e
       JOIN clubs cl ON cl.id = e.club_id
      WHERE e.club_id IN (SELECT club_id FROM my_clubs)
@@ -137,7 +164,7 @@ export async function readCalendarFeed(
     -- 2026-08-15, the only thing keeping FeedItem.at non-null.
     -- (No backticks in this comment: one of those ends the surrounding template literal.)
     SELECT 'race'::text, r.id::text, r.club_id::text, cl.name,
-           r.name, r.race_date::text, true,
+           r.name, r.race_date::text, true, NULL::text,
            (r.id IN (SELECT race_id FROM my_races)) AS accessible
       FROM races r
       JOIN clubs cl ON cl.id = r.club_id
@@ -149,12 +176,29 @@ export async function readCalendarFeed(
 
     -- Eboard meetings. Members of that space ONLY.
     SELECT 'meeting'::text, m.id::text, ec.club_id::text, cl.name,
-           m.title, m.starts_at::text, false, true
+           m.title, m.starts_at::text, false, NULL::text, true
       FROM meetings m
       JOIN eboard_channels ec ON ec.id = m.eboard_id
       JOIN clubs cl ON cl.id = ec.club_id
      WHERE m.eboard_id IN (SELECT eboard_id FROM my_eboards)
        AND (${clubFilter}::uuid IS NULL OR ec.club_id = ${clubFilter}::uuid)
+
+    UNION ALL
+
+    -- Weekly meetups. Every club member, exactly as the meetups screen itself reads them:
+    -- its route checks canReadClubContent, which is club membership and nothing more.
+    --
+    -- The DAY travels in "at" and the TIME travels beside it, never combined. meetup_date is a
+    -- DATE and meetup_time a TIME on purpose - a club's week is local wall-clock and no club
+    -- carries a timezone, so an instant built from the two would put Tuesday's meetup on Monday
+    -- for a member reading from another country. The title is the place, because that is what a
+    -- meetup is called on its own screen: a club meets somewhere at a time, and it has no name.
+    SELECT 'meetup'::text, mu.id::text, mu.club_id::text, cl.name,
+           mu.location, mu.meetup_date::text, true, mu.meetup_time::text, true
+      FROM meetups mu
+      JOIN clubs cl ON cl.id = mu.club_id
+     WHERE mu.club_id IN (SELECT club_id FROM my_clubs)
+       AND (${clubFilter}::uuid IS NULL OR mu.club_id = ${clubFilter}::uuid)
   `);
 
   const now = Date.now();
@@ -172,6 +216,9 @@ export async function readCalendarFeed(
       title: row.title,
       at,
       allDay: row.all_day,
+      // Postgres returns a TIME as HH:MM:SS. A club types minutes, so the seconds are noise that
+      // would otherwise reach a screen.
+      timeOfDay: row.time_of_day === null ? null : row.time_of_day.slice(0, 5),
       upcoming: new Date(at).getTime() >= now,
       accessible: row.accessible,
     };

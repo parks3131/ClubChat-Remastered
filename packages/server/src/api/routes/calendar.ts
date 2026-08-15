@@ -43,11 +43,18 @@ export function registerCalendarRoutes(app: FastifyInstance, deps: AppDeps): voi
         ? items
         : items.filter((item) => item.upcoming === (query.data.when === 'upcoming'));
 
-    // Upcoming ascending and Past descending: both put the row the reader opened the tab for
-    // at the top. Every row is dated, so there is no undated tail to sort last - that branch
-    // existed for a deadline-less poll and went with polls on 2026-08-15.
+    /*
+     * Upcoming ascending and Past descending: both put the row the reader opened the tab for at
+     * the top. Every row is dated, so there is no undated tail to sort last - that branch existed
+     * for a deadline-less poll and went with polls on 2026-08-15.
+     *
+     * The clock is part of the key, not a second pass. Two meetups on one day carry the same
+     * `at` - the day - so without it a morning session and an evening social come back in
+     * whatever order the union produced, which is no order at all.
+     */
+    const key = (item: (typeof filtered)[number]) => `${item.at} ${item.timeOfDay ?? ''}`;
     const sorted = [...filtered].sort((a, b) =>
-      query.data.when === 'past' ? b.at.localeCompare(a.at) : a.at.localeCompare(b.at),
+      query.data.when === 'past' ? key(b).localeCompare(key(a)) : key(a).localeCompare(key(b)),
     );
 
     return { items: sorted };
