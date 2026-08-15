@@ -61,6 +61,16 @@ without being restated. Section 5 is the repo-specific part.
    hedging.
 8. **Never claim something works without having run it.** "Should work" is not a result.
 
+### Asking
+
+9. **A question to the founder is a multiple choice with real trade-offs, not an open one.**
+   Restate what you understood back to him first, name the options, and say what each one costs
+   - an open question hands the work of framing the decision back to the person who asked for
+   the work. Recommend one and say why. Reserve it for decisions that are genuinely his: two
+   readings of the request that would produce materially different work, or a resource only he
+   can allocate, such as the running stack and the phone in section 2.5. A choice with an
+   obvious default is made, mentioned, and moved past.
+
 ---
 
 ## 1. Non-negotiables
@@ -184,8 +194,34 @@ in this section is chosen to convert the silent case into the loud one.
 
 2. **The running stack and the phone are exclusive, and they are not yours by default.** One tree
    holds 3000 / 3001 / 8081, the dev database and the iPhone. Everywhere else, `npm test` is
-   self-sufficient - the handler tests start their own throwaway containers. Ask before taking
-   the device or the founder's ports, and never restart a server you did not start.
+   self-sufficient - the handler tests start their own throwaway containers.
+
+   **Look before you ask, and ask only if nothing is there.** Three agents asking the same
+   question about the same one stack is worse than not asking, so the check comes first:
+
+   ```
+   lsof -nP -iTCP:3000 -sTCP:LISTEN -t     # API      ) something listening means
+   lsof -nP -iTCP:3001 -sTCP:LISTEN -t     # gateway  ) another agent, or the founder,
+   lsof -nP -iTCP:8081 -sTCP:LISTEN -t     # Metro    ) already holds it
+   lsof -nP -iTCP:8081 | grep ESTABLISHED  # a connection here is the phone, attached
+   ```
+
+   - **Something is already running: do not ask, and do not restart it.** Use it as it stands
+     if you need it. It belongs to whoever started it, a restart drops the founder's phone
+     mid-session, and `node --watch` means it is already picking up your saved files anyway.
+     Never `pkill -f` - the command lines are identical across stacks, so a pattern kill takes
+     the founder's server down with the one you meant. Kill by the PID owning the port, and
+     only a port you started.
+   - **Nothing is running: ask, and ask as a multiple choice.** Never start the stack on your
+     own initiative and never assume the answer. Offer him the real options with their
+     trade-offs - start it here in his tree, start it on your own ports, or carry on without
+     it on tests alone - because which one is right depends on whether he wants the phone
+     pointed at your work, and only he knows that.
+
+   The same rule covers the iPhone. A device is a single object in somebody's hand: check
+   whether Metro already has a connection before proposing to install or relaunch anything on
+   it, and see [`SPEC/TECH`](SPEC/TECH/) and section 5.3 for why a successful `devicectl`
+   launch over the cable is no evidence the phone can reach the Mac at all.
 
 3. **If you ARE in the shared tree, ask what you own before writing, and make it include the
    shared files.** Directory ownership is not enough here. Nearly every feature touches
