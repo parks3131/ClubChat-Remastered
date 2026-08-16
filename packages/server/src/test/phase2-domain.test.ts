@@ -149,7 +149,7 @@ async function setup() {
   const ownerId = await makeUser('Owner');
   const memberId = await makeUser('Member');
   const club = await createClub(h.db, {
-    name: 'Hillside', sport: 'running', creatorId: ownerId,
+    name: 'Hillside', creatorId: ownerId,
   });
   await addMember(h.db, await ctxFor(ownerId), club.clubId, memberId);
   const eboard = await h.db.select().from(eboardChannels).where(eq(eboardChannels.clubId, club.clubId));

@@ -57,7 +57,7 @@ check 401 "GET /clubs with no session" "$API/clubs"
 check 200 "GET /clubs with a session" "${AO[@]}" "$API/clubs"
 
 echo "== club, roster, search, rotation =="
-check 201 "POST /clubs" -X POST "${AO[@]}" "${JSON[@]}" -d '{"name":"Gate Club","sport":"running"}' "$API/clubs"
+check 201 "POST /clubs" -X POST "${AO[@]}" "${JSON[@]}" -d '{"name":"Gate Club"}' "$API/clubs"
 CLUB=$(jsonf "['clubId']"); TOKEN=$(jsonf "['inviteToken']"); CHAN=$(jsonf "['mainChannelId']"); EB=$(jsonf "['eboardId']")
 
 check 200 "POST /invites/:token/redeem as member"  -X POST "${AM[@]}" "$API/invites/$TOKEN/redeem"

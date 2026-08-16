@@ -67,7 +67,6 @@ async function as(
 async function createClubAs(actor: Actor): Promise<{ clubId: string; channelId: string }> {
   const created = await as(actor, 'POST', '/clubs', {
     name: `Club ${crypto.randomUUID().slice(0, 6)}`,
-    sport: 'running',
   });
   expect(created.status).toBe(201);
   return { clubId: created.body.clubId, channelId: created.body.channelId };

@@ -135,7 +135,6 @@ export default function DmProfileScreen() {
                     <Text style={styles.rowTitle} numberOfLines={1}>
                       {club.name}
                     </Text>
-                    <Text style={styles.rowSub}>{club.sport}</Text>
                   </View>
                   <MaterialIcons name="chevron-right" size={22} color={color.textSecondary} />
                 </Pressable>

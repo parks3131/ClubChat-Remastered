@@ -559,7 +559,6 @@ export async function listClubsForUser(db: Db, userId: string) {
   const result = await db.execute<{
     id: string;
     name: string;
-    sport: string;
     description: string | null;
     image: string | null;
     join_policy: string;
@@ -568,7 +567,6 @@ export async function listClubsForUser(db: Db, userId: string) {
   }>(sql`
     SELECT cl.id,
            cl.name,
-           cl.sport,
            cl.description,
            cl.image,
            cl.join_policy,
@@ -586,7 +584,6 @@ export async function listClubsForUser(db: Db, userId: string) {
   return result.rows.map((row) => ({
     id: row.id,
     name: row.name,
-    sport: row.sport,
     image: row.image,
     description: row.description,
     joinPolicy: row.join_policy as 'open' | 'request',

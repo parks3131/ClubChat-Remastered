@@ -75,7 +75,6 @@ async function setup(policy: 'open' | 'request' = 'open') {
   const ownerId = await makeUser('Owner');
   const club = await createClub(h.db, {
     name: 'Hillside Running Club',
-    sport: 'running',
     joinPolicy: policy,
     creatorId: ownerId,
   });
@@ -446,7 +445,6 @@ describe('what the client is told it may do', () => {
     // first. This is what keeps the profile's unban control from being dead code.
     const second = await createClub(h.db, {
       name: 'Second Club',
-      sport: 'running',
       joinPolicy: 'open',
       creatorId: ownerId,
     });

@@ -158,7 +158,7 @@ the other behind a button at the bottom of a list.
 Chats  (every club chat and DM, newest first; chips: Unread | DMs | Clubs)
 ├─ New message        (person+: search people you share a club with → their profile)
 ├─ Add a club         (+: chooser)
-│  ├─ Create club     (name, sport, description, join policy)
+│  ├─ Create club     (name, description, join policy)
 │  └─ Join club       (search by name)
 ├─ Join by link       (the deep-link target; no typed-code screen exists)
 ├─ DM chat            ← a DM row opens HERE

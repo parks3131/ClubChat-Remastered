@@ -69,12 +69,6 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
 
 ## Known broken, or quietly wrong
 
-- [ ] **A club must still declare a `sport`, and nothing reads it.** Required on create, free
-      text, validated by nothing, displayed on the club profile - and it now asks a chess club
-      what sport it plays.
-      [ADR-0029](SPEC/decisions/0029-a-meetup-answers-where-when-and-what.md) removed the reason to
-      replace it with a club type and did not remove the column. Deleting it is one migration plus
-      the create form; what stops it being trivial is the profile screen showing it.
 - [ ] **The README's weekly-meetups screenshot predates the rename.** `docs/screenshots/
       ios-weekly-routine.jpg` shows the activity-type UI. The caption says so, which is honest but
       not a fix - it wants a new capture once the screen has been run on a device.

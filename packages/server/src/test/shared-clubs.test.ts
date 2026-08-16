@@ -71,7 +71,7 @@ async function as(actor: Actor, method: 'GET' | 'POST', url: string, payload?: u
 }
 
 async function makeClub(owner: Actor, name: string): Promise<string> {
-  const created = await as(owner, 'POST', '/clubs', { name, sport: 'running' });
+  const created = await as(owner, 'POST', '/clubs', { name });
   expect(created.status).toBe(201);
   return created.body.clubId as string;
 }

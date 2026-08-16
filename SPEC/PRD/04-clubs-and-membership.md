@@ -5,8 +5,15 @@ way in.
 
 **Behaviour rules**
 
-1. A club is created with a **name, a sport, an optional description, and a join policy**.
+1. A club is created with a **name, an optional description, and a join policy**.
    The creator becomes its Owner.
+
+   > **A sport was a fourth, required field until 2026-08-16.** Free text, validated by nothing
+   > and read by nothing, and by then it was asking a chess club what sport it plays.
+   > [ADR-0029](../decisions/0029-a-meetup-answers-where-when-and-what.md) removed the reason to
+   > keep it and named removing it as the follow-up. Nothing replaces it, which is the same
+   > argument that decision made: a club-agnostic product is one with no club-specific field, not
+   > one with a configurable one.
 2. **A new club is provisioned with its main chat and its Eboard space automatically** - no
    separate setup step - and the Owner is a member of both immediately.
 3. **`open` policy:** finding the club by name and tapping Join adds the user immediately.
@@ -108,7 +115,7 @@ way in.
 | Somebody is banned who was never a member | Allowed, and the one thing removal cannot express. Nothing is narrated, because nothing happened in the club |
 | Deleted club still open on another device | Reads fail and the user is returned to the clubs list |
 
-**Search.** Club search is by name, returns a safe projection (name, sport, member count, and
+**Search.** Club search is by name, returns a safe projection (name, member count, and
 the caller's own request status) for clubs the caller is **not** a member of, limited to a
 handful of results. Non-members must be able to find and join a club without being able to
 read anything inside it.

@@ -81,7 +81,7 @@ async function setup() {
   const ownerId = await makeUser('Owner');
   const memberId = await makeUser('Member');
   const outsiderId = await makeUser('Outsider');
-  const club = await createClub(h.db, { name: 'Hillside', sport: 'running', creatorId: ownerId });
+  const club = await createClub(h.db, { name: 'Hillside', creatorId: ownerId });
   await addMember(h.db, await ctxFor(ownerId), club.clubId, memberId);
   const eboard = await h.db
     .select()

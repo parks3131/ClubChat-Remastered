@@ -109,7 +109,6 @@ async function setup(): Promise<Fixture> {
 
   const club = await createClub(h.db, {
     name: 'Hillside Running Club',
-    sport: 'running',
     creatorId: ownerId,
   });
   await h.db.insert(clubMemberships).values([

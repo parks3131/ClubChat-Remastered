@@ -30,7 +30,6 @@ import type {
 export type ClubDetail = {
   id: string;
   name: string;
-  sport: string;
   description: string | null;
   /** The club's picture, as a media id. Null falls back to its initial. */
   image: string | null;
@@ -103,7 +102,6 @@ export type ClubRoster = {
 export type ClubSearchResult = {
   id: string;
   name: string;
-  sport: string;
   memberCount: number;
   joinPolicy: JoinPolicy;
   requestPending: boolean;
@@ -570,7 +568,6 @@ export type InboxPage = { rows: InboxRow[]; nextCursor: string | null };
 export type SharedClub = {
   clubId: string;
   name: string;
-  sport: string;
   /** The club's picture, as a media id, or null for the lettered fallback. */
   image: string | null;
 };

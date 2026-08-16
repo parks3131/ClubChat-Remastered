@@ -85,7 +85,6 @@ async function setup(): Promise<{ ownerId: string; channel: ChannelRef }> {
   const ownerId = await makeUser('SyncOwner');
   const created = await createClub(h.db, {
     name: `Club ${crypto.randomUUID().slice(0, 6)}`,
-    sport: 'running',
     creatorId: ownerId,
   });
   const channel = await getChannelRef(h.db, created.mainChannelId);
@@ -286,7 +285,6 @@ describe('a card removed while the client was away, because its object was delet
     const ownerId = await makeUser('CardSyncOwner');
     const created = await createClub(h.db, {
       name: `Club ${crypto.randomUUID().slice(0, 6)}`,
-      sport: 'running',
       creatorId: ownerId,
     });
     const channel = await getChannelRef(h.db, created.mainChannelId);

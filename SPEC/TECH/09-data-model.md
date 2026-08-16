@@ -47,14 +47,15 @@ authenticate as it. System messages are authored by it and never by `NULL`. See
 
 ### Clubs and membership
 ```
-clubs                 id, name, sport, description, avatar_media_id, join_policy,
+clubs                 id, name, description, avatar_media_id, join_policy,
                       invite_token, member_invite_token, invite_token_rotated_at,
                       created_at
                       UNIQUE (invite_token), UNIQUE (member_invite_token)
-                      -- `sport` is required, free text, validated by nothing and read
-                      -- by nothing - a leftover of the founding case that now asks a
-                      -- chess club what sport it plays. ADR-0029 removed the reason to
-                      -- replace it with a club type and did not remove it; see PRD/17.
+                      -- A `sport` column lived here until 2026-08-16: required, free
+                      -- text, validated by nothing and read by nothing, and by the end
+                      -- it asked a chess club what sport it plays. Dropped with nothing
+                      -- replacing it, which is ADR-0029's own argument applied to the
+                      -- field that decision left behind.
                       -- TWO links, and which one is redeemed is the whole decision
                       -- (ADR-0025): the admin token bypasses the join policy, the
                       -- member token obeys it. Independently minted, never derived

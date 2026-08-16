@@ -128,7 +128,6 @@ export async function seedClub(
     .insert(clubs)
     .values({
       name: `Test Club ${n}`,
-      sport: 'running',
       inviteToken: `tok-${ownerId}`,
       // The member link, distinct from the admin one - the whole of ADR-0025 is which string
       // was redeemed, so a fixture where they matched could not express the difference.

@@ -93,7 +93,6 @@ async function createClubAs(
 ): Promise<{ clubId: string; inviteToken: string; mainChannelId: string; eboardId: string }> {
   const created = await as(actor, 'POST', '/clubs', {
     name: `Club ${crypto.randomUUID().slice(0, 6)}`,
-    sport: 'running',
     ...overrides,
   });
   expect(created.status).toBe(201);

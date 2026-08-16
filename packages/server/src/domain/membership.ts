@@ -1021,7 +1021,6 @@ export async function readClubRoster(
 export type ClubDetail = {
   id: string;
   name: string;
-  sport: string;
   description: string | null;
   /** The club's picture, as a media id. Null falls back to its initial. */
   image: string | null;
@@ -1073,7 +1072,6 @@ export async function readClub(
   const rows = await db.execute<{
     id: string;
     name: string;
-    sport: string;
     description: string | null;
     image: string | null;
     join_policy: string;
@@ -1087,7 +1085,6 @@ export async function readClub(
   }>(sql`
     SELECT c.id::text AS id,
            c.name,
-           c.sport,
            c.description,
            c.image,
            c.join_policy::text AS join_policy,
@@ -1117,7 +1114,6 @@ export async function readClub(
     club: {
       id: row.id,
       name: row.name,
-      sport: row.sport,
       description: row.description,
       image: row.image,
       joinPolicy: row.join_policy as JoinPolicy,
@@ -1167,7 +1163,7 @@ export async function readClub(
  *
  * > **A safe projection, and only clubs the caller is NOT in.** Non-members must be able to
  * > find and join a club without being able to read anything inside it, so this returns the
- * > name, the sport, a member count and the caller's own request status - and nothing else. No
+ * > name, a member count and the caller's own request status - and nothing else. No
  * > description, no roster, no invite token, no channel id.
  *
  * Clubs the caller already belongs to are excluded rather than annotated. PRD/04's edge-case
@@ -1186,7 +1182,6 @@ export async function searchClubs(
   Array<{
     id: string;
     name: string;
-    sport: string;
     memberCount: number;
     joinPolicy: JoinPolicy;
     requestPending: boolean;
@@ -1202,14 +1197,12 @@ export async function searchClubs(
   const rows = await db.execute<{
     id: string;
     name: string;
-    sport: string;
     member_count: string;
     join_policy: string;
     request_pending: boolean;
   }>(sql`
     SELECT c.id::text AS id,
            c.name,
-           c.sport,
            (SELECT count(*) FROM club_memberships m WHERE m.club_id = c.id) AS member_count,
            c.join_policy::text AS join_policy,
            EXISTS (
@@ -1229,7 +1222,6 @@ export async function searchClubs(
   return rows.rows.map((row) => ({
     id: row.id,
     name: row.name,
-    sport: row.sport,
     memberCount: Number(row.member_count),
     joinPolicy: row.join_policy as JoinPolicy,
     requestPending: row.request_pending,

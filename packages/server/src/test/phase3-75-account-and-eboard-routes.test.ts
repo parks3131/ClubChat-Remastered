@@ -69,7 +69,6 @@ async function createClubAs(
 ): Promise<{ clubId: string; inviteToken: string }> {
   const created = await as(actor, 'POST', '/clubs', {
     name: `Club ${crypto.randomUUID().slice(0, 6)}`,
-    sport: 'running',
     ...overrides,
   });
   expect(created.status).toBe(201);
@@ -118,7 +117,6 @@ describe('club search', () => {
     const club = found.body.clubs[0];
     expect(club.id).toBe(clubId);
     expect(club.name).toBe(name);
-    expect(club.sport).toBe('running');
     expect(club.memberCount).toBe(1);
     expect(club.joinPolicy).toBe('open');
     expect(club.requestPending).toBe(false);
@@ -126,6 +124,9 @@ describe('club search', () => {
     expect(club).not.toHaveProperty('inviteToken');
     expect(club).not.toHaveProperty('description');
     expect(club).not.toHaveProperty('channelId');
+    // And `sport` is gone rather than emptied - this line asserted it was 'running' until
+    // 2026-08-16, which is the only place the column was ever read back in a test.
+    expect(club).not.toHaveProperty('sport');
   });
 
   it('excludes clubs the caller is already in', async () => {

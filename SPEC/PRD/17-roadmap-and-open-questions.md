@@ -365,11 +365,16 @@ this list on 2026-08-14 - it is an open question below, not a settled no.)*
   because [Weekly Meetups](08-weekly-meetups.md) rule 1 says the week is a real week and never a
   template. Answering yes also reopens [Overview](00-overview.md)'s recurring-events non-goal,
   whose stated reason was that this surface already covered the weekly case.
-- **Should a club still have a `sport`?** It is a required field on create, free text, validated by
-  nothing and read by nothing - a leftover of the founding case that now asks a chess club what
-  sport it plays. [ADR-0029](../decisions/0029-a-meetup-answers-where-when-and-what.md) removed the
-  reason to replace it with a club type and did not remove the column. Deleting it is the obvious
-  move; what stops it being obvious is that the club profile currently shows it.
+- ~~**Should a club still have a `sport`?**~~ **Settled 2026-08-16: no, and the column is gone.**
+  It was required on create, free text, validated by nothing, and by the end it asked a chess club
+  what sport it plays. Nothing replaces it - which is
+  [ADR-0029](../decisions/0029-a-meetup-answers-where-when-and-what.md)'s own argument applied to
+  the field that decision left behind: a club-agnostic product is one with no club-specific field,
+  not one with a configurable one. **The thing that made this look hard was wrong.** This entry said
+  "what stops it being obvious is that the club profile currently shows it", and the club profile
+  had stopped showing it at some point without anybody updating this line. The only two surfaces
+  that read it were a search result's subtitle and a shared-club row's subtitle, and both say more
+  without it.
 - **Nudge**, the admin-only bell that pushes one meetup to the club, is designed and unbuilt - see
   [Weekly Meetups](08-weekly-meetups.md). Three things decide whether it works rather than becoming
   the reason members turn push off: who the audience is, what stops it being tapped repeatedly by

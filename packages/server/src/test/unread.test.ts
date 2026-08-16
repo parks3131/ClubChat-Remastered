@@ -112,7 +112,7 @@ async function badge(actor: Actor): Promise<number> {
 async function clubWithEboard() {
   const owner = await signUp(`UnOwner${crypto.randomUUID().slice(0, 4)}`);
   const other = await signUp(`UnOther${crypto.randomUUID().slice(0, 4)}`);
-  const created = await as(owner, 'POST', '/clubs', { name: 'Unread FC', sport: 'running' });
+  const created = await as(owner, 'POST', '/clubs', { name: 'Unread FC' });
   expect(created.status).toBe(201);
   const clubId = created.body.clubId as string;
   const mainChannelId = created.body.mainChannelId as string;

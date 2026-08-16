@@ -42,7 +42,6 @@ export function registerClubRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   const CreateClubBody = z.object({
     name: z.string().min(1).max(120),
-    sport: z.string().min(1).max(60),
     description: z.string().max(2_000).nullish(),
     joinPolicy: JoinPolicy.default('open'),
   });

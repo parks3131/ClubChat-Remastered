@@ -98,7 +98,7 @@ async function setup(): Promise<Fixture> {
   const ownerId = await makeUser('Owner');
   const memberId = await makeUser('Member');
   const outsiderId = await makeUser('Outsider');
-  const club = await createClub(h.db, { name: 'Hillside', sport: 'running', creatorId: ownerId });
+  const club = await createClub(h.db, { name: 'Hillside', creatorId: ownerId });
   await addMember(h.db, await ctxFor(ownerId), club.clubId, memberId);
   const channel = await getChannelRef(h.db, club.mainChannelId);
   if (!channel) throw new Error('fixture channel missing');
@@ -393,7 +393,7 @@ describe('reacting takes the posting gate rather than the reading one', () => {
   it('refuses a blocked DM participant who CAN still see the message', async () => {
     const aliceId = await makeUser('Alice');
     const bobId = await makeUser('Bob');
-    const club = await createClub(h.db, { name: 'Trail', sport: 'trail', creatorId: aliceId });
+    const club = await createClub(h.db, { name: 'Trail', creatorId: aliceId });
     await addMember(h.db, await ctxFor(aliceId), club.clubId, bobId);
 
     const opened = await openDm(h.db, await ctxFor(aliceId), bobId);
@@ -424,7 +424,7 @@ describe('reacting takes the posting gate rather than the reading one', () => {
   it('lets both DM participants react while the thread is writable', async () => {
     const aliceId = await makeUser('Alice');
     const bobId = await makeUser('Bob');
-    const club = await createClub(h.db, { name: 'Trail', sport: 'trail', creatorId: aliceId });
+    const club = await createClub(h.db, { name: 'Trail', creatorId: aliceId });
     await addMember(h.db, await ctxFor(aliceId), club.clubId, bobId);
     const opened = await openDm(h.db, await ctxFor(aliceId), bobId);
     if (!opened.ok) throw new Error('dm fixture failed');

@@ -111,7 +111,7 @@ async function upload(
 
 async function setup() {
   const ownerId = await makeUser('Owner');
-  const club = await createClub(h.db, { name: 'Hillside', sport: 'running', creatorId: ownerId });
+  const club = await createClub(h.db, { name: 'Hillside', creatorId: ownerId });
   return { ownerId, channelId: club.mainChannelId };
 }
 

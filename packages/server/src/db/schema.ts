@@ -169,7 +169,6 @@ export const verifications = pgTable('verifications', {
 export const clubs = pgTable('clubs', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
-  sport: text('sport').notNull(),
   description: text('description'),
   /**
    * The club's picture, as a media id.

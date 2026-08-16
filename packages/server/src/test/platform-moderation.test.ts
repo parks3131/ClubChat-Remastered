@@ -234,7 +234,6 @@ async function reportedDm(): Promise<Scene> {
 
   const club = await createClub(h.db, {
     name: `Club ${crypto.randomUUID().slice(0, 6)}`,
-    sport: 'running',
     creatorId: alice.userId,
   });
   await addMember(h.db, await ctxFor(alice.userId), club.clubId, bob.userId);

@@ -85,7 +85,6 @@ async function setup(policy: 'open' | 'request' = 'open') {
   const ownerId = await makeUser('Owner');
   const club = await createClub(h.db, {
     name: 'Hillside Running Club',
-    sport: 'running',
     joinPolicy: policy,
     creatorId: ownerId,
   });
@@ -541,7 +540,7 @@ describe('editing the club', () => {
     const owner = await makeUser('EditOwner');
     const admin = await makeUser('EditAdmin');
     const member = await makeUser('EditMember');
-    const club = await createClub(h.db, { name: 'Before', sport: 'running', creatorId: owner });
+    const club = await createClub(h.db, { name: 'Before', creatorId: owner });
 
     await addMember(h.db, await loadAccessContext(h.db, owner), club.clubId, admin);
     await addMember(h.db, await loadAccessContext(h.db, owner), club.clubId, member);
@@ -573,7 +572,6 @@ describe('editing the club', () => {
     const owner = await makeUser('PatchOwner');
     const club = await createClub(h.db, {
       name: 'Patchy',
-      sport: 'running',
       description: 'the original',
       creatorId: owner,
     });

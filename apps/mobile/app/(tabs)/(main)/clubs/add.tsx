@@ -36,7 +36,7 @@ export default function AddClubScreen() {
         <Choice
           icon="add-circle"
           title="Create a club"
-          body="Name it, pick its sport, and you are its owner. Its chat and its Eboard space are made with it."
+          body="Name it, say who can join, and you are its owner. Its chat and its Eboard space are made with it."
           onPress={() => router.push('/clubs/create')}
         />
       </View>

@@ -1,11 +1,15 @@
 /**
  * Create a club - v1's "Build Your Squad".
  *
- * **All four of `PRD/04` rule 1's inputs, which is two more than this screen used to collect.**
+ * **All three of `PRD/04` rule 1's inputs, which is one more than this screen used to collect.**
  * It asked for a name and a sport and silently let the server default the join policy to `open`,
  * so every club created in the app was public and the description - a field the wire, the route
  * and the table all already carried - was unreachable from the product. The form was the only
  * missing link, which is why it reads as a redesign and is really a completion.
+ *
+ * **The sport field went on 2026-08-16**, with the column behind it. It was required, free text,
+ * validated by nothing and read by nothing, and it asked a chess club what sport it plays. See
+ * ADR-0029, which removed the reason to keep it and did not remove it.
  *
  * **The join policy is a pair of cards rather than a switch**, because the two options are not
  * more-and-less of one thing: one is "anybody walks in" and the other is "an admin decides", and
@@ -58,13 +62,12 @@ export default function CreateClubScreen() {
   const { client } = useSession();
 
   const [name, setName] = useState('');
-  const [sport, setSport] = useState('');
   const [description, setDescription] = useState('');
   const [joinPolicy, setJoinPolicy] = useState<JoinPolicy>('request');
   const [failed, setFailed] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const canSubmit = name.trim().length > 0 && sport.trim().length > 0;
+  const canSubmit = name.trim().length > 0;
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -73,7 +76,6 @@ export default function CreateClubScreen() {
     try {
       const created = await clubApi.create({
         name: name.trim(),
-        sport: sport.trim(),
         // Omitted rather than sent empty: the column is nullable and "" is not a description.
         ...(description.trim().length > 0 ? { description: description.trim() } : {}),
         joinPolicy,
@@ -109,16 +111,6 @@ export default function CreateClubScreen() {
           value={name}
           onChangeText={setName}
           accessibilityLabel="Club name"
-        />
-
-        <Text style={styles.label}>Sport</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="e.g. Running, Swimming"
-          placeholderTextColor={color.textSecondary}
-          value={sport}
-          onChangeText={setSport}
-          accessibilityLabel="Sport"
         />
 
         <Text style={styles.label}>Description</Text>

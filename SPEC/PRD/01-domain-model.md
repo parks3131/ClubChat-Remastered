@@ -72,7 +72,7 @@ abstraction has been broken.
 | Entity | Key facts |
 |---|---|
 | **User / profile** | Full name, avatar, bio, city, date of birth, school. Self-editable only. Created automatically on signup. |
-| **Club** | Name, sport, description, avatar, join policy (`open` \| `request`), invite token. Exactly one Owner at all times. The token is **only ever surfaced as a share link** and is never displayed as something a person types. *(`sport` is a leftover of the founding case and is now a required field a chess club has to answer - see [Roadmap](17-roadmap-and-open-questions.md).)* |
+| **Club** | Name, description, avatar, join policy (`open` \| `request`), invite token. Exactly one Owner at all times. The token is **only ever surfaced as a share link** and is never displayed as something a person types. *(A `sport` was here until 2026-08-16, a leftover of the founding case that had reached the point of asking a chess club what sport it plays. Removed with nothing replacing it, per [ADR-0029](../decisions/0029-a-meetup-answers-where-when-and-what.md).)* |
 | **ClubMembership** | Role: `owner` \| `admin` \| `member`. Per club. **Exactly one owner per club, enforced at the data layer, not in the UI.** |
 | **Channel** | Belongs to a club **except in the `dm` scope**, where it belongs to a pair of users and carries no club at all. Exactly one main channel per club, one per race, one per Eboard, one per conversation. |
 | **DmConversation** | A pair of users, stored in canonical order so one pair cannot produce two threads. Exactly one thread per pair of people, ever - not one per shared club. |

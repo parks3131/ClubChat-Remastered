@@ -148,7 +148,7 @@ async function setup(): Promise<Fixture> {
   const bobId = await makeUser('Bob');
   const strangerId = await makeUser('Stranger');
 
-  const club = await createClub(h.db, { name: 'Hillside', sport: 'running', creatorId: ownerId });
+  const club = await createClub(h.db, { name: 'Hillside', creatorId: ownerId });
   await addMember(h.db, await ctxFor(ownerId), club.clubId, aliceId);
   await addMember(h.db, await ctxFor(ownerId), club.clubId, bobId);
 
@@ -225,7 +225,6 @@ describe('one thread per pair of people, ever', () => {
     // channels.club_id is nullable for this scope at all.
     const second = await createClub(h.db, {
       name: 'Trail Club',
-      sport: 'trail',
       creatorId: f.aliceId,
     });
     await addMember(h.db, await ctxFor(f.aliceId), second.clubId, f.bobId);
@@ -946,7 +945,7 @@ describe('the race scope reaches the machinery Phase 2 forgot to wire it into', 
     const ownerId = await makeUser('RaceOwner');
     const rosterId = await makeUser('OnRoster');
     const managerId = await makeUser('AdminOffRoster');
-    const club = await createClub(h.db, { name: 'Track', sport: 'running', creatorId: ownerId });
+    const club = await createClub(h.db, { name: 'Track', creatorId: ownerId });
     await addMember(h.db, await ctxFor(ownerId), club.clubId, rosterId);
     await addMember(h.db, await ctxFor(ownerId), club.clubId, managerId);
     // A club admin who did NOT create the race, so they manage every race in the club and hold
@@ -1026,7 +1025,7 @@ describe('a chat header wears its own face, never the club\'s', () => {
    */
   it('gives a race chat the race picture and an Eboard chat the space picture', async () => {
     const ownerId = await makeUser('FaceOwner');
-    const club = await createClub(h.db, { name: 'Faces', sport: 'running', creatorId: ownerId });
+    const club = await createClub(h.db, { name: 'Faces', creatorId: ownerId });
 
     const { createRace, updateRace } = await import('../domain/races.ts');
     const { updateEboard } = await import('../domain/eboard.ts');
@@ -1075,7 +1074,7 @@ describe('a chat header wears its own face, never the club\'s', () => {
 
   it('falls back to no picture rather than the club\'s when a race has none', async () => {
     const ownerId = await makeUser('NoFaceOwner');
-    const club = await createClub(h.db, { name: 'Fallback', sport: 'running', creatorId: ownerId });
+    const club = await createClub(h.db, { name: 'Fallback', creatorId: ownerId });
     await h.db.execute(sql`UPDATE clubs SET image = ${crypto.randomUUID()} WHERE id = ${club.clubId}`);
 
     const { createRace } = await import('../domain/races.ts');

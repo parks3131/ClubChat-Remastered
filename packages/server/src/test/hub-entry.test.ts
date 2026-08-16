@@ -98,7 +98,7 @@ describe('a race opens directly only for somebody on its roster', () => {
     const owner = await signUp(`HubOwner${crypto.randomUUID().slice(0, 4)}`);
     const other = await signUp(`HubAdmin${crypto.randomUUID().slice(0, 4)}`);
 
-    const club = await as(owner, 'POST', '/clubs', { name: 'Hub FC', sport: 'running' });
+    const club = await as(owner, 'POST', '/clubs', { name: 'Hub FC' });
     expect(club.status).toBe(201);
     const clubId = club.body.clubId as string;
     // A club admin, and deliberately never added to the race roster: management authority is
@@ -136,7 +136,7 @@ describe('the Eboard opens directly only for a member of the space', () => {
     const owner = await signUp(`HubEbOwner${crypto.randomUUID().slice(0, 4)}`);
     const member = await signUp(`HubEbMember${crypto.randomUUID().slice(0, 4)}`);
 
-    const club = await as(owner, 'POST', '/clubs', { name: 'Board FC', sport: 'running' });
+    const club = await as(owner, 'POST', '/clubs', { name: 'Board FC' });
     const clubId = club.body.clubId as string;
     // An ordinary member: PRD/10 rule 4 gives them no visibility of the space at all.
     await h.db.insert(clubMemberships).values({ clubId, userId: member.userId, role: 'member' });
@@ -159,7 +159,7 @@ describe('the Eboard opens directly only for a member of the space', () => {
 
   it('withholds it from a club admin who has left the space', async () => {
     const owner = await signUp(`HubLeftOwner${crypto.randomUUID().slice(0, 4)}`);
-    const club = await as(owner, 'POST', '/clubs', { name: 'Left FC', sport: 'running' });
+    const club = await as(owner, 'POST', '/clubs', { name: 'Left FC' });
     const clubId = club.body.clubId as string;
     const before = (await as(owner, 'GET', `/clubs/${clubId}`)).body.club;
     expect(before.eboardChannelId).not.toBeNull();

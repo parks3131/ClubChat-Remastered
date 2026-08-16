@@ -10,9 +10,10 @@
  *
  * **The search says "by club name" rather than v1's "by club name or sport".** The server matches
  * `c.name` and nothing else, and a placeholder that promises sport search is a promise the query
- * does not keep.
+ * does not keep. Since 2026-08-16 there is no sport to search by at all: the column is gone, so
+ * this is the only wording that was ever going to survive.
  *
- * The results are a safe projection - name, sport, member count, and the caller's own request
+ * The results are a safe projection - name, member count, and the caller's own request
  * status. A non-member finds a club without being able to read anything inside it, which is why
  * there is no preview of its chat or roster here (`PRD/04`).
  */
@@ -149,8 +150,6 @@ export default function JoinClubScreen() {
               <View style={styles.resultText}>
                 <Text style={styles.resultName}>{club.name}</Text>
                 <Text style={styles.resultMeta}>
-                  {club.sport}
-                  {'  ·  '}
                   {club.memberCount} member{club.memberCount === 1 ? '' : 's'}
                 </Text>
               </View>

@@ -239,6 +239,13 @@
       "when": 1786821176843,
       "tag": "0033_meetup_name_replaces_place",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1786885521091,
+      "tag": "0034_drop_club_sport",
+      "breakpoints": true
     }
   ]
 }

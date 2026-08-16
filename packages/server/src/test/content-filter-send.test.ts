@@ -90,7 +90,6 @@ async function club() {
   const member = await signUp(`CfMember${crypto.randomUUID().slice(0, 4)}`);
   const created = await as(owner, 'POST', '/clubs', {
     name: `Club ${crypto.randomUUID().slice(0, 6)}`,
-    sport: 'running',
   });
   expect(created.status).toBe(201);
   const clubId = created.body.clubId as string;

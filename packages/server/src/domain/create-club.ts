@@ -24,7 +24,6 @@ import {
 
 export type CreateClubInput = {
   name: string;
-  sport: string;
   description?: string | null | undefined;
   joinPolicy?: JoinPolicy | undefined;
   creatorId: string;
@@ -59,7 +58,6 @@ export async function createClub(db: Db, input: CreateClubInput): Promise<Create
       .insert(clubs)
       .values({
         name: input.name,
-        sport: input.sport,
         description: input.description ?? null,
         joinPolicy: input.joinPolicy ?? 'open',
         inviteToken,

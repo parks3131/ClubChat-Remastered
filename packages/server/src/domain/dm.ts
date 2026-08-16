@@ -707,14 +707,13 @@ export async function sharedClubs(
   db: Db,
   ctx: AccessContext,
   otherUserId: string,
-): Promise<Array<{ clubId: string; name: string; sport: string; image: string | null }>> {
+): Promise<Array<{ clubId: string; name: string; image: string | null }>> {
   const rows = await db.execute<{
     id: string;
     name: string;
-    sport: string;
     image: string | null;
   }>(sql`
-    SELECT cl.id::text AS id, cl.name, cl.sport, cl.image
+    SELECT cl.id::text AS id, cl.name, cl.image
       FROM clubs cl
       JOIN club_memberships mine ON mine.club_id = cl.id AND mine.user_id = ${ctx.userId}
       JOIN club_memberships theirs ON theirs.club_id = cl.id AND theirs.user_id = ${otherUserId}
@@ -724,7 +723,6 @@ export async function sharedClubs(
   return rows.rows.map((row) => ({
     clubId: row.id,
     name: row.name,
-    sport: row.sport,
     image: row.image,
   }));
 }

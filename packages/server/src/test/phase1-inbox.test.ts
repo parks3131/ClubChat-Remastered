@@ -53,7 +53,6 @@ async function setup() {
   const memberId = await makeUser('Member');
   const club = await createClub(h.db, {
     name: 'Hillside Running Club',
-    sport: 'running',
     creatorId: ownerId,
   });
   await h.db
@@ -155,7 +154,6 @@ describe('the two clearing exceptions', () => {
     const f = await setup();
     const other = await createClub(h.db, {
       name: 'Other Club',
-      sport: 'swimming',
       creatorId: f.ownerId,
     });
     await pendingJoinRequest(f.clubId, f.ownerId, 20);

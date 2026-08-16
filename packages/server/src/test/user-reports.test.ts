@@ -134,7 +134,6 @@ async function scene(): Promise<Scene> {
 
   const club = await createClub(h.db, {
     name: `Club ${crypto.randomUUID().slice(0, 6)}`,
-    sport: 'running',
     creatorId: olivia.userId,
   });
   await addMember(h.db, await ctxFor(olivia.userId), club.clubId, alice.userId);

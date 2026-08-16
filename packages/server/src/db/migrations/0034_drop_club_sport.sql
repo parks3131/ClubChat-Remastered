@@ -1,0 +1,17 @@
+-- A club stops declaring a sport.
+--
+-- It was required on create, free text, validated by nothing and read by nothing that matters:
+-- a search result's subtitle and a shared-club row's subtitle, both of which say more without it.
+-- It is a leftover of the founding case, and it had reached the point of asking a chess club what
+-- sport it plays.
+--
+-- ADR-0029 deleted the per-club activity-type catalog and recorded this column as the follow-up
+-- in its own words: "`clubs.sport` is still unvalidated free text that nothing reads... It should
+-- go." PRD/00 already says the product works as a template for any club rather than any sport,
+-- and this is the last field that disagreed with that sentence.
+--
+-- DROP rather than deprecate. The data is one unvalidated word per club, entered because a form
+-- refused to submit without it, and there is nothing to migrate it into: no club type replaces
+-- it, deliberately, because the whole argument of ADR-0029 is that having no such field is
+-- stronger than having a configurable one.
+ALTER TABLE "clubs" DROP COLUMN "sport";

@@ -174,7 +174,6 @@ describe('the read frame the app actually sends', () => {
 
     const club = await createClub(db, {
       name: 'Read Frame Club',
-      sport: 'running',
       creatorId: alice.userId,
     });
     await addMember(db, await loadAccessContext(db, alice.userId), club.clubId, bob.userId);
@@ -237,7 +236,6 @@ describe('the read frame the app actually sends', () => {
     const alice = await signUp('RepairAlice');
     const club = await createClub(db, {
       name: 'Repair Club',
-      sport: 'running',
       creatorId: alice.userId,
     });
 
@@ -347,7 +345,6 @@ describe('a frame sent while the handshake is in flight', () => {
     const founder = await signUp('ColdOpen');
     const club = await createClub(db, {
       name: 'Cold Open Club',
-      sport: 'running',
       creatorId: founder.userId,
     });
 
@@ -415,7 +412,6 @@ describe('a frame sent while the handshake is in flight', () => {
     const founder = await signUp('ColdOpenRaw');
     const club = await createClub(db, {
       name: 'Cold Open Raw Club',
-      sport: 'running',
       creatorId: founder.userId,
     });
 
@@ -459,7 +455,6 @@ describe('Phase 0 exit drill', () => {
 
     const club = await createClub(db, {
       name: 'Gateway Drill Running Club',
-      sport: 'running',
       creatorId: alice.userId,
     });
     await db.insert(clubMemberships).values({

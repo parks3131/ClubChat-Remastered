@@ -75,7 +75,7 @@ The bootstrap sequences [Server event catalogue](12-server-event-catalogue.md) c
 handler**, not a chain of triggers firing each other:
 
 ```
-createClub(name, sport, policy, creator):
+createClub(name, policy, creator):
   BEGIN
     club     ← insert clubs
              ← insert club_memberships (creator, role='owner')

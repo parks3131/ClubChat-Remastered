@@ -69,14 +69,14 @@ type Fixture = { channel: ChannelRef; second: ChannelRef; ownerId: string; membe
 async function setup(): Promise<Fixture> {
   const ownerId = await makeUser('Owner');
   const memberId = await makeUser('Member');
-  const club = await createClub(h.db, { name: 'Hillside', sport: 'running', creatorId: ownerId });
+  const club = await createClub(h.db, { name: 'Hillside', creatorId: ownerId });
   await addMember(h.db, await ctxFor(ownerId), club.clubId, memberId);
   const channel = await getChannelRef(h.db, club.mainChannelId);
 
   // A second club, for the cross-channel case. Two channels the same person can reach is the
   // interesting shape: authorization would let them post in both, so only the reference itself
   // can stop a quote crossing between them.
-  const other = await createClub(h.db, { name: 'Riverside', sport: 'running', creatorId: ownerId });
+  const other = await createClub(h.db, { name: 'Riverside', creatorId: ownerId });
   const second = await getChannelRef(h.db, other.mainChannelId);
   if (!channel || !second) throw new Error('fixture channel missing');
   return { channel, second, ownerId, memberId };

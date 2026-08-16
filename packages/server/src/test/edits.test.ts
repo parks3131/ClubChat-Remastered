@@ -79,7 +79,7 @@ async function setup(): Promise<Fixture> {
   const ownerId = await makeUser('Owner');
   const memberId = await makeUser('Member');
   const adminId = await makeUser('Admin');
-  const club = await createClub(h.db, { name: 'Hillside', sport: 'running', creatorId: ownerId });
+  const club = await createClub(h.db, { name: 'Hillside', creatorId: ownerId });
   await addMember(h.db, await ctxFor(ownerId), club.clubId, memberId);
   await addMember(h.db, await ctxFor(ownerId), club.clubId, adminId);
   await changeRole(h.db, await ctxFor(ownerId), club.clubId, adminId, 'admin');

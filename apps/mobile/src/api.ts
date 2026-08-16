@@ -262,7 +262,7 @@ const query = (params: Record<string, string | number | undefined>): string => {
 export const clubApi = {
   mine: () => apiFetch<{ clubs: Club[] }>('/clubs'),
 
-  create: (body: { name: string; sport: string; description?: string; joinPolicy?: JoinPolicy }) =>
+  create: (body: { name: string; description?: string; joinPolicy?: JoinPolicy }) =>
     apiFetch<{ clubId: string; mainChannelId: string; eboardId: string; inviteToken: string }>(
       '/clubs',
       { method: 'POST', body },
