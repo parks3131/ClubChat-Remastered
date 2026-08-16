@@ -109,8 +109,12 @@ Rules carried from [Notifications](../PRD/12-notifications.md) and enforced in t
 - An ordinary message pushes everyone else who can read that channel, and writes no row. Which
   message types count is a list (`text`, `photo`, `document`) rather than a condition, so the
   cards - which have already pushed as `poll_created` and friends - cannot ring a second time.
-- A member is buzzed at most once per message: the ordinary-message audience subtracts anybody
-  mentioned, who gets the more specific "X mentioned you" instead.
+- A member is buzzed at most once per message: the ordinary-message **and announcement** push
+  audiences both subtract anybody mentioned, who gets the more specific "X mentioned you" instead.
+  The subtraction is on the push list only - an announcement still writes its row to the mentioned
+  member, who is entitled to both rows and to one buzz. *(The announcement half was missing until
+  2026-08-16; the two branches were correct and identical apart from this and had never been read
+  side by side.)*
 
 **Every type that writes a row also pushes, and that is enforced by one function.** Writing the
 row and scheduling the push are a single act, `notifyAndPush` - because for most of this

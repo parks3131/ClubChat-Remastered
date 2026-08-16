@@ -66,8 +66,17 @@ unread chat is the computed per-channel row, for a DM and for a club alike. See
 
 **A member is buzzed at most once per message.** A message that mentions somebody sends them the
 mention and not also the ordinary chat push, since "X mentioned you" is the better of the two
-lines. *(An announcement that also mentions somebody is the one remaining case that buzzes twice
-- see [PRD/17](17-roadmap-and-open-questions.md).)*
+lines. **The same holds for an announcement that names somebody**: they hear the mention, and the
+announcement reaches everybody else.
+
+> **That last sentence was false until 2026-08-16**, and this document said so in a parenthesis
+> that pointed at the roadmap. The rule is one rule; it was applied in the ordinary-message
+> audience and not in the announcement one, which is what one phone buzzing twice for one sentence
+> looked like from the outside.
+
+**The suppression is on the buzz and never on the rows.** A member named in an announcement gets
+**both** inbox rows: one says the club was told something, the other says they were named in it,
+and they clear against different things. Only the phone is deduplicated.
 
 **Every row in the catalogue above also reaches the phone.** A notification is not "an inbox row
 that might also push" - the two travel together, and the only type that deliberately stays silent

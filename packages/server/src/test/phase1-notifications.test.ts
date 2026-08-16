@@ -1070,10 +1070,32 @@ describe('mentions', () => {
     );
   });
 
-  it('keeps an announcement and a mention in the same message from colliding', async () => {
-    // Both notifications derive their idempotency key from the same outbox event, so
-    // without an offset one would silently overwrite the other.
+  it('gives an announced mention two rows and one buzz', async () => {
+    /*
+     * The two halves of the same message pull in opposite directions, and both are right.
+     *
+     *  - **Two rows.** Both notifications derive their idempotency key from the same outbox
+     *    event, so without an offset one would silently overwrite the other. The member is
+     *    entitled to both: one says the club was told something, the other says they were named
+     *    in it, and they clear against different things.
+     *  - **One buzz.** One phone, one message.
+     *
+     * > **The buzz half was wrong until 2026-08-16.** The announcement push went to the whole
+     * > channel audience, so a member named in an announcement got "Admin: kit order closes
+     * > Friday" and "Admin mentioned you" seconds apart. The identical rule was already applied
+     * > correctly one branch down, in the ordinary-message audience, and the two had never been
+     * > read side by side. This test asserted the rows and stopped, which is why nothing caught
+     * > it - the assertion that was missing is the one that had to be added, not fixed.
+     */
     const f = await setupClub();
+    for (const userId of [f.ownerId, f.memberId]) {
+      await registerDevice(h.db, {
+        userId,
+        pushToken: `ExponentPushToken[a-${userId.slice(0, 8)}]`,
+        platform: 'ios',
+      });
+    }
+
     const ctx = await loadAccessContext(h.db, f.adminId);
     const channel = await getChannelRef(h.db, f.channelId);
     await sendMessage(h.db, ctx, channel!, {
@@ -1094,6 +1116,20 @@ describe('mentions', () => {
       .from(notifications)
       .where(eq(notifications.recipientId, f.memberId));
     expect(forMember.map((r) => r.type).sort()).toEqual(['announcement', 'mentioned']);
+
+    const memberToken = `ExponentPushToken[a-${f.memberId.slice(0, 8)}]`;
+    const ownerToken = `ExponentPushToken[a-${f.ownerId.slice(0, 8)}]`;
+
+    expect(
+      push.sent.filter((m) => m.token === memberToken).map((m) => m.data['type']),
+      'the mentioned member was buzzed for the announcement as well',
+    ).toEqual(['mentioned']);
+
+    // And the subtraction took only the named: everybody else still hears the announcement,
+    // which is the way a fix like this goes wrong in the other direction.
+    expect(push.sent.filter((m) => m.token === ownerToken).map((m) => m.data['type'])).toEqual([
+      'announcement',
+    ]);
   });
 
   /**

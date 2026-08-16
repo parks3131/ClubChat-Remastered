@@ -296,9 +296,15 @@ function previewForPush(payload: Record<string, unknown>, type: string): string 
  * > this replaces does not have, and the founder found it by testing push on a real phone and
  * > receiving nothing. ADR-0032 records the reversal and what it costs.
  *
- * **A member is buzzed at most once per message**, which is why the group-chat branch subtracts
- * the mentioned: they get the more specific "mentioned you" push instead, and two buzzes for one
- * message is the failure this ordering exists to avoid.
+ * **A member is buzzed at most once per message**, which is why the group-chat and announcement
+ * branches both subtract the mentioned: they get the more specific "mentioned you" push instead,
+ * and two buzzes for one message is the failure this ordering exists to avoid.
+ *
+ * **The subtraction is on the push and never on the rows.** A member who is named in an
+ * announcement is entitled to both inbox rows - one says the club was told something, the other
+ * says they were named in it, and they clear against different things. It is only the phone that
+ * must not buzz twice, so the two lists are computed separately rather than one being derived
+ * from the other.
  */
 const onMessageCreated: EffectHandler = async (event, deps) => {
   const channelId = String(event.payload['channelId'] ?? event.partitionKey);
@@ -340,6 +346,14 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
   const actorName = await displayName(deps.db, senderId);
   const preview = previewForPush(event.payload, type);
 
+  /*
+   * Everybody who is going to be told by name, and therefore must not also be told generically.
+   *
+   * Hoisted out of the group-chat branch on 2026-08-16, when it turned out the announcement
+   * branch needed it too and had never had it.
+   */
+  const named = new Set(mentioned);
+
   if (isAnnouncement) {
     const recipients = await resolveAudience(deps.db, {
       type: 'announcement',
@@ -372,6 +386,21 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
       created,
     });
 
+    /*
+     * The rows went to everybody; the buzz skips whoever the mention branch is about to buzz.
+     *
+     * > **This pushed to `recipients` until 2026-08-16, so an announcement that also named
+     * > somebody buzzed that person's phone twice** - "Riley: kit order closes Friday" and
+     * > "Riley mentioned you", one phone, one message. The rule was already applied correctly one
+     * > branch down, in the ordinary-message audience, and the two had simply never been read
+     * > side by side. It predates per-message push and was made visible by it, because before
+     * > that the second buzz was the only buzz.
+     *
+     * An announcement that names everybody in the room leaves this empty, and `dispatchPush`
+     * returns without sending rather than treating an empty list as "everyone".
+     */
+    const buzzed = recipients.filter((userId) => !named.has(userId));
+
     // Deferred, then the cursor is re-read. Scheduling happens regardless of `created`,
     // because the push ledger - not the notification insert - is what makes the buzz
     // idempotent, and a redelivery after a crash between the two must still push.
@@ -380,7 +409,7 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
         outboxEventId: notificationKey(event.id, 0),
         type: 'announcement',
         params,
-        recipients,
+        recipients: buzzed,
         channelId,
         seq,
       });
@@ -486,7 +515,6 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
      * named in a message would otherwise feel one phone buzz twice for one sentence and read
      * the weaker of the two lines second.
      */
-    const named = new Set(mentioned);
     const recipients = (
       await resolveAudience(deps.db, {
         type: 'chat_message',
