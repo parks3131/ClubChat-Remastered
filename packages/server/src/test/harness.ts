@@ -6,28 +6,20 @@
  * because a dev database accumulates real usage data between sessions and is not
  * fixtures. A container is disposable by construction.
  *
- * Running the real migrations here rather than a hand-written CREATE TABLE is the
- * point: these tests exercise the actual constraints, so a migration that fails to
- * carry an invariant fails the suite rather than passing against a convenient
- * schema.
+ * Running the real migrations rather than a hand-written CREATE TABLE is the point:
+ * these tests exercise the actual constraints, so a migration that fails to carry an
+ * invariant fails the suite rather than passing against a convenient schema. They now
+ * run once per RUN rather than once per file - see `global-setup.ts` - and the schema
+ * a file gets is a copy of that one.
  */
 
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers';
-import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
+import { inject } from 'vitest';
 import type pg from 'pg';
 import { accessContextOf, type AccessContext } from '../policy/context.ts';
 import { createDb, createPool, type Db } from '../db/client.ts';
 import { channels, clubMemberships, clubs, users } from '../db/schema.ts';
-
-const migrationsFolder = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '..',
-  'db',
-  'migrations',
-);
+import { CONTAINER_STARTUP_TIMEOUT_MS, TEMPLATE_DATABASE, withDatabase } from './containers.ts';
 
 export type TestDb = {
   db: Db;
@@ -36,42 +28,47 @@ export type TestDb = {
 };
 
 /**
- * How long to wait for the container's WAIT STRATEGY, which is not the timeout that was failing.
+ * Distinct within a worker, which is all it has to be.
  *
- * > **Recorded because it was diagnosed wrong first.** The suite kept failing with
- * > `Timed out after 10000ms while waiting for container ports to be bound to the host`, on a
- * > different file each run. Raising this looked like the fix and is inert against that error:
- * > testcontainers binds ports in `inspectContainerUntilPortsExposed`, whose timeout is a
- * > **hardcoded 10 seconds** taken from a default parameter and never passed from here.
- * > `withStartupTimeout` governs the wait strategy that runs afterwards - a different clock.
- *
- * The real cause is measured rather than assumed: on this machine Docker takes **~4.3 seconds**
- * to bind a port for a single container on an otherwise quiet system, against that 10 second
- * ceiling. Two dozen container starts per run, on a machine also hosting the dev stack, and some
- * of them cross it. `fileParallelism: false` was already set, so this was never about test
- * concurrency either.
- *
- * This value is kept because bounding the wait strategy is still correct; it is simply not the
- * flake. See `SPEC/PRD/17` for the standing fix - one container for the suite instead of one per
- * file.
+ * The pid is in the name because `fileParallelism` is a configuration setting rather than a law:
+ * turn it on and two workers allocate from two counters that both start at one.
  */
-const CONTAINER_STARTUP_TIMEOUT_MS = 120_000;
+let databaseCounter = 0;
 
+/**
+ * A database of this file's own, copied from the migrated template.
+ *
+ * > **This started a container of its own until 2026-08-16**, which is what made the suite start
+ * > 36 postmasters per run and lose one to Docker's port-bind ceiling every so often. The
+ * > container moved to `global-setup.ts`; a file's isolation did not change, because a database
+ * > per file isolates exactly what a container per file did - no shared channel row, sequence or
+ * > cursor - and the postmaster was never the part being isolated.
+ *
+ * The signature is deliberately unchanged, so no test file knew about this.
+ *
+ * **The database is not dropped on `stop`.** The container goes at the end of the run and takes
+ * every copy with it, and a drop would have to survive a hung file to be worth anything - which
+ * is exactly the case where `afterAll` does not run.
+ */
 export async function startTestDb(): Promise<TestDb> {
-  const container: StartedPostgreSqlContainer = await new PostgreSqlContainer('postgres:17-alpine')
-    .withStartupTimeout(CONTAINER_STARTUP_TIMEOUT_MS)
-    .start();
+  const adminUri = inject('pgAdminUri');
+  databaseCounter += 1;
+  const database = `clubchat_test_${process.pid}_${databaseCounter}`;
 
-  const pool = createPool(container.getConnectionUri());
-  const db = createDb(pool);
-  await migrate(db, { migrationsFolder });
+  const admin = createPool(adminUri);
+  try {
+    await admin.query(`CREATE DATABASE "${database}" TEMPLATE "${TEMPLATE_DATABASE}"`);
+  } finally {
+    await admin.end();
+  }
+
+  const pool = createPool(withDatabase(adminUri, database));
 
   return {
-    db,
+    db: createDb(pool),
     pool,
     stop: async () => {
       await pool.end();
-      await container.stop();
     },
   };
 }

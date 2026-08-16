@@ -88,7 +88,19 @@ designed in.
     watermark rather than rows *added* - and it is a design change to the sync contract rather
     than a patch, which is why it is recorded here rather than fixed in passing. Note the shape:
     every automated check passes, because each half is individually correct.
-15. **The test suite starts one Postgres container per file**, twenty-seven of them per run, and
+15. ~~**The test suite starts one Postgres container per file.**~~ **Done 2026-08-16**, as the
+    entry asked: one container for the suite, a database per file. A `globalSetup` starts the
+    postmaster and replays the migrations once into a template database; `startTestDb` issues
+    `CREATE DATABASE ... TEMPLATE` and hands back the same `TestDb` it always did, so **no test
+    file changed**. 36 container starts became 1 and 36 migration replays became 1; the suite went
+    from 118s to 72s locally, and the flake's cause is gone rather than widened. A file's
+    isolation is unchanged, because a database per file isolates exactly what a container per file
+    did - the postmaster was never the part being isolated. `fileParallelism` stays off: the reason
+    it was set (files sharing a container must not race on the same channel row) has gone, but
+    turning it on is a change with its own failure modes and belongs in its own pass. Original text
+    follows.
+
+    **The test suite starts one Postgres container per file**, twenty-seven of them per run, and
     intermittently fails one with `Timed out after 10000ms while waiting for container ports to be
     bound to the host`. **Measured on 2026-08-03:** Docker binds a port in ~4.3s on this machine
     with nothing else running, against a ceiling that is a **hardcoded default parameter** inside

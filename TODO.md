@@ -69,15 +69,6 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
 
 ## Known broken, or quietly wrong
 
-- [ ] **The testcontainer flake is real, and it has now been seen on a laptop.** `test/harness.ts`
-      records a 10-second ceiling on binding a container's port, and the suite starts one Postgres
-      per file. On 2026-08-15 one `npm test` run reported **1 file failed, 20 tests skipped** with
-      three clean runs either side of it - the shape of a container that never bound rather than an
-      assertion that failed. The machine was busy: three dev stacks and two agents. That makes it
-      more likely on CI, not less. The standing fix is already written down in
-      [`PRD/17`](SPEC/PRD/17-roadmap-and-open-questions.md): **one container for the suite instead
-      of one per file. Do that rather than raising the timeout** - and note this is now a known
-      flake rather than a predicted one, so `AGENTS.md` standing instruction 6 applies to it.
 - [ ] **A club must still declare a `sport`, and nothing reads it.** Required on create, free
       text, validated by nothing, displayed on the club profile - and it now asks a chess club
       what sport it plays.
