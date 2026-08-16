@@ -42,14 +42,35 @@ const files = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' })
 
 const readFile = (await import('node:fs/promises')).readFile;
 
+/**
+ * Git's own heuristic: a NUL byte near the start means binary.
+ *
+ * > **This replaced a `try`/`catch` that could never fire.** The old code read every file with
+ * > `readFile(file, 'utf8')` and skipped it if that threw, with a comment saying "binary or
+ * > unreadable, e.g. the generated diagram assets". `readFile` does not throw on binary - it
+ * > substitutes U+FFFD and hands back a string - so nothing was ever skipped, and the tracked
+ * > images were only passing because none of them happened to contain the bytes `E2 80 94`.
+ * > On 2026-08-16 a screenshot did, and a PNG was reported as an em dash violation with a line
+ * > of mojibake for context.
+ *
+ * 8000 bytes is the window git uses, and the same reasoning applies: a text file does not carry
+ * a NUL, and a binary format puts one in its header almost immediately.
+ */
+function looksBinary(buffer) {
+  return buffer.subarray(0, 8000).includes(0);
+}
+
 let violations = 0;
 for (const file of files) {
-  let text;
+  let buffer;
   try {
-    text = await readFile(file, 'utf8');
+    buffer = await readFile(file);
   } catch {
-    continue; // binary or unreadable, e.g. the generated diagram assets
+    continue; // unreadable, e.g. a symlink to somewhere that is not checked out
   }
+  if (looksBinary(buffer)) continue;
+
+  const text = buffer.toString('utf8');
   if (!text.includes(EM_DASH)) continue;
 
   const lines = text.split('\n');
