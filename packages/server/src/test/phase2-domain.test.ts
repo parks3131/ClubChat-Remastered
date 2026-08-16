@@ -980,12 +980,28 @@ describe('chat cards', () => {
 const todayKey = () => new Date().toISOString().slice(0, 10);
 const tomorrow = () => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
 
-/** The Monday of the week containing today, so a week read covers today and tomorrow. */
+/** The Monday of the week containing today, so a week read covers today. */
 function mondayOfToday(): string {
   const d = new Date();
   const day = d.getUTCDay();
   d.setUTCDate(d.getUTCDate() - (day === 0 ? 6 : day - 1));
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * The seven days that week is, Monday first.
+ *
+ * Naming them beats deriving one from today with arithmetic, because the arithmetic has to know
+ * which side of the week boundary it landed on and a test written on a Wednesday never finds out.
+ * See the nudgeable test below for the failure that produced this.
+ */
+function daysOfThisWeek(): string[] {
+  const monday = new Date(`${mondayOfToday()}T00:00:00Z`);
+  return Array.from({ length: 7 }, (_, offset) => {
+    const day = new Date(monday);
+    day.setUTCDate(monday.getUTCDate() + offset);
+    return day.toISOString().slice(0, 10);
+  });
 }
 
 describe('the meetup week', () => {
@@ -1090,8 +1106,20 @@ describe('the meetup week', () => {
   });
 
   it('marks only today as nudgeable on the week', async () => {
+    /*
+     * A meetup on every day of the week, so one read carries both directions: the days that have
+     * gone and the days still to come must all come back un-nudgeable, and exactly one day must
+     * not.
+     *
+     * > **This compared today against `tomorrow()` until 2026-08-16, and CI went red on a
+     * > Sunday.** Tomorrow is inside the week containing today on six days in seven; on the
+     * > seventh it is the NEXT week's Monday, which the read does not cover - so the assertion
+     * > read `undefined` and expected `false`. The rule was right and the test's arithmetic was
+     * > wrong, and being wrong one day in seven is why it survived from the day it was written.
+     * > Asking the week for its own days removes the arithmetic rather than correcting it.
+     */
     const f = await setup();
-    for (const date of [todayKey(), tomorrow()]) {
+    for (const date of daysOfThisWeek()) {
       await createMeetup(h.db, await ctxFor(f.ownerId), {
         clubId: f.clubId, meetupDate: date, meetupTime: '18:30', title: 'Practice', location: 'Track',
       });
@@ -1099,9 +1127,13 @@ describe('the meetup week', () => {
     const week = await readMeetupWeek(h.db, await ctxFor(f.memberId), f.clubId, mondayOfToday());
     expect(week.ok).toBe(true);
     if (!week.ok) return;
-    const byDate = new Map(week.days.map((d) => [d.date, d.meetups]));
-    expect(byDate.get(todayKey())?.[0]?.nudgeable).toBe(true);
-    expect(byDate.get(tomorrow())?.[0]?.nudgeable).toBe(false);
+
+    // Seven days, each carrying its meetup - so the line below cannot pass on an empty week,
+    // which is the way an "only one is true" assertion usually goes quietly wrong.
+    expect(week.days.filter((d) => d.meetups.length > 0)).toHaveLength(7);
+    expect(week.days.filter((d) => d.meetups.some((m) => m.nudgeable)).map((d) => d.date)).toEqual([
+      todayKey(),
+    ]);
   });
 
   it('refuses the second of two simultaneous nudges, rather than sending two', async () => {
