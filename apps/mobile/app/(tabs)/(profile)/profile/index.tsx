@@ -32,7 +32,16 @@ import { supportMailto } from '../../../../src/support.ts';
 import { pickSquarePhoto, uploadAvatar, UploadError } from '../../../../src/upload.ts';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { color, radius, space, tabBarSpace, type } from '../../../../src/theme.ts';
-import { Action, Card, DataScreen, Field, Row, SearchField, SectionHeader } from '../../../../src/ui.tsx';
+import {
+  Action,
+  Card,
+  DataScreen,
+  DestinationHeader,
+  Field,
+  Row,
+  SearchField,
+  SectionHeader,
+} from '../../../../src/ui.tsx';
 import { useLoad } from '../../../../src/use-load.ts';
 
 export default function ProfileScreen() {
@@ -84,7 +93,9 @@ export default function ProfileScreen() {
   if (authState === 'signed-out') return <Redirect href="/sign-in" />;
 
   return (
-    <DataScreen load={profile}>
+    <View style={styles.flex}>
+      <DestinationHeader title="Profile" />
+      <DataScreen load={profile}>
       {(data) => (
         <ScrollView
           contentContainerStyle={[styles.body, { paddingBottom: tabBarSpace(insets.bottom) }]}
@@ -277,7 +288,8 @@ export default function ProfileScreen() {
             )}
         </ScrollView>
       )}
-    </DataScreen>
+      </DataScreen>
+    </View>
   );
 }
 

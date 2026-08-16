@@ -62,7 +62,7 @@ import { timeAgo } from '../../src/dates.ts';
 import { hrefFor } from '../../src/notification-href.ts';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { color, radius, space, tabBarSpace, type } from '../../src/theme.ts';
-import { Avatar, DataScreen, Row } from '../../src/ui.tsx';
+import { Avatar, DataScreen, DestinationHeader, Row } from '../../src/ui.tsx';
 import { useLoad, usePullToRefresh } from '../../src/use-load.ts';
 
 /**
@@ -214,16 +214,8 @@ export default function NotificationsScreen() {
 
   return (
     <View style={styles.flex}>
-      {/*
-        The screen's own title, in the body rather than in a header bar.
-
-        The top inset is added here rather than baked into the style, for the same reason the tab
-        bar adds it at its own call site: this number is about the design and that one is about
-        the hardware. 59pt on this phone, 0 in a browser.
-      */}
-      <View style={[styles.header, { paddingTop: insets.top + space.sm }]}>
-        <Text style={styles.title}>Notifications</Text>
-      </View>
+      {/* The screen's own title, in the body rather than in a header bar. See DestinationHeader. */}
+      <DestinationHeader title="Notifications" />
 
       <DataScreen
         load={load}
@@ -413,8 +405,6 @@ const styles = StyleSheet.create({
    * The title block. Horizontal padding only - the rows are full-bleed and pay their own gutter,
    * so a padded list would put the title and the row text on two different left edges.
    */
-  header: { paddingHorizontal: space.md, paddingBottom: space.md },
-  title: { ...type.title, color: color.textPrimary },
 
   /*
    * No horizontal padding and no gap: both belong to the row now.

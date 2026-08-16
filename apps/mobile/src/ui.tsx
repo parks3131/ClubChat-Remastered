@@ -102,6 +102,39 @@ export function DataScreen<T>({
   return <>{children(load.data)}</>;
 }
 
+/**
+ * The masthead a top-level destination wears: its name, big, left, in the accent.
+ *
+ * **One component rather than one per tab.** Chats and Notifications each hand-rolled this same
+ * row, and Calendar and Profile wore a navigator header instead - so the four destinations
+ * disagreed about size (28pt against 20pt), colour and alignment, and there was nowhere to fix
+ * that once. Design-system rule 5, and the same argument as the policy module one layer up.
+ *
+ * Three things it owns, each of which was wrong somewhere before it existed:
+ *
+ *  1. **The top inset is added here, not baked into the style.** This number is about the
+ *     hardware - 59pt on one phone, 0 in a browser - and the padding beside it is about the
+ *     design. Keeping them separate is why a notch does not become a magic constant.
+ *  2. **The title truncates rather than shoving the actions off screen.** The Calendar's title
+ *     carries a club's name, so it is the one that can be arbitrarily long.
+ *  3. **A destination with no actions still gets the same row**, so all four line up at the same
+ *     height whether or not anything sits on the right.
+ *
+ * Not for a screen you can go BACK from: those wear a navigator header with a back control, and
+ * a masthead is the mark of a place you arrive at rather than one you travelled to.
+ */
+export function DestinationHeader({ title, children }: { title: string; children?: ReactNode }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={[styles.destinationHeader, { paddingTop: insets.top + space.sm }]}>
+      <Text style={styles.destinationTitle} numberOfLines={1}>
+        {title}
+      </Text>
+      {children === undefined ? null : <View style={styles.destinationActions}>{children}</View>}
+    </View>
+  );
+}
+
 /** A list's empty state. Never a bare blank: it says what is not there. */
 export function EmptyState({ title, body }: { title: string; body?: string }) {
   return (
@@ -1753,6 +1786,19 @@ export const textStyles: Record<string, StyleProp<TextStyle>> = {
 };
 
 const styles = StyleSheet.create({
+  /* The four destinations' masthead. See `DestinationHeader`. */
+  destinationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.sm,
+    paddingHorizontal: space.md,
+    paddingBottom: space.md,
+    // No paddingTop: the safe-area inset supplies it at the call site inside the component.
+  },
+  // flexShrink so a long club name truncates instead of pushing the actions off the edge.
+  destinationTitle: { ...type.title, color: color.accent, flexShrink: 1 },
+  destinationActions: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   composerHeader: {
     flexDirection: 'row',
     alignItems: 'center',

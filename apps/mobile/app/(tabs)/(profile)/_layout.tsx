@@ -26,7 +26,13 @@ export default function ProfileStackLayout() {
     >
       <Stack.Screen
         name="profile/index"
-        options={{ title: 'Profile', headerTitleAlign: 'left', headerShadowVisible: false }}
+        options={{
+          title: 'Profile',
+          // The screen draws its own masthead, the same one the other three destinations wear.
+          // This used to be a navigator header: left-aligned and accent already, but 20pt against
+          // their 28pt, which is the disagreement that made four destinations look like three.
+          headerShown: false,
+        }}
       />
       <Stack.Screen
         name="profile/edit"

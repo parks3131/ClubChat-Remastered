@@ -55,6 +55,7 @@ import {
   ConfirmDialog,
   ContextMenu,
   DataScreen,
+  DestinationHeader,
   EmptyState,
   SearchField,
   Tabs,
@@ -256,34 +257,31 @@ export default function ChatsScreen() {
 
   return (
     <View style={styles.flex}>
-      <View style={[styles.header, { paddingTop: insets.top + space.sm }]}>
-        <Text style={styles.title}>Chats</Text>
-        <View style={styles.headerActions}>
-          {/*
-            Two actions, and which is which matters. The person+ starts a CONVERSATION with
-            somebody; the plain + joins or creates a CLUB. Both are additive, so neither is
-            styled as the primary.
-          */}
-          <Pressable
-            style={styles.headerButton}
-            onPress={() => router.push('/dm/new')}
-            accessibilityRole="button"
-            accessibilityLabel="Message someone"
-            hitSlop={space.xs}
-          >
-            <MaterialIcons name="person-add-alt" size={22} color={color.accent} />
-          </Pressable>
-          <Pressable
-            style={styles.headerButton}
-            onPress={() => router.push('/clubs/add')}
-            accessibilityRole="button"
-            accessibilityLabel="Join or create a club"
-            hitSlop={space.xs}
-          >
-            <MaterialIcons name="add" size={24} color={color.accent} />
-          </Pressable>
-        </View>
-      </View>
+      <DestinationHeader title="Chats">
+        {/*
+          Two actions, and which is which matters. The person+ starts a CONVERSATION with
+          somebody; the plain + joins or creates a CLUB. Both are additive, so neither is
+          styled as the primary.
+        */}
+        <Pressable
+          style={styles.headerButton}
+          onPress={() => router.push('/dm/new')}
+          accessibilityRole="button"
+          accessibilityLabel="Message someone"
+          hitSlop={space.xs}
+        >
+          <MaterialIcons name="person-add-alt" size={22} color={color.accent} />
+        </Pressable>
+        <Pressable
+          style={styles.headerButton}
+          onPress={() => router.push('/clubs/add')}
+          accessibilityRole="button"
+          accessibilityLabel="Join or create a club"
+          hitSlop={space.xs}
+        >
+          <MaterialIcons name="add" size={24} color={color.accent} />
+        </Pressable>
+      </DestinationHeader>
 
       <DataScreen load={load}>
         {(data) => {
@@ -673,16 +671,8 @@ function ConversationRow({
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
 
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: space.md,
-    // paddingTop comes from the safe-area inset at the call site, never from a constant: the
-    // notch is 59pt on one phone and 20 on another, and a hardcoded guess is wrong on both.
-  },
-  title: { ...type.title, color: color.textPrimary },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  // The masthead itself is `DestinationHeader` in ui.tsx, shared with the other three
+  // destinations. Only the two action discs are this screen's own.
   // Outlined rather than filled: both are additive actions, and a filled disc apiece reads as two
   // primary buttons on a screen whose primary action is opening a conversation.
   headerButton: {

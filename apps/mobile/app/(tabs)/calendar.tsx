@@ -19,10 +19,10 @@
  *     does nothing.
  */
 
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Redirect, useNavigation, useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import { useCurrentSpace } from '../../src/current-space.tsx';
 import { calendarApi } from '../../src/api.ts';
 import type { FeedItem } from '../../src/api-types.ts';
@@ -39,7 +39,7 @@ import {
   useMonthPager,
   type MonthCursor,
 } from '../../src/month-pager.tsx';
-import { DataScreen, EmptyState } from '../../src/ui.tsx';
+import { DataScreen, DestinationHeader, EmptyState } from '../../src/ui.tsx';
 import { useLoad } from '../../src/use-load.ts';
 
 /*
@@ -67,28 +67,33 @@ import { useLoad } from '../../src/use-load.ts';
 export default function CalendarScreen() {
   const { currentClub } = useCurrentSpace();
   const { authState } = useSession();
-  const navigation = useNavigation();
 
   /*
-   * Only the header TITLE changes between the two.
+   * Only the TITLE changes between the two.
    *
    * The tab bar label stays "Calendar" either way, so the destination never appears to move when
-   * a club becomes current. Set through the navigator rather than a `<Stack.Screen>` element,
-   * because this screen's parent is the tab navigator and a Stack element would be addressed to a
-   * stack that is not above it.
+   * a club becomes current.
+   *
+   * > **This was `navigation.setOptions({ title })` against the tab navigator's own header until
+   * > 2026-08-15.** That header was 20pt and centred while Chats and Notifications drew their own
+   * > at 28pt on the left, so the four destinations disagreed about what a destination's name
+   * > looks like. It is now the shared `DestinationHeader`, and the navigator's header is off for
+   * > this tab. A club's name can be long, which is the reason that component truncates.
    */
   const title =
     currentClub === null || currentClub.name.length === 0
       ? 'Calendar'
       : `${currentClub.name} Calendar`;
-  useEffect(() => {
-    navigation.setOptions({ title });
-  }, [navigation, title]);
 
   if (authState === 'checking') return <View style={styles.flex} />;
   if (authState === 'signed-out') return <Redirect href="/sign-in" />;
 
-  return <CalendarView {...(currentClub === null ? {} : { clubId: currentClub.clubId })} />;
+  return (
+    <View style={styles.flex}>
+      <DestinationHeader title={title} />
+      <CalendarView {...(currentClub === null ? {} : { clubId: currentClub.clubId })} />
+    </View>
+  );
 }
 
 /**

@@ -479,6 +479,9 @@ export default function TabsLayout() {
         options={{
           title: 'Calendar',
           tabBarAccessibilityLabel: 'Calendar',
+          // The screen draws its own masthead, like the other three destinations. The navigator
+          // header it used to wear was 20pt and centred, which is why the four disagreed.
+          headerShown: false,
           tabBarIcon: ({ focused }) => <TabItem name="calendar" focused={focused} />,
         }}
       />
