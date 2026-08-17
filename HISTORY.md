@@ -13,7 +13,103 @@ Newest first.
 
 ---
 
-## 2026-08-15 - A meetup gets a name, a screen, and a map from a pasted link
+## 2026-08-17 - The DM header's menu stops being the odd one out, and no notice outstays its welcome
+
+The founder sent two photographs side by side: the DM conversation's "..." menu, and the member
+card's. The first was a full-width band of two-line rows wedged under the header; the second was
+the popover this product uses everywhere else. The ask was style, not content - *"something
+similar... not the exact stuff"*.
+
+**The band was not styled badly, it was in the wrong place in the tree.** `styles.sheet` was a
+plain `View` rendered in the layout flow, so it had no card, no radius, no elevation and no
+scrim, and opening it pushed the conversation down to make room. Everything that made it look
+wrong followed from that one fact, which is why no amount of adjusting its colours would have
+fixed it. It is now `ContextMenu` from `src/ui.tsx` - the same component that drew the
+photograph it was being compared to - anchored to the glyph by `measureRow`, exactly as the
+member card does it.
+
+**Three things fell out of the row shape, and only one of them was free.** A `ContextMenu` row is
+an icon and a label, and the old rows carried a second explanatory line each.
+
+- *Mute's* line said what the toast already said, so it cost nothing.
+- *Close* went, because the scrim dismisses and `ContextMenu`'s own note argues a Cancel row in a
+  short menu spends a fifth of its height on "never mind".
+- *Block's* line was the only statement anywhere of what blocking does - and **Block was firing
+  instantly from a menu tap, with no confirmation at all.** Deleting the sentence would have left
+  a destructive, unconfirmed action with nothing explaining it. It became a confirmation instead,
+  reusing word for word the dialog this same file already shows when it offers Block after a
+  report. Two sentences about one action have no business differing by which control reached them.
+
+That last one is a behaviour change rather than a restyle, and is recorded here as such.
+
+**Then the toast, which turned out to be a bigger finding than the menu.** The founder's follow-up
+was *"when muted just say muted and it should pop for just a couple seconds"*, then *"no message
+should stay for a long time"* - and the second sentence is the real bug. Every notice on the chat
+screen was a `Pressable` that stayed until somebody tapped it. Not the mute one: **all fifteen of
+them**, including every upload failure and every refusal. A banner that outlives the thing it
+describes stops being read at all, which costs you the one case it exists for.
+
+**And it was not one screen.** Chasing the mute wording turned up **five** screens holding a
+notice this way - chat, the member card, the DM profile, the photo viewer and the club share
+screen - of which exactly none cleared themselves. So the timer became `useNotice` in
+`src/use-notice.ts` rather than a `useEffect` copied five times, on this repo's own rule that the
+second time you write something is when to extract it. It is a drop-in for the
+`useState<string | null>(null)` all five already had.
+
+The duration is **computed from the message's own length** rather than fixed. Not embellishment:
+these notices run from `Muted` to *"That message was not sent. It contains language this app does
+not allow. Edit it and try again."*, and one number cannot serve both. Short enough for the first
+cuts the second off mid-sentence; long enough for the second leaves an acknowledgement up long
+after anybody stopped looking. `min(2500 + 40 per character, 5000)` puts "Muted" at 2.7s and a
+refusal at the 5s ceiling. Tapping still dismisses sooner.
+
+**The hook carries a token, and that is not defensive coding.** Setting the *same* string twice is
+not a state change, so the effect would not re-run and the second notice would inherit whatever
+was left of the first one's timer - and a retried action produces an identical message by
+definition, so the case is the common one rather than the exotic one. Bumping a counter on every
+call makes each show its own event regardless of the text.
+
+**Both mute controls now say the same word.** Muting one conversation was reachable from two
+places that confirmed it differently: the chat header, and the member card's "...", which said
+*"Muted. The unread count still counts."* That sentence was deliberate and its point was good -
+mute is not "mark as read" - but a confirmation is read once, in the half-second after a tap
+somebody already meant, and is not where a control gets explained. Two controls describing one
+action in different words was the worse of the two problems. Both now say `Muted` / `Unmuted`.
+
+A stale claim was corrected in the same pass: `member-card.tsx` asserted in a comment that
+`dm/[channelId]/profile` "still carries" Mute and Clear chat. It does not and never has - that
+screen's menu is Pin, Block and Delete chat, as its own file header says. The repo wins.
+
+**Verified by measuring rather than by screenshotting.** The first two attempts to catch the
+banner raced it - a screenshot two seconds after the click showed an empty screen, which is
+equally consistent with "it cleared correctly" and "it never rendered", and taking the second one
+as evidence would have been exactly the mistake `AGENTS.md` standing instruction 8 exists for.
+Polling the DOM every 250ms answered it properly, on both surfaces: chat header `Muted` first
+seen 252ms and gone by 2.76s, `Unmuted` gone by 3.0s; the member card `Muted` first seen 252ms and
+gone by 2.76s - against a computed 2.7s. Every mute and unmute was proved against `channel_mutes`
+rather than against the toast, and the dev database was returned to zero.
+
+Worth recording because it nearly produced a false alarm: `SELECT count(*) FROM channel_mutes`
+came back **2** after the cleanup, which read as leaked test state. Both rows belonged to smoke
+accounts and were dated 2026-07-30 and 2026-08-15. The earlier checks had all been filtered by
+channel and were right; the unfiltered one was the one that lied.
+
+**The device pass was the half that mattered, and the founder did it.** Everything above was
+measured on web, and web is precisely where this class hides: `ContextMenu` renders a real
+`Modal`, and failure modes 28 and 29 are both about native modal behaviour a browser cannot show.
+The structural risk was low - this menu hangs off a plain route with no `presentation` declared,
+so it is not the modal-inside-a-modal shape that broke the member card on 2026-08-14 - but low is
+not zero, and "the same construction worked elsewhere" is exactly the weaker claim `DESIGN/10`
+already flags about the three actions added on 2026-08-15. The agent could not run it: the phone
+was locked (`FBSOpenApplicationErrorDomain error 7`) when the pass was due. **Confirmed working on
+the physical iPhone by the founder on 2026-08-17**, which is what allowed this to be committed.
+
+**One inconsistency was sharpened rather than created.** `TODO.md` already carried an item about
+the three chat overlays dimming three different ways. The DM menu now blurs and dims like the
+message long-press menu; the *group* header's quick-nav dropdown, one glyph away in the same
+header, still has a transparent `gridScrim` with no `backgroundColor`. Two menus in one header
+that behave differently is a more visible version of the same open question, and the item was
+updated to say so rather than ticked.
 
 Meetups reached the calendar in the morning, which made them findable and immediately showed what
 they lack: tapping one arrived at a place and a time and nothing else. The founder designed two

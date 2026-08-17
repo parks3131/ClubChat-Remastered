@@ -66,13 +66,22 @@ import {
   type MentionPick,
 } from "../../src/mentions.ts";
 import { MaterialIcons } from "@expo/vector-icons";
-import { Avatar, Tabs, useRisingSheet } from "../../src/ui.tsx";
+import {
+  Avatar,
+  ContextMenu,
+  measureRow,
+  Tabs,
+  useRisingSheet,
+  type ContextMenuItem,
+  type PressAnchor,
+} from "../../src/ui.tsx";
 import { ChatEventCard } from "../../src/screens/events.tsx";
 import { ChatMeetingCard } from "../../src/screens/meetings.tsx";
 import { ChatPollCard } from "../../src/screens/polls.tsx";
 import { EmojiPicker } from "../../src/emoji-picker.tsx";
 import { spaceProfileHref, useGoBack } from "../../src/nav.tsx";
 import { useLoad } from "../../src/use-load.ts";
+import { useNotice } from "../../src/use-notice.ts";
 import { KeyboardAvoider } from "../../src/keyboard-avoider.tsx";
 import { hrefForCard } from "../../src/notification-href.ts";
 import { color, fontFamily, radius, space, type } from "../../src/theme.ts";
@@ -1831,7 +1840,25 @@ export default function ChatScreen() {
     name: meta?.name,
     image: meta?.image,
   });
-  const [menuOpen, setMenuOpen] = useState(false);
+  /**
+   * Where the header's "..." sits, in window coordinates, or null for a closed menu.
+   *
+   * The rectangle IS the open/closed state rather than a boolean beside one, because
+   * `ContextMenu` cannot draw until it knows where to hang - see `measureRow`, which resolves a
+   * frame after the press so the menu never appears at a wrong position and corrects itself.
+   */
+  const [menuAnchor, setMenuAnchor] = useState<PressAnchor | null>(null);
+  const menuButton = useRef<View | null>(null);
+  /**
+   * Blocking asks first.
+   *
+   * It used to fire straight from the menu row, with its consequence written underneath as a
+   * hint - and that hint was the only place the product said what a block actually does. The
+   * menu's rows carry an icon and a label and nothing else, so the sentence moved into a
+   * confirmation rather than being deleted. Same shape as the member card's Ban, and the same
+   * words as the block offered after a report further down this file.
+   */
+  const [confirmingBlock, setConfirmingBlock] = useState(false);
   /**
    * The seq a long press selected.
    *
@@ -1917,7 +1944,8 @@ export default function ChatScreen() {
    * settled on after the banner ate the top of the conversation. It disarms on send.
    */
   const [asAnnouncement, setAsAnnouncement] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  // Clears itself; see `useNotice` for why the duration is read from the message's length.
+  const [notice, setNotice] = useNotice();
   /**
    * True while the attachment panel stands in the keyboard's place.
    *
@@ -3278,7 +3306,7 @@ export default function ChatScreen() {
   const composerFloor = attachOpen ? space.sm : Math.max(insets.bottom, space.sm);
 
   const act = async (run: () => Promise<unknown>, message: string) => {
-    setMenuOpen(false);
+    setMenuAnchor(null);
     try {
       await run();
       setNotice(message);
@@ -3287,6 +3315,58 @@ export default function ChatScreen() {
       setNotice("That did not work. Try again.");
     }
   };
+
+  /*
+   * What the DM header's "..." offers: the two things that hang off a conversation with no club
+   * around it.
+   *
+   * Icon and label only, like every other menu in the product. The explanatory second line each
+   * of these used to carry went two different ways rather than being dropped wholesale - mute's
+   * says the same thing its toast already says, and block's became the confirmation below, since
+   * it was the only statement anywhere of what a block does.
+   */
+  const menuItems: ContextMenuItem[] = [];
+  if (meta?.scope === "dm") {
+    menuItems.push({
+      label: meta.muted ? "Unmute" : "Mute",
+      icon: meta.muted ? "notifications" : "notifications-off",
+      onPress: () =>
+        void act(
+          () => (meta.muted ? dmApi.unmute(channelId!) : dmApi.mute(channelId!)),
+          meta.muted ? "Unmuted" : "Muted",
+        ),
+    });
+
+    if (meta.peer) {
+      const peer = meta.peer;
+      menuItems.push(
+        peer.blockedByMe
+          ? {
+              // Unblocking is not destructive and undoes itself, so it acts directly. Only the
+              // direction that cuts somebody off asks first.
+              label: `Unblock ${peer.name}`,
+              icon: "undo",
+              onPress: () =>
+                void act(
+                  () => dmApi.unblock(peer.userId),
+                  `Unblocked ${peer.name}.`,
+                ),
+            }
+          : {
+              label: `Block ${peer.name}`,
+              icon: "block",
+              destructive: true,
+              onPress: () => {
+                // The menu closes BEFORE the dialog opens. `ContextMenu` is a real Modal and the
+                // dialog is a plain absolutely-positioned view, so a dialog raised under an open
+                // menu would be behind the modal and invisible.
+                setMenuAnchor(null);
+                setConfirmingBlock(true);
+              },
+            },
+      );
+    }
+  }
 
   return (
     <KeyboardAvoider
@@ -3426,18 +3506,37 @@ export default function ChatScreen() {
             <MaterialIcons name="more-vert" size={20} color={color.accent} />
           </Pressable>
         )}
-        {meta?.scope === "dm" && (
-          <Pressable
-            onPress={() => setMenuOpen((open) => !open)}
-            accessibilityRole="button"
-            accessibilityLabel="Conversation options"
-            hitSlop={space.sm}
-            style={styles.headerAction}
+        {meta?.scope === "dm" && menuItems.length > 0 && (
+          /*
+            `collapsable={false}` so the view survives to be measured. React Native flattens a
+            view that only wraps another one, and a flattened host has no node for
+            `measureInWindow` to report - the menu would then open at the fallback touch point
+            rather than hanging off the glyph.
+          */
+          <View
+            ref={(view) => {
+              menuButton.current = view as unknown as View | null;
+            }}
+            collapsable={false}
           >
-            {/* Vertical, like the group header beside it: one corner, one glyph, whatever the
-                conversation is. It held the horizontal pair while the group chats held a grid. */}
-            <MaterialIcons name="more-vert" size={20} color={color.accent} />
-          </Pressable>
+            <Pressable
+              onPress={(event) =>
+                measureRow(
+                  menuButton.current,
+                  { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY },
+                  (anchor) => setMenuAnchor(anchor),
+                )
+              }
+              accessibilityRole="button"
+              accessibilityLabel="Conversation options"
+              hitSlop={space.sm}
+              style={styles.headerAction}
+            >
+              {/* Vertical, like the group header beside it: one corner, one glyph, whatever the
+                  conversation is. It held the horizontal pair while the group chats held a grid. */}
+              <MaterialIcons name="more-vert" size={20} color={color.accent} />
+            </Pressable>
+          </View>
         )}
       </BlurView>
 
@@ -3628,90 +3727,77 @@ export default function ChatScreen() {
       )}
 
       {/*
-        An in-app sheet rather than a platform Alert. A confirmation dialog can report success,
-        log nothing and do nothing where a platform stubs out the dialog API - and react-native-web
-        is exactly such a platform, which would make block and mute silently no-op on the surface
-        this project develops on.
+        The conversation's own menu, hanging off the "..." that opened it.
+
+        It was a full-width band in the layout flow until 2026-08-17: no card, no radius, no
+        elevation and no scrim, so it read as a section of the screen rather than as something
+        raised over it - and being IN the flow it shoved the conversation down as it opened. It
+        is now the same popover every other menu in the product uses, which is the whole point:
+        one treatment, defined once, so the DM header stops being the odd one out.
+
+        Not `hosted` - this hangs off a plain screen rather than from inside a modal, and the
+        Modal is what puts it in the same window coordinates `measureRow` reports.
       */}
-      {menuOpen && (
-        <View style={styles.sheet}>
-          <Pressable
-            style={styles.sheetRow}
-            onPress={() =>
-              void act(
-                () =>
-                  meta?.muted
-                    ? dmApi.unmute(channelId!)
-                    : dmApi.mute(channelId!),
-                meta?.muted
-                  ? "Unmuted."
-                  : "Muted. You will still see unread counts.",
-              )
-            }
-            accessibilityRole="button"
-            accessibilityLabel={
-              meta?.muted
-                ? "Unmute this conversation"
-                : "Mute this conversation"
-            }
-          >
-            <Text style={styles.sheetLabel}>
-              {meta?.muted ? "Unmute conversation" : "Mute conversation"}
-            </Text>
-            <Text style={styles.sheetHint}>
-              {meta?.muted
-                ? "Notifications on again"
-                : "No notifications, unread still counts"}
-            </Text>
-          </Pressable>
+      {menuAnchor !== null && (
+        <ContextMenu
+          anchor={menuAnchor}
+          items={menuItems}
+          onDismiss={() => setMenuAnchor(null)}
+        />
+      )}
 
-          {meta?.peer && (
-            <Pressable
-              style={styles.sheetRow}
-              onPress={() =>
-                void act(
-                  () =>
-                    meta.peer!.blockedByMe
-                      ? dmApi.unblock(meta.peer!.userId)
-                      : dmApi.block(meta.peer!.userId),
-                  meta.peer!.blockedByMe
-                    ? `Unblocked ${meta.peer!.name}.`
-                    : `Blocked ${meta.peer!.name}. History stays visible to you both.`,
-                )
-              }
-              accessibilityRole="button"
-              accessibilityLabel={
-                meta.peer.blockedByMe
-                  ? `Unblock ${meta.peer.name}`
-                  : `Block ${meta.peer.name}`
-              }
-            >
-              <Text
-                style={[
-                  styles.sheetLabel,
-                  !meta.peer.blockedByMe && styles.destructive,
-                ]}
+      {/*
+        An in-app dialog rather than a platform Alert. A confirmation can report success, log
+        nothing and do nothing where a platform stubs out the dialog API - and react-native-web is
+        exactly such a platform, which would make block silently no-op on the surface this project
+        develops on.
+
+        Deliberately the same words as the block offered after a report further down this file.
+        Two sentences describing one action have no business differing by which control reached
+        them.
+      */}
+      {confirmingBlock && meta?.peer && (
+        <View style={styles.dialogBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setConfirmingBlock(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Do not block"
+          />
+          <View style={styles.dialog}>
+            <Text style={styles.dialogTitle}>
+              Block {meta.peer.name.split(" ")[0] ?? "them"}?
+            </Text>
+            <Text style={styles.dialogBody}>
+              They will not be able to message you, and neither of you will appear in the other's
+              search. You keep this conversation and can unblock any time.
+            </Text>
+            <View style={styles.dialogActions}>
+              <Pressable
+                style={styles.dialogButton}
+                onPress={() => setConfirmingBlock(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Do not block"
               >
-                {meta.peer.blockedByMe
-                  ? `Unblock ${meta.peer.name}`
-                  : `Block ${meta.peer.name}`}
-              </Text>
-              <Text style={styles.sheetHint}>
-                {meta.peer.blockedByMe
-                  ? "You will both be able to send again"
-                  : "Instant. Nobody reviews it, and they are not told"}
-              </Text>
-            </Pressable>
-          )}
-
-          <Pressable
-            style={styles.sheetRow}
-            onPress={() => setMenuOpen(false)}
-            accessibilityRole="button"
-            accessibilityLabel="Close options"
-          >
-            <Text style={styles.sheetLabel}>Close</Text>
-          </Pressable>
+                <Text style={styles.dialogButtonLabel}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.dialogButton}
+                onPress={() => {
+                  const peer = meta.peer!;
+                  setConfirmingBlock(false);
+                  void act(
+                    () => dmApi.block(peer.userId),
+                    `Blocked ${peer.name}. History stays visible to you both.`,
+                  );
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`Block ${meta.peer.name}`}
+              >
+                <Text style={[styles.dialogButtonLabel, styles.destructive]}>Block</Text>
+              </Pressable>
+            </View>
+          </View>
         </View>
       )}
 
@@ -5654,20 +5740,6 @@ const styles = StyleSheet.create({
     color: color.textSecondary,
     textTransform: "uppercase",
   },
-  sheet: {
-    backgroundColor: color.card,
-    borderBottomWidth: 1,
-    borderBottomColor: color.divider,
-  },
-  sheetRow: {
-    paddingHorizontal: space.md,
-    paddingVertical: space.md,
-    gap: space.xs,
-    borderBottomWidth: 1,
-    borderBottomColor: color.divider,
-  },
-  sheetLabel: { ...type.body, color: color.textPrimary },
-  sheetHint: { ...type.bodySmall, color: color.textSecondary },
   destructive: { color: color.error },
   notice: {
     backgroundColor: color.fallback,

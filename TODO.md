@@ -27,13 +27,16 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       reach this race" on the club hub. Decide whether "nothing to do here" deserves a glyph at all
       for a viewer who has nothing to do on ANY row.
 
-- [ ] **The three chat overlays dim the background three different ways.** The message long-press
-      menu blurs the whole screen, the member card dims it, and the header quick-nav dropdown does
-      nothing at all - its `gridScrim` is a transparent tap-catcher with no `backgroundColor`.
-      Nothing is broken and the lighter treatment may be right for a small anchored dropdown;
-      **the decision just is not written down anywhere**, which is why it got re-flagged on
-      2026-08-14. Either dim it or record in [`DESIGN/09`](SPEC/DESIGN/09-chat-composer.md) why it
-      stays lighter than the other two.
+- [ ] **The group header's quick-nav dropdown is now the only overlay in chat with no scrim, and
+      its twin sits one glyph away.** The message long-press menu blurs, the member card dims, and
+      the DM header's "..." started blurring and dimming too on 2026-08-17 when it became a
+      `ContextMenu`. The group dropdown still has a transparent `gridScrim` with no
+      `backgroundColor` - so the *same header* now raises two menus that treat the background
+      differently depending on whether the conversation is a DM. Nothing is broken and the lighter
+      treatment may still be right for a six-item navigation list, which is a different animal from
+      a two-item action menu; **the decision just is not written down anywhere**, and it is now
+      visible rather than theoretical. Either dim it, or make it a `ContextMenu` as well, or record
+      in [`DESIGN/09`](SPEC/DESIGN/09-chat-composer.md) why it stays lighter than the other three.
 
 - [ ] **Every chat header reads "ClubChat" under the conversation name.** It is hardcoded, and
       swaps to "Reconnecting" when the socket drops - so a status line shows the app's own name

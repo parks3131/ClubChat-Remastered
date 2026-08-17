@@ -45,6 +45,7 @@ import { QrCode } from '../../../../../src/qr-code.tsx';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import { Avatar, ConfirmDialog, DataScreen } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
+import { useNotice } from '../../../../../src/use-notice.ts';
 
 /**
  * The code's drawn size.
@@ -67,7 +68,8 @@ export default function ClubShareScreen() {
   const router = useRouter();
 
   const svgRef = useRef<Svg | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  // Clears itself; see `useNotice`.
+  const [notice, setNotice] = useNotice();
   const [busy, setBusy] = useState(false);
   const [confirmingRotate, setConfirmingRotate] = useState(false);
   const [rotating, setRotating] = useState(false);

@@ -50,6 +50,7 @@ import {
   type PressAnchor,
 } from './ui.tsx';
 import { useLoad } from './use-load.ts';
+import { useNotice } from './use-notice.ts';
 
 /** v1's, and the largest avatar any person gets. A club's own picture is bigger; a person's is not. */
 const AVATAR_SIZE = 96;
@@ -114,7 +115,7 @@ export function MemberCardSheet({
    * Clear chat and Report all keep the card open, and a control that changes something invisible
    * and says nothing reads as a control that did not work.
    */
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useNotice();
   /** Set by an action that is done with this card: plays the exit, then unmounts it. */
   const [leaving, setLeaving] = useState(false);
   /** Where to go once the card has finished leaving, so the two never animate over each other. */
@@ -206,9 +207,12 @@ export function MemberCardSheet({
    *
    * Both act on a thread rather than on a person, so on a roster row you have never messaged
    * there is nothing for them to act on - `DESIGN/10` rule 5 then does the rest and the "..."
-   * is simply absent for a member with no other authority over this row. That is also why
-   * `dm/[channelId]/profile` still exists and still carries them: reached from a DM there is
-   * always a thread, which is the case this card cannot assume.
+   * is simply absent for a member with no other authority over this row.
+   *
+   * `dm/[channelId]/profile` still exists for the reason `DESIGN/10` gives - it is about the
+   * conversation rather than the person, and its gallery is the proof. Note it does NOT carry
+   * these two: its menu is Pin, Block and Delete chat, as its own header says. An earlier version
+   * of this comment claimed it carried Mute, which it never has.
    */
   if (dm !== undefined) {
     menuItems.push({
@@ -218,9 +222,17 @@ export function MemberCardSheet({
         setMenuAnchor(null);
         void actInPlace(
           () => (dm.muted ? dmApi.unmute(dm.channelId) : dmApi.mute(dm.channelId)),
-          // Mute is not "mark as read", and saying so is the difference between somebody trusting
-          // this control and somebody reaching for Delete chat instead.
-          dm.muted ? 'Unmuted.' : 'Muted. The unread count still counts.',
+          /*
+            One word, and the same word the chat header uses for the same action on the same
+            conversation.
+
+            It read "Muted. The unread count still counts." until 2026-08-17, to make the point
+            that mute is not "mark as read" - a true and useful distinction that was being made in
+            the wrong place. A confirmation is read once, in the half-second after a tap somebody
+            already meant; it is not where a control gets explained, and the two mute controls
+            saying different sentences about one action was the worse problem of the two.
+          */
+          dm.muted ? 'Unmuted' : 'Muted',
         );
       },
     });

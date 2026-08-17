@@ -40,6 +40,7 @@ import { resolveMedia } from './api.ts';
 import { RemoteImage } from './media-bubble.tsx';
 import { color, radius, space, type } from './theme.ts';
 import { Avatar, ConfirmDialog } from './ui.tsx';
+import { useNotice } from './use-notice.ts';
 
 type MaterialIconName = React.ComponentProps<typeof MaterialIcons>['name'];
 
@@ -113,7 +114,8 @@ export function PhotoViewer({
   const { width, height } = useWindowDimensions();
   const [menuOpen, setMenuOpen] = useState(false);
   /** What the last action did, said back to the person who asked for it. */
-  const [notice, setNotice] = useState<string | null>(null);
+  // Clears itself; see `useNotice`.
+  const [notice, setNotice] = useNotice();
   const [busy, setBusy] = useState(false);
   /** Set once Report is tapped, so it takes a second deliberate step - as it does in chat. */
   const [confirmingReport, setConfirmingReport] = useState(false);

@@ -31,6 +31,7 @@ import {
   SheetMenu,
 } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
+import { useNotice } from '../../../../../src/use-notice.ts';
 
 export default function DmProfileScreen() {
   const { channelId } = useLocalSearchParams<{ channelId: string }>();
@@ -39,7 +40,8 @@ export default function DmProfileScreen() {
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  // Clears itself; see `useNotice`.
+  const [notice, setNotice] = useNotice();
 
   /*
    * Both reads in one load, because the screen has nothing to show without either and two
