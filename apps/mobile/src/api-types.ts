@@ -413,6 +413,16 @@ export type MeetupDetail = {
   locationNotes: string | null;
   mapUrl: string | null;
   mapPoint: { lat: number; lng: number } | null;
+  /** Who added it. Null once their account is gone; the meetup outlives them. */
+  creatorId: string | null;
+  creatorName: string | null;
+  creatorImage: string | null;
+  /** Who last changed it, and null unless that is somebody else. The server decides. */
+  editorId: string | null;
+  editorName: string | null;
+  editorImage: string | null;
+  /** Whether this viewer may edit or delete it. Any club admin, not only the author. */
+  canManage: boolean;
 };
 
 export type MeetupWeek = {
@@ -457,6 +467,16 @@ export type EventDetail = {
   /** Null once the creator's account is gone. The event outlives them. */
   creatorId: string | null;
   creatorName: string | null;
+  creatorImage: string | null;
+  /**
+   * Who last changed it, and **null unless that is somebody other than the creator**.
+   *
+   * The server decides that, not this screen: an edit by the author is not worth a line, and
+   * having both detail surfaces re-derive the comparison is how the two would come to disagree.
+   */
+  editorId: string | null;
+  editorName: string | null;
+  editorImage: string | null;
   /** **Any club admin**, not only the creator - the opposite of a poll, deliberately. */
   canManage: boolean;
 };

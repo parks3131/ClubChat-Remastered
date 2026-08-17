@@ -73,6 +73,7 @@ import {
   measureRow,
   type PressAnchor,
 } from '../../../../../src/ui.tsx';
+import { goBackOr } from '../../../../../src/nav.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
 /** Minute granularity on the wheel. Five is the poll composer's, and 60 rows is not a picker. */
@@ -103,15 +104,40 @@ function momentFrom(dateKey: string, hour: number, minute: number): Date {
   return date;
 }
 
+/**
+ * What the composer needs to open on an existing meetup: the fields it actually edits.
+ *
+ * Narrower than `Meetup` on purpose. The week row hands it a full `Meetup` and the meetup's own
+ * screen hands it a `MeetupDetail`, and those two differ - a detail read carries no nudge clock,
+ * because nudging belongs to the week. Asking for the union of both would mean inventing
+ * `nudgeable: false` at one call site to satisfy a type the form never reads, which is a lie a
+ * later reader would have to disprove. Both shapes satisfy this one honestly.
+ */
+type MeetupEditable = Pick<
+  Meetup,
+  'id' | 'time' | 'location' | 'description' | 'title' | 'locationNotes' | 'mapUrl' | 'mapPoint'
+>;
+
 /** What the form is doing: adding to a given day, or editing one that exists. */
 type Editing =
   | { mode: 'add' }
-  | { mode: 'edit'; date: string; meetup: Meetup };
+  | { mode: 'edit'; date: string; meetup: MeetupEditable };
 
 export default function WeeklyMeetupsScreen() {
-  const { clubId, date } = useLocalSearchParams<{ clubId: string; date?: string }>();
+  const { clubId, date, edit } = useLocalSearchParams<{
+    clubId: string;
+    date?: string;
+    /**
+     * A meetup id to open the composer on, from the meetup's own screen.
+     *
+     * The composer lives here, so Edit arrives as a parameter rather than as a second copy of the
+     * form on the detail screen. Same door the event composer grew on the same day.
+     */
+    edit?: string;
+  }>();
   // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
   useDeclareClub(clubId);
+  const router = useRouter();
   /*
    * The week to open on: the one holding `date` when the caller named a day, otherwise this one.
    *
@@ -148,6 +174,21 @@ export default function WeeklyMeetupsScreen() {
   const club = useLoad(() => clubApi.detail(clubId), [clubId]);
   const isAdmin = club.data?.club.viewer.isAdmin === true;
 
+  /*
+   * The meetup being edited, when the meetup's own screen sent one.
+   *
+   * Read here so the form opens filled rather than filling itself a beat later, and held as the
+   * loaded meetup rather than as the id, so nothing opens until there is something to open on.
+   */
+  const editLoad = useLoad(
+    async () => (edit === undefined || edit === '' ? null : await contentApi.meetup(edit)),
+    [edit],
+  );
+  const editingFromLink: Editing | null =
+    editLoad.data == null
+      ? null
+      : { mode: 'edit', date: editLoad.data.meetup.date, meetup: editLoad.data.meetup };
+
   const nudge = async (meetupId: string) => {
     setNudging(true);
     setNudgeNote(null);
@@ -164,13 +205,27 @@ export default function WeeklyMeetupsScreen() {
     }
   };
 
-  if (editing !== null) {
+  // The screen's own state wins, so opening Add over an `?edit=` link does what it says.
+  const composing = editing ?? editingFromLink;
+
+  if (composing !== null) {
     return (
       <MeetupComposer
         clubId={clubId}
-        editing={editing}
-        onCancel={() => setEditing(null)}
+        editing={composing}
+        onCancel={() => {
+          // Arrived by link from the meetup's screen: going back is where that belongs.
+          // Guarded: `?edit=` is a real URL somebody can land on directly. Read off
+          // `editingFromLink` rather than off `composing`, which is also the 'add' case and
+          // would build `/meetups/` out of it.
+          if (editingFromLink !== null) goBackOr(router, `/meetups/${editingFromLink.meetup.id}`);
+          else setEditing(null);
+        }}
         onSaved={() => {
+          if (editingFromLink !== null) {
+            goBackOr(router, `/meetups/${editingFromLink.meetup.id}`);
+            return;
+          }
           setEditing(null);
           week.reload();
         }}

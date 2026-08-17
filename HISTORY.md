@@ -13,6 +13,59 @@ Newest first.
 
 ---
 
+## 2026-08-17 - An event you can edit, and two screens that say who put them there
+
+The event screen carried three stacked buttons - Directions, Open the club, Delete event - and a
+card of three label/value pairs with nothing between them. The founder wanted the buttons gone
+except Directions, the destructive one behind a "...", rules between the rows, and a face on
+"Added by". Meetups the same, and *"if it got edited by some other person just add their name too
+under added by"*.
+
+**Edit did not exist for an event, at any layer.** Meetups had `PATCH /meetups/:id`; events had
+create, read and delete and nothing else. So "Edit event" meant a new route, a new domain
+function, and a composer that opens on an existing row - not a menu item.
+
+**`updated_by` on both tables, and the comparison lives on the server.** Migration `0038`. Written
+on every edit including one by the author, and the READ decides whether it is worth saying: an
+editor is returned only when it differs from the creator, so "Added by Dana, edited by Dana" cannot
+happen. That judgement is `editorFields`, one function, because two detail reads ask the same
+question and a rule written twice is failure mode 9 waiting to happen. Compared by id rather than
+by name, since two members can share a name and one can change theirs.
+
+**Two rules the edit path had to learn.** The past-start check would have made the past
+unmaintainable - an event that has already happened has a start in the past by definition, so
+fixing a typo in its description would have been refused on a field nobody touched. It now asks
+whether the start *changed* rather than whether it is old. And `MeetupEditable` narrows what the
+meetup composer needs to the fields it actually edits: the week row hands it a full `Meetup` and
+the detail screen hands it a `MeetupDetail`, and those differ by a nudge clock the form never
+reads. Asking for the union would have meant inventing `nudgeable: false` at one call site to
+satisfy a type - a lie a later reader would have to disprove.
+
+**The composer is reached by parameter rather than copied.** `?edit=<id>` on the screen that
+already owns the form, for both events and meetups, so Edit is a link rather than a second copy of
+a 200-line form on the detail screen.
+
+### The bug the testing found
+
+Deleting the probe event printed `The action 'GO_BACK' was not handled by any navigator`. That is
+**failure mode 14** - never pop history unguarded, because it throws on every screen reached by a
+direct link or a refresh - and it was reachable in five places: the pre-existing event delete, plus
+the four returns the edit flows had just added. A notification deep link is exactly the case with
+no history to pop, and these are notification destinations.
+
+`useGoBack` already held the rule, but it takes its fallback at hook time and a screen that has
+just deleted what it was showing only learns its club while rendering. So the rule became
+`goBackOr(router, href)` and the hook a thin wrapper over it, rather than the two lines being
+written a second time. Re-tested by navigating straight to a meetup with no history and deleting
+it: it lands on the club, and the console error is gone.
+
+Also worth recording: **a backtick inside a `sql` template comment broke the parse again**, in the
+same afternoon it was recorded as failure mode 2.5.8 for the second time. Two SQL comments naming
+`created_by` and `updated_by` in backticks ended the template literal. It fails loudly and costs a
+minute, which is the only reason it is a footnote rather than a section.
+
+---
+
 ## 2026-08-17 - A week you can read at a glance, a post you can edit, and an event that knows where it is
 
 An afternoon of surfaces, driven from the founder's phone one screenshot at a time. Grouped here

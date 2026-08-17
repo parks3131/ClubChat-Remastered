@@ -17,6 +17,7 @@ import {
   createNewsPost,
   createMeetup,
   deleteEvent,
+  updateEvent,
   deleteMeeting,
   deleteNewsPost,
   deleteMeetup,
@@ -185,6 +186,23 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
    */
   app.get<{ Params: { id: string } }>('/events/:id', async (request, reply) => {
     const result = await readEvent(deps.db, request.access!, request.params.id);
+    if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+    return result;
+  });
+
+  /**
+   * Edit an event. Any club admin, any event - not only its author, and notifying nobody.
+   *
+   * Takes the whole event, like the meetup and news-post PATCHes beside it: the composer holds
+   * the entire form, and a field omitted from a partial update cannot be told apart from a field
+   * deliberately cleared.
+   */
+  app.patch<{ Params: { id: string } }>('/events/:id', async (request, reply) => {
+    const body = EventBody.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: 'invalid_body', issues: body.error.issues });
+    }
+    const result = await updateEvent(deps.db, request.access!, request.params.id, body.data);
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return result;
   });

@@ -98,6 +98,15 @@ field and why one should not be added back.*
    [ADR-0029](../decisions/0029-a-meetup-answers-where-when-and-what.md).
 9. **Any club admin can create, edit, or delete any meetup**, not only its author.
 10. Members see the week and the detail read-only - no create, edit, or delete controls anywhere.
+
+10a. **A meetup's screen says who added it, with their face, and who last changed it when that is
+    somebody else** - the same shape and the same rule as an event
+    ([`PRD/07`](07-calendar-and-events.md) rule 13). An edit by the author names nobody.
+
+10b. **Its edit and delete sit behind a "..." in the screen's own header, and the week keeps its
+    long press.** Both, not either: the long press is the fast path for an admin working down a
+    week, and a gesture nothing advertises is not a way to reach an action - it is a way for
+    somebody who already knows to reach it faster. The menu is the discoverable one.
 11. **Creating a meetup does not notify anyone and does not post to chat.** It is reference
     material, not an event. A week of meetups would otherwise fire seven notifications.
     *(Settled 2026-08-08, and the reason this surface is separate from the calendar. The one

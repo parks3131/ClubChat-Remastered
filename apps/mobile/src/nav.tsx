@@ -102,12 +102,26 @@ export function motionFor(params: unknown) {
  */
 export function useGoBack(href: string): () => void {
   const router = useRouter();
-  return () => {
-    // `canGoBack()` rather than a try/catch around `back()`: popping an empty stack throws, and a
-    // thrown navigation is indistinguishable from a dead control to whoever tapped it.
-    if (router.canGoBack()) router.back();
-    else router.replace(href);
-  };
+  return () => goBackOr(router, href);
+}
+
+/**
+ * The same rule, for a caller that only learns its fallback while rendering.
+ *
+ * `useGoBack` takes its parent up front, which is right for a back arrow: the screen knows what it
+ * sits under before it draws. A screen that has just DELETED the thing it was showing does not -
+ * the club to fall back to comes out of the row it was reading, which is inside the render.
+ * Hooks cannot be called there, so the rule is a plain function and the hook is a thin wrapper
+ * over it, rather than the two lines being written twice.
+ *
+ * `canGoBack()` rather than a try/catch around `back()`: popping an empty stack throws, and a
+ * thrown navigation is indistinguishable from a dead control to whoever tapped it. That is
+ * `AGENTS.md` failure mode 14, and a deep link from a notification is exactly the case with no
+ * history to pop.
+ */
+export function goBackOr(router: ReturnType<typeof useRouter>, href: string): void {
+  if (router.canGoBack()) router.back();
+  else router.replace(href);
 }
 
 /**

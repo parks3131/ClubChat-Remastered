@@ -12,16 +12,29 @@
  */
 
 import type { ReactNode } from 'react';
-import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import { contentApi } from '../api.ts';
 import type { EventDetail } from '../api-types.ts';
 import { bibParts, formatInstant, formatTimeOfDay } from '../dates.ts';
 import { CardEyebrow, CardMeta, CardTitle, ContentCard, DateChip } from '../content-card.tsx';
 import { MeetupDirections } from '../meetup-map.tsx';
+import { MaterialIcons } from '@expo/vector-icons';
 import { color, space, type } from '../theme.ts';
-import { Action, Body, Card, ConfirmDialog, DataScreen, DetailLine } from '../ui.tsx';
+import {
+  Action,
+  Body,
+  Card,
+  ConfirmDialog,
+  ContextMenu,
+  DataScreen,
+  DetailLine,
+  DetailPerson,
+  DetailRule,
+  type PressAnchor,
+} from '../ui.tsx';
+import { goBackOr } from '../nav.tsx';
 import { useLoad } from '../use-load.ts';
 
 /**
@@ -68,7 +81,23 @@ export function EventView({ eventId }: { eventId: string }) {
   const router = useRouter();
   const [confirming, setConfirming] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
+  const [menuAnchor, setMenuAnchor] = useState<PressAnchor | null>(null);
   const load = useLoad(() => contentApi.event(eventId), [eventId]);
+
+  /*
+   * Re-read whenever this screen comes back into focus.
+   *
+   * Editing navigates away to the composer and returns here, so without this the screen would
+   * still be showing what it read before the edit - the change would appear to have been
+   * discarded until something else forced a reload.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      load.reload();
+      // The reader is stable; depending on it would re-run this every render.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [eventId]),
+  );
 
   return (
     <DataScreen load={load} errorMessage="Couldn't load this event.">
@@ -84,6 +113,77 @@ export function EventView({ eventId }: { eventId: string }) {
         return (
           <Body>
             {/*
+              The "..." in the navigation bar, opposite the back arrow, and only for somebody who
+              may actually use it - `canManage` is the server's answer, never a role this screen
+              inspected. A member sees no menu button rather than a menu that opens onto nothing,
+              which is `DESIGN/10` rule 5.
+
+              Installed from here rather than from the route file because the menu's open state
+              lives here; a control in the layout would need that state lifted out of the screen
+              using it. Same shape the DM profile header uses.
+            */}
+            {event.canManage && (
+              <Stack.Screen
+                options={{
+                  headerRight: () => (
+                    <Pressable
+                      onPress={(pressEvent) =>
+                        /*
+                          Anchored on the touch point rather than a measured node. A header button
+                          is rendered inside `options`, which is a separate tree from this one, so
+                          there is nowhere stable to hang a ref - and `measureRow`'s fallback is
+                          exactly this case. `ContextMenu` centres a zero-width anchor and clamps
+                          it inside the screen, so a tap at the right edge still hangs correctly.
+                        */
+                        setMenuAnchor({
+                          x: pressEvent.nativeEvent.pageX,
+                          y: pressEvent.nativeEvent.pageY,
+                          width: 0,
+                          height: 0,
+                        })
+                      }
+                      accessibilityRole="button"
+                      accessibilityLabel="Options for this event"
+                      hitSlop={space.sm}
+                      style={styles.headerButton}
+                    >
+                      <MaterialIcons name="more-vert" size={22} color={color.accent} />
+                    </Pressable>
+                  ),
+                }}
+              />
+            )}
+
+            {menuAnchor !== null && (
+              <ContextMenu
+                anchor={menuAnchor}
+                onDismiss={() => setMenuAnchor(null)}
+                items={[
+                  {
+                    label: 'Edit event',
+                    icon: 'edit',
+                    onPress: () => {
+                      setMenuAnchor(null);
+                      router.push(`/clubs/${event.clubId}/events?edit=${event.id}`);
+                    },
+                  },
+                  {
+                    /* Red and last, per the menu's own rule for an action that ends something. */
+                    label: 'Delete event',
+                    icon: 'delete',
+                    destructive: true,
+                    onPress: () => {
+                      // Menu closes before the dialog opens: both are real modals, and iOS
+                      // presents one per view controller.
+                      setMenuAnchor(null);
+                      setConfirming(true);
+                    },
+                  },
+                ]}
+              />
+            )}
+
+            {/*
               The hero says the same thing the chat card does, in the same arrangement, because a
               member arriving from the card should recognise where they landed. It is the card
               without its border - the screen is already the surface.
@@ -97,8 +197,18 @@ export function EventView({ eventId }: { eventId: string }) {
             </View>
             <Text style={styles.when}>{eventWhen(event.startsAt, event.endsAt)}</Text>
 
+            {/*
+              Rules between the rows, and a face on the people.
+
+              The card was three stacked label/value pairs with nothing between them, so "LOCATION
+              / Common / DETAILS / Vino / ADDED BY / Parks RPK" read as one run-on block. The
+              hairlines say where one answer ends. `DetailRule` is placed here rather than being a
+              border on `DetailLine` because a line hides itself when empty, and a border on a row
+              that renders nothing is a line in the wrong place.
+            */}
             <Card>
               <DetailLine label="Location" value={event.location} />
+              <DetailRule />
               {/* Stated even when empty, because "is there more to this?" is the question the
                   screen exists to answer, and a missing row leaves it open. */}
               <DetailLine
@@ -106,7 +216,22 @@ export function EventView({ eventId }: { eventId: string }) {
                 value={event.description}
                 placeholder="No description was added."
               />
-              <DetailLine label="Added by" value={event.creatorName} />
+              <DetailRule />
+              <DetailPerson
+                label="Added by"
+                name={event.creatorName}
+                image={event.creatorImage}
+              />
+              {/*
+                And who changed it, when that is somebody else. The server decides whether this is
+                worth saying - an edit by the author returns a null editor rather than repeating
+                the name above.
+              */}
+              <DetailPerson
+                label="Edited by"
+                name={event.editorName}
+                image={event.editorImage}
+              />
             </Card>
 
             {/*
@@ -119,22 +244,15 @@ export function EventView({ eventId }: { eventId: string }) {
             */}
             <MeetupDirections mapUrl={event.mapUrl} point={null} place={event.location ?? ''} />
 
-            <Action
-              label="Open the club"
-              variant="secondary"
-              onPress={() => router.push(`/clubs/${event.clubId}`)}
-            />
+            {/*
+              Directions is the only button on this screen now.
 
-            {event.canManage && (
-              <>
-                {failed !== null && <Text style={styles.error}>{failed}</Text>}
-                <Action
-                  label="Delete event"
-                  variant="danger"
-                  onPress={() => setConfirming(true)}
-                />
-              </>
-            )}
+              "Open the club" went because it answered a question nobody arrives here with - every
+              route to an event already came from the club - and "Delete event" went into the
+              header menu, where a destructive action belongs rather than sitting red and
+              full-width under a screen anybody can open.
+            */}
+            {failed !== null && <Text style={styles.error}>{failed}</Text>}
 
             {confirming && (
               <ConfirmDialog
@@ -146,7 +264,10 @@ export function EventView({ eventId }: { eventId: string }) {
                   setConfirming(false);
                   setFailed(null);
                   void contentApi.deleteEvent(eventId).then(
-                    () => router.back(),
+                    // Guarded: this screen is reachable by notification deep link and by refresh,
+                    // and popping an empty stack throws - failure mode 14. The club is the honest
+                    // fallback, since the event it would have gone back to no longer exists.
+                    () => goBackOr(router, `/clubs/${event.clubId}`),
                     () => setFailed('Could not delete the event. Try again.'),
                   );
                 }}
@@ -229,6 +350,8 @@ const styles = StyleSheet.create({
   title: { ...type.title, color: color.textPrimary },
   when: { ...type.label, color: color.textSecondary, textTransform: 'none' },
   error: { ...type.bodySmall, color: color.error },
+  /** Padding around the header glyph, on top of its `hitSlop`. A 22pt target needs both. */
+  headerButton: { padding: space.xs },
 
   /*
     Chip beside text, vertically centred on it. `flex: 1` on the text column is what keeps a long

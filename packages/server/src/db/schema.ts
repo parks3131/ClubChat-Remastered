@@ -1384,6 +1384,19 @@ export const calendarEvents = pgTable(
     mapUrl: text('map_url'),
     description: text('description'),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    /*
+     * Who last changed it, when that is somebody other than whoever added it.
+     *
+     * Written on every edit and read only to answer "and who changed this", which the detail
+     * screen shows under the creator. **Null is the normal state**: a brand new event has never
+     * been edited, and one edited only by its own author says nothing extra - the screen compares
+     * the two ids rather than storing that judgement, because who the author is can change
+     * meaning if an account is deleted.
+     *
+     * `set null` like `created_by` beside it: the event outlives the account, and losing the
+     * editor's name must not take the event with it.
+     */
+    updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -1476,6 +1489,8 @@ export const meetups = pgTable(
     mapLat: numeric('map_lat', { precision: 9, scale: 6 }),
     mapLng: numeric('map_lng', { precision: 9, scale: 6 }),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    /** Who last changed it. Same rule and same reasoning as `calendar_events.updated_by`. */
+    updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

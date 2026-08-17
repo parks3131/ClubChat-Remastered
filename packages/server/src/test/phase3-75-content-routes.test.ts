@@ -447,6 +447,83 @@ describe('calendar events', () => {
     expect((await as(owner, 'GET', `/events/${bad.body.eventId}`)).body.event.mapUrl).toBe(null);
   });
 
+  /*
+   * "And who changed it" - named only when it is somebody else.
+   *
+   * Three cases in one test because the rule is the relationship between them, and asserting the
+   * silent ones is the point: a row nobody has edited and a row edited by its own author must both
+   * say nothing, or the screen grows an "Edited by Dana" line under "Added by Dana".
+   */
+  it('names an editor only when it is not the person who added it', async () => {
+    const owner = await signUp('EditorOwner');
+    const second = await signUp('EditorSecond');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, second, 'admin');
+
+    const body = {
+      type: 'other' as const,
+      title: 'Kit collection',
+      startsAt: '2027-06-02T09:00:00.000Z',
+    };
+    const created = await as(owner, 'POST', `/clubs/${clubId}/events`, body);
+    expect(created.status).toBe(201);
+    const eventId = created.body.eventId;
+
+    // Never edited: an author and no editor.
+    const fresh = (await as(owner, 'GET', `/events/${eventId}`)).body.event;
+    expect(fresh.creatorName).toBe('EditorOwner');
+    expect(fresh.editorName).toBe(null);
+
+    // Edited by its own author: still no editor line, because that is not news.
+    expect((await as(owner, 'PATCH', `/events/${eventId}`, { ...body, location: 'The shed' })).status)
+      .toBe(200);
+    const selfEdited = (await as(owner, 'GET', `/events/${eventId}`)).body.event;
+    expect(selfEdited.location).toBe('The shed');
+    expect(selfEdited.editorName).toBe(null);
+
+    // Edited by a different admin: now it is worth saying, and the author is unchanged.
+    expect((await as(second, 'PATCH', `/events/${eventId}`, { ...body, location: 'The car park' })).status)
+      .toBe(200);
+    const otherEdited = (await as(owner, 'GET', `/events/${eventId}`)).body.event;
+    expect(otherEdited.creatorName).toBe('EditorOwner');
+    expect(otherEdited.editorName).toBe('EditorSecond');
+  });
+
+  it('lets any admin edit an event, and refuses a plain member', async () => {
+    const owner = await signUp('EventEditOwner');
+    const member = await signUp('EventEditMember');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, member);
+
+    const body = {
+      type: 'other' as const,
+      title: 'Before',
+      startsAt: '2027-06-03T09:00:00.000Z',
+    };
+    const created = await as(owner, 'POST', `/clubs/${clubId}/events`, body);
+    const eventId = created.body.eventId;
+
+    // A member may READ it - the create notified the whole club - and may not change it.
+    expect((await as(member, 'GET', `/events/${eventId}`)).status).toBe(200);
+    expect((await as(member, 'PATCH', `/events/${eventId}`, { ...body, title: 'After' })).status)
+      .toBe(404);
+    expect((await as(owner, 'GET', `/events/${eventId}`)).body.event.title).toBe('Before');
+
+    // And an edit carries the map link through the same validation the create uses.
+    expect(
+      (
+        await as(owner, 'PATCH', `/events/${eventId}`, {
+          ...body,
+          title: 'After',
+          mapUrl: 'https://maps.google.com.evil.test/?q=1,2',
+        })
+      ).status,
+    ).toBe(200);
+    const after = (await as(owner, 'GET', `/events/${eventId}`)).body.event;
+    expect(after.title).toBe('After');
+    expect(after.mapUrl).toBe(null);
+  });
+
   it('rejects an invented event type at the route', async () => {
     const owner = await signUp('TypeOwner');
     const { clubId } = await createClubAs(owner);

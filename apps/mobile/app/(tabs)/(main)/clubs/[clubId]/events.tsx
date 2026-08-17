@@ -20,9 +20,9 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { calendarApi, clubApi, contentApi } from '../../../../../src/api.ts';
-import type { FeedItem } from '../../../../../src/api-types.ts';
+import type { EventDetail, FeedItem } from '../../../../../src/api-types.ts';
 import { bibParts, formatDateOnly, formatInstant } from '../../../../../src/dates.ts';
-import { useReturnTo } from '../../../../../src/nav.tsx';
+import { goBackOr, useReturnTo } from '../../../../../src/nav.tsx';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import {
   Action,
@@ -41,12 +41,21 @@ import { useLoad } from '../../../../../src/use-load.ts';
 
 
 export default function ClubEventsScreen() {
-  const { clubId, create, from } = useLocalSearchParams<{
+  const { clubId, create, edit, from } = useLocalSearchParams<{
     clubId: string;
     create?: string;
+    /**
+     * An event id to open the composer on, from the event's own screen.
+     *
+     * The composer lives here rather than on the detail screen, so Edit arrives as a parameter
+     * instead of a second copy of a 200-line form. Same door as `?create=1`, which chat's "+"
+     * already uses - one composer, reached from wherever somebody pressed Edit.
+     */
+    edit?: string;
     from?: string;
   }>();
   const returnToSender = useReturnTo();
+  const router = useRouter();
 
   /*
    * Where to go once it exists. Chat's "+" menu sends `from=/chat/:channelId`, and an event made
@@ -78,25 +87,51 @@ export default function ClubEventsScreen() {
   }, [create, isAdmin]);
 
   /*
+   * The event being edited, read here so the composer opens filled rather than empty and then
+   * populated - a form that fills in a beat after it appears looks like it lost your typing.
+   *
+   * Only read when a real id arrived, and the composer waits for it: `editing` below is the
+   * loaded event, not the id, so nothing opens until there is something to open it on.
+   */
+  const editLoad = useLoad(
+    async () => (edit === undefined || edit === '' ? null : await contentApi.event(edit)),
+    [edit],
+  );
+  const editingEvent = editLoad.data?.event ?? null;
+
+  /*
    * The composer owns the screen, header included - and the option is stated in BOTH directions.
    * `<Stack.Screen options>` is `navigation.setOptions` underneath, so it mutates the route and
    * does not roll back on unmount; setting it only on the way in left the list with no header.
    * Same reasoning as the poll composer.
    */
-  const header = <Stack.Screen options={{ headerShown: !creating }} />;
+  const composing = creating || editingEvent !== null;
+  const header = <Stack.Screen options={{ headerShown: !composing }} />;
 
-  if (creating) {
+  if (composing) {
     return (
       <>
         {header}
       <CreateEvent
+        // Remounts between creating and editing, so `useState` initialisers run again rather than
+        // the form keeping a half-typed draft when it changes what it is composing.
+        key={editingEvent?.id ?? 'new'}
         clubId={clubId}
+        event={editingEvent}
         onCancel={() => {
           if (returnTo !== null) returnToSender(returnTo);
+          // Guarded: `?edit=` is a real URL somebody can land on directly.
+          else if (editingEvent !== null) goBackOr(router, `/events/${editingEvent.id}`);
           else setCreating(false);
         }}
         onCreated={() => {
           setCreating(false);
+          // An edit came from the event's own screen, so going back is where it belongs - and it
+          // re-reads on focus, so the change is there when it arrives.
+          if (editingEvent !== null) {
+            goBackOr(router, `/events/${editingEvent.id}`);
+            return;
+          }
           if (returnTo !== null) {
             // Unwind to the conversation, never navigate to it - see `useReturnTo`.
             returnToSender(returnTo);
@@ -230,15 +265,37 @@ function EventRow({ item, faded }: { item: FeedItem; faded: boolean }) {
 
 function CreateEvent({
   clubId,
+  event,
   onCancel,
   onCreated,
 }: {
   clubId: string;
+  /**
+   * The event being edited, or null to create one.
+   *
+   * One component for both, the same call `PRD/06` rule 7 makes for a news post: everything this
+   * form knows about instants, the past-start rule and the map link would otherwise need a second
+   * copy that drifts from this one.
+   */
+  event?: EventDetail | null;
   onCancel: () => void;
   onCreated: () => void;
 }) {
-  const [title, setTitle] = useState('');
-  const [location, setLocation] = useState('');
+  const editing = event ?? null;
+
+  /*
+   * Seeded once, by `useState`'s initialiser rather than an effect - an effect would overwrite
+   * what somebody had typed on any re-render that produced a new event object.
+   *
+   * The instant is split back into the date and time the two fields want, in LOCAL terms, because
+   * that is how it was entered: reading it in UTC would move a 5pm session by the offset, which
+   * is the same trap `instant` below exists to avoid in the other direction.
+   */
+  const startLocal = editing === null ? null : new Date(editing.startsAt);
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  const [title, setTitle] = useState(editing?.title ?? '');
+  const [location, setLocation] = useState(editing?.location ?? '');
   /*
    * The map link, beside the place rather than instead of it.
    *
@@ -248,10 +305,16 @@ function CreateEvent({
    * says where, and a member who has learned that a pasted link becomes Directions must not find
    * it missing here.
    */
-  const [mapUrl, setMapUrl] = useState('');
-  const [description, setDescription] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [startTime, setStartTime] = useState('');
+  const [mapUrl, setMapUrl] = useState(editing?.mapUrl ?? '');
+  const [description, setDescription] = useState(editing?.description ?? '');
+  const [startDate, setStartDate] = useState(
+    startLocal === null
+      ? ''
+      : `${startLocal.getFullYear()}-${pad(startLocal.getMonth() + 1)}-${pad(startLocal.getDate())}`,
+  );
+  const [startTime, setStartTime] = useState(
+    startLocal === null ? '' : `${pad(startLocal.getHours())}:${pad(startLocal.getMinutes())}`,
+  );
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 
@@ -286,7 +349,18 @@ function CreateEvent({
    * > one. Dropping the field from a form is not a reason to destroy data somebody entered, and a
    * > migration removing it would be exactly that.
    */
-  const startsInPast = startsAt !== null && new Date(startsAt).getTime() <= Date.now();
+  /*
+   * And only when the start has actually been TOUCHED.
+   *
+   * Otherwise the rule quietly makes the past unmaintainable: an event that has already happened
+   * has a start in the past by definition, so opening it to fix a typo in the description would
+   * refuse to save on a field nobody edited. The rule exists to stop somebody scheduling
+   * backwards, which is a thing you can only do by choosing a date - so it asks whether the date
+   * changed rather than whether it is old.
+   */
+  const startUnchanged = editing !== null && startsAt === editing.startsAt;
+  const startsInPast =
+    !startUnchanged && startsAt !== null && new Date(startsAt).getTime() <= Date.now();
 
   const problem = startsInPast
     ? 'That start is in the past. Pick a date and time still to come.'
@@ -299,7 +373,7 @@ function CreateEvent({
     setBusy(true);
     setFailed(null);
     try {
-      await contentApi.createEvent(clubId, {
+      const draft = {
         /*
          * Always `other`, because this screen no longer asks.
          *
@@ -308,7 +382,9 @@ function CreateEvent({
          * member's behalf would file every event under a category nobody chose. The column and
          * its constraint stay, so a type selector can come back without a migration.
          */
-        type: 'other',
+        // `as const` because the draft is now a named object rather than an inline argument, and
+        // without it the literal widens to `string` and stops matching `EventType`.
+        type: 'other' as const,
         title: title.trim(),
         startsAt,
         // No end is sent at all, rather than an empty one - the field is gone from this form and
@@ -318,10 +394,21 @@ function CreateEvent({
         // so a mistyped link is a missing Directions button rather than a refused event.
         mapUrl: mapUrl.trim().length > 0 ? mapUrl.trim() : null,
         description: description.trim().length > 0 ? description.trim() : null,
-      });
+      };
+
+      // One draft, two verbs - the same shape the news composer uses.
+      if (editing !== null) {
+        await contentApi.updateEvent(editing.id, draft);
+      } else {
+        await contentApi.createEvent(clubId, draft);
+      }
       onCreated();
     } catch {
-      setFailed('Could not create the event. Check your connection and try again.');
+      setFailed(
+        editing !== null
+          ? 'Could not save the event. Check your connection and try again.'
+          : 'Could not create the event. Check your connection and try again.',
+      );
     } finally {
       setBusy(false);
     }
@@ -337,8 +424,8 @@ function CreateEvent({
         The header is the copy that survives, because it is the one carrying the way out.
       */}
       <ComposerHeader
-        title="Create event"
-        discardLabel="Discard this event and go back"
+        title={editing !== null ? 'Edit event' : 'Create event'}
+        discardLabel={editing !== null ? 'Discard these changes and go back' : 'Discard this event and go back'}
         onCancel={onCancel}
       />
 
@@ -427,7 +514,7 @@ function CreateEvent({
 
         </View>
 
-        <Text style={styles.meta}>Creating an event tells every other member of the club.</Text>
+        <Text style={styles.meta}>{editing !== null ? 'Saving changes tells nobody.' : 'Creating an event tells every other member of the club.'}</Text>
         {/* The reason SAVE EVENT is refusing, said before it is pressed rather than after. */}
         {problem !== null && <Text style={styles.error}>{problem}</Text>}
         {failed !== null && <Text style={styles.error}>{failed}</Text>}
@@ -440,7 +527,7 @@ function CreateEvent({
           accessibilityLabel="Save event"
           accessibilityState={{ disabled: !valid || busy }}
         >
-          <Text style={styles.saveButtonLabel}>{busy ? 'SAVING' : 'SAVE EVENT'}</Text>
+          <Text style={styles.saveButtonLabel}>{busy ? 'SAVING' : editing !== null ? 'SAVE CHANGES' : 'SAVE EVENT'}</Text>
           <MaterialIcons name="arrow-forward" size={18} color={color.onAccent} />
         </Pressable>
       </ScrollView>

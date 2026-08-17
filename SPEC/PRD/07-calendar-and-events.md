@@ -98,7 +98,23 @@ Two views over **one merged feed**: a month grid for "what is happening when", a
     detail screen - the chat card already confirms it.
 13. **An event has a detail screen of its own**, and all four routes to it lead there: the
     Upcoming/Past list, the calendar's day popup, the chat card, and the notification. It shows
-    the title, when it runs, the location, the description, and **who added it**.
+    the title, when it runs, the location, the description, and **who added it - with their
+    face - and who last changed it when that is somebody else.**
+
+    > **An edit by the author names nobody.** "Added by Dana, edited by Dana" is noise, so the
+    > editor is reported only when the two differ, and the server decides that rather than the
+    > screen - two detail surfaces re-deriving the same comparison is how they come to disagree.
+    > A meetup says the same things in the same shape, for the same reason.
+
+13a. **Edit and delete live behind a "..." in the screen's own header, and only for somebody who
+    may use them.** A member sees no menu button at all rather than a menu that opens onto
+    nothing. Deleting asks first and says what is lost. **There is deliberately no "open the
+    club" button**: every route to an event already came from one.
+
+    Numbered `13a` rather than `14` on purpose - rules 14 and 15 are cited by number from the
+    code and from this file's own prose, and renumbering them to make room would silently
+    redirect every one of those citations.
+
 14. **Every club member can open an event; only an admin can delete one.** The read is
     deliberately wider than the write: creating an event notifies the whole club, so a read
     gated at admin would hand every member a notification that opens nothing.

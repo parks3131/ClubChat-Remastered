@@ -265,7 +265,60 @@ export async function createEvent(
   });
 }
 
-/** Edit or delete an event. Any admin, any event - not only its author. */
+/**
+ * Edit an event. Any admin, any event - not only its author.
+ *
+ * **Notifies nobody, which is the same call `PRD/06` rule 6 makes for a news post and for the
+ * same reason.** Creating an event tells the club because the club has not heard of it; changing
+ * the room it is in has not created a second event, and a club that gets buzzed every time a typo
+ * is fixed learns to ignore the buzz. The card already in chat reads through to this row, so it
+ * updates itself without an announcement.
+ *
+ * The whole event arrives rather than a diff, matching `updateMeetup` and `updateNewsPost`: the
+ * composer holds the entire form in its hand and a field absent from a PATCH is genuinely
+ * ambiguous between "unchanged" and "cleared".
+ */
+export async function updateEvent(
+  db: Db,
+  ctx: AccessContext,
+  eventId: string,
+  input: {
+    type: EventType;
+    title: string;
+    startsAt: string;
+    endsAt?: string | null | undefined;
+    location?: string | null | undefined;
+    mapUrl?: string | null | undefined;
+    description?: string | null | undefined;
+  },
+): Promise<Result<{ updated: true }>> {
+  const rows = await db.select().from(calendarEvents).where(eq(calendarEvents.id, eventId)).limit(1);
+  const event = rows[0];
+  if (!event) return { ok: false, code: 'not_found' };
+  if (!canManageClubContent(ctx, event.clubId)) return { ok: false, code: 'forbidden' };
+
+  // Same rule as the create: not a map link, not stored. A button must never open an arbitrary URL.
+  const link = typeof input.mapUrl === 'string' ? input.mapUrl.trim() : '';
+  const mapUrl = link.length > 0 && isMapLink(link) ? link : null;
+
+  await db
+    .update(calendarEvents)
+    .set({
+      type: input.type,
+      title: input.title,
+      startsAt: new Date(input.startsAt),
+      endsAt: input.endsAt ? new Date(input.endsAt) : null,
+      location: input.location ?? null,
+      mapUrl,
+      description: input.description ?? null,
+      updatedBy: ctx.userId,
+    })
+    .where(eq(calendarEvents.id, eventId));
+
+  return { ok: true, updated: true };
+}
+
+/** Delete an event. Any admin, any event - not only its author. */
 export async function deleteEvent(
   db: Db,
   ctx: AccessContext,
@@ -367,6 +420,29 @@ type MeetupInput = {
  * with a CHECK rather than this function trusting it, but this is still written to require both,
  * because half a coordinate reaching a map centres it on the wrong line rather than failing.
  */
+/**
+ * "And who changed it", or nothing at all.
+ *
+ * One function because two detail reads ask it and a rule written twice is a rule that diverges -
+ * failure mode 9. The rule: an edit is only worth naming when somebody OTHER than the author made
+ * it. A row nobody has edited has no editor, and a row edited only by its own author has nothing
+ * to add; both come back null and the screen draws no second line.
+ *
+ * Compared by id rather than by name, because two members can share a name and one member can
+ * change theirs.
+ */
+function editorFields(
+  createdBy: string | null,
+  updatedBy: string | null,
+  editorName: string | null,
+  editorImage: string | null,
+): { editorId: string | null; editorName: string | null; editorImage: string | null } {
+  if (updatedBy === null || updatedBy === createdBy) {
+    return { editorId: null, editorName: null, editorImage: null };
+  }
+  return { editorId: updatedBy, editorName, editorImage };
+}
+
 function toPoint(lat: string | null, lng: string | null): { lat: number; lng: number } | null {
   if (lat === null || lng === null) return null;
   const point = { lat: Number(lat), lng: Number(lng) };
@@ -476,6 +552,10 @@ export async function updateMeetup(
       description: input.description ?? null,
       title: input.title,
       locationNotes: input.locationNotes ?? null,
+      // Who changed it, recorded on every edit including one by the author. The SCREEN decides
+      // whether that is worth saying, by comparing this against the creator - storing the
+      // judgement instead would bake in an answer that changes if an account is deleted.
+      updatedBy: ctx.userId,
       // Re-resolved rather than kept: an edit that changes the link has to change the point with
       // it, and an edit that clears the link has to clear the pin. Leaving the old coordinates
       // behind would draw a map of where the club used to meet.
@@ -515,12 +595,29 @@ export async function readMeetup(
     map_url: string | null;
     map_lat: string | null;
     map_lng: string | null;
+    created_by: string | null;
+    creator_name: string | null;
+    creator_image: string | null;
+    updated_by: string | null;
+    editor_name: string | null;
+    editor_image: string | null;
   }>(sql`
     SELECT m.id, m.club_id, cl.name AS club_name, m.meetup_date, m.meetup_time,
            m.location, m.description, m.title, m.location_notes,
-           m.map_url, m.map_lat::text, m.map_lng::text
+           m.map_url, m.map_lat::text, m.map_lng::text,
+           m.created_by::text AS created_by,
+           u.full_name AS creator_name,
+           u.image AS creator_image,
+           m.updated_by::text AS updated_by,
+           editor.full_name AS editor_name,
+           editor.image AS editor_image
       FROM meetups m
       JOIN clubs cl ON cl.id = m.club_id
+      -- LEFT for both: created_by is nullable and updated_by is null on anything never edited,
+      -- and an inner join on either would make the meetup itself vanish. (No backticks in here:
+      -- this is a template literal and one would end it. AGENTS.md 2.5.8.)
+      LEFT JOIN users u ON u.id = m.created_by
+      LEFT JOIN users editor ON editor.id = m.updated_by
      WHERE m.id = ${meetupId}
      LIMIT 1
   `);
@@ -550,6 +647,13 @@ export async function readMeetup(
       locationNotes: row.location_notes,
       mapUrl: row.map_url,
       mapPoint: toPoint(row.map_lat, row.map_lng),
+      creatorId: row.created_by,
+      creatorName: row.creator_name,
+      creatorImage: row.creator_image,
+      ...editorFields(row.created_by, row.updated_by, row.editor_name, row.editor_image),
+      // The same gate the week's long press uses, answered by the server rather than re-derived
+      // on the screen - `DESIGN/10` rule 4's rule, applied to a different surface.
+      canManage: canManageClubContent(ctx, row.club_id),
     },
   };
 }
@@ -568,6 +672,16 @@ export type MeetupDetail = {
   locationNotes: string | null;
   mapUrl: string | null;
   mapPoint: { lat: number; lng: number } | null;
+  /** Who added it. Null once their account is gone; the meetup outlives them. */
+  creatorId: string | null;
+  creatorName: string | null;
+  creatorImage: string | null;
+  /** Who last changed it, and null unless that is somebody else. See `editorFields`. */
+  editorId: string | null;
+  editorName: string | null;
+  editorImage: string | null;
+  /** Whether this viewer may edit or delete it. Any club admin, not only the author. */
+  canManage: boolean;
 };
 
 /** Any admin can delete any meetup, not only its author. */
@@ -1343,6 +1457,17 @@ export type EventDetail = {
   /** Null once the creator's account is gone - `created_by` is `on delete set null`. */
   creatorId: string | null;
   creatorName: string | null;
+  creatorImage: string | null;
+  /**
+   * Who last changed it, and **null unless that is somebody other than the creator**.
+   *
+   * The comparison happens here rather than on the screen so both detail surfaces cannot disagree
+   * about it, and so an edit by the author stays silent instead of rendering "Added by Dana,
+   * edited by Dana". A row edited by its own author is not news.
+   */
+  editorId: string | null;
+  editorName: string | null;
+  editorImage: string | null;
   /**
    * Whether this viewer may delete it. **Any club admin, not only the creator** - which is the
    * exact opposite of a poll, where only its creator can.
@@ -1379,6 +1504,10 @@ export async function readEvent(
     description: string | null;
     created_by: string | null;
     full_name: string | null;
+    creator_image: string | null;
+    updated_by: string | null;
+    editor_name: string | null;
+    editor_image: string | null;
   }>(sql`
     SELECT e.id::text AS id,
            e.club_id::text AS club_id,
@@ -1390,11 +1519,18 @@ export async function readEvent(
            e.map_url,
            e.description,
            e.created_by::text AS created_by,
-           u.full_name
+           u.full_name,
+           u.image AS creator_image,
+           e.updated_by::text AS updated_by,
+           editor.full_name AS editor_name,
+           editor.image AS editor_image
       FROM calendar_events e
       -- LEFT, because created_by is nullable: an inner join would make the event itself
       -- disappear the moment the person who added it deleted their account.
       LEFT JOIN users u ON u.id = e.created_by
+      -- And again for the editor, for the same reason and one more: updated_by is null on
+      -- everything that has never been edited, which is most rows.
+      LEFT JOIN users editor ON editor.id = e.updated_by
      WHERE e.id = ${eventId}
   `);
 
@@ -1416,6 +1552,10 @@ export async function readEvent(
       description: row.description,
       creatorId: row.created_by,
       creatorName: row.full_name,
+      creatorImage: row.creator_image,
+      // Suppressed when the editor IS the creator - see the type. Both ids are compared rather
+      // than the names, because two members can share a name and one person can change theirs.
+      ...editorFields(row.created_by, row.updated_by, row.editor_name, row.editor_image),
       canManage: canManageClubContent(ctx, row.club_id),
     },
   };

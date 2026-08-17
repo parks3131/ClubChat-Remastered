@@ -546,6 +546,20 @@ export const contentApi = {
     },
   ) => apiFetch<{ eventId: string }>(`/clubs/${clubId}/events`, { method: 'POST', body }),
 
+  /** The whole event, like the meetup and news PATCHes. Any admin; notifies nobody. */
+  updateEvent: (
+    eventId: string,
+    body: {
+      type: EventType;
+      title: string;
+      startsAt: string;
+      endsAt?: string | null;
+      location?: string | null;
+      mapUrl?: string | null;
+      description?: string | null;
+    },
+  ) => apiFetch<{ updated: true }>(`/events/${eventId}`, { method: 'PATCH', body }),
+
   /** Every club member, not only the admins who create them. `canManage` rides along. */
   event: (eventId: string) => apiFetch<{ event: EventDetail }>(`/events/${eventId}`),
 

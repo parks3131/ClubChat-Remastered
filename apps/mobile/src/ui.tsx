@@ -1727,6 +1727,49 @@ export function DetailLine({
 }
 
 /**
+ * A hairline between two rows inside a detail card.
+ *
+ * Its own element rather than a border on `DetailLine`, because a `DetailLine` hides itself when
+ * its value is empty - a border would then be drawn by a row that renders nothing, or skipped by
+ * one that does, and either way the rule lands in the wrong place. The caller places these
+ * because only the caller knows which rows survived.
+ */
+export function DetailRule() {
+  return <View style={styles.detailRule} />;
+}
+
+/**
+ * A person on a detail card: a label, their face, and their name.
+ *
+ * "Added by" is the case it was built for, and it reads differently from every other row on those
+ * cards - a location or a description is a fact about the thing, while this is somebody. A face
+ * says that faster than a label does, which is why the founder asked for one.
+ *
+ * Renders nothing without a name, so an account that has since been deleted leaves no empty row
+ * behind. The avatar falls back to an initial, which `Avatar` already owns.
+ */
+export function DetailPerson({
+  label,
+  name,
+  image,
+}: {
+  label: string;
+  name: string | null;
+  image: string | null;
+}) {
+  if (name === null || name.trim().length === 0) return null;
+  return (
+    <View style={styles.detailPerson}>
+      <Avatar name={name} image={image} size={40} />
+      <View style={styles.detailPersonText}>
+        <Text style={styles.detailLabel}>{label}</Text>
+        <Text style={styles.detailValue}>{name}</Text>
+      </View>
+    </View>
+  );
+}
+
+/**
  * The header a full-screen composer draws for itself.
  *
  * Three composers - poll, event, meeting - hide the navigator's header while creating and put
@@ -2304,6 +2347,14 @@ const styles = StyleSheet.create({
   bodyContent: { padding: space.md, gap: space.sm, paddingBottom: space.xl },
 
   detailLine: { gap: space.xs, paddingVertical: space.xs },
+  /** Inset from the card's own padding, so it separates rows rather than crossing the card. */
+  detailRule: {
+    height: 1,
+    backgroundColor: color.divider,
+    marginVertical: space.sm,
+  },
+  detailPerson: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingVertical: space.xs },
+  detailPersonText: { flex: 1, gap: space.xs },
   detailLabel: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
   detailLabelTitleCase: { textTransform: 'none', letterSpacing: 0, fontSize: 13, lineHeight: 18 },
   detailValue: { ...type.body, color: color.textPrimary },
