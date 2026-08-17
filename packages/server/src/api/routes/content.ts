@@ -21,6 +21,8 @@ import {
   deleteNewsPost,
   deleteMeetup,
   listMeetings,
+  MAX_NEWS_PHOTOS,
+  NEWS_ASPECTS,
   readEvent,
   readMeeting,
   readNewsFeed,
@@ -33,6 +35,7 @@ import {
   updateMeeting,
   updateNewsPost,
 } from '../../domain/content.ts';
+import { searchMemberCandidates } from '../../domain/member-candidates.ts';
 import { clubIdOfEboard } from '../../domain/scopes.ts';
 import { refusalStatus, type AppDeps } from '../plumbing.ts';
 
@@ -318,9 +321,25 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
   // News
   // ---------------------------------------------------------------------
 
+  /**
+   * What a post is written from.
+   *
+   * `mediaIds` is capped here as well as by the check constraint, so a client sending seven
+   * photos is told which rule it broke rather than watching a transaction die. The ORDER of the
+   * array is the carousel's order - this is the only place it is expressed, since the ordinal
+   * is derived from the index rather than sent.
+   *
+   * Every field is `nullish` in the same sense `PRD/06` rule 7 means: absent leaves it alone on
+   * an edit, explicit null clears it.
+   */
   const NewsBody = z.object({
+    title: z.string().max(200).nullish(),
     body: z.string().max(10_000).nullish(),
-    mediaId: z.string().uuid().nullish(),
+    mediaIds: z.array(z.string().uuid()).max(MAX_NEWS_PHOTOS).optional(),
+    aspect: z.enum(NEWS_ASPECTS).optional(),
+    locationName: z.string().max(200).nullish(),
+    locationUrl: z.string().max(2_000).nullish(),
+    peopleIds: z.array(z.string().uuid()).max(200).optional(),
   });
 
   app.post<{ Params: { id: string } }>('/clubs/:id/news', async (request, reply) => {
@@ -344,6 +363,8 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
   const FeedQuery = z.object({
     before: z.string().datetime().optional(),
     limit: z.coerce.number().int().positive().max(100).optional(),
+    /** PRD/06 rule 17: the feed's search box, over titles and tags, within this club only. */
+    q: z.string().max(200).optional(),
   });
 
   app.get<{ Params: { id: string } }>('/clubs/:id/news', async (request, reply) => {
@@ -354,6 +375,40 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return result;
   });
+
+  /**
+   * Who a post in this club can name: members of that club (ADR-0040).
+   *
+   * **Keyed on the club, not on a post**, because the composer is usually open on a post that
+   * does not exist yet. The same read backs the roster picker on three other screens, so the
+   * interaction the founder asked for - *"it should pop the search like how we will add people
+   * to a race"* - is the same component and not a copy of it.
+   *
+   * Refuses with `not_found` rather than `forbidden` for a caller who may not post, which is the
+   * non-disclosing refusal the rest of this surface uses: an empty list would leak the roster by
+   * exclusion.
+   */
+  const CandidateQuery = z.object({
+    q: z.string().max(200).optional(),
+    limit: z.coerce.number().int().positive().max(200).optional(),
+  });
+
+  app.get<{ Params: { id: string } }>(
+    '/clubs/:id/news/member-candidates',
+    async (request, reply) => {
+      const query = CandidateQuery.safeParse(request.query);
+      if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+
+      const result = await searchMemberCandidates(
+        deps.db,
+        request.access!,
+        { kind: 'news', clubId: request.params.id },
+        { query: query.data.q, limit: query.data.limit },
+      );
+      if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
+      return result;
+    },
+  );
 
   app.get<{ Params: { id: string } }>('/news/:id', async (request, reply) => {
     const result = await readNewsPost(deps.db, request.access!, request.params.id);

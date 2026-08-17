@@ -19,14 +19,17 @@
  */
 
 import { and, eq, sql } from 'drizzle-orm';
-import { isMapLink } from '@clubchat/shared';
+import { extractHashtags, isMapLink } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { isoUtc } from '../db/sql-helpers.ts';
 import { resolveMapPoint } from '../maps.ts';
 import {
   calendarEvents,
   meetings,
+  newsPostMedia,
+  newsPostPeople,
   newsPosts,
+  newsPostTags,
   newsReactions,
   meetupNudges,
   meetups,
@@ -867,40 +870,172 @@ export async function readMeetupWeek(
 // News
 // ---------------------------------------------------------------------------
 
+/** The three shapes a carousel can be drawn in. Mirrors `news_posts_aspect_valid`. */
+export const NEWS_ASPECTS = ['1:1', '4:5', '16:9'] as const;
+
+/** ADR-0038. Also a check constraint, so a route that forgets is still refused. */
+export const MAX_NEWS_PHOTOS = 6;
+
+/** What a post is written from. Every field but the club is optional; see `newsPostShape`. */
+export type NewsPostInput = {
+  title?: string | null | undefined;
+  body?: string | null | undefined;
+  mediaIds?: string[] | undefined;
+  aspect?: string | undefined;
+  locationName?: string | null | undefined;
+  locationUrl?: string | null | undefined;
+  peopleIds?: string[] | undefined;
+};
+
+/** Trimmed, or null. An empty string is not a title and must not become one. */
+function blankToNull(value: string | null | undefined): string | null {
+  const trimmed = (value ?? '').trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Everything about a post that can be wrong without touching the database.
+ *
+ * Returned as a single refusal rather than checked at three call sites, because create and edit
+ * have to agree exactly: an edit that could reach a state a create could not is a rule that only
+ * applies to new posts, which is not a rule.
+ */
+function newsPostShape(
+  next: {
+    title: string | null;
+    body: string | null;
+    mediaIds: string[];
+    aspect: string;
+    locationName: string | null;
+    locationUrl: string | null;
+  },
+): 'invalid' | null {
+  // PRD/06 rule 1. The deferred trigger says the same thing; this one produces a 400 instead
+  // of a transaction that dies at COMMIT.
+  if (!next.title && !next.body && next.mediaIds.length === 0) return 'invalid';
+  if (next.mediaIds.length > MAX_NEWS_PHOTOS) return 'invalid';
+  if (new Set(next.mediaIds).size !== next.mediaIds.length) return 'invalid';
+  if (!(NEWS_ASPECTS as readonly string[]).includes(next.aspect)) return 'invalid';
+  // A link with no name is unreachable: the card draws the row from the name.
+  if (next.locationUrl && !next.locationName) return 'invalid';
+  return null;
+}
+
+/**
+ * The subset of `userIds` who are actually members of this club.
+ *
+ * ADR-0040: you cannot name somebody in a club they are not in. Checked here rather than trusted
+ * to the picker, because the picker is a convenience and this is the rule.
+ */
+async function clubMembersAmong(db: Db, clubId: string, userIds: string[]): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const rows = await db.execute<{ user_id: string }>(sql`
+    SELECT user_id::text AS user_id
+      FROM club_memberships
+     WHERE club_id = ${clubId}::uuid
+       AND user_id = ANY(${sql.param(userIds)}::uuid[])
+  `);
+  return new Set(rows.rows.map((row) => row.user_id));
+}
+
+/**
+ * Write a post's photos, tags and named people. Used by create and by edit, which is the point:
+ * the two produce identical rows for identical input.
+ *
+ * **Tags are derived, never supplied.** They come out of the body every time it is written, so a
+ * post's chips and its sentence cannot disagree - editing `#longrun` out of the text removes the
+ * tag, with nothing to keep in sync.
+ */
+async function writePostChildren(
+  tx: Db,
+  postId: string,
+  next: { body: string | null; mediaIds: string[]; peopleIds: string[] },
+): Promise<void> {
+  await tx.delete(newsPostMedia).where(eq(newsPostMedia.postId, postId));
+  await tx.delete(newsPostTags).where(eq(newsPostTags.postId, postId));
+  await tx.delete(newsPostPeople).where(eq(newsPostPeople.postId, postId));
+
+  if (next.mediaIds.length > 0) {
+    await tx
+      .insert(newsPostMedia)
+      .values(next.mediaIds.map((mediaId, ordinal) => ({ postId, mediaId, ordinal })));
+
+    /*
+      A news photo is not a chat photo, and the Gallery reads this column to tell them apart.
+      Set on write rather than at upload because the uploader does not yet know what the object
+      is for - it is created against the club's main channel, which is what governs access, and
+      only becomes a post's photo here. See PRD/13 rule 4.
+    */
+    await tx.execute(sql`
+      UPDATE media_objects SET owner_type = 'news_post', owner_id = ${postId}::uuid
+       WHERE id = ANY(${sql.param(next.mediaIds)}::uuid[])
+    `);
+  }
+
+  const tags = extractHashtags(next.body);
+  if (tags.length > 0) {
+    // The index IS the order they were written in, which is what the chips are drawn in.
+    await tx.insert(newsPostTags).values(tags.map((tag, ordinal) => ({ postId, tag, ordinal })));
+  }
+
+  if (next.peopleIds.length > 0) {
+    await tx.insert(newsPostPeople).values(next.peopleIds.map((userId) => ({ postId, userId })));
+  }
+}
+
 /**
  * Create a news post. Any club admin.
  *
- * **Must have body text, a photo, or both.** The check constraint enforces it too, so this
- * refusal is about a clear error rather than about safety.
+ * **Must have a title, body text, or at least one photo** (PRD/06 rule 1). The deferred
+ * constraint trigger enforces it too, so this refusal is about a clear error rather than safety.
  *
- * **Creating notifies every other club member. Editing and deleting notify nobody.**
+ * **Creating notifies every other club member. Editing and deleting notify nobody**, except that
+ * somebody newly named in an edit is told they were named - see `updateNewsPost`.
  */
 export async function createNewsPost(
   db: Db,
   ctx: AccessContext,
-  input: { clubId: string; body?: string | null | undefined; mediaId?: string | null | undefined },
+  input: { clubId: string } & NewsPostInput,
 ): Promise<Result<{ postId: string }>> {
   if (!canManageClubContent(ctx, input.clubId)) return { ok: false, code: 'forbidden' };
-  const hasBody = (input.body ?? '').trim().length > 0;
-  if (!hasBody && !input.mediaId) return { ok: false, code: 'invalid' };
+
+  const next = {
+    title: blankToNull(input.title),
+    body: blankToNull(input.body),
+    mediaIds: input.mediaIds ?? [],
+    aspect: input.aspect ?? '1:1',
+    locationName: blankToNull(input.locationName),
+    locationUrl: blankToNull(input.locationUrl),
+  };
+  if (newsPostShape(next)) return { ok: false, code: 'invalid' };
+
+  const asked = [...new Set(input.peopleIds ?? [])];
+  const members = await clubMembersAmong(db, input.clubId, asked);
+  // A name that is not in this club is a refusal rather than a silent drop: the picker only
+  // offers members, so anything else is a client that has gone wrong or is being probed.
+  if (asked.some((userId) => !members.has(userId))) return { ok: false, code: 'invalid' };
 
   return db.transaction(async (tx) => {
     const rows = await tx
       .insert(newsPosts)
-      .values({
-        clubId: input.clubId,
-        authorId: ctx.userId,
-        body: hasBody ? (input.body ?? null) : null,
-        mediaId: input.mediaId ?? null,
-      })
+      .values({ clubId: input.clubId, authorId: ctx.userId, ...next })
       .returning();
     const post = rows[0];
     if (!post) throw new Error('news post insert returned no row');
 
+    await writePostChildren(tx as unknown as Db, post.id, { ...next, peopleIds: asked });
+
     await tx.insert(outbox).values({
       partitionKey: input.clubId,
       eventType: 'news.created',
-      payload: { clubId: input.clubId, postId: post.id, actorId: ctx.userId },
+      payload: {
+        clubId: input.clubId,
+        postId: post.id,
+        actorId: ctx.userId,
+        /* Who gets the specific line instead of the generic one. The worker subtracts these
+           from the push list; see ADR-0040 and the announcement branch it copies. */
+        taggedUserIds: asked,
+      },
     });
 
     return { ok: true as const, postId: post.id };
@@ -910,29 +1045,75 @@ export async function createNewsPost(
 /**
  * Edit a post. **Any club admin can edit any post**, not only its author.
  *
- * Notifies nobody - editing is a correction, not an announcement. Note there is no outbox
- * write here, which is the mechanism of that silence rather than a comment claiming it.
+ * Notifies nobody about the edit itself - it is a correction, not an announcement. The one
+ * exception is people **newly** named, who have not been told anything yet: they get the same
+ * "you were named" line a new post would have sent them, and nobody already on the post is
+ * buzzed again for a fixed typo (ADR-0040).
  */
 export async function updateNewsPost(
   db: Db,
   ctx: AccessContext,
   postId: string,
-  fields: { body?: string | null | undefined; mediaId?: string | null | undefined },
+  fields: NewsPostInput,
 ): Promise<Result<{ updated: true }>> {
   const rows = await db.select().from(newsPosts).where(eq(newsPosts.id, postId)).limit(1);
   const post = rows[0];
   if (!post) return { ok: false, code: 'not_found' };
   if (!canManageClubContent(ctx, post.clubId)) return { ok: false, code: 'forbidden' };
 
-  const nextBody = fields.body !== undefined ? fields.body : post.body;
-  const nextMedia = fields.mediaId !== undefined ? fields.mediaId : post.mediaId;
-  // Still cannot end up empty, whichever field the edit touched.
-  if (!(nextBody ?? '').trim() && !nextMedia) return { ok: false, code: 'invalid' };
+  const existingMedia = await db
+    .select({ mediaId: newsPostMedia.mediaId })
+    .from(newsPostMedia)
+    .where(eq(newsPostMedia.postId, postId))
+    .orderBy(newsPostMedia.ordinal);
+  const existingPeople = await db
+    .select({ userId: newsPostPeople.userId })
+    .from(newsPostPeople)
+    .where(eq(newsPostPeople.postId, postId));
 
-  await db
-    .update(newsPosts)
-    .set({ body: nextBody, mediaId: nextMedia, updatedAt: new Date() })
-    .where(eq(newsPosts.id, postId));
+  // An absent field means "leave it alone"; an explicit null means "clear it" (PRD/06 rule 7).
+  const next = {
+    title: fields.title !== undefined ? blankToNull(fields.title) : post.title,
+    body: fields.body !== undefined ? blankToNull(fields.body) : post.body,
+    mediaIds: fields.mediaIds ?? existingMedia.map((row) => row.mediaId),
+    aspect: fields.aspect ?? post.aspect,
+    locationName:
+      fields.locationName !== undefined ? blankToNull(fields.locationName) : post.locationName,
+    locationUrl:
+      fields.locationUrl !== undefined ? blankToNull(fields.locationUrl) : post.locationUrl,
+  };
+  if (newsPostShape(next)) return { ok: false, code: 'invalid' };
+
+  const before = new Set(existingPeople.map((row) => row.userId));
+  const asked = [...new Set(fields.peopleIds ?? [...before])];
+  const members = await clubMembersAmong(db, post.clubId, asked);
+  if (asked.some((userId) => !members.has(userId))) return { ok: false, code: 'invalid' };
+
+  // Only the difference has learned anything. Removing a tag sends nothing and withdraws
+  // nothing already delivered, the same shape as un-mentioning somebody in an edited message.
+  const newlyNamed = asked.filter((userId) => !before.has(userId) && userId !== ctx.userId);
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(newsPosts)
+      .set({ ...next, updatedAt: new Date() })
+      .where(eq(newsPosts.id, postId));
+
+    await writePostChildren(tx as unknown as Db, postId, { ...next, peopleIds: asked });
+
+    if (newlyNamed.length > 0) {
+      await tx.insert(outbox).values({
+        partitionKey: post.clubId,
+        eventType: 'news.tagged',
+        payload: {
+          clubId: post.clubId,
+          postId,
+          actorId: ctx.userId,
+          taggedUserIds: newlyNamed,
+        },
+      });
+    }
+  });
 
   return { ok: true, updated: true };
 }
@@ -1226,8 +1407,18 @@ export const NEWS_PAGE_SIZE = 20;
 
 export type NewsPostView = {
   id: string;
+  title: string | null;
   body: string | null;
-  mediaId: string | null;
+  /** The shape every photo below is drawn in. One per post, never per photo (ADR-0038). */
+  aspect: string;
+  /** Ordered, at most six. Empty for a text post. */
+  mediaIds: string[];
+  locationName: string | null;
+  locationUrl: string | null;
+  /** Lowercased, in the order they were written in the body. */
+  tags: string[];
+  /** Club members named in the post (ADR-0040). */
+  people: Array<{ userId: string; name: string; image: string | null }>;
   authorId: string;
   authorName: string;
   authorImage: string | null;
@@ -1236,6 +1427,48 @@ export type NewsPostView = {
   /** Every emoji with a count, and whether this viewer is in it. */
   reactions: Array<{ emoji: string; count: number; mine: boolean }>;
 };
+
+/** The columns every post read selects, so the feed and the permalink cannot drift apart. */
+const NEWS_POST_COLUMNS = sql`
+  p.id::text AS id,
+  p.club_id::text AS club_id,
+  p.title,
+  p.body,
+  p.aspect,
+  p.location_name,
+  p.location_url,
+  p.author_id::text AS author_id,
+  u.full_name,
+  u.image,
+  ${isoUtc('p.created_at')} AS created_at,
+  ${isoUtc('p.updated_at')} AS updated_at
+`;
+
+type NewsPostRow = {
+  id: string;
+  club_id: string;
+  title: string | null;
+  body: string | null;
+  aspect: string;
+  location_name: string | null;
+  location_url: string | null;
+  author_id: string;
+  full_name: string;
+  image: string | null;
+  created_at: string;
+  updated_at: string | null;
+};
+
+/**
+ * A `LIKE` pattern that matches `term` literally.
+ *
+ * Without this a member searching for `50%` gets every post in the club, because `%` is the
+ * wildcard rather than the character they typed. The backslash is PostgreSQL's default `LIKE`
+ * escape, so no `ESCAPE` clause is needed.
+ */
+function likeContains(term: string): string {
+  return `%${term.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+}
 
 /**
  * The club's front page: reverse-chronological, newest first.
@@ -1250,34 +1483,43 @@ export async function readNewsFeed(
   db: Db,
   ctx: AccessContext,
   clubId: string,
-  opts: { before?: string | undefined; limit?: number | undefined } = {},
+  opts: { before?: string | undefined; limit?: number | undefined; q?: string | undefined } = {},
 ): Promise<Result<{ posts: NewsPostView[]; hasMore: boolean }>> {
   if (!canReadClubContent(ctx, clubId)) return { ok: false, code: 'not_found' };
 
   const limit = Math.min(opts.limit ?? NEWS_PAGE_SIZE, 100);
 
-  const rows = await db.execute<{
-    id: string;
-    body: string | null;
-    media_id: string | null;
-    author_id: string;
-    full_name: string;
-    image: string | null;
-    created_at: string;
-    updated_at: string | null;
-  }>(sql`
-    SELECT p.id::text AS id,
-           p.body,
-           p.media_id::text AS media_id,
-           p.author_id::text AS author_id,
-           u.full_name,
-           u.image,
-           ${isoUtc('p.created_at')} AS created_at,
-           ${isoUtc('p.updated_at')} AS updated_at
+  /*
+    PRD/06 rule 17: the box searches titles and tags, and nothing else.
+
+    The two halves match differently on purpose. A **title** is a sentence, so it matches
+    anywhere inside - somebody looking for "Binghamton" should find "Evening Run in Binghamton".
+    A **tag** is a word somebody chose as a label, so it matches from the start, which is what
+    makes typing `long` find `#longrun` while it is still being typed. Prefix matching is also
+    the half `news_post_tags_by_tag` can actually serve.
+
+    The leading `#` is stripped because a member searching for a tag types the character they
+    can see on the chip, and requiring them not to would be a rule with no reason behind it.
+  */
+  const term = opts.q?.trim() ?? '';
+  const searching = term.length > 0;
+  const tagPrefix = `${term.replace(/^#/, '').toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+  const rows = await db.execute<NewsPostRow>(sql`
+    SELECT ${NEWS_POST_COLUMNS}
       FROM news_posts p
       JOIN users u ON u.id = p.author_id
      WHERE p.club_id = ${clubId}
        ${opts.before ? sql`AND p.created_at < ${opts.before}::timestamptz` : sql``}
+       ${
+         searching
+           ? sql`AND (
+                   p.title ILIKE ${likeContains(term)}
+                   OR EXISTS (SELECT 1 FROM news_post_tags t
+                               WHERE t.post_id = p.id AND t.tag LIKE ${tagPrefix})
+                 )`
+           : sql``
+       }
      ORDER BY p.created_at DESC
      LIMIT ${limit + 1}
   `);
@@ -1288,7 +1530,7 @@ export async function readNewsFeed(
 
   return {
     ok: true,
-    posts: await withReactions(db, ctx, page),
+    posts: await hydratePosts(db, ctx, page),
     hasMore,
   };
 }
@@ -1299,26 +1541,8 @@ export async function readNewsPost(
   ctx: AccessContext,
   postId: string,
 ): Promise<Result<{ post: NewsPostView }>> {
-  const rows = await db.execute<{
-    id: string;
-    club_id: string;
-    body: string | null;
-    media_id: string | null;
-    author_id: string;
-    full_name: string;
-    image: string | null;
-    created_at: string;
-    updated_at: string | null;
-  }>(sql`
-    SELECT p.id::text AS id,
-           p.club_id::text AS club_id,
-           p.body,
-           p.media_id::text AS media_id,
-           p.author_id::text AS author_id,
-           u.full_name,
-           u.image,
-           ${isoUtc('p.created_at')} AS created_at,
-           ${isoUtc('p.updated_at')} AS updated_at
+  const rows = await db.execute<NewsPostRow>(sql`
+    SELECT ${NEWS_POST_COLUMNS}
       FROM news_posts p
       JOIN users u ON u.id = p.author_id
      WHERE p.id = ${postId}
@@ -1328,7 +1552,7 @@ export async function readNewsPost(
   if (!row) return { ok: false, code: 'not_found' };
   if (!canReadClubContent(ctx, row.club_id)) return { ok: false, code: 'not_found' };
 
-  const [post] = await withReactions(db, ctx, [row]);
+  const [post] = await hydratePosts(db, ctx, [row]);
   if (!post) return { ok: false, code: 'not_found' };
   return { ok: true, post };
 }
@@ -1342,55 +1566,103 @@ export async function readNewsPost(
  * viewer's own membership resolved server-side, because "did I react" cannot be derived from
  * a count.
  */
-async function withReactions(
+async function hydratePosts(
   db: Db,
   ctx: AccessContext,
-  rows: ReadonlyArray<{
-    id: string;
-    body: string | null;
-    media_id: string | null;
-    author_id: string;
-    full_name: string;
-    image: string | null;
-    created_at: string;
-    updated_at: string | null;
-  }>,
+  rows: ReadonlyArray<NewsPostRow>,
 ): Promise<NewsPostView[]> {
   if (rows.length === 0) return [];
 
   const ids = rows.map((row) => row.id);
-  const reactionRows = await db.execute<{
-    post_id: string;
-    emoji: string;
-    count: string;
-    mine: boolean;
-  }>(sql`
-    SELECT post_id::text AS post_id,
-           emoji,
-           count(*) AS count,
-           bool_or(user_id = ${ctx.userId}) AS mine
-      FROM news_reactions
-     WHERE post_id = ANY(${sql.param(ids)}::uuid[])
-     GROUP BY post_id, emoji
-     ORDER BY emoji
-  `);
 
-  const byPost = new Map<string, NewsPostView['reactions']>();
+  /*
+    Four reads for a page of any size, rather than four per post. The four run together because
+    none of them depends on another's answer - a feed of twenty posts costs the same round trips
+    as a feed of one, which is the property that matters when the page size is a parameter.
+  */
+  const [reactionRows, mediaRows, tagRows, peopleRows] = await Promise.all([
+    db.execute<{ post_id: string; emoji: string; count: string; mine: boolean }>(sql`
+      SELECT post_id::text AS post_id,
+             emoji,
+             count(*) AS count,
+             bool_or(user_id = ${ctx.userId}) AS mine
+        FROM news_reactions
+       WHERE post_id = ANY(${sql.param(ids)}::uuid[])
+       GROUP BY post_id, emoji
+       ORDER BY emoji
+    `),
+    // ORDER BY ordinal is the carousel's order, and it is the whole reason this is a table.
+    db.execute<{ post_id: string; media_id: string }>(sql`
+      SELECT post_id::text AS post_id, media_id::text AS media_id
+        FROM news_post_media
+       WHERE post_id = ANY(${sql.param(ids)}::uuid[])
+       ORDER BY post_id, ordinal
+    `),
+    /* ORDER BY ordinal, never by tag: alphabetical is deterministic and is not the order
+       anybody typed. See 0036_news_tag_order.sql. */
+    db.execute<{ post_id: string; tag: string }>(sql`
+      SELECT post_id::text AS post_id, tag
+        FROM news_post_tags
+       WHERE post_id = ANY(${sql.param(ids)}::uuid[])
+       ORDER BY post_id, ordinal
+    `),
+    /* Named people come back with a face, because the card draws them and the sheet lists them.
+       Ordered by name so two reads of the same post cannot shuffle the row order. */
+    db.execute<{ post_id: string; user_id: string; full_name: string; image: string | null }>(sql`
+      SELECT np.post_id::text AS post_id,
+             np.user_id::text AS user_id,
+             u.full_name,
+             u.image
+        FROM news_post_people np
+        JOIN users u ON u.id = np.user_id
+       WHERE np.post_id = ANY(${sql.param(ids)}::uuid[])
+       ORDER BY np.post_id, u.full_name
+    `),
+  ]);
+
+  const reactions = new Map<string, NewsPostView['reactions']>();
   for (const row of reactionRows.rows) {
-    const list = byPost.get(row.post_id) ?? [];
+    const list = reactions.get(row.post_id) ?? [];
     list.push({ emoji: row.emoji, count: Number(row.count), mine: row.mine });
-    byPost.set(row.post_id, list);
+    reactions.set(row.post_id, list);
+  }
+
+  const media = new Map<string, string[]>();
+  for (const row of mediaRows.rows) {
+    const list = media.get(row.post_id) ?? [];
+    list.push(row.media_id);
+    media.set(row.post_id, list);
+  }
+
+  const tags = new Map<string, string[]>();
+  for (const row of tagRows.rows) {
+    const list = tags.get(row.post_id) ?? [];
+    list.push(row.tag);
+    tags.set(row.post_id, list);
+  }
+
+  const people = new Map<string, NewsPostView['people']>();
+  for (const row of peopleRows.rows) {
+    const list = people.get(row.post_id) ?? [];
+    list.push({ userId: row.user_id, name: row.full_name, image: row.image });
+    people.set(row.post_id, list);
   }
 
   return rows.map((row) => ({
     id: row.id,
+    title: row.title,
     body: row.body,
-    mediaId: row.media_id,
+    aspect: row.aspect,
+    mediaIds: media.get(row.id) ?? [],
+    locationName: row.location_name,
+    locationUrl: row.location_url,
+    tags: tags.get(row.id) ?? [],
+    people: people.get(row.id) ?? [],
     authorId: row.author_id,
     authorName: row.full_name,
     authorImage: row.image,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    reactions: byPost.get(row.id) ?? [],
+    reactions: reactions.get(row.id) ?? [],
   }));
 }

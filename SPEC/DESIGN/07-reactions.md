@@ -9,9 +9,17 @@ and in a club where forty people share a chat, *which* Emma agreed is most of th
 
 ## Where it appears
 
-Under every message and every card in chat, in all four scopes. The sheet opens from the pills and
-nowhere else. News posts have their own fixed row of quick reactions and no sheet - a different
-surface that happens to share the catalog ([Chat](../PRD/05-chat.md) rule R6).
+Under every message and every card in chat, in all four scopes, **and under every news post**. The
+sheet opens from the pills and nowhere else.
+
+> **News used to be the exception and stopped being one on 2026-08-16.** It had a fixed row of six
+> quick reactions, always drawn whether or not anybody had used them, with no picker and no sheet -
+> justified as a different surface that happened to share the catalog. Shown the post mockup, the
+> founder asked for chat's behaviour instead: *"you can reach and apply the same thing how the
+> emoji and [long]press on any emoji we can select using the emoji category we created"*. So the
+> pills, the `+` picker over the full catalog and the hold-to-see-who sheet are one surface across
+> the product now, and `news_reactions.emoji` already keyed the same catalog table, so nothing in
+> the data had to move.
 
 ## Anatomy
 

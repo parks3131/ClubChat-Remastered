@@ -125,6 +125,12 @@ const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
     actorName: 'Riley',
     postId: POST,
   },
+  news_post_tagged: {
+    clubId: CLUB,
+    clubName: 'Hillside',
+    actorName: 'Riley',
+    postId: POST,
+  },
   meetup_nudged: {
     clubId: CLUB,
     clubName: 'Hillside',
@@ -196,7 +202,7 @@ const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
 };
 
 describe('the catalogue is complete', () => {
-  it('declares 23 types: the PRD table, two push-only kinds, two reports and the nudge', () => {
+  it('declares 24 types: the PRD table, two push-only kinds, two reports, the nudge and a naming', () => {
     // PRD/12's catalogue lists 18. dm_message is the nineteenth and never appears in that
     // table because it never becomes an inbox row - it exists so a direct message can buzz a
     // phone, which is what makes muting a conversation mean anything. See ADR-0015.
@@ -210,7 +216,11 @@ describe('the catalogue is complete', () => {
     // user_reported is the twenty-third, added 2026-08-15 with Report on the member card: the
     // other noun a report can name, and the only type with exactly one audience and no scope
     // switch at all. See ADR-0035.
-    expect(notificationTypes).toHaveLength(23);
+    // news_post_tagged is the twenty-fourth, added 2026-08-16 when a post could name people:
+    // the only type that deliberately duplicates another one's inbox row, because being told the
+    // club posted and being told you are in it clear against different things. Only the push is
+    // deduplicated. See ADR-0040.
+    expect(notificationTypes).toHaveLength(24);
   });
 
   it('has a params schema for every type', () => {
@@ -443,6 +453,7 @@ describe('notificationSubject', () => {
     'event_created',
     'meeting_created',
     'news_post_created',
+    'news_post_tagged',
     'meetup_nudged',
     'car_group_incharge_left',
     /*

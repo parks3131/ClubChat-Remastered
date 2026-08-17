@@ -199,6 +199,40 @@ export function BackTo({
 }
 
 /**
+ * A back control that unwinds a step **inside** a screen, without navigating anywhere.
+ *
+ * **Not a third definition of "back" - a different verb.** `useGoBack` owns navigation and stays
+ * the only thing that pops a route. This is for a screen that holds its own steps: the News screen
+ * is a feed, a composer and a people picker in one route, and the layout's `headerLeft` is built
+ * per ROUTE, so it cannot know which of the three is showing.
+ *
+ * > **Reported from the phone on 2026-08-16, in the plainest terms:** *"if I go and select people
+ * > to tag ... and I just click back button, it just take me outside instead of the previous
+ * > page."* It was worse than reported - the arrow left the news screen entirely from the composer
+ * > too, landing on Chats, because the layout's arrow was doing exactly what it was told: unwind
+ * > the whole route. Two levels of in-screen state, one route-level control, and nothing joining
+ * > them.
+ *
+ * A screen using this must also turn the swipe-back gesture off while it has steps to unwind, or
+ * the gesture skips every one of them and reproduces the same bug with a different finger.
+ */
+export function BackStep({ onPress, label }: { onPress: () => void; label: string }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`Back to ${label}`}
+      hitSlop={space.sm}
+      style={styles.backWrap}
+    >
+      {/* The same arrow as every other nested header. A step back and a route back look alike
+          on purpose - the difference is where they land, not what they are. */}
+      <MaterialIcons name="arrow-back" size={22} color={color.accent} />
+    </Pressable>
+  );
+}
+
+/**
  * A back control that ALWAYS goes to its target, ignoring whatever history exists.
  *
  * For the two cross-stack jumps where popping is a live loop rather than a convenience: a club hub

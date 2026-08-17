@@ -118,6 +118,49 @@ export async function pickPhoto(): Promise<PickedAttachment | null> {
   };
 }
 
+/** A picked photo that also knows its own size, which is what a crop rectangle is measured in. */
+export type PickedPhoto = PickedAttachment & { width: number; height: number };
+
+/**
+ * Pick up to `max` pictures at once, for a news post's gallery.
+ *
+ * **`allowsEditing` is deliberately absent, and it is not an oversight.** It and
+ * `allowsMultipleSelection` are mutually exclusive in `expo-image-picker` - the OS editor crops
+ * one image - so asking for a batch means the OS cropper cannot be the thing that crops. A news
+ * post does not need it to be: every photo in a post is cropped to the SAME shape, which the
+ * author chooses once, so the rectangle is computed with `centredRectForRatio` and applied by the
+ * server. See ADR-0038.
+ *
+ * The dimensions come back with the asset and are what that rectangle is measured against. An
+ * asset that reports none yields a whole-image crop rather than a guessed one.
+ *
+ * > Contrast `pickPhoto`, which stays single-select for chat: [`11-photo-compose`](../../../SPEC/DESIGN/11-photo-compose.md)
+ * > rule 6 keeps one photo at a time there, because a partially sent batch is worse than sending
+ * > twice. A post is not sent - it is composed and then published in one act, so a photo that
+ * > fails to upload is a thumbnail with a retry rather than half a conversation.
+ */
+export async function pickPhotos(max: number): Promise<PickedPhoto[]> {
+  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!permission.granted) {
+    throw new UploadError('no_permission', 'ClubChat needs permission to open your photos.');
+  }
+
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images'],
+    allowsMultipleSelection: true,
+    selectionLimit: Math.max(1, max),
+    quality: 0.85,
+  });
+  if (result.canceled) return [];
+
+  return result.assets.slice(0, max).map((asset) => ({
+    uri: asset.uri,
+    mime: asset.mimeType ?? 'image/jpeg',
+    width: asset.width ?? 0,
+    height: asset.height ?? 0,
+  }));
+}
+
 /**
  * Pick a picture that will be shown in a **square frame**, with a crop step.
  *

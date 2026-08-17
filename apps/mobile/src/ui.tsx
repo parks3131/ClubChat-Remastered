@@ -1669,6 +1669,24 @@ export function Body({ children }: { children?: ReactNode }) {
       style={styles.bodyScroll}
       contentContainerStyle={styles.bodyContent}
       keyboardShouldPersistTaps="handled"
+      /*
+        **The keyboard must not sit on top of the field being typed into.**
+
+        Reported from the device on 2026-08-16 with a screen recording: tapping a field low in the
+        news composer put it behind the keyboard, and the two buttons under it with it. Seventeen
+        screens render through `Body` and none of them handled this - the three auth screens each
+        hand-rolled a `KeyboardAvoidingView`, which is why the bug survived: every screen that hit
+        it fixed only itself, so the shared component was never the thing that changed.
+
+        `automaticallyAdjustKeyboardInsets` is UIScrollView's own answer and does both halves: it
+        insets the bottom by the keyboard's height AND scrolls the focused input into view, then
+        undoes both on dismiss. It is iOS-only; Android resizes the window instead and the web
+        ignores it, so all three land in the same place.
+
+        Not `KeyboardAvoider`: that one pads the bottom of a PINNED bar, which is right for chat's
+        composer and wrong for a form, where the thing that has to move is the scroll offset.
+      */
+      automaticallyAdjustKeyboardInsets
     >
       {children}
     </ScrollView>

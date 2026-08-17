@@ -14,6 +14,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  centredRectForRatio,
   dragRect,
   grabZone,
   GRIPS,
@@ -361,5 +362,56 @@ describe('whether there is anything to cut', () => {
   it('treats a real crop as not whole', () => {
     expect(isWholeImage({ x: 0, y: 0, width: 0.9, height: 1 })).toBe(false);
     expect(isWholeImage({ x: 0.05, y: 0, width: 0.95, height: 1 })).toBe(false);
+  });
+});
+
+describe('the shape a whole post is cropped to', () => {
+  const SQUARE = 1;
+  const PORTRAIT = 4 / 5;
+  const LANDSCAPE = 16 / 9;
+
+  it('trims the sides of a picture wider than the target', () => {
+    // 2000x1000 into a square: keep the full height, take the middle 1000 wide.
+    const rect = centredRectForRatio({ width: 2000, height: 1000 }, SQUARE);
+    expect(rect.height).toBe(1);
+    expect(rect.width).toBeCloseTo(0.5, 6);
+    expect(rect.x).toBeCloseTo(0.25, 6);
+    expect(rect.y).toBe(0);
+  });
+
+  it('trims the top and bottom of a picture taller than the target', () => {
+    // A phone portrait photo into a landscape post.
+    const rect = centredRectForRatio({ width: 1080, height: 1920 }, LANDSCAPE);
+    expect(rect.width).toBe(1);
+    expect(rect.height).toBeCloseTo((1080 / 1920) / LANDSCAPE, 6);
+    expect(rect.x).toBe(0);
+    // Centred, so what is cut off the top equals what is cut off the bottom.
+    expect(rect.y).toBeCloseTo((1 - rect.height) / 2, 6);
+  });
+
+  it('leaves a picture that already has the target shape entirely alone', () => {
+    // The common case, and the one worth being exact about: it must read as "nothing to cut",
+    // or the server decodes and re-encodes a picture to produce a copy of itself.
+    expect(isWholeImage(centredRectForRatio({ width: 1200, height: 1200 }, SQUARE))).toBe(true);
+    expect(isWholeImage(centredRectForRatio({ width: 1600, height: 2000 }, PORTRAIT))).toBe(true);
+  });
+
+  it('produces a region the extractor will accept', () => {
+    const source = { width: 4032, height: 3024 };
+    const region = toSourceRect(centredRectForRatio(source, PORTRAIT), source);
+
+    // The pipeline refuses a rectangle that does not fit inside the picture rather than
+    // clamping it, so the rounding has to land inside the bounds on its own.
+    expect(region.originX).toBeGreaterThanOrEqual(0);
+    expect(region.originY).toBeGreaterThanOrEqual(0);
+    expect(region.originX + region.width).toBeLessThanOrEqual(source.width);
+    expect(region.originY + region.height).toBeLessThanOrEqual(source.height);
+    expect(region.width / region.height).toBeCloseTo(PORTRAIT, 2);
+  });
+
+  it('refuses to divide by a picture it has no dimensions for', () => {
+    // ImagePicker can hand back an asset with no width or height. Cropping to a guess would put
+    // a confidently wrong region on the upload; the whole image is the honest answer.
+    expect(centredRectForRatio({ width: 0, height: 0 }, SQUARE)).toEqual(WHOLE);
   });
 });

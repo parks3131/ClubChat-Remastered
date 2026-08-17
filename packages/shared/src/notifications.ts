@@ -48,6 +48,16 @@ export const notificationTypes = [
   'race_created',
   'meeting_created',
   'news_post_created',
+  /**
+   * You were named in a club news post (ADR-0040).
+   *
+   * Sits beside `news_post_created` rather than replacing it: a named member gets **both** inbox
+   * rows, because one says the club was told something and the other says they were named in it,
+   * and they clear against different things. Only the PUSH is deduplicated, which the worker does
+   * by subtracting these people from the generic audience - the same shape the announcement
+   * branch uses for mentions.
+   */
+  'news_post_tagged',
   // Chat.
   'announcement',
   'mentioned',
@@ -265,6 +275,7 @@ export const notificationParams = {
     title: z.string(),
   }),
   news_post_created: club.merge(actor).extend({ postId: Uuid }),
+  news_post_tagged: club.merge(actor).extend({ postId: Uuid }),
   /**
    * Where and when, carried as params rather than as a sentence.
    *
@@ -531,6 +542,7 @@ export function notificationTarget(n: {
     case 'meeting_created':
       return { kind: 'meeting', meetingId: p['meetingId']! };
     case 'news_post_created':
+    case 'news_post_tagged':
       return { kind: 'news', clubId: p['clubId']! };
     case 'meetup_nudged':
       return { kind: 'meetup', meetupId: p['meetupId']! };
@@ -712,6 +724,10 @@ export function notificationSubject(n: {
     case 'event_created':
     case 'meeting_created':
     case 'news_post_created':
+    /* Being named in a post is still ABOUT the post, so it keeps the post's glyph rather than
+       borrowing the namer's face. `mentioned` takes a picture because it points at a
+       conversation, and a news post is not one. */
+    case 'news_post_tagged':
     case 'meetup_nudged':
     case 'car_group_incharge_left':
       return null;
@@ -824,6 +840,8 @@ export function renderNotification(n: {
       return { title: p['clubName']!, body: `${p['actorName']} scheduled ${p['title']}` };
     case 'news_post_created':
       return { title: p['clubName']!, body: `${p['actorName']} posted club news` };
+    case 'news_post_tagged':
+      return { title: p['clubName']!, body: `${p['actorName']} named you in a post` };
     /*
      * Where and when, in that order, because they are what the reader needs off a lock screen.
      *

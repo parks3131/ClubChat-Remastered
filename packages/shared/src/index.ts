@@ -13,3 +13,8 @@ export * from './notifications.ts';
   just pasted will work before waiting for a round trip.
 */
 export * from './map-link.ts';
+/*
+  A news post's hashtags. In shared for the same reason as map-link: the composer draws the chips
+  the server is going to store, so both ends have to agree on what a tag is down to the character.
+*/
+export * from './hashtags.ts';

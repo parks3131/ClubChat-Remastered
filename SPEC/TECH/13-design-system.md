@@ -16,6 +16,19 @@ System". The remaster may restyle, but these structural rules should survive.
    lands everywhere at once.
 6. **Consistent headers** across every club-scoped screen, including a working back control
    on screens reached by deep link.
+7. **The keyboard never covers the field being typed into, and `Body` is where that is
+   answered.** Seventeen screens scroll through `Body`, and it handled the keyboard on none of
+   them until 2026-08-16: a field low in a form went behind the keys, and so did the buttons
+   under it. It now sets `automaticallyAdjustKeyboardInsets`, which insets the scroll AND brings
+   the focused input into view.
+
+   > **The reason it survived so long is rule 5 read backwards.** The three auth screens each
+   > hand-rolled a `KeyboardAvoidingView`, so every screen that hit the bug fixed only itself and
+   > the shared component was never the thing that changed. A fix that lands in one call site is
+   > evidence the shared one is missing something.
+
+   `KeyboardAvoider` is a different tool and not a substitute: it pads a **pinned** bar, which is
+   what chat's composer needs. In a form the thing that has to move is the scroll offset.
 
 ### Current tokens
 

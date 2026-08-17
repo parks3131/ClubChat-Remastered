@@ -135,6 +135,20 @@ check 400 "news reaction, skin-tone variant" -X POST "${AM[@]}" "${JSON[@]}" -d 
 check 400 "news reaction that is not emoji"  -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"nope"}' "$API/news/$NEWS/reactions"
 check 200 "news reaction, plain in catalog"  -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"👏"}' "$API/news/$NEWS/reactions"
 check 200 "news reaction, once in the six"   -X POST "${AM[@]}" "${JSON[@]}" -d '{"emoji":"🔥"}' "$API/news/$NEWS/reactions"
+
+# 2026-08-16: a post grew a headline, a gallery, a place, tags and a cast. See ADR-0038 to 0040.
+# The seventh photo is the one worth having over TCP: the composer stops at six, the route stops
+# at six, and a constraint stops at six, and only this line proves the middle one is wired.
+check 201 "POST news, title only"   -X POST "${AO[@]}" "${JSON[@]}" -d '{"title":"Evening Run in Binghamton"}' "$API/clubs/$CLUB/news"
+check 400 "POST news, blank title and body" -X POST "${AO[@]}" "${JSON[@]}" -d '{"title":"  ","body":"  "}' "$API/clubs/$CLUB/news"
+check 400 "POST news, seventh photo" -X POST "${AO[@]}" "${JSON[@]}" -d '{"title":"Seven","mediaIds":["11111111-1111-4111-8111-111111111101","11111111-1111-4111-8111-111111111102","11111111-1111-4111-8111-111111111103","11111111-1111-4111-8111-111111111104","11111111-1111-4111-8111-111111111105","11111111-1111-4111-8111-111111111106","11111111-1111-4111-8111-111111111107"]}' "$API/clubs/$CLUB/news"
+check 400 "POST news, aspect off the list" -X POST "${AO[@]}" "${JSON[@]}" -d '{"title":"Wide","aspect":"3:2"}' "$API/clubs/$CLUB/news"
+check 400 "POST news, link with no place"  -X POST "${AO[@]}" "${JSON[@]}" -d '{"title":"Where","locationUrl":"https://maps.example.invalid/x"}' "$API/clubs/$CLUB/news"
+check 400 "POST news, naming a non-member" -X POST "${AO[@]}" "${JSON[@]}" -d '{"title":"Recap","peopleIds":["11111111-1111-4111-8111-1111111111ff"]}' "$API/clubs/$CLUB/news"
+check 200 "GET news search"          "${AM[@]}" "$API/clubs/$CLUB/news?q=Binghamton"
+check 200 "GET news tag candidates as owner"  "${AO[@]}" "$API/clubs/$CLUB/news/member-candidates"
+# Non-disclosing: a member who cannot post must not learn the roster by exclusion.
+check 404 "GET news tag candidates as member" "${AM[@]}" "$API/clubs/$CLUB/news/member-candidates"
 # A meetup is named rather than placed since 2026-08-15: the form asks for a link, not a place,
 # so the NAME is what a blank is refused for. This gate is what caught the rename reaching every
 # test and none of the callers - `npm test` was green while CI was red, because the gate goes over

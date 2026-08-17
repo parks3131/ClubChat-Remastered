@@ -165,6 +165,14 @@ async function gather(db: Db, request: AudienceRequest): Promise<string[]> {
     case 'event_created':
     case 'race_created':
     case 'news_post_created':
+    /*
+     * `news_post_tagged` names specific people, so it looks like it belongs in the
+     * explicit-recipients group below. It is here because the caller does NOT use it as the
+     * audience: it intersects the named list with this one, which is what removes somebody who
+     * was named and has since left the club. Returning `[]` here would make that intersection
+     * empty and silently notify nobody.
+     */
+    case 'news_post_tagged':
     case 'meetup_nudged':
       if (!request.clubId) return [];
       return clubMembers(db, request.clubId);

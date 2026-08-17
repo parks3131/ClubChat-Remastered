@@ -19,6 +19,12 @@
    inherits the chat's own access rules. Club, race, and Eboard each have their own, reached
    from that space's profile screen.
 4. **A photo enters a gallery only by being posted in chat.** There is no separate upload.
+   **A news-post photo is the case that tests this**, and until 2026-08-16 it broke it: news
+   photos are uploaded against the club's main channel so that channel's access rules govern
+   them, and they were recorded as `owner_type: 'message'`, so they appeared in a gallery of a
+   conversation they were never posted in. They carry `owner_type: 'news_post'` now and the
+   gallery filters on it. The channel still governs access, which was always the right part.
+   See [ADR-0038](../decisions/0038-a-news-post-carries-an-ordered-gallery.md).
 5. **Signed display URLs must be stable per device**, not minted per fetch. A URL that changes
    on every fetch guarantees a permanent cache miss at every layer (the signature rides in the
    query string, and the query string is part of every cache key). Memoize them, refresh

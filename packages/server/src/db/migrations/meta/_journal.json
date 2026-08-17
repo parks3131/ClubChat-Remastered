@@ -246,6 +246,20 @@
       "when": 1786885521091,
       "tag": "0034_drop_club_sport",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1786920783110,
+      "tag": "0035_news_post_gallery",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1786924351444,
+      "tag": "0036_news_tag_order",
+      "breakpoints": true
     }
   ]
 }

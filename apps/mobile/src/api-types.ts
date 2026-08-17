@@ -252,10 +252,45 @@ export type MeetingDetail = MeetingSummary & {
   clubId: string;
 };
 
+/**
+ * What the composer sends, for both create and edit.
+ *
+ * **An absent field means "leave it alone"; an explicit `null` means "clear it"** (PRD/06 rule
+ * 7). That distinction is the whole reason this is not `Partial<NewsPost>`: `undefined` and
+ * `null` mean different things here, and an edit that sent every field every time would make
+ * "leave the photos alone" impossible to express.
+ */
+export type NewsPostDraft = {
+  title?: string | null;
+  body?: string | null;
+  /** Order is the carousel order. At most six; the server and a constraint both refuse a seventh. */
+  mediaIds?: string[];
+  aspect?: '1:1' | '4:5' | '16:9';
+  locationName?: string | null;
+  locationUrl?: string | null;
+  peopleIds?: string[];
+};
+
 export type NewsPost = {
   id: string;
+  title: string | null;
   body: string | null;
-  mediaId: string | null;
+  /**
+   * The shape EVERY photo below is drawn in, chosen once by the author.
+   *
+   * On the post rather than on the photo, so the carousel is one box and swiping cannot change
+   * the card's height. See ADR-0038.
+   */
+  aspect: '1:1' | '4:5' | '16:9';
+  /** Ordered, at most six. Empty for a text post. */
+  mediaIds: string[];
+  locationName: string | null;
+  /** What the location opens, when there is one. Never resolved to a map (ADR-0039). */
+  locationUrl: string | null;
+  /** Lowercased, in the order they were written in the body. Each one is a search. */
+  tags: string[];
+  /** Club members named in the post (ADR-0040). */
+  people: Array<{ userId: string; name: string; image: string | null }>;
   authorId: string;
   authorName: string;
   authorImage: string | null;

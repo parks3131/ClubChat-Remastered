@@ -22,6 +22,7 @@
  * | Club | anybody sharing a club with the caller | the widest thing the caller can already see |
  * | Race | members of that race's club | a race is a mini-club inside one club |
  * | Eboard | admin tier of that club | `addEboardMember` refuses anybody else anyway |
+ * | News | members of the post's club | you cannot name somebody in a club they are not in |
  *
  * **The Eboard row is the one that matters.** Offering a plain member there would produce a search
  * result that fails on tap - and worse, it would advertise a capability the command refuses, which
@@ -39,7 +40,12 @@
 import { sql, type SQL } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import type { AccessContext } from '../policy/context.ts';
-import { canApproveEboardRequest, canManageRace, isClubAdmin } from '../policy/predicates.ts';
+import {
+  canApproveEboardRequest,
+  canManageClubContent,
+  canManageRace,
+  isClubAdmin,
+} from '../policy/predicates.ts';
 import { clubIdOfEboard, clubIdOfRace } from './scopes.ts';
 
 export type MemberCandidate = {
@@ -52,7 +58,8 @@ export type MemberCandidate = {
 export type CandidateTarget =
   | { kind: 'club'; clubId: string }
   | { kind: 'race'; raceId: string }
-  | { kind: 'eboard'; eboardId: string };
+  | { kind: 'eboard'; eboardId: string }
+  | { kind: 'news'; clubId: string };
 
 export type Refusal = { ok: false; code: 'not_found' };
 export type Result<T> = ({ ok: true } & T) | Refusal;
@@ -133,6 +140,30 @@ async function resolve(
       return {
         pool: sql`(SELECT user_id FROM club_memberships WHERE club_id = ${clubId})`,
         already: sql`(SELECT user_id FROM race_memberships WHERE race_id = ${target.raceId})`,
+      };
+    }
+
+    /*
+     * Naming people in a news post (ADR-0040).
+     *
+     * **Keyed on the club rather than on a post**, because the commonest caller is a post that
+     * does not exist yet - the composer is open and nothing has been written. That also makes
+     * the pool identical for creating and for editing, which is the property that stops a person
+     * being nameable on one screen and not the other.
+     *
+     * Its pool is the race row's shape, NOT the club row's above. The club target offers anybody
+     * sharing any club with the caller, which is right for inviting somebody into a club and
+     * wrong here: an admin of two clubs must not be able to name a member of the other one.
+     *
+     * Nothing is excluded. A roster search hides people already on the roster because adding
+     * them twice is meaningless; a composer holds its current selection in its own hand and has
+     * not saved anything yet, so there is no server-side "already" to subtract.
+     */
+    case 'news': {
+      if (!canManageClubContent(ctx, target.clubId)) return null;
+      return {
+        pool: sql`(SELECT user_id FROM club_memberships WHERE club_id = ${target.clubId})`,
+        already: sql`(SELECT NULL::uuid WHERE false)`,
       };
     }
 

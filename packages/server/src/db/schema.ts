@@ -1535,12 +1535,17 @@ export const meetupNudges = pgTable(
 /**
  * A news post. The club's front page.
  *
- * A post must have **body text, a photo, or both** - the check constraint carries that, so
- * an entirely empty post cannot exist even if a handler forgets.
+ * A post must have **a title, body text, or at least one photo** (`PRD/06` rule 1). The first two
+ * are columns here; the third is rows in `news_post_media`. **No `check` can see across that
+ * join**, so the emptiness invariant is a DEFERRED CONSTRAINT TRIGGER instead - the only trigger
+ * in this schema, written in `0035_news_post_gallery.sql` and asserted in `constraint-proof.sql`.
  *
- * `mediaId` has no foreign key yet: `media_objects` arrives in Phase 3. The column exists
- * now so the check constraint can express the invariant today rather than being retrofitted
- * over historical rows.
+ * Deferred rather than immediate because the write is unavoidably two statements: the post is
+ * inserted before the media rows that make it non-empty exist. An immediate trigger would refuse
+ * a photo-only post at its first statement, every time.
+ *
+ * > It carried `media_id` until 2026-08-16, when a post grew a gallery - see
+ * > [ADR-0038](../../../../SPEC/decisions/0038-a-news-post-carries-an-ordered-gallery.md).
  */
 export const newsPosts = pgTable(
   'news_posts',
@@ -1550,14 +1555,117 @@ export const newsPosts = pgTable(
       .notNull()
       .references(() => clubs.id, { onDelete: 'cascade' }),
     authorId: uuid('author_id').references(() => users.id, { onDelete: 'set null' }),
+    title: text('title'),
     body: text('body'),
-    mediaId: uuid('media_id'),
+    /**
+     * The shape **every** photo in this post is drawn in, chosen once by the author.
+     *
+     * On the post rather than on the photo, because a carousel has one display frame and
+     * `upload.ts` requires the crop frame and the display frame to be the same frame. Deriving it
+     * from the first photo would resize the card when photos are reordered.
+     */
+    aspect: text('aspect').notNull().default('1:1'),
+    /** Where it happened. Free text; nothing geocodes it (ADR-0039). */
+    locationName: text('location_name'),
+    /** What the location opens. Stored as pasted, never resolved, never followed. */
+    locationUrl: text('location_url'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    check('news_posts_not_empty', sql`body is not null or media_id is not null`),
+    check('news_posts_aspect_valid', sql`aspect in ('1:1', '4:5', '16:9')`),
+    /* A url with no name is invisible: the card draws the row only when there is something to
+       draw, so a link alone would be data nothing can reach. */
+    check('news_posts_link_needs_a_place', sql`location_url is null or location_name is not null`),
     index('news_posts_by_club').on(t.clubId, t.createdAt.desc()),
+  ],
+);
+
+/**
+ * The photos of a post, in order. At most six.
+ *
+ * **The cap is a consequence of the key rather than a counted rule.** The primary key is
+ * `(post_id, ordinal)` and `ordinal` is checked into `[0, 6)`, so six rows is the most that can
+ * exist and a seventh has nowhere to go. Counting rows in a trigger would be the same rule
+ * enforced later and more expensively.
+ *
+ * `media_id` restricts rather than cascades: an object referenced by a published post is not
+ * something the media layer may quietly delete out from under it.
+ */
+export const newsPostMedia = pgTable(
+  'news_post_media',
+  {
+    postId: uuid('post_id')
+      .notNull()
+      .references(() => newsPosts.id, { onDelete: 'cascade' }),
+    mediaId: uuid('media_id')
+      .notNull()
+      .references(() => mediaObjects.id, { onDelete: 'restrict' }),
+    ordinal: integer('ordinal').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.postId, t.ordinal] }),
+    /* The same picture twice in one carousel is a mistake, not a choice. */
+    unique('news_post_media_once_per_post').on(t.postId, t.mediaId),
+    check('news_post_media_six_at_most', sql`ordinal >= 0 and ordinal < 6`),
+  ],
+);
+
+/**
+ * The hashtags of a post, extracted from its body. What the feed's search box reads.
+ *
+ * Stored lowercased so `#LongRun` and `#longrun` are one tag: a search that distinguishes them
+ * splits a club's own vocabulary by whoever typed it first.
+ */
+export const newsPostTags = pgTable(
+  'news_post_tags',
+  {
+    postId: uuid('post_id')
+      .notNull()
+      .references(() => newsPosts.id, { onDelete: 'cascade' }),
+    tag: text('tag').notNull(),
+    /**
+     * Where the tag appeared in the sentence.
+     *
+     * **The chips are drawn in the order they were written**, which `extractHashtags` returns and
+     * which is the only ordering that needs no explaining to the person who typed them. Without
+     * this column the read fell back to `ORDER BY tag`, so a body reading "#longRun #bingRC" drew
+     * `#bingrc #longrun` - the code and its own docstring disagreeing, found on the device.
+     */
+    ordinal: integer('ordinal').notNull().default(0),
+  },
+  (t) => [
+    primaryKey({ columns: [t.postId, t.tag] }),
+    /* One tag per position, the same way the gallery keeps one photo per slot. */
+    unique('news_post_tags_one_per_position').on(t.postId, t.ordinal),
+    index('news_post_tags_by_tag').on(t.tag),
+    check(
+      'news_post_tags_normalised',
+      sql`tag = lower(tag) and tag <> '' and length(tag) <= 64`,
+    ),
+  ],
+);
+
+/**
+ * Club members named in a post (ADR-0040).
+ *
+ * Cascades on the person being deleted and **not** on them leaving the club: a post is a record
+ * of something that happened, and unnaming somebody months later rewrites it.
+ */
+export const newsPostPeople = pgTable(
+  'news_post_people',
+  {
+    postId: uuid('post_id')
+      .notNull()
+      .references(() => newsPosts.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.postId, t.userId] }),
+    /* "Posts naming me", which the inbox row leads to one at a time and a screen may want in bulk. */
+    index('news_post_people_by_user').on(t.userId),
   ],
 );
 

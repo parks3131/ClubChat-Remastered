@@ -37,6 +37,7 @@ import type {
   MeetingDetail,
   MeetingSummary,
   NewsPost,
+  NewsPostDraft,
   PollSummary,
   PollView,
   ClubBan,
@@ -576,15 +577,29 @@ export const contentApi = {
   nudgeMeetup: (meetupId: string) =>
     apiFetch<{ cooldownUntil: string }>(`/meetups/${meetupId}/nudge`, { method: 'POST' }),
 
-  news: (clubId: string, before?: string) =>
-    apiFetch<{ posts: NewsPost[]; hasMore: boolean }>(`/clubs/${clubId}/news${query({ before })}`),
+  /** `q` searches this club's titles and tags, and never any other club's (PRD/06 rule 17). */
+  news: (clubId: string, before?: string, q?: string) =>
+    apiFetch<{ posts: NewsPost[]; hasMore: boolean }>(
+      `/clubs/${clubId}/news${query({ before, q })}`,
+    ),
+
+  /**
+   * Who a post here can name: members of this club.
+   *
+   * Keyed on the club rather than a post, because the composer is usually open on one that does
+   * not exist yet. Same read, same picker, as adding people to a race roster.
+   */
+  newsMemberCandidates: (clubId: string, q: string, limit?: number) =>
+    apiFetch<{ candidates: MemberCandidate[] }>(
+      `/clubs/${clubId}/news/member-candidates${query({ q, limit: limit?.toString() })}`,
+    ),
 
   newsPost: (postId: string) => apiFetch<{ post: NewsPost }>(`/news/${postId}`),
 
-  createNews: (clubId: string, body: { body?: string | null; mediaId?: string | null }) =>
+  createNews: (clubId: string, body: NewsPostDraft) =>
     apiFetch<{ postId: string }>(`/clubs/${clubId}/news`, { method: 'POST', body }),
 
-  updateNews: (postId: string, body: { body?: string | null; mediaId?: string | null }) =>
+  updateNews: (postId: string, body: NewsPostDraft) =>
     apiFetch<unknown>(`/news/${postId}`, { method: 'PATCH', body }),
 
   deleteNews: (postId: string) => apiFetch<unknown>(`/news/${postId}`, { method: 'DELETE' }),

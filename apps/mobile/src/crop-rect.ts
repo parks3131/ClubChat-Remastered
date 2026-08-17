@@ -97,6 +97,37 @@ export function toSourceRect(norm: NormRect, source: DisplayBox): SourceRect {
 }
 
 /**
+ * The largest centred rectangle of a given shape that fits inside a picture, in fractions.
+ *
+ * **This is what makes "one ratio for the whole post" real** (ADR-0038). A news carousel draws
+ * every slide in one box, so every photo has to arrive in that box's shape - and the author picks
+ * the shape once rather than cropping six pictures by hand. Centred is the honest default: it
+ * keeps the middle of what somebody chose, and it is the same guess a `cover` resize makes, only
+ * applied where the crop frame and the display frame can be proved identical.
+ *
+ * `ratio` is width over height, so `1` is a square, `0.8` is `4:5` and `16 / 9` is landscape.
+ *
+ * A photo that already has the target shape returns the whole image, which `isWholeImage` then
+ * reads as "nothing to cut" - so the common case of a square photo in a square post costs the
+ * server no decode at all.
+ */
+export function centredRectForRatio(source: DisplayBox, ratio: number): NormRect {
+  if (source.width <= 0 || source.height <= 0 || ratio <= 0) return WHOLE;
+
+  const sourceRatio = source.width / source.height;
+
+  // Wider than the target: keep the full height and trim the sides.
+  if (sourceRatio > ratio) {
+    const width = ratio / sourceRatio;
+    return { x: (1 - width) / 2, y: 0, width, height: 1 };
+  }
+
+  // Taller than the target (or identical): keep the full width and trim top and bottom.
+  const height = sourceRatio / ratio;
+  return { x: 0, y: (1 - height) / 2, width: 1, height };
+}
+
+/**
  * Whether the frame still covers the whole picture, in which case there is nothing to cut.
  *
  * A thousandth of tolerance, because the fractions are floating point and "reset to the whole

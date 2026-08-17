@@ -1275,6 +1275,54 @@ const onAccountSuspended: EffectHandler = async (event, deps) => {
  * Meetup CREATION is deliberately absent from every call site: creating one notifies nobody
  * and posts nothing.
  */
+/**
+ * Tell the people a post names.
+ *
+ * Shared by `news.created` and `news.tagged` because the two must produce **identical** rows: a
+ * person named when the post went up and a person named an hour later by an edit have learned
+ * exactly the same thing, and a second copy of this would be where that stopped being true.
+ *
+ * The slot differs and nothing else does. On a new post this is the second notification of the
+ * event, so it takes the mention slot; on an edit it is the only one, so it takes slot 0.
+ */
+async function notifyNamedInPost(
+  deps: EffectDeps,
+  input: {
+    event: OutboxEvent;
+    slot: 0 | 1;
+    clubId: string;
+    actorId: string | null;
+    params: { clubId: string; clubName: string; actorName: string; postId: string };
+    named: string[];
+  },
+): Promise<void> {
+  if (input.named.length === 0) return;
+
+  const key = notificationKey(input.event.id, input.slot);
+
+  await writeNotifications(deps.db, {
+    outboxEventId: key,
+    type: 'news_post_tagged',
+    params: input.params,
+    recipients: input.named,
+    actorId: input.actorId,
+    clubId: input.clubId,
+  });
+
+  // Deferred and scheduled regardless of whether rows were created, for the reason the
+  // announcement branch gives: the push ledger is what makes the buzz idempotent, not the
+  // notification insert, so a redelivery after a crash between the two must still push.
+  schedule(deps, async () => {
+    const outcome = await dispatchPush(deps.db, deps.push, {
+      outboxEventId: key,
+      type: 'news_post_tagged',
+      params: input.params,
+      recipients: input.named,
+    });
+    deps.log('info', 'news_post_tagged push dispatched', { eventId: input.event.id, ...outcome });
+  });
+}
+
 function makeCreationHandler(config: {
   notificationType:
     | 'race_created'
@@ -2431,17 +2479,113 @@ export const handlers: Record<string, EffectHandler> = {
     });
   },
 
-  'news.created': makeCreationHandler({
-    notificationType: 'news_post_created',
-    buildParams: (event, ctx) => ({
-      clubId: String(event.payload['clubId']),
-      clubName: ctx.clubName,
-      actorName: ctx.actorName,
-      postId: String(event.payload['postId']),
-    }),
-    // News deliberately posts NO chat card: discussion belongs in chat, but the post itself
-    // lives on the club's front page.
-  }),
+  /**
+   * A news post was published.
+   *
+   * **Not `makeCreationHandler`, and the reason is one line of it.** That helper writes rows to
+   * an audience and pushes to the same list, which is right for every other creation and wrong
+   * here: a post can NAME people, and somebody named would otherwise be buzzed twice about one
+   * post - "Hillside posted club news" and "Riley named you in a post", seconds apart.
+   *
+   * The fix is the one the announcement branch above already runs, and it is deliberately the
+   * same shape rather than a similar one:
+   *
+   *  - **Both inbox rows are written.** One says the club was told something, the other says
+   *    they were named in it, and they clear against different things.
+   *  - **Only the push list subtracts.** The named get the specific line instead of the generic
+   *    one, so one message is one buzz.
+   *
+   * A post that names everybody in the club leaves the generic push list empty, and
+   * `dispatchPush` returns without sending rather than reading an empty list as "everyone".
+   *
+   * News deliberately posts NO chat card: discussion belongs in chat, but the post itself lives
+   * on the club's front page.
+   */
+  'news.created': async (event, deps) => {
+    const clubId = String(event.payload['clubId']);
+    const postId = String(event.payload['postId']);
+    const actorId = (event.payload['actorId'] as string | null) ?? null;
+
+    const club = await clubContext(deps.db, clubId);
+    if (!club) return;
+
+    const actorName = actorId ? await displayName(deps.db, actorId) : 'Someone';
+    const params = { clubId, clubName: club.name, actorName, postId };
+
+    const recipients = await resolveAudience(deps.db, {
+      type: 'news_post_created',
+      actorId,
+      clubId,
+    });
+
+    /*
+      Intersected with the generic audience rather than trusted from the payload. That drops the
+      author naming themselves, and anybody who left the club between the post being written and
+      this event being handled - both of which would otherwise be a notification to somebody who
+      should not get one, produced by a list the API built minutes ago.
+    */
+    const audience = new Set(recipients);
+    const named = (event.payload['taggedUserIds'] as unknown[] | undefined ?? [])
+      .filter((userId): userId is string => typeof userId === 'string')
+      .filter((userId) => audience.has(userId));
+    const namedSet = new Set(named);
+
+    if (recipients.length > 0) {
+      await writeNotifications(deps.db, {
+        outboxEventId: notificationKey(event.id, 0),
+        type: 'news_post_created',
+        params,
+        recipients,
+        actorId,
+        clubId,
+      });
+
+      const buzzed = recipients.filter((userId) => !namedSet.has(userId));
+      schedule(deps, async () => {
+        const outcome = await dispatchPush(deps.db, deps.push, {
+          outboxEventId: notificationKey(event.id, 0),
+          type: 'news_post_created',
+          params,
+          recipients: buzzed,
+        });
+        deps.log('info', 'news_post_created push dispatched', { eventId: event.id, ...outcome });
+      });
+    }
+
+    // Slot 1 is the mention slot, which is what being named in a post is.
+    await notifyNamedInPost(deps, { event, slot: 1, clubId, actorId, params, named });
+  },
+
+  /**
+   * Somebody was named in an EXISTING post, by an edit.
+   *
+   * PRD/06 rule 6 says editing notifies nobody, and that rule is about the post. Being named is
+   * not about the post; it is about the person, and somebody added an hour later has not been
+   * told anything yet. Only the difference is here - the domain computes it, so a fixed typo
+   * re-buzzes nobody (ADR-0040).
+   */
+  'news.tagged': async (event, deps) => {
+    const clubId = String(event.payload['clubId']);
+    const postId = String(event.payload['postId']);
+    const actorId = (event.payload['actorId'] as string | null) ?? null;
+
+    const club = await clubContext(deps.db, clubId);
+    if (!club) return;
+
+    const actorName = actorId ? await displayName(deps.db, actorId) : 'Someone';
+    const params = { clubId, clubName: club.name, actorName, postId };
+
+    /* The same intersection as above, and for the same reason - `resolveAudience` is what knows
+       who is still in this club and that the actor is not their own audience. */
+    const audience = new Set(
+      await resolveAudience(deps.db, { type: 'news_post_tagged', actorId, clubId }),
+    );
+    const named = (event.payload['taggedUserIds'] as unknown[] | undefined ?? [])
+      .filter((userId): userId is string => typeof userId === 'string')
+      .filter((userId) => audience.has(userId));
+
+    await notifyNamedInPost(deps, { event, slot: 0, clubId, actorId, params, named });
+  },
 
   'poll.created': makeCreationHandler({
     cardType: 'poll',

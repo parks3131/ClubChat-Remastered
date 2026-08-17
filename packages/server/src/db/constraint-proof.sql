@@ -39,6 +39,38 @@ BEGIN
 END
 $fn$ LANGUAGE plpgsql;
 
+-- A DEFERRED constraint does not fire when the statement runs, so `assert_rejected` would
+-- report a pass for a trigger that never ran and then blow up at COMMIT - which in this file
+-- means at the ROLLBACK, where nothing is watching. Forcing the check with SET CONSTRAINTS
+-- ALL IMMEDIATE brings the failure back inside the block that is looking for it.
+--
+-- Both helpers restore the deferred setting afterwards, or every later assertion in the file
+-- would be running under a different constraint mode than production does.
+CREATE FUNCTION pg_temp.assert_rejected_at_commit(label text, stmt text) RETURNS void AS $fn$
+BEGIN
+  BEGIN
+    EXECUTE stmt;
+    SET CONSTRAINTS ALL IMMEDIATE;
+  EXCEPTION
+    WHEN others THEN
+      SET CONSTRAINTS ALL DEFERRED;
+      RAISE NOTICE 'PASS  rejected at commit: %', label;
+      RETURN;
+  END;
+  SET CONSTRAINTS ALL DEFERRED;
+  RAISE EXCEPTION 'FAIL  deferred constraint did not fire: %', label;
+END
+$fn$ LANGUAGE plpgsql;
+
+CREATE FUNCTION pg_temp.assert_accepted_at_commit(label text, stmt text) RETURNS void AS $fn$
+BEGIN
+  EXECUTE stmt;
+  SET CONSTRAINTS ALL IMMEDIATE;
+  SET CONSTRAINTS ALL DEFERRED;
+  RAISE NOTICE 'PASS  accepted at commit: %', label;
+END
+$fn$ LANGUAGE plpgsql;
+
 -- ---------------------------------------------------------------------------
 -- Fixtures
 -- ---------------------------------------------------------------------------
@@ -564,19 +596,129 @@ SELECT pg_temp.assert_rejected(
             'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             '11111111-1111-4111-8111-111111111111', 'nope')$$);
 
--- A news post must have a body, a photo, or both. An entirely empty post cannot exist even
--- if a handler forgets to check.
-SELECT pg_temp.assert_rejected(
+-- Seven photographs to build galleries out of. `ready`, because a post only ever references an
+-- object that finished uploading.
+INSERT INTO media_objects (id, owner_type, uploader_id, bucket, object_key, mime, bytes, status)
+SELECT ('dddddddd-dddd-4ddd-8ddd-00000000000' || n)::uuid,
+       'news_post', '11111111-1111-4111-8111-111111111111',
+       'content', 'news/' || n, 'image/jpeg', 1000, 'ready'
+FROM generate_series(0, 6) AS n;
+
+-- PRD/06 rule 1: a post must have a title, body text, or at least one photo.
+--
+-- **These are the deferred ones.** The rule spans `news_posts` and `news_post_media`, so it is a
+-- CONSTRAINT TRIGGER rather than a CHECK and it does not fire until the transaction ends. Proving
+-- it with `assert_rejected` would prove nothing - the INSERT succeeds, and the trigger would take
+-- the ROLLBACK down instead, where no assertion is looking.
+SELECT pg_temp.assert_rejected_at_commit(
   'news - an entirely empty post',
   $$INSERT INTO news_posts (club_id, author_id)
     VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             '11111111-1111-4111-8111-111111111111')$$);
 
-SELECT pg_temp.assert_accepted(
+SELECT pg_temp.assert_accepted_at_commit(
   'news - body only is a valid post',
   $$INSERT INTO news_posts (club_id, author_id, body)
     VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
             '11111111-1111-4111-8111-111111111111', 'We won.')$$);
+
+SELECT pg_temp.assert_accepted_at_commit(
+  'news - title only is a valid post',
+  $$INSERT INTO news_posts (club_id, author_id, title)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            '11111111-1111-4111-8111-111111111111', 'Evening Run in Binghamton')$$);
+
+-- A photo-only post: the case the trigger has to be DEFERRED for. The post is inserted before
+-- the photo that makes it valid can reference it, so an immediate check would refuse it here.
+SELECT pg_temp.assert_accepted_at_commit(
+  'news - photo only is a valid post',
+  $$WITH p AS (
+      INSERT INTO news_posts (id, club_id, author_id)
+      VALUES ('bbbbbbbb-0000-4000-8000-000000000001',
+              'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+              '11111111-1111-4111-8111-111111111111')
+      RETURNING id)
+    INSERT INTO news_post_media (post_id, media_id, ordinal)
+    SELECT id, 'dddddddd-dddd-4ddd-8ddd-000000000000', 0 FROM p$$);
+
+-- ...and it stops being valid the moment that photo goes, which is the other direction the rule
+-- can be broken in and the reason there is a trigger on the media table too.
+SELECT pg_temp.assert_rejected_at_commit(
+  'news - removing the last photo from a photo-only post',
+  $$DELETE FROM news_post_media
+    WHERE post_id = 'bbbbbbbb-0000-4000-8000-000000000001'$$);
+
+-- ADR-0038: six photos, and the cap is a consequence of the primary key rather than a count.
+INSERT INTO news_posts (id, club_id, author_id, body)
+VALUES ('bbbbbbbb-0000-4000-8000-000000000002',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        '11111111-1111-4111-8111-111111111111', 'Six of them.');
+
+SELECT pg_temp.assert_accepted(
+  'news - six photos in one post',
+  $$INSERT INTO news_post_media (post_id, media_id, ordinal)
+    SELECT 'bbbbbbbb-0000-4000-8000-000000000002',
+           ('dddddddd-dddd-4ddd-8ddd-00000000000' || n)::uuid, n
+    FROM generate_series(0, 5) AS n$$);
+
+SELECT pg_temp.assert_rejected(
+  'news - a seventh photo has no ordinal to sit at',
+  $$INSERT INTO news_post_media (post_id, media_id, ordinal)
+    VALUES ('bbbbbbbb-0000-4000-8000-000000000002',
+            'dddddddd-dddd-4ddd-8ddd-000000000006', 6)$$);
+
+SELECT pg_temp.assert_rejected(
+  'news - the same photo twice in one carousel',
+  $$INSERT INTO news_post_media (post_id, media_id, ordinal)
+    VALUES ('bbbbbbbb-0000-4000-8000-000000000002',
+            'dddddddd-dddd-4ddd-8ddd-000000000000', 5)$$);
+
+SELECT pg_temp.assert_rejected(
+  'news - an aspect ratio the carousel cannot draw',
+  $$UPDATE news_posts SET aspect = '3:2'
+    WHERE id = 'bbbbbbbb-0000-4000-8000-000000000002'$$);
+
+-- ADR-0039: a link with no name is data the card can never reach, since the row is drawn from
+-- the name.
+SELECT pg_temp.assert_rejected(
+  'news - a location link with nothing to attach it to',
+  $$UPDATE news_posts SET location_url = 'https://maps.example.invalid/x'
+    WHERE id = 'bbbbbbbb-0000-4000-8000-000000000002'$$);
+
+SELECT pg_temp.assert_accepted(
+  'news - a location name and link together',
+  $$UPDATE news_posts
+    SET location_name = 'Lincoln Memorial, Washington DC',
+        location_url = 'https://maps.example.invalid/x'
+    WHERE id = 'bbbbbbbb-0000-4000-8000-000000000002'$$);
+
+-- Tags are stored lowercased, or a club's own vocabulary splits by whoever typed it first.
+SELECT pg_temp.assert_rejected(
+  'news tags - a tag carrying capitals',
+  $$INSERT INTO news_post_tags (post_id, tag)
+    VALUES ('bbbbbbbb-0000-4000-8000-000000000002', 'longRun')$$);
+
+SELECT pg_temp.assert_rejected(
+  'news tags - the empty tag',
+  $$INSERT INTO news_post_tags (post_id, tag)
+    VALUES ('bbbbbbbb-0000-4000-8000-000000000002', '')$$);
+
+SELECT pg_temp.assert_accepted(
+  'news tags - a normalised tag',
+  $$INSERT INTO news_post_tags (post_id, tag)
+    VALUES ('bbbbbbbb-0000-4000-8000-000000000002', 'longrun')$$);
+
+-- One post to react to, with an id of its own.
+--
+-- **These statements used to read `FROM news_posts LIMIT 1`**, which was deterministic only
+-- because the fixtures held exactly one post. The gallery work above added four more, and the
+-- last two assertions in this block only mean anything if they land on the SAME post - an
+-- unordered LIMIT 1 does not promise that, so the pair would have started passing for the wrong
+-- reason on whichever day the planner changed its mind.
+INSERT INTO news_posts (id, club_id, author_id, body)
+VALUES ('bbbbbbbb-0000-4000-8000-000000000003',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        '11111111-1111-4111-8111-111111111111', 'React to me.');
 
 -- PRD/06 rule 4: news reactions use the same emoji set as chat. The set became the whole
 -- catalog on 2026-08-13 (ADR-0028) and the rule survives, because both tables key into the
@@ -586,7 +728,7 @@ SELECT pg_temp.assert_accepted(
 SELECT pg_temp.assert_rejected(
   'news reactions - arbitrary text in the emoji column',
   $$INSERT INTO news_reactions (post_id, user_id, emoji)
-    SELECT id, '11111111-1111-4111-8111-111111111111', 'nice one' FROM news_posts LIMIT 1$$);
+    SELECT id, '11111111-1111-4111-8111-111111111111', 'nice one' FROM news_posts WHERE id = 'bbbbbbbb-0000-4000-8000-000000000003'$$);
 
 -- The normalisation half, and the reason the catalog is worth having. These two strings are
 -- the same emoji to a reader and different bytes to the primary key. Exactly one is canonical,
@@ -595,28 +737,28 @@ SELECT pg_temp.assert_rejected(
 SELECT pg_temp.assert_rejected(
   'news reactions - a thumbs up WITHOUT the variation selector the catalog carries',
   $$INSERT INTO news_reactions (post_id, user_id, emoji)
-    SELECT id, '11111111-1111-4111-8111-111111111111', '👍' FROM news_posts LIMIT 1$$);
+    SELECT id, '11111111-1111-4111-8111-111111111111', '👍' FROM news_posts WHERE id = 'bbbbbbbb-0000-4000-8000-000000000003'$$);
 
 SELECT pg_temp.assert_accepted(
   'news reactions - the canonical thumbs up',
   $$INSERT INTO news_reactions (post_id, user_id, emoji)
-    SELECT id, '11111111-1111-4111-8111-111111111111', '👍️' FROM news_posts LIMIT 1$$);
+    SELECT id, '11111111-1111-4111-8111-111111111111', '👍️' FROM news_posts WHERE id = 'bbbbbbbb-0000-4000-8000-000000000003'$$);
 
 SELECT pg_temp.assert_accepted(
   'news reactions - an emoji that was NOT one of the six',
   $$INSERT INTO news_reactions (post_id, user_id, emoji)
-    SELECT id, '11111111-1111-4111-8111-111111111111', '🦄' FROM news_posts LIMIT 1$$);
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🦄' FROM news_posts WHERE id = 'bbbbbbbb-0000-4000-8000-000000000003'$$);
 
 -- The duplicate assertion below needs a row to duplicate, so this one earns its place twice.
 SELECT pg_temp.assert_accepted(
   'news reactions - one of the six still works',
   $$INSERT INTO news_reactions (post_id, user_id, emoji)
-    SELECT id, '11111111-1111-4111-8111-111111111111', '🔥' FROM news_posts LIMIT 1$$);
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🔥' FROM news_posts WHERE id = 'bbbbbbbb-0000-4000-8000-000000000003'$$);
 
 SELECT pg_temp.assert_rejected(
   'news reactions - the same emoji twice from the same member',
   $$INSERT INTO news_reactions (post_id, user_id, emoji)
-    SELECT id, '11111111-1111-4111-8111-111111111111', '🔥' FROM news_posts LIMIT 1$$);
+    SELECT id, '11111111-1111-4111-8111-111111111111', '🔥' FROM news_posts WHERE id = 'bbbbbbbb-0000-4000-8000-000000000003'$$);
 
 -- Weekly Meetups has no activity-type CHECK left to prove. ADR-0029 deleted the field rather
 -- than generalising it, so the invariants that remain are that a meetup answers WHERE and WHEN.
