@@ -186,3 +186,21 @@ they cost.
 36. **An exhaustive switch still says nothing about whether the string it returns is real.** The
     `never` trick proves every case exists; it cannot prove `/clubs/${id}/typo` is a screen. Where
     the returned value is a route, sweep every case in a test as well. *(Same day, same file.)*
+
+37. **A native module you just wrote does not exist in a binary somebody is already holding, and
+    `requireNativeModule` throws at import time.** Two things follow, and the first is the one that
+    bites. An import-time throw is entry 8's failure exactly - it takes the whole bundle down, so
+    one unavailable action becomes a blank screen on every route - and a module written today is
+    *guaranteed* to be missing from every build made before today, including the founder's phone.
+    **Rule: reach a local native module through `requireOptionalNativeModule`, which answers `null`,
+    and give the caller a path that works without it.** Adding the QuickLook viewer on 2026-08-17
+    was the first change in this project where a JavaScript reload was not enough, and the founder
+    tapped a PDF on his phone before the rebuild reached it: the share-sheet fallback answered, as
+    designed, instead of a red screen.
+
+    The second thing follows from the first: **autolinking has no default for
+    `expo.autolinking.nativeModulesDir`**. Without that key in the app's `package.json`, `modules/`
+    is never scanned, the podspec is never found, and the module is simply absent from the build -
+    with no error at `pod install`, no error at compile, and a `null` at runtime that the optional
+    require then handles perfectly. Which is to say the safety net above will hide this one, so
+    check `Podfile.lock` for the pod by name after adding a module.

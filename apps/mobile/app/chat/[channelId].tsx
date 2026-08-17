@@ -41,6 +41,7 @@ import {
 import { formatDaySeparator } from "../../src/dates.ts";
 import { channelApi, dmApi, pollApi, type ChannelMeta } from "../../src/api.ts";
 import { DocumentBubble, PhotoBubble, RemoteImage } from "../../src/media-bubble.tsx";
+import { openDocument } from "../../src/open-document.ts";
 import { PhotoViewer } from "../../src/photo-viewer.tsx";
 import { PhotoCompose, type ComposedPhoto } from "../../src/photo-compose.tsx";
 import { MentionList } from "../../src/mention-list.tsx";
@@ -1261,7 +1262,19 @@ const PendingRow = memo(function PendingRow({
       */}
       <View style={styles.avatarSpacer} />
       <View style={styles.bubbleWrapMine}>
-        <BubbleContainer mine pending>
+        <BubbleContainer
+          mine
+          pending
+          /*
+            The same test the acked row uses, so an attachment sent without a caption does not
+            spend its time in the outbox inside a bubble and then jump out of one the moment the
+            ack lands. The "Sending" line sits under the tile exactly where the timestamp that
+            replaces it will sit.
+          */
+          bare={
+            (row.type === "photo" || row.type === "document") && row.body.length === 0
+          }
+        >
           {/* The quote is drawn before the ack, from the outbox entry's own copy of it, so a
               reply does not visibly gain its quote a moment after being sent. */}
           {row.replyTo !== undefined && (
@@ -1324,6 +1337,8 @@ const MessageRow = memo(function MessageRow({
   onOpenProfile,
   onJumpToQuote,
   onOpenPhoto,
+  onOpenDocument,
+  openingDocument,
 }: {
   message: MessageEnvelope;
   /** The viewer, for marking their own reactions. Null only before auth resolves. */
@@ -1353,6 +1368,16 @@ const MessageRow = memo(function MessageRow({
   onJumpToQuote: (seq: number) => void;
   /** Open the full-screen viewer. Only ever reached from a photo message. */
   onOpenPhoto: (message: MessageEnvelope) => void;
+  /** Stage the file and hand it to the platform. Only ever reached from a document message. */
+  onOpenDocument: (message: MessageEnvelope) => void;
+  /**
+   * True while THIS message's document is being fetched.
+   *
+   * A boolean rather than the seq of whatever is opening, so the memo keeps its promise: every
+   * row but the one that changed is handed the same `false` it had last render and re-renders
+   * nothing.
+   */
+  openingDocument: boolean;
 }) {
   /*
    * Where this row is on screen, measured at the moment it is held.
@@ -1633,27 +1658,41 @@ const MessageRow = memo(function MessageRow({
           measureThenSelect();
         }}
         /*
-          A tap opens the photo, and ONLY on a photo message.
+          A tap opens the attachment, and ONLY on a message that has one: a photo opens the
+          full-screen viewer, a document goes to the share sheet.
 
           It belongs to this Pressable rather than to the bubble inside it, which is what
           `media-bubble.tsx` has said since it was written: a second Pressable nested in this one
           is a <button> inside a <button> on web and swallows this long press on native. So the
-          gesture that already owns the bubble grows a tap, and a message with no photo keeps
-          having none rather than becoming a control that does nothing.
+          gesture that already owns the bubble grows a tap, and a message carrying nothing to open
+          keeps having none rather than becoming a control that does nothing.
         */
         onPress={
-          message.type === "photo" && message.mediaId !== null
-            ? () => onOpenPhoto(message)
-            : undefined
+          message.mediaId === null
+            ? undefined
+            : message.type === "photo"
+              ? () => onOpenPhoto(message)
+              : message.type === "document"
+                ? () => onOpenDocument(message)
+                : undefined
         }
         delayLongPress={400}
         // Always a button now that cards do not come through here. The `none` role that
         // kept a card's own controls legal moved with them, into the branch above.
         accessibilityRole="button"
+        /*
+          A document says what the tap does and names the file, because on a document the tap is
+          the point and the hold is the secondary gesture. Everywhere else the hold is the only
+          gesture there is, so it stays the whole label.
+        */
         accessibilityLabel={
-          mine
-            ? "Press and hold to react to your message"
-            : "Press and hold to react to or report this message"
+          message.type === "document" && message.mediaId !== null
+            ? `Open ${message.documentName ?? "this document"}. Press and hold to react${
+                mine ? "" : " or report"
+              }`
+            : mine
+              ? "Press and hold to react to your message"
+              : "Press and hold to react to or report this message"
         }
         // The gesture stays on the OUTERMOST element and the fill sits inside it, so the
         // bubble can be styled freely without the pressable becoming the styled thing -
@@ -1671,12 +1710,17 @@ const MessageRow = memo(function MessageRow({
         <BubbleContainer
           mine={mine}
           /*
-            A photo with nothing said alongside it wears no bubble. The caption is the test rather
-            than the type: with words there is something that needs a surface, without them the
-            picture is the message and a tinted frame is just an outline around an outline.
+            An attachment with nothing said alongside it wears no bubble. The caption is the test
+            rather than the type: with words there is something that needs a surface, without them
+            the attachment is the message and a tinted frame is just an outline around an outline.
+
+            **A document is in this now as well as a photo**, and for the stronger version of the
+            same reason: its tile is a rounded, filled rectangle already, so a bubble behind it was
+            a second one drawn a few points further out. The tile carries the bubble's own fill,
+            so what this removes is the duplicate rather than the surface.
           */
           bare={
-            message.type === "photo" &&
+            (message.type === "photo" || message.type === "document") &&
             message.mediaId !== null &&
             (message.body === null || message.body.length === 0)
           }
@@ -1709,6 +1753,7 @@ const MessageRow = memo(function MessageRow({
               name={message.documentName}
               size={message.documentSize}
               mine={mine}
+              opening={openingDocument}
             />
           )}
           {/*
@@ -2126,6 +2171,22 @@ export default function ChatScreen() {
   const [headerBottom, setHeaderBottom] = useState(0);
   /** True while bytes are in flight, so the "+" cannot start a second upload. */
   const [uploading, setUploading] = useState(false);
+  /**
+   * Which message's document is being fetched, so its own tile can say so.
+   *
+   * A `seq` rather than a boolean, because the answer the row needs is "is it MINE that is
+   * opening" and there is exactly one conversation on screen. Null the rest of the time.
+   */
+  const [openingDocumentSeq, setOpeningDocumentSeq] = useState<number | null>(null);
+  /*
+   * The same fact, held where a callback can read it without depending on it.
+   *
+   * `MessageRow` is memoized on prop identity, so a handler that closed over the state above
+   * would be a new function every time a document started or finished opening, and every row in
+   * the conversation would re-render for it. The ref is what keeps a second tap from starting a
+   * second download of the same file while the first is still coming.
+   */
+  const openingDocument = useRef(false);
   /**
    * The photo waiting on the compose sheet, or null.
    *
@@ -2791,6 +2852,40 @@ export default function ChatScreen() {
     [],
   );
 
+  /**
+   * Open a document: stage its bytes and hand them to the platform.
+   *
+   * **No viewer of its own, and that is the decision rather than the shortcut.** A document is
+   * something to read in Files, open in Pages or mail on, and the OS owns all of those - so
+   * `openDocument` puts it in the share sheet, where Quick Look and "Save to Files" are one tap.
+   * Rendering seven file types inside a chat screen would be a worse version of what the phone
+   * already does well.
+   *
+   * The wait is reported on the tapped tile rather than on this screen's notice: a spinner where
+   * the icon was is the thing you touched answering you, and a banner at the top of the
+   * conversation is not. The notice is kept for the two things a tile cannot say - a refusal and a
+   * failure.
+   */
+  const openDocumentMessage = useCallback(
+    async (message: MessageEnvelope) => {
+      if (message.mediaId === null || openingDocument.current) return;
+      openingDocument.current = true;
+      setOpeningDocumentSeq(message.seq);
+      try {
+        const said = await openDocument(message.mediaId, message.documentName);
+        if (said.length > 0) setNotice(said);
+      } catch {
+        // Losing access to the conversation is a legitimate reason for this to fail, so it is not
+        // necessarily an error - but somebody tapped a file and is waiting, so it is never silent.
+        setNotice("That document could not be opened. Try again.");
+      } finally {
+        openingDocument.current = false;
+        setOpeningDocumentSeq(null);
+      }
+    },
+    [setNotice],
+  );
+
   /*
    * Both list callbacks are hoisted out of the JSX and given stable identities.
    *
@@ -2854,10 +2949,23 @@ export default function ChatScreen() {
           onOpenProfile={openProfile}
           onJumpToQuote={jumpToQuote}
           onOpenPhoto={openPhoto}
+          onOpenDocument={openDocumentMessage}
+          openingDocument={openingDocumentSeq === item.message.seq}
         />
       );
     },
-    [retry, userId, jumpedTo, selectMessage, react, openProfile, jumpToQuote, openPhoto],
+    [
+      retry,
+      userId,
+      jumpedTo,
+      selectMessage,
+      react,
+      openProfile,
+      jumpToQuote,
+      openPhoto,
+      openDocumentMessage,
+      openingDocumentSeq,
+    ],
   );
 
   /*

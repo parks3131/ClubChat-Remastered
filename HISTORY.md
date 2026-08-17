@@ -13,6 +13,97 @@ Newest first.
 
 ---
 
+## 2026-08-17 - A document you can open, and the first native module in the project
+
+Two sentences from the founder, four hours apart, and the second one changed the answer to the
+first.
+
+**"So if I upload any documents, I can click the document first of all. And then the UI for the
+document should be like this"**, with a mockup: a peach tile, an orange square holding a page
+glyph, the filename in bold, `PDF · 1.2 MB` beneath it, and the time under the tile rather than in
+it.
+
+### The tile was two rectangles, and the mockup was one
+
+The bubble had been shipping since 2026-07-30 as a **white card with a hairline border, inside the
+tinted bubble** - so every document in a conversation was two nested rounded rectangles around one
+filename, with `FILE` in a grey square where the mockup has an icon, and the size on its own with
+no type beside it.
+
+The mockup's peach rectangle is not a card inside a bubble. It **is** the bubble. So the tile took
+the bubble's own fill and the message bubble went `bare` behind it, which is not a new idea at all:
+the chat screen already does exactly this for a photo sent without a caption, on the reasoning that
+"a tinted frame around it is a second edge saying nothing". A document tile is a filled rounded
+rectangle in its own right, so it wants the same treatment more, not less. The timestamp landing
+under the tile follows from that rather than being a second decision - a bare bubble has no padding
+for it to sit in.
+
+The pending row got the same test, which fixed a jump nobody had reported: an attachment in the
+outbox sat inside a bubble and then popped out of one the instant its ack arrived.
+
+`PDF` comes from the **filename's extension**, and it has to: the message envelope carries a name
+and a byte count and no content type at all. That is also the honest source, since the extension is
+what the sender saw. It went into `document-name.ts` with `cacheFileName`, beside `photo-size.ts`
+and for the same reason - vitest cannot parse React Native's Flow sources, so anything reachable
+from a `react-native` import is untestable.
+
+### What "click the document" means, answered twice
+
+Offered as a multiple choice, because iOS has no free way to preview a file and the options
+differed in whether the founder's phone had to be rebuilt. He picked the share sheet: stage the
+bytes under the document's real filename, hand them to `Sharing.shareAsync`, and let **Preview**,
+Save to Files and the rest hang off that. Verified end to end - the sheet came up with a real PDF
+thumbnail, `PDF Document · 1.3 MB`, and the file that came back down was byte-identical to the one
+that went up.
+
+Then he sent a screen recording of **GroupMe** and asked *"can we do like this for pdf"*, and the
+recording named its own implementation. A full-screen white sheet inside the app, the filename with
+a close button, a `1 of 2` page counter, the PDF inline, a magnifier and a share control. Nothing
+counts pages and searches text without knowing what a PDF is except `QLPreviewController`, which is
+iOS's own document previewer.
+
+So: `apps/mobile/modules/quick-look`, **the first native module in this project** - one Swift file
+and a podspec, wrapping a framework that has not changed since iOS 4. Rejected `react-native-file-viewer`,
+which does the same thing in fewer lines of ours, on standing instruction 3: a third-party package
+in the binary forever, to avoid writing sixty lines. Rejected `expo-web-browser` because its chrome
+is a browser's, over a signed URL nobody should be reading, and because a `.docx` downloads rather
+than opening. Rejected a DOM-component `<iframe>`, which needed no rebuild and covers PDFs at best.
+[ADR-0041](SPEC/decisions/0041-a-document-opens-in-the-platforms-own-viewer.md) records all four.
+
+The share sheet stayed as the **fallback**, and within the hour that proved to be the load-bearing
+part rather than tidiness.
+
+### The founder's phone disagreed with the simulator, and that was correct
+
+He tapped a PDF on his iPhone and got the share sheet while the simulator was showing the viewer,
+and reported it as a discrepancy. It was not one: his binary predated the module by twenty minutes.
+`previewDocument` answered `false` and the fallback caught it, which is exactly what
+`requireOptionalNativeModule` exists to do.
+
+The alternative is severe enough to be worth stating plainly. `requireNativeModule` throws **at
+import time** for a module that is not in the binary, and this repo has already been taken down
+twice by an import-time throw - `expo-sqlite`'s wasm and `expo-media-library` on web, both recorded
+as pitfall 8. A module whose entire nature is *being newer than some installed builds* would have
+been the third, and the symptom would have been a blank screen on every route rather than a share
+sheet. Recorded as pitfall 37, along with the quieter half: `expo.autolinking.nativeModulesDir` has
+no default, so without that key in `package.json` the module is silently absent from the build with
+no error at `pod install`, no error at compile, and a `null` that the optional require then handles
+perfectly.
+
+Rebuilt and installed on the device, and the viewer opened his own two-page resume with `1 of 2` in
+the corner - the same file and the same frame as the recording he sent.
+
+### Verified
+
+On **web** through Playwright: the tile, and a tap that downloads a byte-identical file (the
+browser has no previewer and no share sheet, and a tab opened after an `await` is what a popup
+blocker exists to stop, so a `blob:` download is the honest answer there). On the **simulator**
+before and after the rebuild, both the sent and the received tile, and both the share sheet and the
+viewer. On the **device**, by the founder, in both states.
+
+Not directly observed: the optimistic bubble between upload and ack. It is the same `bare`
+expression the acked row uses, and on localhost the window is a few milliseconds wide.
+
 ## 2026-08-17 - The "..." was a round trip late, and the focus effect was why
 
 Reported from the phone within the hour, with a video: opening an event or a meetup and waiting

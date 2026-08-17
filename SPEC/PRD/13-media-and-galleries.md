@@ -33,7 +33,14 @@
    explicit cache key derived from the URL **without** its query string.
 6. **Sign in batches, never per row.** One signing call per bucket per page, not one per
    message.
-7. A document message shows filename and size; a photo message may carry a caption.
+7. A document message shows its filename, its type and its size; a photo message may carry a
+   caption. **Tapping it opens it full screen inside ClubChat**, in the platform's own document
+   viewer - the same component Files and Mail use, so it renders every accepted type and arrives
+   with a page count, text search and a share control already in it. The bytes are staged in the
+   cache under the document's real filename first, because the platform decides what it is holding
+   from the extension alone. Where there is no viewer - a browser, or an app build older than the
+   module - it falls back to the share sheet, which reaches the same place in one more tap. See
+   [ADR-0041](../decisions/0041-a-document-opens-in-the-platforms-own-viewer.md).
 
 **Known gaps in the current build.** No storage cleanup at all (deleting a message, post,
 club, race, or account leaves the object). No file size or MIME-type limits on any bucket. No

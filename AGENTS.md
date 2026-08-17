@@ -411,6 +411,7 @@ into `SPEC/PRD/17` and `SPEC/TECH/14` - this file is meant to shrink |
 | `packages/server/src/domain/` | Command handlers and query functions |
 | `packages/server/src/db/` | Schema, migrations, `constraint-proof.sql`, and the raw-read helpers |
 | `apps/mobile/` | Expo client (iOS / Android / web) |
+| `apps/mobile/modules/` | Local native modules, one directory each, found through `expo.autolinking.nativeModulesDir` in the app's `package.json` - autolinking has no default for that key. **Anything here is newer than some installed binary**, so it is reached with `requireOptionalNativeModule` and always has a path that works without it. See failure mode 37 |
 | `scripts/` | Diagram export, service readiness, em-dash check |
 
 **Where the invariants actually live.** `packages/server/src/db/schema.ts` carries them as

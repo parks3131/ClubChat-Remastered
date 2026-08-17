@@ -383,9 +383,11 @@ it, and the reports it would contain belong to the platform moderation queue.
 **Acceptance criteria**
 
 - [ ] A message sent on one device appears on another in realtime without a refresh.
-- [ ] Photos and documents round-trip: upload and appear. *(Opening full screen waits on the
-      viewer - see [Media and galleries](13-media-and-galleries.md).)*
-- [ ] A document bubble shows its filename and size.
+- [ ] Photos and documents round-trip: upload and appear, and both open full screen from the
+      bubble - see [Media and galleries](13-media-and-galleries.md).
+- [ ] A document bubble shows its filename, its type and its size.
+- [ ] Tapping a document opens it in the platform's own viewer; holding it still opens the
+      message menu.
 - [ ] Choosing a photo opens a preview; cancelling it posts nothing and uploads nothing.
 - [ ] A photo sent with a caption shows that caption under it, and an @mention in the caption
       notifies that person.

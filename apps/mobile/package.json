@@ -54,5 +54,11 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests"
   },
-  "private": true
+  "private": true,
+  "expo": {
+    "autolinking": {
+      "//": "Where local native modules live. Autolinking has no default for this: without the key, modules/ is simply never scanned and the module is silently absent from the build.",
+      "nativeModulesDir": "./modules"
+    }
+  }
 }

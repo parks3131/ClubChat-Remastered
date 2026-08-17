@@ -9,9 +9,13 @@
  * > the message bubble's own Pressable, which owns the long-press that reacts and reports. A
  * > second Pressable within it produces a `<button>` nested in a `<button>` on web - invalid
  * > HTML that React reports as a hydration error - and on native it would swallow the outer
- * > gesture. Whatever tap behaviour these grow (a full-screen viewer), it belongs to the
- * > enclosing bubble rather than to a nested control. Caught by the browser console during the
- * > Phase 3 smoke test.
+ * > gesture. Whatever tap behaviour these grow, it belongs to the enclosing bubble rather than
+ * > to a nested control. Caught by the browser console during the Phase 3 smoke test.
+ *
+ * Both have since grown one, and both obeyed that: a photo opens the full-screen viewer and a
+ * document opens the share sheet, and neither gesture is declared in this file. What a document
+ * DOES declare is that it is busy - see `opening` on `DocumentBubble`, which is the tapped thing
+ * answering rather than a banner somewhere else saying something happened.
  */
 
 import { useEffect, useState } from 'react';
@@ -25,8 +29,9 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import { formatBytes } from '@clubchat/shared';
+import { MaterialIcons } from '@expo/vector-icons';
 import { resolveMedia, resolveMediaUrl, type MediaVariant } from './api.ts';
+import { documentDetail } from './document-name.ts';
 import {
   PHOTO_MAX_WIDTH,
   photoSize,
@@ -254,19 +259,40 @@ type DocumentProps = {
   name: string | null;
   size: number | null;
   mine: boolean;
+  /**
+   * True while the bytes are being fetched for the share sheet.
+   *
+   * The spinner takes the icon's place rather than sitting beside it, so nothing in the
+   * conversation moves while a file is on its way - and it is drawn on the thing that was
+   * tapped, which is the only place somebody is looking after tapping it.
+   */
+  opening?: boolean;
 };
 
-/** A document bubble: filename and size, per PRD/05's in-scope table. */
-export function DocumentBubble({ name, size, mine }: DocumentProps) {
+/**
+ * A document bubble: filename and size, per PRD/05's in-scope table.
+ *
+ * > **The tile is the bubble, and carries the bubble's own fill.** It was a white card with a
+ * > hairline, rendered inside the tinted bubble, so every document in the conversation was two
+ * > nested rectangles around one filename - the same "boundary shades" the photo bubble lost its
+ * > grey matte for. The message bubble goes `bare` for a document exactly as it does for a
+ * > caption-less photo, and this draws the one rectangle that is left.
+ */
+export function DocumentBubble({ name, size, mine, opening = false }: DocumentProps) {
+  const detail = documentDetail(name, size);
   return (
     <View
       accessibilityLabel={`Document ${name ?? 'attachment'}${
-        size === null ? '' : `, ${formatBytes(size)}`
+        detail === null ? '' : `, ${detail}`
       }`}
       style={[styles.document, mine ? styles.documentMine : styles.documentTheirs]}
     >
       <View style={styles.documentIcon}>
-        <Text style={styles.documentIconText}>FILE</Text>
+        {opening ? (
+          <ActivityIndicator color={color.onAccent} />
+        ) : (
+          <MaterialIcons name="description" size={26} color={color.onAccent} />
+        )}
       </View>
       <View style={styles.documentMeta}>
         <Text
@@ -278,9 +304,7 @@ export function DocumentBubble({ name, size, mine }: DocumentProps) {
         >
           {name ?? 'Attachment'}
         </Text>
-        {size !== null && (
-          <Text style={styles.documentSize}>{formatBytes(size)}</Text>
-        )}
+        {detail !== null && <Text style={styles.documentDetail}>{detail}</Text>}
       </View>
     </View>
   );
@@ -309,44 +333,52 @@ const styles = StyleSheet.create({
   photoLoading: { alignItems: 'center', justifyContent: 'center' },
   photoUnavailable: { alignItems: 'center', justifyContent: 'center', padding: space.md },
   unavailableText: { ...type.bodySmall, color: color.textSecondary, textAlign: 'center' },
+  /*
+    The tile IS the bubble. No `maxWidth` of its own: the message row already caps a bubble at 82%
+    of the screen, and a second cap here was the tile disagreeing with the conversation about how
+    wide a message may be.
+
+    `space.sm + 4` twice, which is the padding-to-icon relationship the founder's mockup holds: the
+    frame around the icon is a quarter of the icon, and the gap to the words matches it, so the
+    tile reads as one object rather than as an icon with a caption next to it.
+  */
   document: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    maxWidth: 260,
-    padding: space.sm,
-    borderRadius: radius.md,
+    gap: space.sm + 4,
+    padding: space.sm + 4,
+    borderRadius: radius.lg,
   },
   /*
-    A document tile is a card on BOTH bubbles since 2026-08-12.
+    The bubble's own two fills, because this tile stands in for the bubble.
 
-    It was a solid accent slab on your own message, which worked while the sent bubble was an
-    orange gradient carrying white. On `bubbleSent` it is a saturated block sitting inside a pale
-    one - the loudest thing in the conversation, for an attachment.
+    > **It was a white card with a hairline, inside the tinted bubble**, which put two rectangles
+    > around every document in the conversation. Before that it was a solid accent slab, back when
+    > the sent bubble was an orange gradient carrying white text.
 
-    The two keys stay separate although they now match: the sent bubble is expected to get its own
-    treatment again, and the call site already branches.
+    The two keys stay separate although both are just the bubble's fill: the sent bubble is
+    expected to get its own treatment again, and the call site already branches.
   */
-  documentMine: {
-    backgroundColor: color.card,
-    borderWidth: 1,
-    borderColor: color.divider,
-  },
-  documentTheirs: {
-    backgroundColor: color.card,
-    borderWidth: 1,
-    borderColor: color.divider,
-  },
+  documentMine: { backgroundColor: color.bubbleSent },
+  documentTheirs: { backgroundColor: color.bubbleReceived },
+  /*
+    The accent square, which is the only saturated thing in the tile and is doing the whole job of
+    saying "this is a file" at a glance down a scrolling conversation.
+  */
   documentIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.sm,
-    backgroundColor: color.appBackground,
+    width: 48,
+    height: 48,
+    borderRadius: radius.md,
+    backgroundColor: color.accent,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  documentIconText: { ...type.label, color: color.secondary },
-  documentMeta: { flex: 1, gap: space.xs },
-  documentName: { ...type.body, color: color.textPrimary },
-  documentSize: { ...type.label, color: color.textSecondary },
+  /*
+    `flexShrink`, never `flex: 1`. A flexible basis makes the tile claim the full 82% for a
+    six-character filename; shrinking only when it must keeps the bubble close to the size of what
+    it contains, which is the relationship the rest of the conversation is built on.
+  */
+  documentMeta: { flexShrink: 1 },
+  documentName: { ...type.headline, color: color.textPrimary },
+  documentDetail: { ...type.bodySmall, color: color.textSecondary },
 });

@@ -74,6 +74,10 @@ restating it wrongly.
 | 09 | [Chat composer](09-chat-composer.md) | The bar you write in: a wash of the accent, glyphs rather than chips, and a send that only exists when there is something to send |
 | 10 | [Member card](10-member-card.md) | Who somebody is, raised over the list that asked: a panel that travels while the shade stays put, and a menu that is the server's answer |
 | 11 | [Photo compose](11-photo-compose.md) | The step between choosing a photo and sending it: a look at it, a crop stored as fractions, and a caption that is a real message body |
+| 12 | [Meetup detail](12-meetup-detail.md) | One meetup on its own screen: name, place, notes, and the map from a pasted link |
+| 13 | [News post](13-news-post.md) | A post as a publication: the gallery, the place, the people, and the composer behind it |
+| 14 | [Week row](14-week-row.md) | One day of the club's week: the letter badge, the name, and the time chip |
+| 15 | [Document bubble](15-document-bubble.md) | A file somebody sent: the tile that IS the bubble, the type read off the extension, and tap-to-open |
 
 **Written as surfaces are worked on, not backfilled in a pass.** A spec written by reading code
 rather than by looking at a device starts out wrong, and a directory of unverified documents is

@@ -119,6 +119,7 @@ survives the number changing.
 | 12 | [Meetup detail](DESIGN/12-meetup-detail.md) | One meetup on its own screen: name, place, notes, and the map from a pasted link |
 | 13 | [News post](DESIGN/13-news-post.md) | A post as a publication: the gallery, the place, the people, and the composer behind it |
 | 14 | [Week row](DESIGN/14-week-row.md) | One day of the club's week: the letter badge, the name, and the time chip |
+| 15 | [Document bubble](DESIGN/15-document-bubble.md) | A file somebody sent: the tile that IS the bubble, and tap-to-open in the platform's viewer |
 
 Written as surfaces are worked on rather than backfilled in a pass, since a spec written by reading
 code instead of by looking at a device starts out wrong. See [`DESIGN/README.md`](DESIGN/README.md)
