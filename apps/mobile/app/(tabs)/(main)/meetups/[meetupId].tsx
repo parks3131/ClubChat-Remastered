@@ -61,9 +61,14 @@ export default function MeetupScreen() {
               */}
               <DetailLine label="Where" value={meetup.location} />
               {/*
-                "Description", not "What". The composer asks the question - "What are we doing?" -
-                because a form reads better as one; the record answering it is a description, and
-                the founder read "WHAT / Easy Run" as a label that had lost its question mark.
+                "Description", here and in the composer, which now match.
+
+                They deliberately did not until 2026-08-17: the form asked "What are we doing?" on
+                the reasoning that a form reads better as a question, while the record answering it
+                was labelled "Description". The founder asked for the question to go - one word for
+                one field, wherever it appears. The original complaint that produced the split
+                still stands and is still answered: "WHAT / Easy Run" reads as a label that lost
+                its question mark, and neither surface says "What" any more.
               */}
               <DetailLine label="Description" value={meetup.description} />
               <DetailLine label="Who" value={meetup.clubName} />

@@ -79,6 +79,7 @@ export function ComposerField({
   accessibilityLabel,
   filled = false,
   multiline = false,
+  tall = false,
   trailing,
   autoCapitalize = 'sentences',
   autoCorrect = true,
@@ -89,6 +90,15 @@ export function ComposerField({
   accessibilityLabel: string;
   filled?: boolean;
   multiline?: boolean;
+  /**
+   * Open the field to several lines, for prose rather than a sentence.
+   *
+   * Per call site rather than a bigger `multiline`, because the two multiline fields in this app
+   * want opposite things: a meetup's description is a paragraph and wants room to be one, while a
+   * poll's question is nearly always a single line and a tall empty box under it just looks
+   * unfinished. `multiline` says the text may wrap; this says it is expected to.
+   */
+  tall?: boolean;
   /** A control at the field's right edge, such as remove-this-choice. */
   trailing?: ReactNode;
   /**
@@ -104,7 +114,11 @@ export function ComposerField({
   return (
     <View style={[styles.field, filled ? styles.fieldFilled : styles.fieldOutlined]}>
       <TextInput
-        style={[styles.fieldInput, multiline && styles.fieldInputMultiline]}
+        style={[
+          styles.fieldInput,
+          multiline && styles.fieldInputMultiline,
+          multiline && tall && styles.fieldInputTall,
+        ]}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
@@ -346,6 +360,14 @@ const styles = StyleSheet.create({
   },
   fieldInput: { ...type.body, flex: 1, color: color.textPrimary },
   fieldInputMultiline: { minHeight: 44, textAlignVertical: 'top' },
+  /*
+    Roughly five lines before it has to grow.
+
+    A minimum rather than a height, so the field still grows with the text and never scrolls a
+    paragraph inside itself. What this buys is the invitation: a one-line box asks for a phrase,
+    and the description of a meetup is meant to be more than that.
+  */
+  fieldInputTall: { minHeight: 132 },
 
   addRow: {
     flexDirection: 'row',

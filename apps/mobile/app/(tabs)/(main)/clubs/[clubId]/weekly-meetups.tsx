@@ -36,7 +36,7 @@
  * > this too.
  */
 
-import { useRef, useState } from 'react';
+import { Fragment, useRef, useState } from 'react';
 import { Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -44,11 +44,13 @@ import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { clubApi, contentApi } from '../../../../../src/api.ts';
 import { meetupHeadline, type Meetup } from '../../../../../src/api-types.ts';
 import {
-  formatDayTitle,
   formatTimeOfDay,
   formatWallClock,
+  formatWeekRange,
   fromDateKey,
+  isToday,
   toDateKey,
+  weekdayInitial,
 } from '../../../../../src/dates.ts';
 import {
   ComposerField,
@@ -180,7 +182,11 @@ export default function WeeklyMeetupsScreen() {
     <View style={styles.flex}>
       <View style={styles.weekNav}>
         <Action label="Previous" variant="secondary" onPress={() => setMonday(shift(monday, -1))} />
-        <Text style={styles.weekLabel}>Week of {monday}</Text>
+        {/*
+          The span, not the raw key. It reads as a week rather than as a database value, and it
+          now carries the dates that used to sit in seven per-day headers - see `formatWeekRange`.
+        */}
+        <Text style={styles.weekLabel}>{formatWeekRange(monday)}</Text>
         <Action label="Next" variant="secondary" onPress={() => setMonday(shift(monday, 1))} />
       </View>
 
@@ -194,28 +200,57 @@ export default function WeeklyMeetupsScreen() {
               unrelated panels rather than as one week - `DESIGN/06` rule 1, the same reason the
               poll composer stopped putting each group in a box.
             */}
-            {data.days.map((day) => (
-              <View key={day.date}>
-                <SectionLabel>{formatDayTitle(day.date)}</SectionLabel>
+            {data.days.map((day, dayIndex) => (
+              /*
+                One row per day, marked by its letter, rather than a headed section per day.
 
-                {day.empty && <Text style={styles.empty}>Nothing planned</Text>}
+                The badge used to carry the meetup's time and the day was a header above it, which
+                meant seven headers plus seven "Nothing planned" lines to show one meetup. The
+                letter moved into the badge and the header went, so the day is marked once and the
+                week is seven rows tall. `PRD/08` rules 2 and 3 still hold and are the reason an
+                empty day is a row rather than nothing: all seven days are shown, and a day with
+                nothing on it says so.
 
-                {day.meetups.map((meetup) => (
-                  <MeetupRow
-                    key={meetup.id}
-                    meetup={meetup}
-                    isAdmin={isAdmin}
-                    bellBusy={nudging}
-                    onNudge={() => void nudge(meetup.id)}
-                    onGrey={setNudgeNote}
-                    onLongPress={(anchor) => {
-                      longPressFeedback();
-                      setMenuFor({ day: day.date, meetup, anchor });
-                    }}
-                  />
-                ))}
+                The badge belongs to the DAY, so it is drawn once here rather than by the row - a
+                Tuesday with a morning and an evening meetup is one T against two stacked rows,
+                not the letter repeated down the column.
+              */
+              <Fragment key={day.date}>
+                {/*
+                  Two rules, and the difference between them is the whole point.
 
-              </View>
+                  The heavier one separates DAYS and the hairline separates meetups INSIDE a day,
+                  so the week's structure is visible without reading a single word. Neither runs
+                  edge to edge: each is inset, and the deeper the thing it divides the further it
+                  is inset, so the indentation itself says which level you are looking at.
+                */}
+                {dayIndex > 0 && <View style={styles.dayRule} />}
+
+                <View style={styles.day}>
+                  <DayBadge date={day.date} hasMeetups={!day.empty} />
+
+                  <View style={styles.dayBody}>
+                    {day.empty && <Text style={styles.empty}>Nothing planned</Text>}
+
+                    {day.meetups.map((meetup, meetupIndex) => (
+                      <Fragment key={meetup.id}>
+                        {meetupIndex > 0 && <View style={styles.meetupRule} />}
+                        <MeetupRow
+                          meetup={meetup}
+                          isAdmin={isAdmin}
+                          bellBusy={nudging}
+                          onNudge={() => void nudge(meetup.id)}
+                          onGrey={setNudgeNote}
+                          onLongPress={(anchor) => {
+                            longPressFeedback();
+                            setMenuFor({ day: day.date, meetup, anchor });
+                          }}
+                        />
+                      </Fragment>
+                    ))}
+                  </View>
+                </View>
+              </Fragment>
             ))}
 
             {/*
@@ -282,19 +317,44 @@ export default function WeeklyMeetupsScreen() {
  * day turned the week into a wall of repeated words.
  */
 /**
- * `18:30` as `6P`, for the chip.
+ * The day's letter, and the only thing marking which day a row belongs to.
  *
- * Deliberately not `formatWallClock`, which produces "6:30 PM" - that does not fit a circle, and
- * the circle is what makes a week scannable. The minutes are dropped only when they are zero, so
- * `6:30` stays `630P` rather than claiming a meetup is at six.
+ * Three weights, and each one is a fact rather than decoration:
+ *
+ *  - **Today is solid accent.** The one day the reader is most often looking for, and the reason
+ *    the badge is worth its width now that it no longer carries a time.
+ *  - **A day with something on it is accent-soft.** `TECH/13` reserves the solid accent for the
+ *    thing being pointed at; seven solid circles would point at nothing.
+ *  - **An empty day is sunken and grey**, so the week's shape is legible before a single word is
+ *    read - which is what the founder meant by scanning it.
+ *
+ * `shortClock` lived here until 2026-08-17, squeezing "6:30 PM" into "630P" because that was what
+ * fitted a 46pt circle. The time moved out to its own chip, so it reads properly again and that
+ * function is gone rather than kept for a caller that no longer exists.
  */
-function shortClock(hhmm: string): string {
-  const [rawHour, rawMinute] = hhmm.split(':').map(Number);
-  const hour = rawHour ?? 0;
-  const minute = rawMinute ?? 0;
-  const suffix = hour < 12 ? 'A' : 'P';
-  const twelve = hour % 12 === 0 ? 12 : hour % 12;
-  return minute === 0 ? `${twelve}${suffix}` : `${twelve}:${String(minute).padStart(2, '0')}`;
+function DayBadge({ date, hasMeetups }: { date: string; hasMeetups: boolean }) {
+  const today = isToday(date);
+  return (
+    <View
+      style={[
+        styles.dayBadge,
+        today ? styles.dayBadgeToday : hasMeetups ? styles.dayBadgeActive : styles.dayBadgeEmpty,
+      ]}
+    >
+      <Text
+        style={[
+          styles.dayBadgeText,
+          today
+            ? styles.dayBadgeTextToday
+            : hasMeetups
+              ? styles.dayBadgeTextActive
+              : styles.dayBadgeTextEmpty,
+        ]}
+      >
+        {weekdayInitial(date)}
+      </Text>
+    </View>
+  );
 }
 
 function MeetupRow({
@@ -335,54 +395,64 @@ function MeetupRow({
       ? `Someone already nudged this meetup. You can nudge it again at ${formatTimeOfDay(blockedUntil!)}.`
       : null;
 
-  return (
-    <Pressable
-      ref={ref}
-      style={styles.meetup}
-      onLongPress={(event) =>
-        measureRow(
-          ref.current,
-          { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY },
-          onLongPress,
-        )
-      }
-      /*
-        Everybody can open it now. Until 2026-08-15 a member could not press this row at all -
-        there was nothing behind it, because a meetup had no screen. It has one, so the row leads
-        there for everybody and the long press stays what it always was: an admin's shortcut.
-      */
-      onPress={() => router.push(`/meetups/${meetup.id}`)}
-      accessibilityRole="button"
-      accessibilityLabel={`${meetupHeadline(meetup)} at ${formatWallClock(meetup.time)}${
-        isAdmin ? '. Hold for options' : ''
-      }`}
-    >
-      {/*
-        The time as a chip rather than a prefix on the headline, from the founder's design.
-        It is the thing scanned for down a week - "what is at six" - and as a prefix it competed
-        with the name for the start of the line.
-      */}
-      <View style={styles.clock}>
-        <Text style={styles.clockText}>{shortClock(meetup.time)}</Text>
-      </View>
+  /*
+    A plain View, with the tappable part and the bell as SIBLINGS inside it.
 
-      <View style={styles.meetupText}>
+    The bell used to sit inside the row's own Pressable, which is a button inside a button: invalid
+    HTML on web, where React reports a hydration error, and on native the kind of nesting where the
+    inner control takes the responder and the outer gesture never arrives. It happened to behave,
+    because the bell wants the press it was intercepting - but that is luck rather than design, and
+    `AGENTS.md` failure mode 17 is explicit that only the outermost element in a row owns a gesture.
+
+    Pre-existing rather than introduced by the redesign, and fixed here because this is the file.
+  */
+  return (
+    <View style={styles.meetup}>
+      <Pressable
+        ref={ref}
+        style={styles.meetupTap}
+        onLongPress={(event) =>
+          measureRow(
+            ref.current,
+            { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY },
+            onLongPress,
+          )
+        }
+        /*
+          Everybody can open it now. Until 2026-08-15 a member could not press this row at all -
+          there was nothing behind it, because a meetup had no screen. It has one, so the row leads
+          there for everybody and the long press stays what it always was: an admin's shortcut.
+        */
+        onPress={() => router.push(`/meetups/${meetup.id}`)}
+        accessibilityRole="button"
+        accessibilityLabel={`${meetupHeadline(meetup)} at ${formatWallClock(meetup.time)}${
+          isAdmin ? '. Hold for options' : ''
+        }`}
+      >
         {/*
-          The NAME is the headline, and the place sits under it. Without a name the place is the
-          headline and there is no second line - `meetupHeadline` owns that fallback so every
-          surface makes the same choice.
-        */}
-        <Text style={styles.headline}>{meetupHeadline(meetup)}</Text>
-        {/* Only the meetups made before the place stopped being collected still carry one. */}
-        {meetup.location !== null && meetup.location.trim().length > 0 && (
-          <Text style={styles.description}>{meetup.location}</Text>
-        )}
-        {meetup.description !== null && (
-          <Text style={styles.description} numberOfLines={2}>
-            {meetup.description}
-          </Text>
-        )}
-      </View>
+        The name, and nothing else.
+
+        The place and the description sat under it until 2026-08-17 and made every row three lines
+        deep, so a week with a meetup on each day was a wall of prose. They are one tap away on the
+        meetup's own screen, which is where somebody deciding whether to go actually reads them.
+        `meetupHeadline` still owns the no-name fallback, so a club that only fills in a place
+        keeps a headline rather than an empty row.
+      */}
+      <Text style={styles.headline} numberOfLines={1}>
+        {meetupHeadline(meetup)}
+      </Text>
+
+      {/*
+        The time, out of the circle and into its own chip.
+
+        It is the thing scanned for down a week - "what is at six" - and it kept that job when the
+        badge took the day. Tinted rather than filled, because a row can carry one loud thing and
+        on today's row that is already the badge.
+      */}
+        <View style={styles.timeChip}>
+          <Text style={styles.timeChipText}>{formatWallClock(meetup.time)}</Text>
+        </View>
+      </Pressable>
 
       {/*
         Always drawn for an admin, and grey when it cannot be rung. Hiding it on other days made
@@ -421,7 +491,7 @@ function MeetupRow({
           </Pressable>
         </View>
       )}
-    </Pressable>
+    </View>
   );
 }
 
@@ -774,9 +844,10 @@ function MeetupComposer({
         <ComposerField
           value={description}
           onChangeText={setDescription}
-          placeholder="What are we doing?"
-          accessibilityLabel="What the club is doing"
+          placeholder="Description"
+          accessibilityLabel="A description of this meetup"
           multiline
+          tall
         />
 
         {failed !== null && <Text style={styles.error}>{failed}</Text>}
@@ -805,22 +876,88 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
   },
   /*
+    The part of the row that opens the meetup, which is everything except the bell.
+
+    It takes the remaining width so the tap target is the whole row rather than the words - and
+    being a sibling of the bell rather than its ancestor is what stops a button nesting inside a
+    button. See the note on the row itself.
+  */
+  meetupTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  /*
     The time, as a circle down the left of the week.
     Fixed width so every row's text starts on the same line, which is the whole reason the chip
     beats a prefix: a column of names is scannable and a column of "6:00 PM · " is not.
   */
-  clock: {
+  /*
+    The day: its badge on the left, everything that day holds stacked to the right of it.
+
+    **`alignItems: center` is what puts the badge beside the MIDDLE of the stack**, and it was
+    `flex-start` until 2026-08-17. Pinned to the top, a day with two meetups drew its letter level
+    with the first one and left the second hanging off nothing, which the founder reported as
+    disoriented and which is exactly what it looked like. Centred, two meetups put the letter
+    between them and three put it beside the second - the middle, in both cases, without the
+    layout having to count anything.
+
+    The vertical padding is the room asked for in the same breath. A week is seven rows and can
+    afford to breathe; it read as a list crushed against itself.
+  */
+  day: { flexDirection: 'row', alignItems: 'center', gap: space.md, paddingVertical: space.md },
+  /** `justifyContent` centres "Nothing planned" against the badge on a day that holds nothing. */
+  dayBody: { flex: 1, justifyContent: 'center', minHeight: 46, gap: space.xs },
+  /*
+    Between two DAYS: the heavier of the two rules, inset from the gutter and stopping well short
+    of the right edge. A full-width rule reads as a table; this reads as a break.
+  */
+  dayRule: {
+    height: 1,
+    backgroundColor: color.border,
+    marginRight: space.xl,
+  },
+  /*
+    Between two meetups on ONE day: the hairline, and inset further still.
+
+    It already begins after the badge, because it lives inside the day's body - so the two rules
+    start at different places as well as being different weights, and the eye reads the nesting
+    before it reads the colour.
+  */
+  meetupRule: {
+    height: 1,
+    backgroundColor: color.divider,
+    marginRight: space.xl,
+  },
+  dayBadge: {
     width: 46,
     height: 46,
     borderRadius: radius.pill,
-    backgroundColor: color.cardSunken,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  clockText: { ...type.bodySmallStrong, color: color.textPrimary },
-  meetupText: { flex: 1, gap: space.xs },
-  headline: { ...type.headline, color: color.textPrimary },
-  description: { ...type.bodySmall, color: color.textSecondary },
+  /** Today: the one solid circle on the screen. */
+  dayBadgeToday: { backgroundColor: color.accent },
+  /** A day with something on it. */
+  dayBadgeActive: { backgroundColor: color.accentSoft },
+  /** A day with nothing on it: present, and plainly quieter. */
+  dayBadgeEmpty: { backgroundColor: color.cardSunken },
+  /*
+    `headline` rather than `bodySmallStrong`: 17pt bold instead of 14.
+
+    The letter is the only thing naming the day now that the headers are gone, and at the smaller
+    size it read as a caption on the circle rather than as the circle's whole content - "so slim
+    and tiny". A token step rather than a hand-set size, so it stays with the scale.
+  */
+  dayBadgeText: { ...type.headline },
+  dayBadgeTextToday: { color: color.onAccent },
+  dayBadgeTextActive: { color: color.onAccentSoft },
+  dayBadgeTextEmpty: { color: color.textSecondary },
+  headline: { ...type.headline, color: color.textPrimary, flex: 1 },
+  /** The time, tinted rather than filled. One loud thing per row, and the badge already is one. */
+  timeChip: {
+    paddingHorizontal: space.sm,
+    paddingVertical: space.xs,
+    borderRadius: radius.pill,
+    backgroundColor: color.accentSoft,
+  },
+  timeChipText: { ...type.bodySmallStrong, color: color.onAccentSoft },
   bellWrap: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
   bellTime: { ...type.bodySmall, color: color.textSecondary },
   bell: { padding: space.xs },

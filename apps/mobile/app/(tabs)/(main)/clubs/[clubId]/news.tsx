@@ -12,7 +12,7 @@
  * The card and the composer are specified in [`DESIGN/13`](../../../../../../SPEC/DESIGN/13-news-post.md).
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Image,
@@ -47,10 +47,15 @@ import {
   Avatar,
   Body,
   Card,
+  ConfirmDialog,
+  ContextMenu,
   DataScreen,
   EmptyState,
   Field,
+  measureRow,
   SectionHeader,
+  type ContextMenuItem,
+  type PressAnchor,
 } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
@@ -74,6 +79,13 @@ export default function ClubNewsScreen() {
   // Inside this club for as long as this screen is mounted, which is what the Clubs tab reads.
   useDeclareClub(clubId);
   const [composing, setComposing] = useState(false);
+  /**
+   * The post being edited, held whole rather than by id.
+   *
+   * The feed has already read every field the composer needs, so seeding from this object opens
+   * the form filled in with no second request and no spinner over a form somebody is looking at.
+   */
+  const [editing, setEditing] = useState<NewsPost | null>(null);
   const [search, setSearch] = useState('');
 
   // The query is part of the load key, so typing re-reads rather than filtering a stale page.
@@ -84,14 +96,28 @@ export default function ClubNewsScreen() {
   const club = useLoad(() => clubApi.detail(clubId), [clubId]);
   const isAdmin = club.data?.club.viewer.isAdmin === true;
 
-  if (composing) {
+  if (composing || editing !== null) {
     return (
       <ComposePost
+        /*
+          Keyed by what it is composing, so switching between writing a new post and editing an
+          existing one REMOUNTS rather than reusing the state.
+
+          `useState` initialisers run once per mount. Without this key, opening Edit after
+          cancelling a New post would keep the half-typed draft and ignore the post entirely -
+          the fields are seeded at mount and the mount never happened again.
+        */
+        key={editing?.id ?? 'new'}
         clubId={clubId}
         channelId={club.data?.club.channelId ?? null}
-        onCancel={() => setComposing(false)}
+        post={editing}
+        onCancel={() => {
+          setComposing(false);
+          setEditing(null);
+        }}
         onPosted={() => {
           setComposing(false);
+          setEditing(null);
           feed.reload();
         }}
       />
@@ -167,6 +193,7 @@ export default function ClubNewsScreen() {
                 isAdmin={isAdmin}
                 onChanged={feed.reload}
                 onSearchTag={setSearch}
+                onEdit={() => setEditing(post)}
               />
             ))}
             {data.hasMore && <Text style={styles.meta}>Older posts load as you scroll.</Text>}
@@ -192,16 +219,115 @@ function PostCard({
   isAdmin,
   onChanged,
   onSearchTag,
+  onEdit,
 }: {
   post: NewsPost;
+  /**
+   * Whether the viewer administers this club, which is the whole permission question here.
+   *
+   * `PRD/06` rule 3: any club admin may edit or delete ANY post, not only the one they wrote -
+   * a post is club content published on the club's behalf, and an author-only rule would leave a
+   * demoted or departed admin's posts unremovable by anybody. So this is deliberately not
+   * compared against `post.authorId`.
+   */
   isAdmin: boolean;
   onChanged: () => void;
   onSearchTag: (tag: string) => void;
+  onEdit: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<PressAnchor | null>(null);
+  const menuButton = useRef<View | null>(null);
+
+  const menuItems: ContextMenuItem[] = [
+    {
+      label: 'Edit post',
+      icon: 'edit',
+      onPress: () => {
+        setMenuAnchor(null);
+        onEdit();
+      },
+    },
+    {
+      label: 'Delete post',
+      icon: 'delete',
+      destructive: true,
+      onPress: () => {
+        // The menu closes BEFORE the dialog opens. ContextMenu is a real Modal and ConfirmDialog
+        // is another, and iOS presents one per view controller - the second would never appear.
+        setMenuAnchor(null);
+        setConfirming(true);
+      },
+    },
+  ];
 
   return (
     <Card>
+      {/*
+        The "..." in the card's own top-right corner, where a post's controls live everywhere
+        else. It replaced a full-width "Delete post" button along the bottom of every card, which
+        spent a row of the feed on the rarest action and offered no room for the commoner one.
+
+        `PRD/06` rule 20: a member sees no create, edit or delete controls at all - so for them
+        there is no button rather than a menu that opens onto nothing, which is `DESIGN/10` rule 5.
+      */}
+      {isAdmin && (
+        <View
+          style={styles.cardMenuHost}
+          ref={(view) => {
+            menuButton.current = view as unknown as View | null;
+          }}
+          collapsable={false}
+        >
+          <Pressable
+            style={styles.cardMenuButton}
+            hitSlop={space.sm}
+            onPress={(event) =>
+              measureRow(
+                menuButton.current,
+                { x: event.nativeEvent.pageX, y: event.nativeEvent.pageY },
+                (anchor) => setMenuAnchor(anchor),
+              )
+            }
+            accessibilityRole="button"
+            accessibilityLabel={`Options for this post by ${post.authorName}`}
+          >
+            <MaterialIcons name="more-vert" size={20} color={color.textSecondary} />
+          </Pressable>
+        </View>
+      )}
+
+      {menuAnchor !== null && (
+        <ContextMenu
+          anchor={menuAnchor}
+          items={menuItems}
+          onDismiss={() => setMenuAnchor(null)}
+        />
+      )}
+
+      {/*
+        Raised over the feed rather than unfolded inside the card.
+
+        It was an inline block: the button swapped for a sentence and a Keep/Delete row within the
+        card's own flow, which reflowed the post underneath it and read as part of the post rather
+        than as a question about it. A permanent deletion deserves the same treatment as blocking
+        somebody, and that is a dialog.
+      */}
+      {confirming && (
+        <ConfirmDialog
+          title="Delete this post?"
+          // Names what is lost. A post has no tombstone, unlike a deleted chat message.
+          body="This removes the post, its photos and its reactions for everybody, permanently. Unlike a chat message it leaves nothing behind."
+          confirmLabel="Delete"
+          dismissLabel="Keep"
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false);
+            void contentApi.deleteNews(post.id).then(onChanged, onChanged);
+          }}
+        />
+      )}
+
       <View style={styles.author}>
         <Avatar name={post.authorName} image={post.authorImage} />
         <View style={styles.authorText}>
@@ -245,34 +371,6 @@ function PostCard({
       )}
 
       <ReactionRow post={post} onChanged={onChanged} />
-
-      {isAdmin &&
-        (confirming ? (
-          <>
-            {/* Names the post and states what is lost: deletion is permanent, with no tombstone. */}
-            <Text style={styles.meta}>
-              Delete this post permanently? Unlike a chat message it leaves nothing behind.
-            </Text>
-            <View style={styles.actions}>
-              <Action
-                label="Keep"
-                variant="secondary"
-                style={styles.actionButton}
-                onPress={() => setConfirming(false)}
-              />
-              <Action
-                label="Delete"
-                variant="danger"
-                style={styles.actionButton}
-                onPress={() => {
-                  void contentApi.deleteNews(post.id).then(onChanged, onChanged);
-                }}
-              />
-            </View>
-          </>
-        ) : (
-          <Action label="Delete post" variant="quiet" onPress={() => setConfirming(true)} />
-        ))}
     </Card>
   );
 }
@@ -467,7 +565,16 @@ function ReactionRow({ post, onChanged }: { post: NewsPost; onChanged: () => voi
 type Slot = {
   /** Stable across a retry, so React does not remount the tile and lose its place in the row. */
   key: string;
-  picked: PickedPhoto;
+  /**
+   * The file on this phone, or **null for a photo that is already on the server**.
+   *
+   * An edit opens with the post's existing gallery, and those photos have no local original: the
+   * phone chose the rectangle and the server cut the pixels at upload time (DESIGN/11 rule 3), so
+   * what exists now is the cropped result and nothing else. That single fact decides three things
+   * below - such a slot needs no upload, draws from its `mediaId` rather than a `uri`, and cannot
+   * be re-cropped into a different shape.
+   */
+  picked: PickedPhoto | null;
   mediaId: string | null;
   failed: boolean;
 };
@@ -475,6 +582,7 @@ type Slot = {
 function ComposePost({
   clubId,
   channelId,
+  post,
   onCancel,
   onPosted,
 }: {
@@ -493,17 +601,58 @@ function ComposePost({
    * > stamps `owner_type = 'news_post'` so these never appear in the chat Gallery (PRD/13 rule 4).
    */
   channelId: string | null;
+  /**
+   * The post being edited, or null to write a new one.
+   *
+   * One component for both, which is `PRD/06` rule 7 - "editing reuses the create form,
+   * pre-filled" - and the reason the rule is worth obeying rather than forking: everything the
+   * composer has learned about cropping, ordering and the six-photo ceiling would otherwise need
+   * a second copy that drifts.
+   */
+  post?: NewsPost | null;
   onCancel: () => void;
   onPosted: () => void;
 }) {
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [aspect, setAspect] = useState<Aspect>('1:1');
-  const [slots, setSlots] = useState<Slot[]>([]);
-  const [locationName, setLocationName] = useState('');
-  const [locationUrl, setLocationUrl] = useState('');
-  const [people, setPeople] = useState<MemberCandidate[]>([]);
-  const [placing, setPlacing] = useState(false);
+  const editing = post ?? null;
+
+  /*
+   * Seeded from the post exactly once, by `useState`'s initialiser rather than an effect.
+   *
+   * An effect would overwrite what somebody had typed on any re-render that changed the post
+   * object, which is every reload of the feed behind this screen.
+   */
+  const [title, setTitle] = useState(editing?.title ?? '');
+  const [body, setBody] = useState(editing?.body ?? '');
+  const [aspect, setAspect] = useState<Aspect>(editing?.aspect ?? '1:1');
+  const [slots, setSlots] = useState<Slot[]>(() =>
+    // Already uploaded, in the post's own order, with no local file. See `Slot.picked`.
+    (editing?.mediaIds ?? []).map((mediaId) => ({
+      key: `existing-${mediaId}`,
+      picked: null,
+      mediaId,
+      failed: false,
+    })),
+  );
+  const [locationName, setLocationName] = useState(editing?.locationName ?? '');
+  const [locationUrl, setLocationUrl] = useState(editing?.locationUrl ?? '');
+  const [people, setPeople] = useState<MemberCandidate[]>(
+    // `NewsPost.people` and `MemberCandidate` carry the same three fields under the same names.
+    (editing?.people ?? []).map((person) => ({
+      userId: person.userId,
+      name: person.name,
+      image: person.image,
+    })),
+  );
+  /*
+    Open already when the post arrived with a place, closed when it did not.
+
+    Left at `false` it hid an existing location behind a button reading "Add a location" - the
+    value was in state and would have survived the save, so nothing would have been lost, but the
+    form showed no sign of a place the post plainly has and offered no way to correct one. A field
+    you cannot see is a field you cannot edit, and the button was telling you there was nothing
+    there.
+  */
+  const [placing, setPlacing] = useState((editing?.locationName ?? '') !== '');
   const [naming, setNaming] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -525,16 +674,19 @@ function ComposePost({
    */
   const upload = useCallback(
     async (slot: Slot, forAspect: Aspect) => {
+      // Already uploaded, and no local original to send. Nothing to do rather than an error.
+      if (slot.picked === null) return;
       if (channelId === null) {
         setFailed('This club has no chat channel to attach a photo through.');
         return;
       }
-      const source = { width: slot.picked.width, height: slot.picked.height };
+      const picked = slot.picked;
+      const source = { width: picked.width, height: picked.height };
       const norm = centredRectForRatio(source, ratioOf(forAspect));
       const crop = source.width > 0 && source.height > 0 ? toSourceRect(norm, source) : undefined;
 
       try {
-        const uploaded = await uploadAttachment(channelId, slot.picked, 'photo', crop);
+        const uploaded = await uploadAttachment(channelId, picked, 'photo', crop);
         setSlots((current) =>
           current.map((entry) =>
             entry.key === slot.key
@@ -586,7 +738,22 @@ function ComposePost({
    * again, so every slot is uploaded afresh at the new shape. The old objects are left behind for
    * the nightly sweep, which is the storage gap PRD/13 already records.
    */
+  /*
+    An edit cannot re-crop what it did not pick, so the shape locks rather than lying.
+
+    The re-crop above works by uploading each slot's LOCAL file again at the new ratio. A photo
+    that arrived with the post has no local file - the server holds the already-cut result - so on
+    an edit the old photos would keep the old shape while any newly added one took the new shape,
+    and the carousel draws every photo in one frame. That is a visibly broken gallery produced by
+    a control that appeared to work, which is worse than a control that is plainly unavailable.
+
+    So the shape is fixed for as long as the post's own photos are in the row, and removing them
+    all hands it back. Stated in the UI rather than silently ignored - see `shapeLocked`.
+  */
+  const shapeLocked = slots.some((slot) => slot.picked === null);
+
   const changeAspect = (next: Aspect) => {
+    if (shapeLocked) return;
     setAspect(next);
     if (slots.length === 0) return;
     const reset = slots.map((slot) => ({ ...slot, mediaId: null, failed: false }));
@@ -597,20 +764,37 @@ function ComposePost({
   const submit = async () => {
     setBusy(true);
     setFailed(null);
+    const draft = {
+      title: title.trim() || null,
+      body: body.trim() || null,
+      mediaIds: ready.map((slot) => slot.mediaId!),
+      aspect,
+      locationName: locationName.trim() || null,
+      // A link with no name is refused by the server, so it is not offered here either.
+      locationUrl: locationName.trim() ? locationUrl.trim() || null : null,
+      peopleIds: people.map((person) => person.userId),
+    };
+
     try {
-      await contentApi.createNews(clubId, {
-        title: title.trim() || null,
-        body: body.trim() || null,
-        mediaIds: ready.map((slot) => slot.mediaId!),
-        aspect,
-        locationName: locationName.trim() || null,
-        // A link with no name is refused by the server, so it is not offered here either.
-        locationUrl: locationName.trim() ? locationUrl.trim() || null : null,
-        peopleIds: people.map((person) => person.userId),
-      });
+      /*
+        One draft, two verbs. `PATCH` takes the whole post rather than a diff, which is why the
+        existing photos had to be carried into `slots` as real entries rather than remembered on
+        the side: whatever is in the row at this moment IS the post's gallery, and a photo left
+        out here is a photo removed. `PRD/06` rule 7's "photos survive an edit that does not touch
+        them" is delivered by them still being in the row, not by the server inferring anything.
+      */
+      if (editing !== null) {
+        await contentApi.updateNews(editing.id, draft);
+      } else {
+        await contentApi.createNews(clubId, draft);
+      }
       onPosted();
     } catch {
-      setFailed('Could not post. A post needs a title, some text, or a photo.');
+      setFailed(
+        editing !== null
+          ? 'Could not save. A post needs a title, some text, or a photo.'
+          : 'Could not post. A post needs a title, some text, or a photo.',
+      );
     } finally {
       setBusy(false);
     }
@@ -658,19 +842,24 @@ function ComposePost({
           gestureEnabled: false,
         }}
       />
-      <SectionHeader title="New post" />
+      <SectionHeader title={editing !== null ? 'Edit post' : 'New post'} />
       <Field label="Title" value={title} onChangeText={setTitle} placeholder="Optional" />
-      <Field label="What happened" value={body} onChangeText={setBody} multiline />
+      <Field label="Description" value={body} onChangeText={setBody} multiline />
 
       <Text style={styles.fieldLabel}>Photos &amp; shape</Text>
       <View style={styles.aspectRow}>
         {ASPECTS.map((entry) => (
           <Pressable
             key={entry.key}
-            style={[styles.aspectChip, aspect === entry.key && styles.aspectChipOn]}
+            style={[
+              styles.aspectChip,
+              aspect === entry.key && styles.aspectChipOn,
+              shapeLocked && aspect !== entry.key && styles.aspectChipOff,
+            ]}
             onPress={() => changeAspect(entry.key)}
+            disabled={shapeLocked}
             accessibilityRole="radio"
-            accessibilityState={{ selected: aspect === entry.key }}
+            accessibilityState={{ selected: aspect === entry.key, disabled: shapeLocked }}
             accessibilityLabel={`${entry.label}, ${entry.key}`}
           >
             <Text style={[styles.aspectText, aspect === entry.key && styles.aspectTextOn]}>
@@ -679,6 +868,11 @@ function ComposePost({
           </Pressable>
         ))}
       </View>
+      {shapeLocked && (
+        <Text style={styles.meta}>
+          This post's shape is fixed while its photos are here. Remove them to choose another.
+        </Text>
+      )}
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoRow}>
         {/* Add is FIRST and always in the same place, and leaves the row entirely at six. */}
@@ -696,7 +890,16 @@ function ComposePost({
 
         {slots.map((slot, index) => (
           <View key={slot.key} style={styles.thumbWrap}>
-            <Image source={{ uri: slot.picked.uri }} style={styles.thumb} resizeMode="cover" />
+            {/* Already on the server draws from its id; a fresh pick draws from the local file. */}
+            {slot.picked === null && slot.mediaId !== null ? (
+              <RemoteImage mediaId={slot.mediaId} style={styles.thumb} resizeMode="cover" />
+            ) : (
+              <Image
+                source={{ uri: slot.picked?.uri ?? '' }}
+                style={styles.thumb}
+                resizeMode="cover"
+              />
+            )}
             {slot.mediaId === null && (
               <View style={styles.veil}>
                 <Text style={styles.veilText}>{slot.failed ? 'Retry' : '...'}</Text>
@@ -757,14 +960,20 @@ function ComposePost({
         onPress={() => setNaming(true)}
       />
 
+      {/*
+        The consequence line differs because the consequence differs: creating tells the club and
+        editing tells nobody, except somebody newly named. PRD/06 rule 6.
+      */}
       <Text style={styles.meta}>
-        A post needs a title, text, or a photo. Posting tells every other member of the club.
+        {editing !== null
+          ? 'A post needs a title, text, or a photo. Saving tells nobody, except anybody you have just named.'
+          : 'A post needs a title, text, or a photo. Posting tells every other member of the club.'}
       </Text>
       {failed !== null && <Text style={styles.error}>{failed}</Text>}
       <View style={styles.actions}>
         <Action label="Cancel" variant="secondary" style={styles.actionButton} onPress={onCancel} />
         <Action
-          label={busy ? 'Posting' : 'Post'}
+          label={busy ? (editing !== null ? 'Saving' : 'Posting') : editing !== null ? 'Save' : 'Post'}
           style={styles.actionButton}
           disabled={busy || uploading || !valid}
           onPress={() => void submit()}
@@ -967,6 +1176,15 @@ const styles = StyleSheet.create({
     paddingVertical: space.xs,
   },
   aspectChipOn: { borderColor: color.accent, backgroundColor: color.accentSoft },
+  /** The shapes not chosen, while the shape is locked: present, legibly unavailable. */
+  aspectChipOff: { opacity: 0.4 },
+  /*
+    Absolutely positioned so the author row below stays centred on the CARD rather than on
+    whatever width is left beside a button - the same reason the member card's "..." floats.
+    `zIndex` because it is declared before the content it must sit above.
+  */
+  cardMenuHost: { position: 'absolute', top: space.xs, right: space.xs, zIndex: 2 },
+  cardMenuButton: { padding: space.xs },
   aspectText: { ...type.bodySmall, color: color.textSecondary },
   aspectTextOn: { color: color.onAccentSoft },
 

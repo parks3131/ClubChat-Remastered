@@ -2148,7 +2148,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  heading: { paddingHorizontal: space.md, paddingTop: space.lg, gap: space.xs },
+  /*
+    No horizontal padding: the screen owns its gutter, this owns its top space.
+
+    It carried `paddingHorizontal` until 2026-08-17 and was therefore correct only on a container
+    that had none. Inside the meetup screen's already-padded body the two stacked, and the title
+    sat 32pt in while the accent time line, the card and the button under it all sat at 16 -
+    reported as the title "hanging from the left side to the center".
+  */
+  heading: { paddingTop: space.lg, gap: space.xs },
   headingEyebrow: { ...type.label, color: color.textSecondary, textTransform: 'uppercase' },
   headingTitle: { ...type.title, fontSize: 24, lineHeight: 30, color: color.textPrimary },
 

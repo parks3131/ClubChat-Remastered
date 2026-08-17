@@ -25,7 +25,7 @@ poll, because the club is only known once the read lands and the control has to 
 | Eyebrow | "MEETUP", in the small uppercase label type every detail screen uses |
 | Title | The name, or the place when there is no name. The screen's largest text |
 | When | One accent line directly under the title: "TODAY @ 6:00 PM", or the weekday |
-| Card | Where, Description, Who, Location notes - each omitted when empty, never shown blank. **"Description" rather than "What"**: the composer asks "What are we doing?" because a form reads as a question, and the record answering it does not |
+| Card | Where, Description, Who, Location notes - each omitted when empty, never shown blank. **"Description" rather than "What"**, and the composer says the same word since 2026-08-17 - it asked "What are we doing?" until then, on the reasoning that a form reads as a question, and one field answering to two names cost more than the question was worth |
 | Directions | A full-width accent button, present only when a map link was pasted |
 
 ## Rules that must survive

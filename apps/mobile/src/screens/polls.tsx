@@ -206,7 +206,17 @@ export function PollsList({
   return (
     <View style={styles.flex}>
       {header}
-      <ScreenHeading eyebrow="Community voice" title="Active conversations" />
+      {/*
+        The gutter is the SCREEN's, not the heading's.
+
+        `ScreenHeading` used to carry `paddingHorizontal` itself, which is right exactly once: on a
+        screen like this one, whose container has none. On the meetup screen, whose body is already
+        padded, the two added up and the title sat a full gutter right of everything under it.
+        A component that assumes its container's inset is only ever correct by coincidence.
+      */}
+      <View style={styles.headingGutter}>
+        <ScreenHeading eyebrow="Community voice" title="Active conversations" />
+      </View>
 
       <View style={styles.tabsWrap}>
         <Tabs
@@ -1174,6 +1184,8 @@ function DeletePoll({
 
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
+  /** This screen's container has no padding, so the heading is given the gutter here. */
+  headingGutter: { paddingHorizontal: space.md },
   tabsWrap: { padding: space.md, paddingBottom: 0 },
   meta: { ...type.bodySmall, color: color.textSecondary },
   error: { ...type.bodySmall, color: color.error },

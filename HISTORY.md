@@ -13,7 +13,102 @@ Newest first.
 
 ---
 
-## 2026-08-17 - The author was the one person who could not be named in their own post
+## 2026-08-17 - A week you can read at a glance, a post you can edit, and an event that knows where it is
+
+An afternoon of surfaces, driven from the founder's phone one screenshot at a time. Grouped here
+because they were one sitting rather than because they are one feature.
+
+### The news post grew a menu, and edit stopped being half-built
+
+The post card carried a full-width **DELETE POST** strip along its bottom and, on tap, unfolded a
+confirmation *inside* the card that reflowed the post under it. Both are gone: a "..." in the
+card's top-right opens the same `ContextMenu` every other menu in the product uses, and the
+confirmation is a raised `ConfirmDialog` over a dimmed feed.
+
+**Edit was the interesting half, because it already existed.** `PATCH /news/:id` and
+`contentApi.updateNews` had both shipped and **nothing in the UI called either** - failure mode 11
+again, the same shape as the tagging bug found earlier the same day. Making it real meant the
+composer opening pre-filled, and the awkward part is the gallery: a photo that arrives with a post
+has a `mediaId` and no local file, because the phone chose the rectangle and the server cut the
+pixels at upload. So `Slot.picked` became nullable, an existing photo draws from `RemoteImage`, and
+**the shape selector locks while the post's own photos are present** - re-cropping works by
+re-uploading the local original, which for those does not exist, so an unlocked selector would
+leave old photos at the old ratio and crop new ones to the new one inside a carousel that draws
+every photo in one frame. A control that is plainly unavailable beats one that appears to work and
+produces a broken gallery.
+
+Found while testing: an existing location was hidden behind a button reading **"Add a location"**.
+The value was in state and would have survived a save, so nothing was at risk - but the form showed
+no sign of a place the post obviously had.
+
+Verified by no-op saving two real posts and diffing the database: title, aspect, location and its
+URL, body, tags, **photo ids in order**, and both tagged people all byte-identical. Zero
+notifications, because editing correctly tells nobody.
+
+### The week became seven rows
+
+`PRD/08` requires all seven days with "Nothing planned" spelled out, so the screen was seven
+headers plus six such lines to show one meetup. The founder asked for the day letter in the badge;
+that would have repeated the header directly above it, so the header went instead and **the badge
+became the day marker**.
+
+Three things earned their way in. **Two letters where one is ambiguous** - `M T W Th F S Su`, since
+a single initial cannot tell Tuesday from Thursday at exactly the glance the badge exists for.
+**Three badge weights** - today solid, a day with something accent-soft, an empty day sunken - so
+the week's shape reads before a word does. And **the time left the circle**, which let it stop
+being `430P`: that abbreviation existed only to fit 46 points.
+
+Then three follow-ups that turned out to be one problem. The badge sat at the *top* of a day
+holding two meetups, leaving the second hanging off nothing - *"you can see how disoriented it
+is"*. **Centring the row fixes it for any count** and is one alignment rule rather than arithmetic;
+with three meetups the letter lands beside the second, which is what was asked for, verified with a
+temporary third row. Rules were added at two weights and two insets, days got vertical room, and
+the letters went up a step in the type scale.
+
+**A pre-existing nested-pressable bug surfaced while looking**: the bell had always been *inside*
+the row's own `Pressable`. Invalid on web, and on native the nesting where the child takes the
+responder and the ancestor's gesture never arrives (failure mode 17). The diff confirmed it was not
+introduced by the redesign; it was fixed anyway, because the file was open.
+
+### One field, two names, and a heading said twice
+
+`ScreenHeading` carried its own `paddingHorizontal`, which is correct exactly once: on a screen
+whose container has none. On the meetup screen, whose body already pads, the two added up and the
+title sat at 32 while the accent time line, the card and the button below all sat at 16 - reported
+as the title *"hanging from the left side to the center"*. **The gutter belongs to the screen**, so
+it moved to the two call sites; polls was measured before and after to prove it had not shifted.
+
+The meetup composer asked *"What are we doing?"* while the record answering it said *"Description"*,
+a split `DESIGN/12` had argued for deliberately. The founder asked for one word, so both say
+Description now and the spec records the reversal rather than being left describing a product that
+no longer exists.
+
+### An event learned where it is
+
+Three asks on the event composer, and only one of them was cosmetic.
+
+**The end time is gone from the form.** Two of the three validation rules there existed only to
+police it - an end before the start, and an end half-filled - and both went with it. **The column
+did not**: `ends_at` is nullable, older events still carry one, and `eventWhen` still renders a
+range. A migration removing it would have destroyed entered data to tidy a form.
+
+**A map link was added beside the location, not instead of it**, because the two answer different
+questions: where in the club's own words, and what a phone can open. Migration `0037` adds one
+column - `map_url`, and deliberately no `map_lat` / `map_lng`, because those exist on `meetups` for
+a hand-placed pin and nothing places one on an event; `directionsUrl` opens the stored URL and only
+falls back to coordinates when there is no link. Columns that would always be null are absent
+rather than reserved. `isMapLink` is reused rather than re-derived - a second copy of a host
+allowlist is the one that goes stale - and a link that is not a map is dropped rather than refused,
+since the link is optional and a typo should not reject the event.
+
+Proved in both directions at the route (a valid link stored, a `maps.google.com.evil.test`
+lookalike stored as null) and in both directions on the screen: a link renders **Directions**, an
+event without one renders no button at all. The screen probe was inserted directly rather than
+created through the API, so the club's phones were not notified for a test.
+
+Finally, the composer said "New event" in its header and "NEW EVENT" again as the first thing in
+the body, in two different treatments. One title now, and it names the act: **Create event**. The
+header is the copy that survived because it is the one carrying the way out.
 
 Reported from the phone, a day after tagging shipped: *"I can't tag myself... I can see the person
 who's posting in the tag"*. Both halves are one symptom seen from two sides. Everybody else could

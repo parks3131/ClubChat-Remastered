@@ -157,6 +157,9 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
     startsAt: z.string().datetime(),
     endsAt: z.string().datetime().nullish(),
     location: z.string().max(500).nullish(),
+    // Same bound the meetup's link uses. Anything that is not a map link is dropped by
+    // `createEvent` rather than refused, because a link is optional and a bad one is not an error.
+    mapUrl: z.string().trim().max(2_000).nullish(),
     description: z.string().max(5_000).nullish(),
   });
 

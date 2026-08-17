@@ -239,11 +239,19 @@ function CreateEvent({
 }) {
   const [title, setTitle] = useState('');
   const [location, setLocation] = useState('');
+  /*
+   * The map link, beside the place rather than instead of it.
+   *
+   * Two fields because they answer two questions: `location` is where in the club's own words -
+   * "the wooden archway", "Room 204" - and this is what a phone can open. ADR-0039 settled that
+   * for a meetup and the reasoning carries over unchanged; an event is the other surface that
+   * says where, and a member who has learned that a pasted link becomes Directions must not find
+   * it missing here.
+   */
+  const [mapUrl, setMapUrl] = useState('');
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [startTime, setStartTime] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [endTime, setEndTime] = useState('');
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 
@@ -262,32 +270,27 @@ function CreateEvent({
   };
 
   const startsAt = instant(startDate, startTime);
-  const endsAt = instant(endDate, endTime);
 
   /*
-   * Two rules, checked here and stated to the member rather than left to a failed save.
+   * One rule now, stated to the member rather than left to a failed save: **an event cannot start
+   * in the past.** Scheduling backwards is never what anyone meant, and a club that "has" a
+   * session which already happened is noise on every calendar.
    *
-   *  1. **An event cannot start in the past.** Scheduling backwards is never what anyone meant,
-   *     and a club that "has" a session which already happened is noise on every calendar.
-   *  2. **It cannot end before it starts.** An end date is optional; an end BEFORE the start is
-   *     not a shorter event, it is a typo.
-   *
-   * A half-filled end counts as unset rather than invalid, so picking a date and not yet a time
-   * does not shout at somebody mid-way through filling the form in.
+   * > **The end time was removed from this form on 2026-08-17, at the founder's request** - "I
+   * > don't want the end option nowadays". Two of the three rules that used to live here were
+   * > about it, and both are gone with it: an end before the start, and an end half-filled with a
+   * > date but no time.
+   * >
+   * > **The column stays and so does everything that reads it.** `ends_at` is nullable, events
+   * > created before today still carry one, and `eventWhen` still renders a range when it finds
+   * > one. Dropping the field from a form is not a reason to destroy data somebody entered, and a
+   * > migration removing it would be exactly that.
    */
-  const endHalfFilled =
-    (endDate.length > 0) !== (endTime.length > 0);
   const startsInPast = startsAt !== null && new Date(startsAt).getTime() <= Date.now();
-  const endsBeforeStart =
-    startsAt !== null && endsAt !== null && new Date(endsAt).getTime() <= new Date(startsAt).getTime();
 
   const problem = startsInPast
     ? 'That start is in the past. Pick a date and time still to come.'
-    : endsBeforeStart
-      ? 'The end has to come after the start.'
-      : endHalfFilled
-        ? 'An end needs both a date and a time, or neither.'
-        : null;
+    : null;
 
   const valid = title.trim().length > 0 && startsAt !== null && problem === null;
 
@@ -308,8 +311,12 @@ function CreateEvent({
         type: 'other',
         title: title.trim(),
         startsAt,
-        endsAt,
+        // No end is sent at all, rather than an empty one - the field is gone from this form and
+        // the column is left to the events that already have one.
         location: location.trim().length > 0 ? location.trim() : null,
+        // Sent as typed. The server validates the host and stores nothing it does not recognise,
+        // so a mistyped link is a missing Directions button rather than a refused event.
+        mapUrl: mapUrl.trim().length > 0 ? mapUrl.trim() : null,
         description: description.trim().length > 0 ? description.trim() : null,
       });
       onCreated();
@@ -322,8 +329,15 @@ function CreateEvent({
 
   return (
     <View style={styles.flex}>
+      {/*
+        One title, and it names the act rather than the noun.
+
+        This screen said "New event" in the header AND "NEW EVENT" again as the first thing in the
+        body, in two different treatments, so the top of the form was the same two words twice.
+        The header is the copy that survives, because it is the one carrying the way out.
+      */}
       <ComposerHeader
-        title="New event"
+        title="Create event"
         discardLabel="Discard this event and go back"
         onCancel={onCancel}
       />
@@ -333,12 +347,6 @@ function CreateEvent({
         contentContainerStyle={styles.composerBody}
         keyboardShouldPersistTaps="handled"
       >
-        {/* v1's heading: the name at display weight over a short accent rule. */}
-        <View>
-          <Text style={styles.composerHeading}>NEW EVENT</Text>
-          <View style={styles.composerRule} />
-        </View>
-
         <Text style={styles.composerLabel}>Event Title</Text>
         <TextInput
           style={styles.composerInput}
@@ -361,6 +369,37 @@ function CreateEvent({
             accessibilityLabel="Location"
           />
         </View>
+
+        {/*
+          The link, under the place it belongs to.
+
+          Its own field rather than a second use of the one above, because the two are different
+          answers: one is where in the club's own words and the other is what a phone can open.
+          The placeholder says what pasting one BUYS you, since a URL field with no explanation
+          reads as homework - and the whole point is that it is optional.
+
+          `autoCapitalize` and `autoCorrect` off, which is not fussiness: iOS capitalises the first
+          letter and autocorrects what it takes for words, and "Https://Maps.app.goo.gl" is a link
+          the server will not recognise. The meetup composer learned this first.
+        */}
+        <Text style={styles.composerLabel}>Location link (optional)</Text>
+        <View style={styles.composerInputRow}>
+          <MaterialIcons name="link" size={18} color={color.textSecondary} />
+          <TextInput
+            style={styles.composerInputInline}
+            value={mapUrl}
+            onChangeText={setMapUrl}
+            placeholder="Paste a Google or Apple Maps link"
+            placeholderTextColor={color.textSecondary}
+            accessibilityLabel="A map link for this event"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+        </View>
+        <Text style={styles.meta}>
+          Paste a map link and the event gets a Directions button, the same as a meetup.
+        </Text>
 
         <Text style={styles.composerLabel}>Description</Text>
         <TextInput
@@ -386,15 +425,6 @@ function CreateEvent({
             </View>
           </View>
 
-          <Text style={styles.scheduleLabel}>Ends (optional)</Text>
-          <View style={styles.scheduleRow}>
-            <View style={styles.scheduleDate}>
-              <DateField label="end date" value={endDate} onChange={setEndDate} optional />
-            </View>
-            <View style={styles.scheduleTime}>
-              <TimeField label="End time" value={endTime} onChange={setEndTime} />
-            </View>
-          </View>
         </View>
 
         <Text style={styles.meta}>Creating an event tells every other member of the club.</Text>
@@ -420,15 +450,6 @@ function CreateEvent({
 
 const styles = StyleSheet.create({
   composerBody: { padding: space.md, paddingBottom: space.xl, gap: space.sm },
-  composerHeading: { ...type.title, color: color.textPrimary },
-  composerRule: {
-    height: 3,
-    width: 88,
-    backgroundColor: color.accent,
-    borderRadius: radius.pill,
-    marginTop: space.xs,
-    marginBottom: space.sm,
-  },
   /* The field labels are accent-coloured in v1, which is what separates them from body copy. */
   composerLabel: { ...type.label, color: color.accent, marginTop: space.sm },
   composerInput: {

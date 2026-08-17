@@ -215,10 +215,22 @@ export async function createEvent(
     startsAt: string;
     endsAt?: string | null | undefined;
     location?: string | null | undefined;
+    mapUrl?: string | null | undefined;
     description?: string | null | undefined;
   },
 ): Promise<Result<{ eventId: string }>> {
   if (!canManageClubContent(ctx, input.clubId)) return { ok: false, code: 'forbidden' };
+
+  /*
+   * Not a map link: not stored at all, exactly as a meetup treats it.
+   *
+   * The rule is the same one and it is worth restating: a stored URL becomes a Directions button
+   * that opens it, so anything that is not a map is dropped rather than kept and refused later.
+   * `isMapLink` is reused rather than re-derived - the second copy of a host allowlist is the one
+   * that goes stale.
+   */
+  const link = typeof input.mapUrl === 'string' ? input.mapUrl.trim() : '';
+  const mapUrl = link.length > 0 && isMapLink(link) ? link : null;
 
   return db.transaction(async (tx) => {
     const rows = await tx
@@ -230,6 +242,7 @@ export async function createEvent(
         startsAt: new Date(input.startsAt),
         endsAt: input.endsAt ? new Date(input.endsAt) : null,
         location: input.location ?? null,
+        mapUrl,
         description: input.description ?? null,
         createdBy: ctx.userId,
       })
@@ -1324,6 +1337,8 @@ export type EventDetail = {
   startsAt: string;
   endsAt: string | null;
   location: string | null;
+  /** A pasted map link, already validated. Becomes a Directions button, or no button at all. */
+  mapUrl: string | null;
   description: string | null;
   /** Null once the creator's account is gone - `created_by` is `on delete set null`. */
   creatorId: string | null;
@@ -1360,6 +1375,7 @@ export async function readEvent(
     starts_at: string;
     ends_at: string | null;
     location: string | null;
+    map_url: string | null;
     description: string | null;
     created_by: string | null;
     full_name: string | null;
@@ -1371,6 +1387,7 @@ export async function readEvent(
            ${isoUtc('e.starts_at')} AS starts_at,
            ${isoUtc('e.ends_at')} AS ends_at,
            e.location,
+           e.map_url,
            e.description,
            e.created_by::text AS created_by,
            u.full_name
@@ -1395,6 +1412,7 @@ export async function readEvent(
       startsAt: row.starts_at,
       endsAt: row.ends_at,
       location: row.location,
+      mapUrl: row.map_url,
       description: row.description,
       creatorId: row.created_by,
       creatorName: row.full_name,

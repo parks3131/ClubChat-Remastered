@@ -413,6 +413,40 @@ describe('calendar events', () => {
     expect((await as(secondAdmin, 'DELETE', `/events/${created.body.eventId}`)).status).toBe(200);
   });
 
+  /*
+   * An event's map link, which is the meetup's rule applied to the other surface that answers
+   * "where". Asserted in both directions on purpose: storing the good one proves the feature, and
+   * dropping the bad one proves the reason it is validated at all - a stored URL becomes a button
+   * that opens it, so a lookalike host must never reach a member's phone as Directions.
+   */
+  it('keeps a pasted map link on an event, and drops anything that is not one', async () => {
+    const owner = await signUp('EventMapOwner');
+    const { clubId } = await createClubAs(owner);
+
+    const good = await as(owner, 'POST', `/clubs/${clubId}/events`, {
+      type: 'other' as const,
+      title: 'Trailhead meet',
+      startsAt: '2027-05-02T13:00:00.000Z',
+      location: 'The preserve car park',
+      mapUrl: 'https://maps.apple.com/?ll=42.0887,-75.9698',
+    });
+    expect(good.status).toBe(201);
+    expect((await as(owner, 'GET', `/events/${good.body.eventId}`)).body.event.mapUrl).toBe(
+      'https://maps.apple.com/?ll=42.0887,-75.9698',
+    );
+
+    // A host that merely CONTAINS a map domain. The same lookalike the meetup test uses.
+    const bad = await as(owner, 'POST', `/clubs/${clubId}/events`, {
+      type: 'other' as const,
+      title: 'Trailhead meet',
+      startsAt: '2027-05-02T13:00:00.000Z',
+      mapUrl: 'https://maps.google.com.evil.test/?q=42.0887,-75.9698',
+    });
+    // Created, because a link is optional and a bad one is not a reason to refuse the event.
+    expect(bad.status).toBe(201);
+    expect((await as(owner, 'GET', `/events/${bad.body.eventId}`)).body.event.mapUrl).toBe(null);
+  });
+
   it('rejects an invented event type at the route', async () => {
     const owner = await signUp('TypeOwner');
     const { clubId } = await createClubAs(owner);

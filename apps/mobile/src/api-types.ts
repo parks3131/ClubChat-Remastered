@@ -445,6 +445,14 @@ export type EventDetail = {
   startsAt: string;
   endsAt: string | null;
   location: string | null;
+  /**
+   * A pasted map link, already validated by the server. Null means no Directions button.
+   *
+   * Read off the server's `EventDetail` rather than guessed at, which is `AGENTS.md` failure
+   * mode 16: this file restates the server's shapes by hand and every wrong guess in it has
+   * surfaced as a crash on a screen rather than as a type error here.
+   */
+  mapUrl: string | null;
   description: string | null;
   /** Null once the creator's account is gone. The event outlives them. */
   creatorId: string | null;

@@ -260,6 +260,13 @@
       "when": 1786924351444,
       "tag": "0036_news_tag_order",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1786974023364,
+      "tag": "0037_event_map_url",
+      "breakpoints": true
     }
   ]
 }

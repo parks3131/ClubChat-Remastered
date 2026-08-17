@@ -76,8 +76,24 @@ Two views over **one merged feed**: a month grid for "what is happening when", a
     button - a card that is entirely a link does not also need to contain one. See
     [`DESIGN/05`](../DESIGN/05-content-card.md) rule 3, which is the same rule for all three kinds
     of card.
-11. An event carries a type, a title, a date and time, an optional location, and an optional
-    description.
+11. An event carries a type, a title, a date and time, an optional location, an optional **map
+    link**, and an optional description.
+
+    > **The end time stopped being asked for on 2026-08-17.** The form had an optional end date
+    > and time and it is gone; an event is a moment, and the two validation rules that existed
+    > only to police an end went with it. **The stored value is untouched**: `ends_at` is still on
+    > the row, events created before that date still carry one, and every surface that renders a
+    > range still does. Removing a field from a form is not a reason to destroy what people
+    > already entered.
+    >
+    > **The map link is the meetup's, on the other surface that answers "where"**
+    > ([ADR-0039](../decisions/0039-a-post-says-where-with-a-name-and-a-link.md) settled the
+    > shape). It sits beside the location rather than replacing it, because the two answer
+    > different questions: the location is where in the club's own words, and the link is what a
+    > phone can open. A pasted link becomes a **Directions** button on the event's screen; no
+    > link means no button, never a button that hands Maps a text search for whatever the
+    > location field happens to say. Anything that is not a recognised map host is not stored,
+    > because a stored URL becomes a button that opens it.
 12. **Creating an event from chat's "+" returns to chat afterwards**, not to the new event's
     detail screen - the chat card already confirms it.
 13. **An event has a detail screen of its own**, and all four routes to it lead there: the

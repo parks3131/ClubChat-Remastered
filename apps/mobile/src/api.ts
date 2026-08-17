@@ -541,6 +541,7 @@ export const contentApi = {
       startsAt: string;
       endsAt?: string | null;
       location?: string | null;
+      mapUrl?: string | null;
       description?: string | null;
     },
   ) => apiFetch<{ eventId: string }>(`/clubs/${clubId}/events`, { method: 'POST', body }),

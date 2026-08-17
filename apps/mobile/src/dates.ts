@@ -266,3 +266,43 @@ export function formatDateOfBirth(dateKey: string | null | undefined): string {
     day: 'numeric',
   });
 }
+
+/**
+ * `M`, `T`, `W`, `Th`, `F`, `S`, `Su` - the day badge on the weekly meetups screen.
+ *
+ * **Hand-written rather than sliced off a locale name**, and the reason is Tuesday and Thursday.
+ * A single initial gives `T` for both and `S` for both weekend days, so the week reads as
+ * M T W T F S S and two pairs of days become indistinguishable at exactly the glance this badge
+ * exists to serve. Two letters where one is ambiguous is the whole trick.
+ *
+ * The consequence of writing them out is that these are English, where the rest of this module
+ * formats in the reader's locale. That is a real limitation and it is deliberate for now: the
+ * product ships in one language, and a locale-derived version has to solve the collision above
+ * per language rather than once.
+ */
+const WEEKDAY_INITIALS = ['Su', 'M', 'T', 'W', 'Th', 'F', 'S'] as const;
+
+export function weekdayInitial(dateKey: string): string {
+  return WEEKDAY_INITIALS[fromDateKey(dateKey).getDay()] ?? '';
+}
+
+/** Whether a date-only key is the reader's today. Local, like `toDateKey`. */
+export function isToday(dateKey: string, now: Date = new Date()): boolean {
+  return dateKey === toDateKey(now);
+}
+
+/**
+ * `Aug 17 - 23`, or `Aug 31 - Sep 6` when the week crosses a month.
+ *
+ * Carries the dates the per-day headers used to, now that the week is seven rows marked by a
+ * letter rather than seven headed sections - so "which 17th" is still answerable without giving
+ * every row a number.
+ */
+export function formatWeekRange(mondayKey: string): string {
+  const start = fromDateKey(mondayKey);
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  const month = (date: Date) => date.toLocaleDateString(undefined, { month: 'short' });
+  return start.getMonth() === end.getMonth()
+    ? `${month(start)} ${start.getDate()} - ${end.getDate()}`
+    : `${month(start)} ${start.getDate()} - ${month(end)} ${end.getDate()}`;
+}

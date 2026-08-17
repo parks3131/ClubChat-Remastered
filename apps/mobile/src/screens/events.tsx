@@ -19,6 +19,7 @@ import { contentApi } from '../api.ts';
 import type { EventDetail } from '../api-types.ts';
 import { bibParts, formatInstant, formatTimeOfDay } from '../dates.ts';
 import { CardEyebrow, CardMeta, CardTitle, ContentCard, DateChip } from '../content-card.tsx';
+import { MeetupDirections } from '../meetup-map.tsx';
 import { color, space, type } from '../theme.ts';
 import { Action, Body, Card, ConfirmDialog, DataScreen, DetailLine } from '../ui.tsx';
 import { useLoad } from '../use-load.ts';
@@ -107,6 +108,16 @@ export function EventView({ eventId }: { eventId: string }) {
               />
               <DetailLine label="Added by" value={event.creatorName} />
             </Card>
+
+            {/*
+              Directions, and only when a link was pasted.
+
+              The same component and the same rule as a meetup's: no link means no button, never a
+              button that hands Maps a text search for whatever the location field happens to say.
+              `point` is always null here - an event has no hand-placed pin, so the stored URL is
+              the only thing that can open, which is why the column has no lat/lng beside it.
+            */}
+            <MeetupDirections mapUrl={event.mapUrl} point={null} place={event.location ?? ''} />
 
             <Action
               label="Open the club"

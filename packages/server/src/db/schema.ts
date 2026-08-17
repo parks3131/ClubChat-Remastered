@@ -1366,6 +1366,22 @@ export const calendarEvents = pgTable(
     startsAt: timestamp('starts_at', { withTimezone: true }).notNull(),
     endsAt: timestamp('ends_at', { withTimezone: true }),
     location: text('location'),
+    /*
+     * A pasted Google or Apple Maps URL, which becomes a Directions button on the event.
+     *
+     * The same shape a meetup carries (ADR-0037), deliberately: an event and a meetup both answer
+     * "where", and a member who has learned that a pasted link turns into Directions on one must
+     * not find it missing on the other.
+     *
+     * **No `map_lat` / `map_lng` here, unlike `meetups`.** Those exist there for a hand-placed pin,
+     * and nothing places one on an event - `directionsUrl` opens the stored URL and only falls
+     * back to coordinates when there is no link. Columns that would always be null are absent
+     * rather than reserved.
+     *
+     * Validated by `isMapLink` before it is stored, because a stored URL becomes a button that
+     * opens it.
+     */
+    mapUrl: text('map_url'),
     description: text('description'),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

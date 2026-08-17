@@ -11,7 +11,15 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { bibParts, formatConversationTimestamp, formatDaySeparator, toDateKey } from './dates.ts';
+import {
+  bibParts,
+  formatConversationTimestamp,
+  formatDaySeparator,
+  formatWeekRange,
+  isToday,
+  toDateKey,
+  weekdayInitial,
+} from './dates.ts';
 
 /** A local date, built from components - never parsed, for the reason at the top of `dates.ts`. */
 const localDate = (year: number, month: number, day: number, hour = 12) =>
@@ -131,5 +139,50 @@ describe('the calendar bib', () => {
     // The opposite handling, and the reason the flag is a required parameter: this string has no
     // zone to honour, so parsing it as an instant would chip the 11th west of Greenwich.
     expect(bibParts('2026-08-12', true).day).toBe(12);
+  });
+});
+
+describe('the weekly meetups week', () => {
+  it('gives every day a distinguishable badge', () => {
+    // 2026-08-17 is a Monday. Seven consecutive days, seven distinct labels.
+    const week = [
+      '2026-08-17',
+      '2026-08-18',
+      '2026-08-19',
+      '2026-08-20',
+      '2026-08-21',
+      '2026-08-22',
+      '2026-08-23',
+    ].map(weekdayInitial);
+
+    expect(week).toEqual(['M', 'T', 'W', 'Th', 'F', 'S', 'Su']);
+    /*
+      The point of the two-letter forms, asserted rather than described: a single initial gives
+      T for Tuesday and Thursday and S for Saturday and Sunday, and a badge that cannot tell
+      Tuesday from Thursday is worse than no badge at all.
+    */
+    expect(new Set(week).size).toBe(7);
+  });
+
+  it('reads the weekday locally, not as UTC midnight', () => {
+    // The failure this whole module is shaped around: parsed as an instant, a date-only key is
+    // UTC midnight and lands on the previous day west of Greenwich - so Monday would badge as Su.
+    expect(weekdayInitial('2026-08-17')).toBe('M');
+    expect(weekdayInitial('2026-01-01')).toBe('Th');
+  });
+
+  it('names the week by its span, and says both months when it crosses one', () => {
+    expect(formatWeekRange('2026-08-17')).toBe('Aug 17 - 23');
+    // 2026-08-31 is a Monday, so this week ends in September.
+    expect(formatWeekRange('2026-08-31')).toBe('Aug 31 - Sep 6');
+  });
+
+  it('knows today from a date-only key, in the reader own zone', () => {
+    const now = new Date(2026, 7, 17, 9, 30);
+    expect(isToday('2026-08-17', now)).toBe(true);
+    expect(isToday('2026-08-18', now)).toBe(false);
+
+    // Late evening, when the UTC date has already rolled over west of Greenwich.
+    expect(isToday('2026-08-17', new Date(2026, 7, 17, 23, 45))).toBe(true);
   });
 });

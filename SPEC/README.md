@@ -117,6 +117,8 @@ survives the number changing.
 | 10 | [Member card](DESIGN/10-member-card.md) | Who somebody is, raised over the roster that asked: the panel travels, the shade stays put |
 | 11 | [Photo compose](DESIGN/11-photo-compose.md) | The step between choosing a photo and sending it: a look at it, a crop stored as fractions, and a caption |
 | 12 | [Meetup detail](DESIGN/12-meetup-detail.md) | One meetup on its own screen: name, place, notes, and the map from a pasted link |
+| 13 | [News post](DESIGN/13-news-post.md) | A post as a publication: the gallery, the place, the people, and the composer behind it |
+| 14 | [Week row](DESIGN/14-week-row.md) | One day of the club's week: the letter badge, the name, and the time chip |
 
 Written as surfaces are worked on rather than backfilled in a pass, since a spec written by reading
 code instead of by looking at a device starts out wrong. See [`DESIGN/README.md`](DESIGN/README.md)
