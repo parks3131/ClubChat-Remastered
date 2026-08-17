@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
 import { ApiError } from './api.ts';
 
 export type LoadState = 'loading' | 'loaded' | 'error';
@@ -120,6 +121,44 @@ export function useLoad<T>(read: () => Promise<T>, deps: readonly unknown[] = []
     refresh: () => run(false),
     set: setData,
   };
+}
+
+/**
+ * Read again when a screen is RETURNED to, and not when it is first opened.
+ *
+ * The case is a detail screen that pushes an editor and comes back: without this it shows what it
+ * read before the edit, so the change looks discarded. `useFocusEffect` alone is the obvious
+ * answer and is wrong twice over, which is what this exists to stop being rediscovered:
+ *
+ *  - **It fires on mount as well as on return**, so a screen makes TWO reads to open. And they are
+ *    not merely wasteful: `run` bumps an attempt counter and every earlier response is discarded
+ *    by it, so the first request's answer is thrown away and the screen waits for the second.
+ *    Two round trips before anything renders - reported from the phone on 2026-08-17 as the "..."
+ *    taking "a couple fraction of seconds" to appear, because a control gated on the read cannot
+ *    appear before it.
+ *  - **`reload` announces a load and `refresh` does not.** A return is not a first load. `reload`
+ *    moves the state to `loading`, which blanks any screen that has not got data yet and drives
+ *    every refresh spinner bound to that state - the same distinction this module already draws
+ *    one layer up, and the same bug the chats list had.
+ *
+ * So: skip the first focus, and refresh quietly on every one after it.
+ */
+export function useRefreshOnReturn(load: { refresh: () => void }, key: string): void {
+  const opened = useRef<string | null>(null);
+  const refresh = useRef(load.refresh);
+  refresh.current = load.refresh;
+
+  useFocusEffect(
+    useCallback(() => {
+      // Keyed, so navigating between two of the same screen still counts as a first open for the
+      // second one rather than inheriting the first one's "already opened".
+      if (opened.current !== key) {
+        opened.current = key;
+        return;
+      }
+      refresh.current();
+    }, [key]),
+  );
 }
 
 /**

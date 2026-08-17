@@ -19,9 +19,9 @@
  * left it standing on 2026-08-15 rather than reversing it from a mockup.
  */
 
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { contentApi } from '../../../../src/api.ts';
 import { meetupHeadline } from '../../../../src/api-types.ts';
@@ -40,7 +40,7 @@ import {
   type PressAnchor,
 } from '../../../../src/ui.tsx';
 import { goBackOr } from '../../../../src/nav.tsx';
-import { useLoad } from '../../../../src/use-load.ts';
+import { useLoad, useRefreshOnReturn } from '../../../../src/use-load.ts';
 
 export default function MeetupScreen() {
   const { meetupId } = useLocalSearchParams<{ meetupId: string }>();
@@ -50,13 +50,8 @@ export default function MeetupScreen() {
   const [failed, setFailed] = useState<string | null>(null);
   const load = useLoad(() => contentApi.meetup(meetupId), [meetupId]);
 
-  /* Re-read on focus, so an edit made on the composer is here when it returns. */
-  useFocusEffect(
-    useCallback(() => {
-      load.reload();
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [meetupId]),
-  );
+  /* Re-read on RETURN, so an edit made on the composer is here - and only on return. */
+  useRefreshOnReturn(load, meetupId);
 
   return (
     <DataScreen load={load} errorMessage="Couldn't load this meetup.">

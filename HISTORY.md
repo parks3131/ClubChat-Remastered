@@ -13,6 +13,37 @@ Newest first.
 
 ---
 
+## 2026-08-17 - The "..." was a round trip late, and the focus effect was why
+
+Reported from the phone within the hour, with a video: opening an event or a meetup and waiting
+"a couple fraction of seconds" for the three dots to appear.
+
+**The menu is gated on `canManage`, which arrives with the read - so it can never precede it.**
+That much is inherent. What was not inherent is that the screen was doing the read TWICE.
+
+The focus effect added that same afternoon called `load.reload()`, and `useFocusEffect` fires on
+mount as well as on return. Two things followed, and the second is the one that cost the time:
+
+- `reload` announces a load where a return wants `refresh`, which the module's own doc comment
+  spells out - "a background refresh is not a first load and must not claim to be one", written
+  after the chats list was reported "reloading again and again, weird and seeable". The same
+  mistake, in a hook that documents it.
+- **`run` bumps an attempt counter and discards every earlier response.** So the mount read's
+  answer was thrown away by the focus read a millisecond later, and the screen waited for the
+  second round trip before rendering anything. On localhost that is 1ms and invisible; on a phone
+  over the LAN it is the whole delay.
+
+Measured rather than reasoned about, by counting `fetch` calls on a cold open: **two reads before,
+one after**, and the menu now appears about 30ms after the single read resolves. Leaving the screen
+and returning still re-reads exactly once, which is the behaviour the effect existed for.
+
+The fix is `useRefreshOnReturn(load, key)` in `use-load.ts` rather than a corrected focus effect on
+each screen: two copies of "skip the first fire, then refresh quietly" is how one of them ends up
+calling `reload` again. It is keyed, so navigating from one meetup straight to another still counts
+as a first open for the second.
+
+---
+
 ## 2026-08-17 - An event you can edit, and two screens that say who put them there
 
 The event screen carried three stacked buttons - Directions, Open the club, Delete event - and a

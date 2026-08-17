@@ -12,9 +12,9 @@
  */
 
 import type { ReactNode } from 'react';
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { contentApi } from '../api.ts';
 import type { EventDetail } from '../api-types.ts';
 import { bibParts, formatInstant, formatTimeOfDay } from '../dates.ts';
@@ -35,7 +35,7 @@ import {
   type PressAnchor,
 } from '../ui.tsx';
 import { goBackOr } from '../nav.tsx';
-import { useLoad } from '../use-load.ts';
+import { useLoad, useRefreshOnReturn } from '../use-load.ts';
 
 /**
  * When it happens, as one line.
@@ -85,19 +85,11 @@ export function EventView({ eventId }: { eventId: string }) {
   const load = useLoad(() => contentApi.event(eventId), [eventId]);
 
   /*
-   * Re-read whenever this screen comes back into focus.
-   *
-   * Editing navigates away to the composer and returns here, so without this the screen would
-   * still be showing what it read before the edit - the change would appear to have been
-   * discarded until something else forced a reload.
+   * Re-read on RETURN, not on open - editing pushes the composer and comes back, and without this
+   * the screen would still show what it read before the edit. See `useRefreshOnReturn` for why
+   * this is not a plain focus effect calling `reload`.
    */
-  useFocusEffect(
-    useCallback(() => {
-      load.reload();
-      // The reader is stable; depending on it would re-run this every render.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [eventId]),
-  );
+  useRefreshOnReturn(load, eventId);
 
   return (
     <DataScreen load={load} errorMessage="Couldn't load this event.">
