@@ -683,6 +683,45 @@ describe('the Eboard rejoin path', () => {
     expect(back.body.eboard.viewer.requestPending).toBe(false);
   });
 
+  /*
+   * A roster picker never offers you yourself. Pinned as BEHAVIOUR, not as a mechanism.
+   *
+   * Self-exclusion became a per-target property on 2026-08-17, because news-post tagging had
+   * silently inherited it from one condition on the shared query and needed the opposite.
+   *
+   * **This test cannot tell which mechanism keeps the caller out, and it is worth saying so
+   * rather than implying otherwise.** An earlier version of this comment asserted that the Eboard
+   * was the discriminating case, on the reasoning that approving a request is a club-admin power
+   * and a club admin need not be on the board. That is wrong: `canApproveEboardRequest` is defined
+   * as `isEboardMember`, so only somebody already in the space can search it, and `already`
+   * subtracts them regardless. Inverting the new condition leaves this test green - checked, which
+   * is the only reason the claim was caught.
+   *
+   * It stays because the behaviour is worth pinning wherever it comes from: the day somebody
+   * loosens either the predicate or the pool, this is what notices.
+   */
+  it('never offers an admin themselves as somebody to add to the space', async () => {
+    const owner = await signUp('EbSelfOwner');
+    const admin = await signUp('EbSelfAdmin');
+    const { clubId } = await createClubAs(owner);
+    const eboardId = await eboardIdOf(clubId);
+
+    await as(owner, 'POST', `/clubs/${clubId}/members`, { userId: admin.userId });
+    await as(owner, 'PATCH', `/clubs/${clubId}/members/${admin.userId}/role`, { role: 'admin' });
+    // They leave, so they are admin tier and off the board: in the pool, out of `already`.
+    expect(
+      (await as(admin, 'DELETE', `/eboards/${eboardId}/members/${admin.userId}`)).status,
+    ).toBe(200);
+
+    const candidates = await as(owner, 'GET', `/eboards/${eboardId}/member-candidates`);
+    expect(candidates.status).toBe(200);
+    const names = candidates.body.candidates.map((c: { name: string }) => c.name);
+    // The admin who left is offerable...
+    expect(names).toContain('EbSelfAdmin');
+    // ...and the Owner asking is not.
+    expect(names).not.toContain('EbSelfOwner');
+  });
+
   it('refuses to add a plain member to the space', async () => {
     const owner = await signUp('EbAddOwner');
     const member = await signUp('EbAddMember');

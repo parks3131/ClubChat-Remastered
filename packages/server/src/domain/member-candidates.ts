@@ -30,6 +30,27 @@
  *
  * ---
  *
+ * **Whether the caller is in their own results is a property of the target, not of the search.**
+ * Three of these four add somebody to a roster, where offering yourself is offering to add a person
+ * who is already there. Naming people in a news post is not that: a post is a record of something
+ * that happened, and the admin who writes it up was frequently in it. Posting is not the same act
+ * as being present, so the byline cannot stand in for the tag.
+ *
+ * This was a single `u.id <> caller` on the shared query until 2026-08-17, which the fourth target
+ * silently inherited - so the author of a post was the one club member who could not be named in
+ * it, while everybody else could name them. Reported from the phone as "I can't tag myself".
+ *
+ * **On the three roster branches the flag is currently belt-and-braces, and that is deliberate.**
+ * Each of their predicates already implies membership of the very set `already` subtracts -
+ * `isClubAdmin` implies a club row, `canManageRace` implies a roster row by ADR-0027, and
+ * `canApproveEboardRequest` IS `isEboardMember` - so the caller is excluded whether or not this
+ * flag is set, and no test can tell the two mechanisms apart. It is kept because that is a chain
+ * of three separate implications, each of which some future decision could loosen, and because
+ * stating it per branch makes a fifth target a compile error until somebody chooses. A rule that
+ * holds by coincidence across several definitions is exactly the shape of failure modes 9 and 10.
+ *
+ * ---
+ *
  * **Authorization is the add's own predicate, reused, not a similar one.** A search that anybody
  * could run would leak a club's roster by exclusion: ask for every candidate, and whoever is
  * missing is a member. So each branch asks exactly the question its `add` asks, and a caller who
@@ -86,7 +107,10 @@ export async function searchMemberCandidates(
       FROM users u
      WHERE u.id IN ${resolved.pool}
        AND u.id NOT IN ${resolved.already}
-       AND u.id <> ${ctx.userId}
+       -- Per target, never global: see resolve() above. A news post names who was there, and
+       -- the author is frequently one of them. (No backticks in here: this is a template
+       -- literal, and one would end it. AGENTS.md 2.5.8.)
+       ${resolved.excludeSelf ? sql`AND u.id <> ${ctx.userId}` : sql``}
        -- A deleted account is not a candidate. Its row survives so history stays attributed as
        -- "Deleted member"; it is not somebody who can be added to anything.
        AND u.anonymized_at IS NULL
@@ -113,12 +137,17 @@ export async function searchMemberCandidates(
  *
  * Both halves are subqueries rather than fetched id lists: a club with three hundred members
  * would otherwise round-trip three hundred ids in order to exclude them.
+ *
+ * `excludeSelf` is stated by every branch rather than defaulted, so adding a fifth target is a
+ * compile error until somebody decides which it is. That is the whole point: the previous version
+ * applied it to everybody from the shared query, and the fourth target inherited a rule nobody
+ * had chosen for it.
  */
 async function resolve(
   db: Db,
   ctx: AccessContext,
   target: CandidateTarget,
-): Promise<{ pool: SQL; already: SQL } | null> {
+): Promise<{ pool: SQL; already: SQL; excludeSelf: boolean } | null> {
   switch (target.kind) {
     case 'club': {
       // The same predicate `addMember` asks.
@@ -128,6 +157,8 @@ async function resolve(
                     WHERE club_id IN (SELECT club_id FROM club_memberships
                                        WHERE user_id = ${ctx.userId}))`,
         already: sql`(SELECT user_id FROM club_memberships WHERE club_id = ${target.clubId})`,
+        // Adding yourself to a club you administer is adding somebody already there.
+        excludeSelf: true,
       };
     }
 
@@ -140,6 +171,14 @@ async function resolve(
       return {
         pool: sql`(SELECT user_id FROM club_memberships WHERE club_id = ${clubId})`,
         already: sql`(SELECT user_id FROM race_memberships WHERE race_id = ${target.raceId})`,
+        /*
+          Kept explicitly rather than left to `already`.
+
+          ADR-0027 means whoever is managing this race holds a roster row, so `already` would
+          usually cover them - but "usually" is not a rule, and the day that stops being true the
+          picker starts offering somebody the chance to add themselves to a roster they are on.
+        */
+        excludeSelf: true,
       };
     }
 
@@ -155,15 +194,23 @@ async function resolve(
      * sharing any club with the caller, which is right for inviting somebody into a club and
      * wrong here: an admin of two clubs must not be able to name a member of the other one.
      *
-     * Nothing is excluded. A roster search hides people already on the roster because adding
-     * them twice is meaningless; a composer holds its current selection in its own hand and has
-     * not saved anything yet, so there is no server-side "already" to subtract.
+     * Nothing is excluded, **the caller included**. A roster search hides people already on the
+     * roster because adding them twice is meaningless; a composer holds its current selection in
+     * its own hand and has not saved anything yet, so there is no server-side "already" to
+     * subtract.
+     *
+     * And the author is a candidate for their own post. Writing something up is not the same act
+     * as being in it - an admin posts the recap of a run they ran - so the byline cannot stand in
+     * for the tag. This branch is the reason `excludeSelf` exists at all: it read `<> caller` from
+     * the shared query for a day, which made the author the single club member who could not be
+     * named in their own post while every other member could name them.
      */
     case 'news': {
       if (!canManageClubContent(ctx, target.clubId)) return null;
       return {
         pool: sql`(SELECT user_id FROM club_memberships WHERE club_id = ${target.clubId})`,
         already: sql`(SELECT NULL::uuid WHERE false)`,
+        excludeSelf: false,
       };
     }
 
@@ -177,6 +224,16 @@ async function resolve(
         pool: sql`(SELECT user_id FROM club_memberships
                     WHERE club_id = ${clubId} AND role IN ('owner', 'admin'))`,
         already: sql`(SELECT user_id FROM eboard_memberships WHERE eboard_id = ${target.eboardId})`,
+        /*
+          Redundant today and kept anyway - see the header.
+
+          The first version of this comment claimed the opposite: that a club admin need not be on
+          the board, so `already` might not hold the caller. It does hold them, because
+          `canApproveEboardRequest` is defined as `isEboardMember` - only somebody already in the
+          space can search it at all. Recorded because the wrong version was written down first and
+          a mutation test is what disproved it.
+        */
+        excludeSelf: true,
       };
     }
   }

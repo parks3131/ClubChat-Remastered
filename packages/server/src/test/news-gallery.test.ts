@@ -430,7 +430,7 @@ describe('tags and search', () => {
 });
 
 describe('naming people', () => {
-  it('offers this club members, and refuses somebody who may not post', async () => {
+  it('offers this club members INCLUDING the caller, and refuses somebody who may not post', async () => {
     const owner = await signUp('Owner');
     const member = await signUp('Member');
     const outsider = await signUp('Outsider');
@@ -439,11 +439,33 @@ describe('naming people', () => {
 
     const candidates = await as(owner, 'GET', `/clubs/${clubId}/news/member-candidates`);
     expect(candidates.status).toBe(200);
-    expect(candidates.body.candidates.map((c: any) => c.name)).toEqual(['Member']);
+    /*
+      The author is in their own list.
+
+      This assertion read `['Member']` until 2026-08-17 and was wrong in the direction that is
+      hardest to see: it did not fail, it *encoded* the defect. The caller was dropped by a
+      `u.id <> caller` on the shared candidate query, which the three roster targets want and this
+      one inherited - so the author of a post was the single club member who could not be named in
+      it, while every other member could name them. Reported from the phone as "I can't tag
+      myself". Naming who was somewhere is not the same question as who typed it up.
+    */
+    expect(candidates.body.candidates.map((c: any) => c.name)).toEqual(['Member', 'Owner']);
 
     // Non-disclosing: an empty list would leak the roster by exclusion.
     expect((await as(member, 'GET', `/clubs/${clubId}/news/member-candidates`)).status).toBe(404);
     expect((await as(outsider, 'GET', `/clubs/${clubId}/news/member-candidates`)).status).toBe(404);
+  });
+
+  it('offers the author even when they are the only member', async () => {
+    const owner = await signUp('Owner');
+    const { clubId } = await createClubAs(owner);
+
+    // The degenerate case, and the one that says the rule out loud: a club of one, writing up
+    // something they did alone, still has somebody to name. Before the fix this answered `[]`,
+    // which is indistinguishable from "nobody to tag" and reads as the feature being broken.
+    const candidates = await as(owner, 'GET', `/clubs/${clubId}/news/member-candidates`);
+    expect(candidates.status).toBe(200);
+    expect(candidates.body.candidates.map((c: any) => c.name)).toEqual(['Owner']);
   });
 
   it('stores the named people with their faces', async () => {

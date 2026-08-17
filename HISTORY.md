@@ -13,6 +13,60 @@ Newest first.
 
 ---
 
+## 2026-08-17 - The author was the one person who could not be named in their own post
+
+Reported from the phone, a day after tagging shipped: *"I can't tag myself... I can see the person
+who's posting in the tag"*. Both halves are one symptom seen from two sides. Everybody else could
+name the author; the author could not name themselves.
+
+**Reproduced before diagnosing, which mattered here.** Binghamton Running Club has nine members;
+signed in as one of them, the picker offered eight. The missing row was the caller's own, and
+another member's row was present in it - so the exclusion was of *the person asking*, not of
+anybody in particular.
+
+**Root cause: one condition on a query shared by four callers.** `searchMemberCandidates` carried
+`AND u.id <> ${caller}` in its single SELECT. Three of its targets add somebody to a roster, where
+that is obviously right. The fourth, added the previous day for naming people in a news post, is
+not an add at all - and it inherited the rule silently. Naming who was somewhere is a different
+question from who typed it up: an admin writes the recap of a run they ran.
+
+Self-exclusion is now a property each branch states, so a fifth target is a compile error until
+somebody chooses. `news` says no; the other three say yes.
+
+**Two things fell out of checking the work, and the second is the useful one.**
+
+First, the existing test had **encoded the defect rather than catching it**: `offers this club
+members` asserted `['Member']` for a club of Owner and Member, so the author's absence was written
+down as correct. That is failure mode 19's shape exactly - the same way two tests once asserted a
+stranger *could* read a card - and it is why the fix had to change an assertion rather than only
+add one.
+
+Second, **a claim made confidently in a comment turned out to be false, and only a mutation test
+found it.** The reasoning written down was that the Eboard is where per-target self-exclusion does
+real work, since approving a request is a club-admin power and a club admin need not be on the
+board. Inverting the new condition left that test green. `canApproveEboardRequest` is *defined as*
+`isEboardMember`, so only somebody already in the space can search it and `already` subtracts them
+regardless. The same holds for the other two: `isClubAdmin` implies a club row, and `canManageRace`
+implies a roster row by ADR-0027.
+
+So the original condition was **dead code on all three roster targets**, and its only live effect
+anywhere in the product was breaking the fourth. The flag is kept anyway - that redundancy rests on
+three separate implications, any of which a later decision could loosen - but both the module and
+the test now say plainly that it is belt-and-braces and that the test pins behaviour rather than
+mechanism. A check that cannot fail is worse than no check, so it must not claim to be one.
+
+**The feature was half-built rather than wrong.** `never notifies the author for naming themselves`
+was already passing: the write path stored a self-tag and `worker/audience.ts` already drops the
+actor from every audience, so tagging yourself correctly buzzes nobody. Only the picker never
+offered it. Nothing in the notification path needed changing.
+
+Also worth recording: the first attempt put a backtick inside a SQL comment **inside a `sql`
+template literal**, which ended the string and made every affected test fail to parse rather than
+fail an assertion. `AGENTS.md` 2.5.8, the same hazard that took the founder's API down on
+2026-08-15, reached this time through a comment rather than through code.
+
+---
+
 ## 2026-08-17 - The DM header's menu stops being the odd one out, and no notice outstays its welcome
 
 The founder sent two photographs side by side: the DM conversation's "..." menu, and the member
