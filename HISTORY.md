@@ -13,6 +13,83 @@ Newest first.
 
 ---
 
+## 2026-08-17 - Four stale specs, and a save that erased what it never asked about
+
+A reading session that turned into a data-loss fix. Nothing here was reported from a phone; all
+of it came from reading the spec tree against the repo, which is the exercise `SPEC/README.md`
+says settles a disagreement and which nothing had run in a while.
+
+### Four documents disagreeing with the build
+
+Per the standing rule that the repo is right and the doc is the bug:
+
+- **`TECH/09` had missed seven migrations.** It still described `news_posts.media_id`, dropped by
+  `0035`, and documented none of `news_post_media`, `news_post_tags`, `news_post_people`, the four
+  columns news gained with ADR-0038 to 0040, the five `meetups` gained with ADR-0037,
+  `calendar_events.map_url`, or `updated_by` on either dated table. Also added: `media_objects`'s
+  `width`/`height`, and the `owner_type: 'news_post'` label that `PRD/13` rule 4 turns out to
+  depend on.
+- **`SPEC/README`'s ADR index stopped at 0037**, while 0038 to 0041 were on disk and cited from
+  three specs.
+- **`PRD/08` rule 5's table contradicted its own note two paragraphs down**, still calling the
+  place required and the name optional. Rule 6 still described a composer asking "Where should we
+  meet on Friday 14 August?" about a field that has not been collected since 2026-08-15.
+- **`PRD/18` carried four meetup lines reversed by ADR-0036 and 0037** - the week hiding past
+  days, a meetup *not* appearing on the calendar, Save gated on the place, and the nudge
+  notification opening the club's week.
+
+Two code comments went with them, both stating the old required field: the `meetups` docblock in
+`schema.ts` and the `MeetupBody` docblock in the content routes. Neither is reachable by any
+check, which is the whole reason they had drifted.
+
+### The bug the reading found
+
+`PRD/08` rule 5 lists **location notes** as a field a meetup carries. ADR-0037 specified it, the
+route accepts it, the domain writes it, and `meetups/[meetupId].tsx` draws a "Location notes"
+line. **The composer has never had a control for it**, so the only way to set one was to call the
+API by hand.
+
+That would have been an ordinary half-built feature, except for what it collided with.
+`updateMeetup` is a **whole-form save**: absent means empty, which is the right rule for something
+saved as one form and is what makes clearing a description work. The composer sent only the
+fields it drew. So opening any meetup, changing nothing and pressing Save erased its location
+notes - and `location` with them, the place text deliberately kept for the eighty meetups written
+before the form stopped asking for one, and still shown on their screen.
+
+**Nothing about that is visible.** Both ends are individually correct: the route means what it
+says, and the composer sends what it has. Typecheck cannot see it, because every field is
+optional; the screen cannot show it, because the thing that vanishes was never on the form. It is
+failure mode 31's shape one layer out - the code that is present is entirely correct, and what is
+absent was never written down anywhere.
+
+### The fix, and why it moved out of the screen
+
+The body-building moved into `apps/mobile/src/meetup-body.ts` as one pure function, for failure
+mode 34's reason: the rule was unreachable from a test while it sat inline in a file that imports
+`react-native`. `location` is carried through untouched and named as the one field the form holds
+without owning; `locationNotes` gained a real control in the location section, beside the link.
+
+Eight tests, and the one that matters asserts the **key set** rather than the fields: the failure
+mode is omission, and a per-field test only ever checks the fields somebody remembered. A column
+added later that the form does not edit fails that assertion until it is carried or deliberately
+listed.
+
+**Both halves were proved to fail without their own fix**, which is the only reason they are worth
+having - removing the `location` carry fails three tests, removing `locationNotes` fails four. A
+ninth test on the server pins the contract from the other end: a partial save is asserted to
+**erase**, so the reason the caller must send everything is an executable fact rather than a
+comment, and turning the route into absent-keeps fails loudly.
+
+`TECH/10` gained the general rule beside the races note that already drew the distinction: a form
+route puts an obligation on its caller, the two rules are indistinguishable at the call site, and
+so a form route's caller builds its body in one testable place.
+
+**Verified:** typecheck, `check:runtime`, `lint:emdash`, and the full suite at 1,444. **Not
+verified on a device or in a browser** - the new field has not been looked at, and the round trip
+has not been walked in the running app.
+
+---
+
 ## 2026-08-17 - A document you can open, and the first native module in the project
 
 Two sentences from the founder, four hours apart, and the second one changed the answer to the

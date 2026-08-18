@@ -43,19 +43,26 @@ field and why one should not be added back.*
 
    | | | |
    |---|---|---|
-   | **What it is called** | A name - "Morning Miles", "morning book reading", "swim practice night" | Optional |
-   | **Where** | A place, in the club's own words - "Memorial Park gate", "Room 204" | Required |
+   | **What it is called** | A name - "Morning Miles", "morning book reading", "swim practice night" | Required |
    | **When** | A date and a time of day | Required |
    | **What** | Free text: what they will actually be doing | Optional |
    | **How to find us** | Location notes: "the wooden archway; parking is tight" | Optional |
    | **A map link** | A pasted Google or Apple Maps URL. Becomes a Directions button | Optional |
 
+   > **"Where" is no longer one of the questions, and that is the 2026-08-15 change stated
+   > plainly.** A place was the required field and the headline until then; the form does not ask
+   > for one now, and the name took its place, because with no place nothing else identifies a
+   > meetup. The map link is what answers "where" for a phone, and the location notes answer it
+   > for a person once they are there. **Meetups authored before that date keep their place and
+   > still show it** - the column was not destroyed to tidy a form.
+
    > **The name and the last two arrived 2026-08-15** ([ADR-0037](../decisions/0037-a-meetup-carries-a-name-and-a-pasted-map-link.md)).
    > The name is what lets this feature belong to a club that is not a running club, which is the
    > same generalisation [ADR-0029](../decisions/0029-a-meetup-answers-where-when-and-what.md)
-   > made when it deleted the activity-type catalog. **Without a name the location is the
-   > headline**, exactly as this shipped, so a club that only wants a place and a time is
-   > unaffected.
+   > made when it deleted the activity-type catalog. **The name was optional for the few hours
+   > between arriving and the place being dropped**, and the location was the headline in that
+   > window; a meetup written then still reads correctly, because the name was backfilled from
+   > exactly the field that used to be the headline.
    >
    > **Still not a field: distance, difficulty, pace, or anything else describing the session as
    > training.** A mockup carried "5.2 mi" and it was left out - see the non-goals in
@@ -72,9 +79,14 @@ field and why one should not be added back.*
    > already opens. **No link means no button**, rather than a button that hands Maps a text search
    > for "Bimini".
 
-6. **Creating one opens on the day that was tapped and asks it as a question** - *"Where should we
-   meet on Friday 14 August?"* - with the place as the first and largest field. The screen is
-   phrased as the question a member opens it to answer, not as a form to be filled in.
+6. **Creating one opens on the day that was tapped**, with the name as the first and largest
+   field and the date already filled in.
+
+   > **It asked a question until 2026-08-15** - *"Where should we meet on Friday 14 August?"*,
+   > with the place as the first field - on the reasoning that the screen should be phrased as
+   > the thing a member opens it to answer. The place stopped being collected that day (rule 5),
+   > so the question had no field to ask about. What survives is the half that was really doing
+   > the work: the form opens **on the day that was tapped** rather than asking for a date twice.
 7. **It cannot be saved until the name and the moment are filled in**, and **the moment can only
    be now or later**. The picker offers today onwards, and on today only the hours and minutes
    still ahead - so a meetup cannot be authored into a day that has gone.

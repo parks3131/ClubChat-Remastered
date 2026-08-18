@@ -1411,10 +1411,14 @@ export const calendarEvents = pgTable(
 /**
  * One entry on the club's week. The feature that replaces the screenshotted Excel sheet.
  *
- * **Answers three questions and only these three:** where (`location`), when (`meetupDate`
- * plus `meetupTime`) and what (`description`, free text). The first two are `NOT NULL` -
- * the surface exists to answer them, and a club that has not decided yet types "TBC", which
- * tells a member something a blank does not.
+ * **Answers what it is called (`title`), when (`meetupDate` plus `meetupTime`), and what the
+ * club will be doing (`description`, free text).** The first two are `NOT NULL`, because the
+ * surface exists to answer them.
+ *
+ * **`location` is nullable and is no longer collected**, which is the reverse of how this
+ * shipped: the place was the required field and the headline until 2026-08-15, when ADR-0037
+ * gave a meetup a name and the form stopped asking for a place. `title` was backfilled from it.
+ * Where is now answered by `mapUrl` for a phone and `locationNotes` for a person.
  *
  * **There is no type, category or kind column, and that absence is the design.** A per-club,
  * admin-editable catalog of activity types was specified in full and rejected; see ADR-0029,

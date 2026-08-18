@@ -98,26 +98,37 @@ A remaster is at parity when every line below passes on **iOS, Android, and web*
 
 ### Calendar and weekly meetups
 
-- [ ] The grid marks exactly the days with an event, race, or meeting, and no filler days.
+- [ ] The grid marks exactly the days with an event, race, meeting **or meetup**, and no filler
+      days.
 - [ ] Paging months does not change the grid's height.
 - [ ] The grid swipes between months, one month per swipe, and the arrows still work.
 - [ ] The heading changes as the swipe crosses halfway, and reverts if the swipe is dragged back.
 - [ ] A swipe does not steal a day tap, and does not block the page's vertical scroll.
 - [ ] Tapping the heading picks any month and year; **This month** returns to today.
-- [ ] The list merges events, races and meetings into Upcoming/Past.
+- [ ] The list merges events, races, meetings **and meetups** into Upcoming/Past, and every row
+      carries a date.
 - [ ] **No poll appears in either view**, with or without a deadline - grid, day popup, or list.
 - [ ] Eboard meetings are absent from a non-member's calendar; races are visible to everyone.
 - [ ] The merged cross-club feed tags each row with its club and offers no create action.
-- [ ] The meetups week shows Monday-Sunday, hides past days on the current week, and says
-      "Nothing planned" on every empty day.
+- [ ] The meetups week shows **all seven** days Monday-Sunday, including the ones that have gone,
+      and says "Nothing planned" on every empty day.
+- [ ] A day that has gone carries no "Add a meetup" row, and is otherwise readable.
 - [ ] Any admin can edit any meetup; creating one notifies nobody and posts nothing.
-- [ ] Creating one opens on the day that was tapped and asks **"Where should we meet on ...?"**,
-      with the date already filled in.
-- [ ] Save stays unavailable until **both** the place and the time are filled in.
+- [ ] Creating one opens on the day that was tapped, with the date already filled in.
+- [ ] Save stays unavailable until **both** the name and the moment are filled in.
+- [ ] The date picker offers today onwards, and on today only the hours still ahead - **but
+      editing an existing meetup still offers its own date, including a past one.**
 - [ ] Two meetups on one day both show, in time order, and the day grows to fit them.
 - [ ] **No screen anywhere offers an activity type, category or kind** - not on create, not on
       the detail, not as an icon in the week.
-- [ ] A meetup does **not** appear on the month calendar or in the Upcoming/Past list.
+- [ ] A meetup **does** appear on the month calendar and in the Upcoming/Past list, and its row
+      opens the meetup's own screen.
+- [ ] A meetup with a pasted map link shows **Directions**; one without shows no button at all.
+- [ ] A meetup carries **location notes**, they can be entered on the composer, and they show on
+      the meetup's own screen.
+- [ ] **Opening a meetup's composer, changing nothing and saving leaves every field as it was** -
+      including its location notes and the place text of a meetup written before the place stopped
+      being asked for.
 - [ ] A member sees no create, edit or delete control anywhere - **including by direct URL**.
 - [ ] Nudging a meetup pushes it to every club member **including the admin who sent it**, and
       reaches a real device.
@@ -131,8 +142,8 @@ A remaster is at parity when every line below passes on **iOS, Android, and web*
 - [ ] Only the meetup actually cooling down shows a time; the others show a live bell.
 - [ ] The bell is accent-coloured before and grey after, and **pressing the grey one says who is
       being waited on and until when** rather than doing nothing.
-- [ ] **Tapping the nudge notification opens that club's week** - from the inbox row AND from the
-      push banner.
+- [ ] **Tapping the nudge notification opens the meetup that was nudged** - from the inbox row AND
+      from the push banner.
 - [ ] Edit and Remove are reached by a long press, and the press buzzes.
 
 ### Notifications

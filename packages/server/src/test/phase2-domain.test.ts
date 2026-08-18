@@ -34,6 +34,7 @@ import {
   deleteMeeting,
   readMeetupWeek,
   updateMeeting,
+  updateMeetup,
 } from '../domain/content.ts';
 import { sendMessage } from '../domain/send-message.ts';
 import { getChannelRef } from '../domain/reads.ts';
@@ -56,6 +57,7 @@ import {
   carGroupMembers,
   carGroups,
   eboardChannels,
+  meetups,
   notifications,
   racePins,
   raceMemberships,
@@ -1169,6 +1171,62 @@ describe('the meetup week', () => {
     const recipients = (await h.db.select().from(notifications)).map((r) => r.recipientId);
     expect(recipients.sort()).toEqual([f.memberId, f.ownerId].sort());
     expect(new Set(recipients).size, 'somebody was notified twice').toBe(recipients.length);
+  });
+
+  it('is a whole-form save, so an omitted field is an erased field', async () => {
+    /*
+     * The contract the composer depends on, pinned from the server's end.
+     *
+     * `updateMeetup` takes a whole form: absent means empty, which is the rule `TECH/10` draws for
+     * anything saved as one form, and is what makes clearing a description work. The cost is that
+     * every caller has to send back what it does not edit - and until 2026-08-17 the meetup
+     * composer did not, so saving an unchanged old meetup erased the place it met at and any
+     * location notes it had.
+     *
+     * Asserted here rather than only in the client, because this is the half that makes the
+     * client's carry-through necessary. If this ever becomes absent-KEEPS, this test fails and
+     * whoever changed it finds out that `meetup-body.ts` exists.
+     */
+    const f = await setup();
+    const created = await createMeetup(h.db, await ctxFor(f.ownerId), {
+      clubId: f.clubId,
+      meetupDate: '2026-01-07',
+      meetupTime: '18:30',
+      title: 'Practice',
+      location: 'Memorial Park gate',
+      locationNotes: 'Meet at the wooden archway',
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    // A partial save - the shape the composer used to send - clears both.
+    const partial = await updateMeetup(h.db, await ctxFor(f.ownerId), created.meetupId, {
+      meetupDate: '2026-01-07',
+      meetupTime: '18:30',
+      title: 'Practice',
+    });
+    expect(partial.ok).toBe(true);
+
+    const afterPartial = await h.db
+      .select()
+      .from(meetups)
+      .where(eq(meetups.id, created.meetupId));
+    expect(afterPartial[0]?.location, 'a partial save must be what erases it').toBeNull();
+    expect(afterPartial[0]?.locationNotes).toBeNull();
+
+    // And a whole one keeps them, which is what the composer now sends.
+    const whole = await updateMeetup(h.db, await ctxFor(f.ownerId), created.meetupId, {
+      meetupDate: '2026-01-07',
+      meetupTime: '18:30',
+      title: 'Practice',
+      location: 'Memorial Park gate',
+      locationNotes: 'Meet at the wooden archway',
+    });
+    expect(whole.ok).toBe(true);
+
+    const afterWhole = await h.db.select().from(meetups).where(eq(meetups.id, created.meetupId));
+    expect(afterWhole[0]?.location).toBe('Memorial Park gate');
+    expect(afterWhole[0]?.locationNotes).toBe('Meet at the wooden archway');
   });
 
   it('holds several meetups on one day, in time order', async () => {

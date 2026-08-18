@@ -43,6 +43,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { clubApi, contentApi } from '../../../../../src/api.ts';
 import { meetupHeadline, type Meetup } from '../../../../../src/api-types.ts';
+import { toMeetupBody } from '../../../../../src/meetup-body.ts';
 import {
   formatTimeOfDay,
   formatWallClock,
@@ -574,13 +575,23 @@ function MeetupComposer({
   /*
    * The name, and it is FIRST on the form rather than last.
    *
-   * Optional, so the form still saves with a place and a time alone - which is how this shipped
-   * and how somebody in a hurry uses it. It leads because it is what the week and the calendar
-   * show as the headline, and because it is what lets this belong to a club that is not a running
-   * club: "morning book reading", "swim practice night".
+   * **Required**, since the place stopped being collected on 2026-08-15 and something has to
+   * identify a meetup. It leads because it is what the week and the calendar show as the headline,
+   * and because it is what lets this belong to a club that is not a running club: "morning book
+   * reading", "swim practice night".
    */
   const [title, setTitle] = useState(existing?.title ?? '');
   const [mapUrl, setMapUrl] = useState(existing?.mapUrl ?? '');
+  /*
+   * How to find the club once you are there, which is a different fact from the place and one a
+   * map pin cannot say: "meet at the wooden archway; parking is tight, so carpool from the union".
+   *
+   * **It had no field at all until 2026-08-17**, though ADR-0037 specified it, the route accepted
+   * it and the meetup's own screen drew it - so the only way to set one was to call the API by
+   * hand, and `updateMeetup` is a whole-form save, so opening the composer on a meetup that had
+   * one and pressing Save silently wiped it. See the note on `location` in `submit`.
+   */
+  const [locationNotes, setLocationNotes] = useState(existing?.locationNotes ?? '');
   /*
    * Null until the wheel is opened, because the time is REQUIRED and a default is not a choice.
    * PRD/08 rule 7 refuses to save without one, so pre-filling would let an admin post a time
@@ -705,25 +716,15 @@ function MeetupComposer({
     if (when === null) return;
     setBusy(true);
     setFailed(null);
-    const body = {
-      // Split from ONE local moment. The wire carries a wall-clock date and time, never an
-      // instant, because a club's week is its own day and not the reader's - see ADR-0029.
-      meetupDate: toDateKey(when),
-      meetupTime: `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`,
-      title: title.trim(),
-      /*
-       * Blank is null, not "". An empty string is a value the row would then hold, and every
-       * reader downstream would have to know that "" means the same as absent.
-       */
-      description: description.trim().length > 0 ? description.trim() : null,
-      /*
-       * The link, and no coordinates. This client places no pin: the map picture was taken out on
-       * 2026-08-15 and Directions opens the link itself, which is exact. The server still reads a
-       * point out of a link that carries one, and the route still accepts a hand-placed pair - see
-       * `ADR-0037` - so the map can return without touching either end.
-       */
-      mapUrl: mapUrl.trim().length > 0 ? mapUrl.trim() : null,
-    };
+    /*
+     * Built by `toMeetupBody`, which is a module of its own so the rule inside it can be tested:
+     * this is a WHOLE-FORM save, so any field the form does not send is a field it erases. See
+     * `meetup-body.ts`, and the regression it exists to hold.
+     */
+    const body = toMeetupBody(
+      { when, title, description, locationNotes, mapUrl },
+      existing === null ? null : { location: existing.location },
+    );
     try {
       if (existing === null) await contentApi.createMeetup(clubId, body);
       else await contentApi.updateMeetup(existing.id, body);
@@ -889,6 +890,19 @@ function MeetupComposer({
           accessibilityLabel="A map link for this place"
           autoCapitalize="none"
           autoCorrect={false}
+        />
+
+        {/*
+          How to find the club once the link has got somebody to the right car park. Labelled for
+          the same reason the link above it is: it sits in that section rather than opening one of
+          its own, because both answer "where" and a heading over a single field names it twice.
+        */}
+        <ComposerField
+          value={locationNotes}
+          onChangeText={setLocationNotes}
+          placeholder="How to find us once you are there"
+          accessibilityLabel="Notes on how to find this place"
+          multiline
         />
 
         {/* One note, at the end of its section. */}

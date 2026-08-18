@@ -249,6 +249,20 @@ DELETE /devices                              ← forget it on sign-out; scoped t
 > date, tapping the avatar sends nothing but a picture - so an omitted field means "not mine to
 > touch". Merged, an avatar upload would be indistinguishable from a form that cleared the name.
 > `PATCH /eboards/:id` and `PATCH /clubs/:id` follow the identity rule, not the form rule.
+>
+> **`PATCH /meetups/:id` and `PATCH /events/:id` are form routes, and a form route puts an
+> obligation on its CALLER: send back what you do not edit.** Found on 2026-08-17, on meetups.
+> The composer sent only the fields it drew, so every save erased `location_notes` - which had
+> no control anywhere, though this route accepted it and the meetup's own screen drew it - and
+> `location`, the place text kept on purpose for the meetups written before the form stopped
+> asking for one. Nothing was wrong with the route; the caller was reading "absent" as "leave
+> it" on an endpoint that means "clear it".
+>
+> The tell is that the two rules are indistinguishable at the call site: a body with a field
+> missing looks identical either way, and only the endpoint knows which it means. So a form
+> route's caller builds its body in **one testable place** rather than inline - see
+> `apps/mobile/src/meetup-body.ts`, which exists so that "every field, every time" is a property
+> a test states out loud rather than something the next person to add a column remembers.
 
 > **A `channels[]` entry is written raw, and an entry that does not parse is refused.** Two rules
 > from one defect, found 2026-08-12. The client must never percent-encode the entry: React Native's

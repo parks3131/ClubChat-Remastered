@@ -287,24 +287,68 @@ poll_votes            poll_id, option_id, user_id, allow_multiple, created_at
                       -- does not have and escape the index.
                       -- polls therefore also carries UNIQUE (id, allow_multiple) as
                       -- the referenced target.
-calendar_events       id, club_id, type, title, starts_at, ends_at, location, description,
-                      created_by, created_at
+calendar_events       id, club_id, type, title, starts_at, ends_at, location, map_url,
+                      description, created_by, updated_by, created_at
                       CHECK (type IN ('race','practice','team_bonding','volunteer','other'))
                       -- created_by is audit only. Any club admin may edit or delete
                       -- ANY event, so it is deliberately not the authorization
                       -- subject - unlike meetings.creator_id, which is.
-meetups               id, club_id, meetup_date, meetup_time, location, description,
-                      created_by, created_at
+                      -- updated_by is who last changed it, and NULL is the normal
+                      -- state. The detail screen names an editor only when it differs
+                      -- from the creator, and that comparison is made by the READ
+                      -- rather than stored - two detail surfaces re-deriving it is how
+                      -- they come to disagree. Compared by id, since two members can
+                      -- share a name and one can change theirs.
+                      -- ends_at is still written and still rendered as a range, and
+                      -- the FORM stopped asking for one on 2026-08-17. Removing a
+                      -- field from a form is not a reason to destroy what people
+                      -- already entered. See PRD/07 rule 11.
+                      -- map_url is a pasted Google or Apple Maps link, validated by
+                      -- isMapLink before it is stored, because a stored URL becomes a
+                      -- Directions button that opens it. Deliberately NO map_lat /
+                      -- map_lng: those exist on meetups for a hand-placed pin and
+                      -- nothing places one on an event, so a column that could only
+                      -- ever be null is absent rather than reserved.
+meetups               id, club_id, meetup_date, meetup_time, title, location,
+                      location_notes, description, map_url, map_lat, map_lng,
+                      created_by, updated_by, created_at
                       INDEX (club_id, meetup_date, meetup_time)
+                      CHECK ((map_lat IS NULL) = (map_lng IS NULL))
+                      CHECK (map_lat IS NULL OR (map_lat BETWEEN -90 AND 90
+                                             AND map_lng BETWEEN -180 AND 180))
                       -- Was routine_workouts, whose CHECK listed ten sports. The CHECK
                       -- is DELETED, not replaced: a meetup has no type, category or
                       -- kind of any sort (ADR-0029), and the free-text description is
                       -- the only place what the club is doing is ever recorded. A
                       -- reader who assumes the missing column is an oversight should
                       -- read that ADR before adding one back.
-                      -- location and meetup_time are NOT NULL. The surface exists to
-                      -- answer where and when; "TBC" is a valid place and a blank is
-                      -- not.
+                      -- title, meetup_date and meetup_time are NOT NULL, and location
+                      -- is NOT. That is the reverse of how it shipped: the place was
+                      -- the required field and the headline until 2026-08-15, when
+                      -- ADR-0037 gave a meetup a name and the form stopped collecting
+                      -- a place at all. The migration backfilled title from location,
+                      -- which is exactly what the headline used to be, and the column
+                      -- stays because the meetups already holding real text in it
+                      -- should still say where the club met.
+                      -- The name is what lets this feature belong to a club that is
+                      -- not a running club - "morning book reading", "swim practice
+                      -- night" - which is ADR-0029's generalisation reached from the
+                      -- other side: free text rather than a taxonomy.
+                      -- location_notes is how to find the club once you are there
+                      -- ("the wooden archway; parking is tight"), which is a different
+                      -- fact from the place and one a map pin cannot say.
+                      -- map_url is the pasted link, kept verbatim, and map_lat/map_lng
+                      -- are the point read out of it - so the link is the record and
+                      -- the coordinates are the cache. numeric rather than float: a
+                      -- coordinate is compared and displayed, and binary floating
+                      -- point turns 42.0887 into 42.088699999999996 on the way back.
+                      -- The two CHECKs above are why the pair cannot be half-written
+                      -- or off the earth; map-link.ts refuses the same thing kindly,
+                      -- and this is the place it cannot get in at all.
+                      -- NOTHING DRAWS THE POINT TODAY. A meetup with a link shows a
+                      -- Directions button and no map; the columns are kept so the map
+                      -- can return without a migration. See ADR-0037, which records
+                      -- the map being built and pulled the same afternoon.
                       -- meetup_date is a DATE and meetup_time is a TIME, deliberately
                       -- NOT one timestamptz. A club's week is local wall-clock and no
                       -- club carries a timezone, so there is nothing to convert from -
@@ -314,6 +358,9 @@ meetups               id, club_id, meetup_date, meetup_time, location, descripti
                       -- NO unique key on (club_id, meetup_date): a day holds as many
                       -- meetups as the club needs, ordered by time.
                       -- created_by is audit only: any admin edits any meetup.
+                      -- updated_by follows calendar_events.updated_by exactly, and the
+                      -- comparison that decides whether to name an editor is one
+                      -- function shared by both reads rather than written twice.
 meetup_nudges         id, club_id, meetup_id, actor_id, created_at, cooldown_until
                       EXCLUDE USING gist (meetup_id WITH =,
                                           tstzrange(created_at, cooldown_until) WITH &&)
@@ -336,14 +383,75 @@ meetup_nudges         id, club_id, meetup_id, actor_id, created_at, cooldown_unt
                       -- "Not a past day" is NOT here: it changes with the clock, so it is
                       -- not immutable and cannot be indexed. It is a handler check, and the
                       -- only one in this feature that should be.
-news_posts            id, club_id, author_id, body, media_id, created_at, updated_at
-                      CHECK (body IS NOT NULL OR media_id IS NOT NULL)
-                      -- The check carries "a post must have body text, a photo, or
-                      -- both" so an empty post cannot exist even if a handler forgets.
-                      -- media_id has no FK yet: media_objects arrives in Phase 3. The
-                      -- column exists now so the check can express the invariant
-                      -- today rather than being retrofitted over historical rows.
+news_posts            id, club_id, author_id, title, body, aspect,
+                      location_name, location_url, created_at, updated_at
+                      CHECK (aspect IN ('1:1','4:5','16:9'))
+                      CHECK (location_url IS NULL OR location_name IS NOT NULL)
+                      DEFERRED CONSTRAINT TRIGGER: a post has a title, a body, or at
+                                                   least one row in news_post_media
+                      INDEX (club_id, created_at DESC)
+                      -- It carried media_id until 2026-08-16, when a post grew a
+                      -- gallery (ADR-0038). The column is gone; the photos are rows.
+                      -- "A post must have a title, body text, or at least one photo"
+                      -- (PRD/06 rule 1) is the ONE invariant in this schema a CHECK
+                      -- cannot carry, because the third clause is across a join. It is
+                      -- the only trigger here, and it is DEFERRED because the write is
+                      -- unavoidably two statements: the post is inserted before the
+                      -- media rows that make it non-empty exist, so an immediate
+                      -- trigger would refuse every photo-only post at its first
+                      -- statement.
+                      -- aspect is the shape EVERY photo in the post is drawn in,
+                      -- chosen once by the author. On the post rather than on the
+                      -- photo because a carousel has one display frame, and the crop
+                      -- frame must be the display frame or the card crops a second
+                      -- time. Deriving it from the first photo would resize the card
+                      -- when photos are reordered.
+                      -- location_name and location_url are free text and a pasted
+                      -- link, and NOTHING resolves either - no geocoder, no key, no
+                      -- outbound request (ADR-0039). The link is deliberately NOT
+                      -- host-allowlisted the way a meetup's is: a meetup's sits behind
+                      -- a Directions button, which makes it a capability, and a post's
+                      -- sits behind the place's own text, where a results page or a
+                      -- route link is a reasonable thing to attach.
                       -- author_id is audit only: any club admin edits any post.
+news_post_media       post_id, media_id, ordinal
+                      PK (post_id, ordinal)
+                      UNIQUE (post_id, media_id)
+                      CHECK (ordinal >= 0 AND ordinal < 6)
+                      FK media_id -> media_objects ON DELETE RESTRICT
+                      -- Six photos, ordered. The cap is a CONSEQUENCE OF THE KEY
+                      -- rather than a counted rule: the PK is (post_id, ordinal) and
+                      -- ordinal is checked into [0, 6), so a seventh row has nowhere
+                      -- to go. Counting rows in a trigger would be the same rule
+                      -- enforced later and more expensively.
+                      -- A join table rather than a uuid[] because the ordinal is data
+                      -- the carousel reads and each row is a reference the database
+                      -- can check. An array of ids is a list of strings it cannot.
+                      -- RESTRICT, not cascade: an object a published post is drawing
+                      -- is not something the media layer may delete from under it.
+news_post_tags        post_id, tag, ordinal
+                      PK (post_id, tag)
+                      UNIQUE (post_id, ordinal)
+                      INDEX (tag)
+                      CHECK (tag = lower(tag) AND tag <> '' AND length(tag) <= 64)
+                      -- The hashtags of a post, extracted from its body. Lowercased,
+                      -- so #LongRun and #longrun are one tag rather than a club's own
+                      -- vocabulary split by whoever typed it first.
+                      -- ordinal is WRITTEN ORDER, which is the only ordering that
+                      -- needs no explaining to the person who typed them. Without it
+                      -- the read fell back to ORDER BY tag, so a body reading
+                      -- "#longRun #bingRC" drew "#bingrc #longrun" - both orderings
+                      -- deterministic, only one of them the one somebody typed, which
+                      -- is why no test caught it and a glance at a phone did.
+news_post_people      post_id, user_id
+                      PK (post_id, user_id)
+                      INDEX (user_id)
+                      -- Club members named in a post (ADR-0040). `people`, not `tags`:
+                      -- one word covering both a person and a #longrun is two meanings
+                      -- on one table name.
+                      -- Cascades on the PERSON being deleted and deliberately not on
+                      -- them leaving the club. A post is a record of something that
+                      -- happened, and unnaming somebody months later rewrites it.
 news_reactions        post_id, user_id, emoji
                       FK emoji -> emoji_catalog(emoji)
                       -- The same catalog chat uses, which is what keeps PRD/06 rule 4
@@ -446,11 +554,25 @@ moderation_actions    id, moderator_id, action, subject_user_id NULL, message_id
 
 ### Infrastructure
 ```
-media_objects         id, owner_type, owner_id, bucket, object_key, mime, bytes, status,
-                      variants jsonb, derive_error NULL, created_at
+media_objects         id, owner_type, owner_id, bucket, object_key, mime, bytes,
+                      width NULL, height NULL, status, variants jsonb,
+                      derive_error NULL, created_at
                       -- derive_error: why thumbnailing gave up, for bytes that will never
                       -- decode. A permanent fact, so the effect records it and completes
                       -- rather than retrying five times and parking. See TECH/07.
+                      -- width and height are the DISPLAYED size, swapped for the
+                      -- quarter-turn EXIF orientations, measured inside the decode the
+                      -- upload gate already pays for - so a photo can be laid out
+                      -- before a byte of it arrives. Null for a document, and null for
+                      -- every row uploaded before 2026-08-13, which a client reads as
+                      -- "measure it yourself".
+                      -- owner_type carries 'news_post' as well as 'message', and that
+                      -- distinction is what keeps a news photo out of the chat Gallery
+                      -- (PRD/13 rule 4). It was recorded as 'message' until 2026-08-16
+                      -- because news uploads against the club's main channel, which is
+                      -- still correct and is about ACCESS - the channel governs who may
+                      -- fetch the bytes. Only the label decides which grid it appears
+                      -- in. See ADR-0038.
 notifications         id, recipient_id, actor_id NULL, club_id NULL, type, params jsonb,
                       outbox_event_id, read_at, created_at
                       UNIQUE (outbox_event_id, recipient_id)       ← at-least-once safety

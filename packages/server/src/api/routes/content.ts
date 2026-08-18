@@ -222,9 +222,14 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
    * ADR-0029 already made and rejected - the free-text description is where what the club is
    * doing lives, in that club's own words.
    *
-   * `location` and `meetupTime` are required rather than nullable. The surface exists to answer
-   * where and when, and a club that has not decided yet types "TBC", which tells a member
-   * something a blank does not.
+   * `title` and `meetupTime` are required rather than nullable, and `location` is not: the form
+   * stopped asking for a place on 2026-08-15 (ADR-0037) and the name took its place as the thing
+   * that identifies a meetup.
+   *
+   * **This body is a whole form, so an absent field means empty**, which is the rule `TECH/10`
+   * draws for anything saved as one form. Every caller therefore has to send back what it does
+   * not edit - see the meetup composer, which passes `location` through untouched for exactly
+   * that reason.
    */
   const MeetupBody = z.object({
     meetupDate: IsoDate,
