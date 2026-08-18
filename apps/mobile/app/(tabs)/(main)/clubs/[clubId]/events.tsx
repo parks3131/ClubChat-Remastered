@@ -37,7 +37,7 @@ import {
   Tabs,
   TimeField,
 } from '../../../../../src/ui.tsx';
-import { useLoad } from '../../../../../src/use-load.ts';
+import { useLoad, useRefreshOnReturn } from '../../../../../src/use-load.ts';
 
 
 export default function ClubEventsScreen() {
@@ -70,6 +70,10 @@ export default function ClubEventsScreen() {
   const [when, setWhen] = useState<'upcoming' | 'past'>('upcoming');
 
   const feed = useLoad(() => calendarApi.feed({ club: clubId, when }), [clubId, when]);
+
+  // Creating one here already reloads (see below), but an event can also be added from chat's
+  // "+" menu or by another admin - and this list would otherwise keep the answer it opened with.
+  useRefreshOnReturn(feed, `${clubId}:${when}`);
   const club = useLoad(() => clubApi.detail(clubId), [clubId]);
   const isAdmin = club.data?.club.viewer.isAdmin === true;
 

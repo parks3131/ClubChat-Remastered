@@ -26,8 +26,9 @@ contained *more* activity than the "before" one.
 
 ## 1. How to measure this, so it can be repeated
 
-Nothing below could have been found by reading code. Two of the nine findings were the opposite
-of what the code's own comments claimed. The measurement is the method:
+Nothing below could have been found by reading code. Two of the ten findings were the opposite of
+what the code's own comments claimed, and one was found by asking why a route appeared too FEW
+times. The measurement is the method:
 
 ```
 open http://localhost:3000/dev/trace          # the live page
@@ -40,7 +41,7 @@ three processes, joined into one feed and appended to a file. See
 [`packages/server/src/dev/`](../../packages/server/src/dev/) and the commands in
 [`AGENTS.md`](../../AGENTS.md).
 
-**Four rules learned while measuring, each of which produced a wrong answer first:**
+**Five rules learned while measuring, each of which produced a wrong answer first:**
 
 1. **Put both windows side by side; never watch from a background tab.** A backgrounded browser
    tab has its timers throttled and its rendering deferred, which invented two extra "waves" of
@@ -51,7 +52,10 @@ three processes, joined into one feed and appended to a file. See
 3. **The recording buffer in the page is 200 events.** A walk through the app is thousands. The
    file recorder exists because the first long session was analysed from its tail only.
 4. **Ask the person driving what they were doing.** "I did a lot of scrolling" is what exposed
-   finding 8, which the numbers alone read as a `revision` problem and was not.
+   2.8, which the numbers alone read as a `revision` problem and was not.
+5. **Read the quiet routes too.** 2.10 was found by somebody asking why `GET /calendar` appeared
+   once and never again. Every other technique here searches for excess and would have called that
+   a success.
 
 ---
 
@@ -225,6 +229,33 @@ seventeen-minute session.
 
 **Status: done.** `apps/mobile/src/api.ts`.
 
+### 2.10 The calendar read itself once and never again
+
+**The defect, and it runs the opposite way to every other entry here.** `calendar.tsx` reads on
+mount and has no reload of any kind - no `revision`, no focus refresh, nothing. **A tab screen
+stays mounted once it has been opened**, so switching to Chats and back re-runs nothing. The read
+happened once per club for the whole life of a session.
+
+What that costs: add an event from chat's "+" menu, from the club's own events screen, or from
+another member's phone, then open the Calendar tab. It shows what it read the first time that tab
+was ever opened, and nothing short of restarting the app corrects it.
+
+This is the complaint [`use-load.ts`](../../apps/mobile/src/use-load.ts) already documents -
+"coming back to a list and seeing what it said ten minutes ago" - and the calendar simply never
+got the treatment the chat list and the club hub have.
+
+**How it was found, which is the interesting part.** Not from a number being too big. Somebody
+looked at the trace and asked why `GET /calendar` appeared **once** and never again. **The trace
+finds too few requests as readily as too many, and only one of those two is a correctness bug.**
+Nothing in section 2.1 to 2.9 would have surfaced this, because every technique there is a search
+for excess.
+
+**The fix.** `useRefreshOnReturn` on the calendar tab and on the club's events list, keyed by club.
+The events list already reloaded after creating one itself; what it could not see was an event
+created somewhere else.
+
+**Status: done.** `app/(tabs)/calendar.tsx`, `app/(tabs)/(main)/clubs/[clubId]/events.tsx`.
+
 ---
 
 ## 3. Still open
@@ -307,6 +338,26 @@ but nothing has been verified there - and the phone is where the round trips act
 This is the checklist. Open [the trace page](http://localhost:3000/dev/trace), work down the
 coverage column, and the percentage is the progress bar. **A second throwaway account is needed**
 for anything with two sides: approvals, bans, join requests, DMs, ownership transfer.
+
+> **Not every unexercised route is untested - some have no caller at all, and the coverage column
+> cannot tell the difference.** `GET /calendar/markers` is the known example: `calendarApi.markers`
+> exists in `api.ts` and **nothing in the app calls it**, deliberately, because `calendar.tsx`
+> answers the grid and the day list from one feed read rather than two ("asking twice would make
+> the dots and the list two answers to the same question"). It will therefore never light up, no
+> matter how thoroughly anybody clicks.
+>
+> So a route that stays grey after a genuine attempt to reach it is **a finding, not a gap**, and
+> it is one of three things:
+>
+>  1. **Unreachable by design**, like the markers route. Decide whether it stays: a route with no
+>     caller is surface to authorize, test and keep working forever, for nobody.
+>  2. **Reachable only from a surface that does not exist yet**, which is a roadmap item rather
+>     than a defect.
+>  3. **Reachable and simply not found**, which is a UX finding - the control is somewhere nobody
+>     looks.
+>
+> Work through the list expecting all three. The first pass over these 93 is as much an audit of
+> what the client actually uses as it is a performance sweep.
 
 **Chat, the largest untouched surface** - reactions, editing, pinning, announcements, reporting,
 deleting, muting, per-conversation pin, clearing, the gallery, jump-to-message, history paging:
@@ -401,9 +452,13 @@ anything that reads data.
    Before keying a read on `revision`, ask whether the thing being read can actually change
    because of what `revision` announces. For a title, a roster or a club's name, it cannot.
 
-And one about method rather than code:
+And two about method rather than code:
 
 5. **Watch the wire before believing a comment.** Two of the nine findings contradicted the
    comment sitting directly above them - `screens/polls.tsx` on how many polls a conversation
    holds, and the same file on what makes a tally move. Both comments were written in good faith
    and both were wrong, and no test could have said so.
+6. **Ask why something appears too FEW times, not only too many.** 2.10 was found by noticing a
+   route that fired once and never again, which every other technique in this document would have
+   read as a success. A screen that never re-reads is a correctness bug wearing the costume of a
+   fast one.

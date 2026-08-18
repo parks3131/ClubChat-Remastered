@@ -40,7 +40,7 @@ import {
   type MonthCursor,
 } from '../../src/month-pager.tsx';
 import { DataScreen, DestinationHeader, EmptyState } from '../../src/ui.tsx';
-import { useLoad } from '../../src/use-load.ts';
+import { useLoad, useRefreshOnReturn } from '../../src/use-load.ts';
 
 /*
  * The month vocabulary and the swipe both live in `src/month-pager.tsx` now, so this screen and
@@ -118,6 +118,23 @@ export function CalendarView({ clubId }: { clubId?: string } = {}) {
     () => calendarApi.feed({ ...(clubId ? { club: clubId } : {}), when: 'all' }),
     [clubId],
   );
+
+  /*
+   * Read again on RETURN, which this screen did not do at all.
+   *
+   * > **A tab screen stays mounted once it has been opened**, so `useLoad` above ran exactly once
+   * > per club for the whole life of the session. Adding an event from chat's "+" menu, from the
+   * > club's own events screen, or from another member's phone left this grid showing what it read
+   * > the first time the tab was ever opened - and nothing here would have corrected it short of
+   * > restarting the app. Found 2026-08-18 by asking why `GET /calendar` appeared once and never
+   * > again.
+   *
+   * Quiet rather than a reload, and keyed by club so switching clubs still counts as a first open
+   * for the new one. This is the same treatment the chat list and the club hub carry, for the
+   * complaint stated in `use-load.ts`: coming back to a list and seeing what it said ten minutes
+   * ago.
+   */
+  useRefreshOnReturn(feed, clubId ?? 'all-clubs');
 
   /*
    * Both views' input, built once per load rather than once per render - it was inside the render
