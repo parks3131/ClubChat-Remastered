@@ -51,7 +51,7 @@
  * name rather than as chrome above it.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Redirect, useFocusEffect } from 'expo-router';
@@ -103,6 +103,9 @@ export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const { authState, revision, notifyChanged } = useSession();
   const load = useLoad(() => inboxApi.page(), [revision]);
+
+  /** Whether this screen has been opened before, so a return can be told from a first open. */
+  const opened = useRef(false);
 
   /*
    * `revision` above is why this is needed rather than optional. The socket bumps it for
@@ -183,10 +186,25 @@ export default function NotificationsScreen() {
        * The pull-to-refresh gesture still calls `reload`, because there the spinner is the point:
        * somebody asked for a load and is owed the acknowledgement.
        */
-      load.refresh();
-      setOlder([]);
-      setOlderCursor(null);
-      setExhausted(false);
+      /*
+       * > **Not on the FIRST fire.** `useFocusEffect` runs on mount as well as on return, and
+       * > `useLoad` above has already read on mount - so opening this tab asked for
+       * > `/notifications` twice, about 18ms apart, and the loader's attempt counter threw the
+       * > first answer away. The same defect `useRefreshOnReturn` exists to prevent; this screen
+       * > cannot simply use it, because the cleanup below has to run on every blur and that hook
+       * > has no cleanup of its own.
+       *
+       * The pagination reset is inside the guard for the same reason and at no cost: on a first
+       * open there is nothing paged in yet, so skipping it changes nothing.
+       */
+      if (opened.current) {
+        load.refresh();
+        setOlder([]);
+        setOlderCursor(null);
+        setExhausted(false);
+      } else {
+        opened.current = true;
+      }
 
       return () => {
         /*

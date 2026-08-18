@@ -38,7 +38,7 @@ import {
 } from '../../domain/content.ts';
 import { searchMemberCandidates } from '../../domain/member-candidates.ts';
 import { clubIdOfEboard } from '../../domain/scopes.ts';
-import { refusalStatus, type AppDeps } from '../plumbing.ts';
+import { parseIdList, refusalStatus, type AppDeps } from '../plumbing.ts';
 
 /** A calendar day, never a timestamp - see the `raceDate` note on the race routes. */
 const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD');
@@ -188,6 +188,26 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
     const result = await readEvent(deps.db, request.access!, request.params.id);
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return result;
+  });
+
+  /**
+   * The same read, for several events at once.
+   *
+   * The twin of `GET /polls`, for the same reason and with the same rules - one club chat drew
+   * ten event cards and paid ten requests for them. See that route for why authorization is
+   * `readEvent` once per id rather than a batched query with a predicate of its own, and why an
+   * event the caller may not read is absent rather than an error.
+   */
+  app.get('/events', async (request, reply) => {
+    const parsed = parseIdList((request.query as { ids?: unknown }).ids);
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+
+    const events = [];
+    for (const id of parsed.ids) {
+      const result = await readEvent(deps.db, request.access!, id);
+      if (result.ok) events.push(result.event);
+    }
+    return { events };
   });
 
   /**

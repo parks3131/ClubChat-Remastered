@@ -366,6 +366,16 @@ npm run dev:mobile           # Expo client
 # mounts itself whenever NODE_ENV is not production. DEV_TRACE=off switches it off.
 open http://localhost:3000/dev/trace
 
+# Every event is ALSO appended to .dev-trace/trace.jsonl, which is what makes a session
+# longer than the page's 200-event buffer analysable afterwards. It appends across restarts
+# on purpose, so delete the file to start a fresh recording. DEV_TRACE_FILE=off, or any path.
+rm -f .dev-trace/trace.jsonl                    # start a clean session
+curl -s localhost:3000/dev/trace/recording      # is it still recording, and how much
+
+# Read one back. Every line is one whole event, so ordinary line tools work.
+jq -r 'select(.kind=="http") | "\(.method) \(.route) \(.status) \(.ms)ms"' .dev-trace/trace.jsonl \
+  | sort | uniq -c | sort -rn | head -20        # what got asked, most-asked first
+
 # A worktree, branch, install and free port triple for one agent, so several can work at
 # once without sharing a directory. See section 2.5 for why that is the whole game.
 ./scripts/agent-worktree.sh moderation

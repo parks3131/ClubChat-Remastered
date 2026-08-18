@@ -62,7 +62,7 @@ import {
   measureRow,
   type PressAnchor,
 } from '../../../../src/ui.tsx';
-import { useLoad, usePullToRefresh } from '../../../../src/use-load.ts';
+import { useLoad, usePullToRefresh, useRefreshOnReturn } from '../../../../src/use-load.ts';
 
 /**
  * The four chips, in the order the design shows them.
@@ -205,17 +205,17 @@ export default function ChatsScreen() {
    *
    * Cheap: one small query, and only when the screen is actually being looked at.
    */
-  useFocusEffect(
-    useCallback(() => {
-      // QUIET. Coming back to this screen is not a load, and driving the loader into its loading
-      // state fires the list's refresh spinner every single time - which is what "the chats
-      // reloading again and again, weird and seeable" was.
-      load.refresh();
-      // Deliberately not depending on `load` - it is a fresh object every render, and depending
-      // on it would refetch in a loop rather than on focus.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []),
-  );
+  /*
+   * > **`useFocusEffect` fires on MOUNT as well as on return, so this screen read twice to
+   * > open.** `useLoad` above reads on mount, and this fired a second read about 18ms behind it -
+   * > caught on the dev trace as `/conversations` arriving in pairs, eight times in one session.
+   * > Both answers were fetched and the first was discarded by the loader's attempt counter, so
+   * > it cost a round trip and showed nothing for it.
+   *
+   * This is the exact defect `useRefreshOnReturn` was written for on 2026-08-17, and its doc
+   * comment describes this screen's symptom. It simply was never moved over.
+   */
+  useRefreshOnReturn(load, 'chats');
 
   /**
    * A pull, and only a pull, spins the control. A background refresh must look like nothing.

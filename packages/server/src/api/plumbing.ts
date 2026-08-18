@@ -110,6 +110,54 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 export const isUuid = (value: unknown): boolean =>
   typeof value === 'string' && UUID_PATTERN.test(value);
 
+/** How many ids one batch read may name. Well under any URL length anybody enforces. */
+export const MAX_BATCH_IDS = 100;
+
+export type IdList = { ok: true; ids: string[] } | { ok: false; error: string };
+
+/**
+ * Parse `?ids=a,b,c` for a batch read.
+ *
+ * > **Batch reads exist because a screen full of cards was a screen full of requests.** A chat
+ * > with 26 poll cards and 10 event cards issued 36 requests to draw itself, one per card, and
+ * > the client had no way to say "these ones" - the same shape as `/sync` before it took a list.
+ *
+ * Three rules, and each is the one `/sync` settled on for the same reasons:
+ *
+ *  1. **A malformed id is a 400, not a skip.** Skipping it answers `200` with a response that
+ *     simply does not mention that id, which is indistinguishable from an id the caller may not
+ *     read - so a client bug hides behind a success. That cost this project months on iOS once
+ *     already; see the `channels[]` note in `routes/inbox.ts`.
+ *  2. **An id the caller may not read is OMITTED**, by the route rather than here. That is
+ *     deliberate and is not the same as (1): a card in old chat history can name a poll that has
+ *     since been deleted or a race the reader has left, and one stale card must not fail the
+ *     other 25. Omission also keeps `forbidden` and `not_found` indistinguishable, which is the
+ *     property `refusalStatus` exists to hold.
+ *  3. **Duplicates collapse and order is preserved**, so a caller that asks twice for the same id
+ *     is charged once and can still match results back positionally if it wants to.
+ *
+ * The id list is never percent-encoded by the client. A uuid and a comma need no escaping, and
+ * whatever a platform escapes on its own the server decodes back - the rule from `syncEntry`,
+ * which is the one place this project has been bitten by encoding twice.
+ */
+export function parseIdList(raw: unknown, max: number = MAX_BATCH_IDS): IdList {
+  if (typeof raw !== 'string' || raw === '') return { ok: false, error: 'no_ids' };
+
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const part of raw.split(',')) {
+    const id = part.trim();
+    if (!isUuid(id)) return { ok: false, error: 'bad_id' };
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+
+  if (ids.length === 0) return { ok: false, error: 'no_ids' };
+  if (ids.length > max) return { ok: false, error: 'too_many_ids' };
+  return { ok: true, ids };
+}
+
 /** Map a domain refusal onto a status code, in one place. */
 export const refusalStatus = (code: string): number =>
   code === 'forbidden' || code === 'not_found'

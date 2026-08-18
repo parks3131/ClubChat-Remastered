@@ -26,7 +26,25 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Redis } from 'ioredis';
+import { createRecorder, type Recorder } from './recorder.ts';
 import { devTraceEnabled, subscribeToTrace, type TraceEvent } from './trace.ts';
+
+/** The repository root, from this file. Also how the spec is found below. */
+const repoRoot = () => join(import.meta.dirname, '..', '..', '..', '..');
+
+/**
+ * Where the session recording goes, or `null` for none.
+ *
+ * On by default, because the case it exists for is a long walk through the app and remembering
+ * to switch a recorder on before a session is the one moment nobody is thinking about it. Set
+ * `DEV_TRACE_FILE=off` to run without one, or to any path to put it somewhere else.
+ */
+function recordingPath(): string | null {
+  const configured = process.env['DEV_TRACE_FILE'];
+  if (configured === 'off') return null;
+  if (configured !== undefined && configured !== '') return configured;
+  return join(repoRoot(), '.dev-trace', 'trace.jsonl');
+}
 
 /** One route, as Fastify registered it. */
 export type RouteEntry = { method: string; url: string };
@@ -165,8 +183,7 @@ export function parseSpecNotes(markdown: string): Record<string, string> {
 /** Load the spec once per request, so editing the spec updates the page on refresh. */
 function loadSpecNotes(): Record<string, string> {
   try {
-    const specPath = join(import.meta.dirname, '..', '..', '..', '..', 'SPEC', 'TECH', '10-protocol.md');
-    return parseSpecNotes(readFileSync(specPath, 'utf8'));
+    return parseSpecNotes(readFileSync(join(repoRoot(), 'SPEC', 'TECH', '10-protocol.md'), 'utf8'));
   } catch {
     return {};
   }
@@ -202,7 +219,20 @@ export function registerDevDashboard(app: FastifyInstance, opts: DevDashboardOpt
   const recent: TraceEvent[] = [];
   const RECENT_LIMIT = 200;
 
+  /*
+   * The file recording, fed from the SAME subscription the browsers are.
+   *
+   * One Redis subscription rather than two: a second connection just to write a file would be a
+   * second thing that can lag behind the first, and then the recording and the page would
+   * disagree about what happened - which is the one property a recording exists to have.
+   */
+  const recorder: Recorder = createRecorder(recordingPath(), { log: (message) => opts.log?.(message) });
+  const started = recorder.stats().path;
+  if (started !== null) opts.log?.(`dev trace: recording to ${started}`);
+
   subscribeToTrace(opts.subscriber, (event) => {
+    recorder.write(event);
+
     recent.push(event);
     if (recent.length > RECENT_LIMIT) recent.shift();
 
@@ -246,6 +276,15 @@ export function registerDevDashboard(app: FastifyInstance, opts: DevDashboardOpt
     });
     reply.raw.end(html);
   });
+
+  /*
+   * What the recording has captured so far.
+   *
+   * Exists so the page can say it out loud. A recorder that silently stopped - the ceiling, a
+   * full disk, a path that cannot be written - would otherwise be discovered at the end of a
+   * long session, which is exactly when the session cannot be repeated.
+   */
+  app.get('/dev/trace/recording', async () => recorder.stats());
 
   app.get('/dev/trace/catalogue', async () => {
     const notes = loadSpecNotes();

@@ -42,6 +42,14 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       swaps to "Reconnecting" when the socket drops - so a status line shows the app's own name
       whenever nothing is wrong. Decide what it should say when healthy, or drop it.
 
+- [ ] **The app asks for more than it needs, and the open half of that lives in
+      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md).** Nine defects were found and fixed on
+      2026-08-18 by watching the wire; five remain. Largest open item: one request per picture,
+      the same shape as the two batching defects already fixed. Largest unknown: what the server
+      does to answer one request, which has never been measured at all. And **93 of 145 routes
+      have never been watched by anything** - that document carries the checklist, grouped so a
+      session can pick a surface and go.
+
 - [ ] **Recurrence** is the next real feature, and is deferred rather than pending - see below.
       Nothing else in Weekly Meetups is outstanding: Nudge shipped and was verified on a device on
       2026-08-14, notification included.

@@ -89,6 +89,7 @@ other specs.
 | 15 | [Stack and hosting](TECH/15-stack-and-hosting.md) | Every technology choice, with its rationale |
 | 16 | [Build phases](TECH/16-build-phases.md) | The phased plan, and the v1 debt each phase pays off |
 | 17 | [Diagrams](TECH/17-diagrams.md) | System overview, message flows, fan-out topology, failure behaviour |
+| 18 | [Mission: backend cleaning](TECH/18-mission-backend-cleaning.md) | **The request economy.** What the app asks for that it need not, what was fixed, and the routes nobody has watched yet |
 
 ## DESIGN - what a surface looks like
 

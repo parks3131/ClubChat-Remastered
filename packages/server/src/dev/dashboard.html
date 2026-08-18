@@ -44,6 +44,9 @@
   .status { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
   .dot.live { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.rec { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  .dot.off { background: var(--dimmer); box-shadow: none; }
+  #rec { cursor: default; }
   .spacer { flex: 1; }
   header button, header label.toggle {
     background: var(--panel-2); color: var(--text);
@@ -184,6 +187,7 @@
   <div class="brand">ClubChat wire <small>every request, frame and effect</small></div>
   <div class="status"><span class="dot" id="dot"></span><span id="conn">connecting</span></div>
   <div class="status" id="counts"></div>
+  <div class="status" id="rec"></div>
   <div class="spacer"></div>
   <input id="search" placeholder="filter timeline">
   <div class="srcfilter">
@@ -308,6 +312,24 @@
     return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' +
            ('0' + d.getSeconds()).slice(-2) + '.' + ('00' + d.getMilliseconds()).slice(-3);
   };
+
+  // ------------------------------------------------------------- recording
+
+  function drawRecording() {
+    fetch('/dev/trace/recording').then(function (r) { return r.json(); }).then(function (s) {
+      var el = $('rec');
+      if (!s.path) { el.innerHTML = '<span class="dot off"></span>not recording'; return; }
+      var mb = (s.bytes / 1048576).toFixed(1);
+      if (s.stopped) {
+        el.innerHTML = '<span class="dot off"></span>recording STOPPED at ' + s.events + ' events';
+      } else {
+        el.innerHTML = '<span class="dot rec"></span>recording ' + s.events + ' events (' + mb + ' MB)';
+      }
+      el.title = s.path;
+    }).catch(function () { $('rec').textContent = ''; });
+  }
+  drawRecording();
+  setInterval(drawRecording, 5000);
 
   // ------------------------------------------------------------- catalogue
 

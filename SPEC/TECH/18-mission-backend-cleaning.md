@@ -1,0 +1,409 @@
+# Mission: backend cleaning
+
+**A standing programme, not a phase.** Everything here was found in one day, 2026-08-18, by
+watching the app talk to its server while somebody used it. None of it was visible any other
+way: every request succeeded, every test passed, no error was ever logged, and nothing crashed.
+The app was simply asking for far more than it needed.
+
+> **The one idea.** A wasted request comes back with the right answer. That is what makes this
+> class of defect invisible, and it is why it survived from the day each line was written until
+> somebody looked at the wire directly. Correctness tests cannot find it, because nothing is
+> incorrect. It only becomes painful at the exact moment you can least afford it - real members,
+> on real phones, on mobile networks.
+
+The measured headline, opening one club chat:
+
+| | before | after |
+|---|---|---|
+| requests | 78 | 39 |
+| CORS preflights | 49 | 0 |
+| **network trips** | **127** | **39** |
+
+Per minute of ordinary use, roughly 110 requests became roughly 31 - and the "after" session
+contained *more* activity than the "before" one.
+
+---
+
+## 1. How to measure this, so it can be repeated
+
+Nothing below could have been found by reading code. Two of the nine findings were the opposite
+of what the code's own comments claimed. The measurement is the method:
+
+```
+open http://localhost:3000/dev/trace          # the live page
+rm -f .dev-trace/trace.jsonl                  # start a clean session
+curl -s localhost:3000/dev/trace/recording    # is it still recording
+```
+
+Every REST request, every socket frame in both directions, and every outbox effect, from all
+three processes, joined into one feed and appended to a file. See
+[`packages/server/src/dev/`](../../packages/server/src/dev/) and the commands in
+[`AGENTS.md`](../../AGENTS.md).
+
+**Four rules learned while measuring, each of which produced a wrong answer first:**
+
+1. **Put both windows side by side; never watch from a background tab.** A backgrounded browser
+   tab has its timers throttled and its rendering deferred, which invented two extra "waves" of
+   requests that did not exist. Twenty minutes were spent on them.
+2. **Check how many clients are connected before blaming the code.** `msg.new -> 1 socket` in the
+   trace is what ruled out "two browser tabs open" as the explanation for duplicated requests. It
+   is the first thing to check, not the last.
+3. **The recording buffer in the page is 200 events.** A walk through the app is thousands. The
+   file recorder exists because the first long session was analysed from its tail only.
+4. **Ask the person driving what they were doing.** "I did a lot of scrolling" is what exposed
+   finding 8, which the numbers alone read as a `revision` problem and was not.
+
+---
+
+## 2. What was found, and what was done
+
+Ordered by what a member on a phone would feel.
+
+### 2.1 Catching up asked about one chat at a time
+
+**The defect.** `GET /sync` has always read `channels[]` as an array, authorized each entry
+independently and refused only at 201 of them. The client sent **one entry per request and
+awaited each before starting the next**. A member of 23 channels paid 23 sequential round trips
+on every connect, foreground and reconnect.
+
+**Why it mattered.** A quarter of a second on a laptop. On a phone, where a round trip is nearer
+200ms than 5, it is the several seconds somebody spends looking at the app before it is caught
+up - and it grows with how many clubs a member joins, so the app got slower the better it did.
+
+**The fix.** `syncAll` now sends every channel in one request; the paging loop moved up a level,
+so the request count is the deepest channel's page count rather than the sum of everybody's. In
+the ordinary case that is one. Writes still go through the per-channel queue a live frame uses.
+
+**Measured.** 12 channels, 1 request, 21ms. For a few minutes both versions ran against the same
+server at the same instant - one client issuing 23 requests 9ms apart while another asked once.
+
+**Status: done.** `packages/client-core/src/chat-client.ts`.
+
+### 2.2 The browser asked permission before nearly every request
+
+**The defect.** Every call carries an `Authorization` header, which makes it non-simple, so the
+browser sends a preflight `OPTIONS` first and only skips the next one if the answer says how long
+to cache it. `@fastify/cors` was registered with no `maxAge`, so browsers fell back to their own
+default - five seconds in Chromium - and re-asked before almost everything.
+
+**Measured.** 92 preflights against 104 real requests. Close to half of all traffic was the client
+asking whether it was allowed to speak.
+
+**The fix.** `maxAge: 7200`, the ceiling Chromium honours. What is cached is the *shape* of the
+permission, never an authorization decision; every request is still authenticated and
+access-checked on arrival. Native clients never preflighted and are unaffected.
+
+**Note for whoever reads the numbers next.** The browser caches per exact URL, so a route whose
+URL differs every time still preflights every time. That is why fixing 2.7 also removed 49
+preflights from one screen: fewer distinct URLs, fewer preflights.
+
+**Status: done.** `packages/server/src/api/app.ts`.
+
+### 2.3 One signal announced "something changed" five times per message
+
+**The defect.** The session provider bumps `revision` for everything the socket hears about, and
+**eight screens re-fetch when it changes**. Every screen a person has visited stays mounted behind
+whatever they are looking at, so one announcement is not one request - it is one request per
+loaded screen. Sending a single message announced four or five times on its own.
+
+**Measured.** `/conversations`, `/notifications/badge` and `/polls/:id` all fired twice within
+130ms of each other, from three different screens, because connecting and then finishing a sync
+announced twice in a row.
+
+**The fix.** The client's `onChange` is coalesced on a **leading edge**: the first change is still
+instant, because a message arriving must appear as it arrives, and everything inside the next
+400ms folds into one trailing announcement. Sign-in, sign-out and a rejected socket keep
+announcing immediately - those are single lifecycle events, and delaying one would mean an app
+that has signed out still drawing the previous member's screens.
+
+**Status: done.** `apps/mobile/src/chat-provider.tsx`.
+
+### 2.4 The chat screen re-read its own title and roster on every message
+
+**The defect.** `loadMeta` was keyed on `revision`, so one send - optimistic bubble, `msg.ack`,
+`msg.new`, read cursor - asked "what is this channel called" and "who can be mentioned here"
+**six times each**. Neither answer can change because a message moved: one is a title and a
+posting rule, the other is a roster.
+
+**The fix.** Read on arrival, on return (`useRefreshOnReturn`), and after an action that changes
+it. Not on `revision`.
+
+**Status: done.** `apps/mobile/app/chat/[channelId].tsx`.
+
+### 2.5 Three screens read twice to open
+
+**The defect.** `useFocusEffect` **fires on mount as well as on return**. Three screens did
+`useLoad(...)` *and* a focus effect that refreshed, so each asked twice to open, about 18ms
+apart - and `useLoad`'s attempt counter discarded the first answer, so it cost a round trip and
+showed nothing for it.
+
+This is the exact defect `useRefreshOnReturn` was written for on 2026-08-17, and its doc comment
+describes this symptom. **Three screens were never moved over.**
+
+**The fix.** The chat list and a club's hub now use `useRefreshOnReturn`. The inbox needed a
+hand-rolled guard, because its cleanup marks the inbox read on the way out and that has to keep
+running on every blur.
+
+**Status: done.** `clubs/index.tsx`, `clubs/[clubId]/index.tsx`, `notifications.tsx`.
+
+### 2.6 The notification badge had two clocks
+
+**The defect.** `GET /notifications/badge` arrived in pairs 20 to 30ms apart, on an idle app,
+repeating at exactly 60.000s forever - which is two timers, not one firing twice. There is one
+call site and no StrictMode in this build, so something renders `BadgedIcon` twice.
+
+**The fix, and why it is not the obvious one.** Finding which copy was the wrong thing to reach
+for. **This number is one fact about the whole app, not a property of an icon.** The count, the
+timer and the request moved to module scope with the hook as a subscription, so any number of
+copies share one of each. A deferring cooldown was added on top: a suppressed read is **deferred,
+never dropped**, because a plain rate limit would put back the bug that "I accepted the request
+and it still shows 1" describes.
+
+**Status: done, cause unexplained.** See 3.2.
+
+### 2.7 Every card on a screen fetched itself
+
+**The defect.** A chat card reads its own poll so its tally is current, which is right. What was
+wrong is that each card was also its own request, and `screens/polls.tsx` said in a comment that
+"a conversation rarely has more than one". The trace found a conversation holding **twenty-six**,
+plus ten event cards.
+
+**Measured.** Opening one club chat: 78 requests and 49 preflights inside 958ms, of which 43 were
+poll cards and 10 were event cards reading themselves.
+
+**The fix.** New batch routes `GET /polls?ids=` and `GET /events?ids=`, and a batching reader on
+the client that swaps in beneath `pollApi.detail` and `contentApi.event` - so no card, screen or
+sheet had to change, and none of them can forget to.
+
+**The rule the batch routes hold, and it is the important part.** Authorization is `readPoll` and
+`readEvent` called **once per id, the same function the single-item routes call**. Not one query
+with an `IN` clause and a predicate written a second time - the second copy is always the one that
+forgets that a race poll is invisible to a club admin with no roster row. `batch-reads.test.ts`
+asks the same question of both routes and demands the same answer, and asserts the refused id does
+not appear anywhere in the response.
+
+An id the caller may not read, or one that no longer exists, is **omitted** rather than an error,
+so one stale card in old history fails alone instead of taking the other twenty-five with it. A
+**malformed** id is a 400, because skipping it would hide a client bug behind a success - the
+defect `/sync` spent months in.
+
+**Status: done.** `routes/polls.ts`, `routes/content.ts`, `api/plumbing.ts`,
+`apps/mobile/src/batch-reader.ts`.
+
+### 2.8 Scrolling re-read every card it rebuilt
+
+**The defect, and the one that needed the person driving.** After 2.7, cards were still being read
+six to ten times each. The clue was that **event cards do not depend on `revision` at all and were
+still read six times each** - so it could not be the announcement. The chat's `FlatList` unmounts
+rows that leave the screen and rebuilds them on the way back, and a rebuilt card reads on mount.
+
+**Measured.** 26 distinct polls fetched 261 times, and 12 distinct events fetched 81 times, in two
+minutes.
+
+**The fix, and a reversal worth recording.** The batch reader had been written to deliberately
+*not* cache, on the grounds that a time-based cache would answer the re-read after a vote with the
+tally from before it. **That reasoning was right about the danger and wrong about the conclusion:**
+no amount of batching helps a read that happens a second later. An answer is now reused for 15
+seconds, and **every write clears the whole map** - so your own vote is never answered from
+memory, because casting it emptied the memory.
+
+**Measured after.** 261 poll fetches became 53; 81 event fetches became 29. A vote is followed by
+a re-read of exactly that one poll, 34 to 43ms later, and the other 25 are left alone.
+
+**Status: done.** `apps/mobile/src/batch-reader.ts`, with the write paths in `api.ts` invalidating.
+
+### 2.9 The same picture was requested three times at once
+
+**The defect.** `resolveMedia` memoises a signed URL, but the memo fills in only once an answer
+arrives - so everything wanting the same picture in the same instant missed it and asked too.
+
+**Measured.** One thumbnail requested three times inside 40ms; nine such cases in a
+seventeen-minute session.
+
+**The fix.** An in-flight map beside the memo. They answer different questions: the memo says
+"this URL is still good", the in-flight map says "somebody is already asking".
+
+**Status: done.** `apps/mobile/src/api.ts`.
+
+---
+
+## 3. Still open
+
+Ranked by what it would cost a member.
+
+### 3.1 One request per picture
+
+**The largest remaining item, and the same shape as 2.1 and 2.7.** Resolving signed URLs is one
+request per picture: a measured session showed 35 requests for 35 distinct pictures. Nothing is
+duplicated - it is simply not batched.
+
+A `GET /media/urls?ids=` reading the same authorized path once per id would collapse a gallery or
+a picture-heavy conversation the way `/polls?ids=` collapsed the cards. The client already funnels
+every call through `resolveMedia`, so the swap is behind that one function.
+
+### 3.2 `BadgedIcon` renders twice, and nobody knows why
+
+The cost is gone (2.6) but the cause is not explained. There is one call site
+(`app/(tabs)/_layout.tsx`, the `tabBarIcon` slot) and no StrictMode in this build. **Worth
+explaining rather than leaving**: whatever renders that icon twice is presumably rendering its
+siblings twice too, and the next component to own a timer will not have been written defensively.
+Also tracked in [`TODO.md`](../../TODO.md).
+
+### 3.3 Voting writes no event, so live tallies are a coincidence
+
+`toggleVote` writes **zero outbox events**. Another member's vote raises no frame and bumps no
+revision. The poll card's old comment claimed the opposite, and what actually happened was that an
+unrelated message arriving triggered a re-read that happened to pick the vote up.
+
+Two honest options, neither taken yet:
+
+- **Accept it.** Cards now read on open and on return, which is what was chosen on 2026-08-18.
+- **Make it real.** A vote writes an event, the worker fans it out, and cards refresh on something
+  that actually happened. This is feature work, not cleanup, and it belongs with
+  [PRD/11](../PRD/11-polls.md) rather than here.
+
+### 3.4 Six reads on three screens still key on `revision`
+
+Left deliberately, because they are not the same defect as 2.4 - they use "something changed" as a
+general signal, and that is defensible:
+
+| Screen | Read |
+|---|---|
+| Profile | own profile, own club list, own identity |
+| A club's hub | club detail, race list |
+| The inbox | the notification page |
+| The chat list | `/conversations` |
+| A club's hub | `/channels` |
+
+The last three are **correct**: a message genuinely changes an inbox, a chat list and unread
+counts. The first four cannot be changed by a message arriving. With 2.3 in place each fires once
+per burst rather than five times, so the cost is much smaller - but it is not zero, and the
+question of whether a club rename should reach a mounted screen live is a product one.
+
+### 3.5 What the server does per request has never been measured
+
+Everything above is about **what the client asks for**. Nothing has ever looked at what the server
+does to answer one question - whether a single request becomes twenty database round trips. The
+batch routes in 2.7 deliberately loop `readPoll` per id, which is right for authorization and is
+exactly the shape that hides an N+1 one layer down.
+
+The dev trace already knows the wall time of every request (nothing measured has exceeded 85ms, so
+there is no fire), but a per-request query count would be the same trick applied to the layer
+below, and it is the natural next tool to build.
+
+### 3.6 The iPhone has never been measured
+
+Every number in this document is the web client. The phone runs the same code, so the fixes apply,
+but nothing has been verified there - and the phone is where the round trips actually hurt.
+
+---
+
+## 4. Never checked at all
+
+**52 of 145 routes have ever been exercised while anything was watching.** The three global fixes
+(2.1, 2.2, 2.3) cover every screen including these. Anything screen-specific - a 2.4, a 2.5, a 2.7
+- would still be sitting in them, undisturbed.
+
+This is the checklist. Open [the trace page](http://localhost:3000/dev/trace), work down the
+coverage column, and the percentage is the progress bar. **A second throwaway account is needed**
+for anything with two sides: approvals, bans, join requests, DMs, ownership transfer.
+
+**Chat, the largest untouched surface** - reactions, editing, pinning, announcements, reporting,
+deleting, muting, per-conversation pin, clearing, the gallery, jump-to-message, history paging:
+
+```
+GET    /channels/:id/messages            GET    /channels/:id/messages/around
+GET    /channels/:id/gallery             GET    /channels/:id/messages/:seq/reactions
+POST   /channels/:id/messages/:seq/reactions      POST /channels/:id/messages/:seq/body
+POST   /channels/:id/messages/:seq/pinned         POST /channels/:id/messages/:seq/report
+DELETE /channels/:id/messages/:seq       POST   /channels/:id/read
+POST   /channels/:id/mute   | DELETE     POST   /channels/:id/pin  | DELETE
+POST   /channels/:id/clear
+```
+
+**Races, entirely untouched** - the whole mini-club surface, including car groups:
+
+```
+POST   /clubs/:id/races                  PATCH  /races/:id
+PATCH  /races/:id/meet-information       POST   /races/:id/pin
+POST   /races/:id/members                DELETE /races/:id/members/:uid
+GET    /races/:id/member-candidates      POST   /races/:id/join
+POST   /races/:id/join-requests          POST   /race-join-requests/:id/approve | /deny
+POST   /races/:id/car-groups             POST   /car-groups/:id/members
+PATCH  /car-groups/:id/incharge          DELETE /car-groups/:id
+DELETE /races/:id/car-group-members/:uid GET    /races/:id/polls
+POST   /races/:id/polls                  DELETE /races/:id
+```
+
+**Membership and moderation** - the two-person flows, and the platform queue:
+
+```
+POST   /clubs/:id/join                   POST   /join-requests/:id/approve | /deny
+POST   /invites/:token/redeem            POST   /clubs/:id/invite-token/rotate
+POST   /clubs/:id/members                DELETE /clubs/:id/members/:uid
+PATCH  /clubs/:id/members/:uid/role      POST   /clubs/:id/transfer-ownership
+POST   /clubs/:id/bans | DELETE          POST   /clubs/:id/leave
+GET    /clubs/search                     GET    /clubs/:id/member-candidates
+PATCH  /clubs/:id                        DELETE /clubs/:id
+POST   /users/:uid/report                POST   /moderation/users/:uid/suspended
+GET    /moderation/reports/:id/context   POST   /moderation/reports/:id/dismiss | /remove
+POST   /moderation/user-reports/:uid/dismiss      GET  /moderation/reads
+```
+
+**Direct messages and blocking, entirely untouched:**
+
+```
+GET    /dm/threads                       GET    /dm/candidates
+POST   /dm/threads                       GET    /blocks
+POST   /blocks                           DELETE /blocks/:uid
+```
+
+**The Eboard space:**
+
+```
+PATCH  /eboards/:id                      POST   /eboards/:id/members
+DELETE /eboards/:id/members/:uid         GET    /eboards/:id/member-candidates
+POST   /eboards/:id/join-requests        POST   /eboard-join-requests/:id/approve | /deny
+POST   /eboards/:id/meetings             PATCH  /meetings/:id
+DELETE /meetings/:id                     POST   /eboards/:id/polls
+```
+
+**Content and the rest:**
+
+```
+POST   /clubs/:id/news                   GET    /news/:id
+PATCH  /news/:id                         DELETE /news/:id
+GET    /clubs/:id/news/member-candidates
+POST   /clubs/:id/meetups                PATCH  /meetups/:id
+DELETE /meetups/:id                      POST   /meetups/:id/nudge
+DELETE /events/:id                       POST   /polls/:id/closed
+DELETE /polls/:id                        GET    /calendar/markers
+PATCH  /me/profile                       DELETE /me
+POST   /devices | DELETE                 GET    /media/:id
+```
+
+---
+
+## 5. Rules that fall out of this
+
+Four patterns produced all nine findings. They are worth reading as a checklist before writing
+anything that reads data.
+
+1. **If a screen can hold N of something, the read for it must take N ids.** Two independent
+   defects (2.1, 2.7) and one still open (3.1) were the same mistake: a route that could answer
+   for many, called once per one. **Ask "what happens at twenty?" of every per-item read.**
+2. **A batch read authorizes per id, using the same function the single read uses.** Never a
+   second predicate. The saving being bought is network round trips, not database work, and
+   database work was never the expensive part at this size.
+3. **`useFocusEffect` fires on mount.** Use `useRefreshOnReturn` unless you also need a cleanup,
+   and then guard the first fire by hand.
+4. **A signal every screen listens to is a signal that costs one request per mounted screen.**
+   Before keying a read on `revision`, ask whether the thing being read can actually change
+   because of what `revision` announces. For a title, a roster or a club's name, it cannot.
+
+And one about method rather than code:
+
+5. **Watch the wire before believing a comment.** Two of the nine findings contradicted the
+   comment sitting directly above them - `screens/polls.tsx` on how many polls a conversation
+   holds, and the same file on what makes a tally move. Both comments were written in good faith
+   and both were wrong, and no test could have said so.

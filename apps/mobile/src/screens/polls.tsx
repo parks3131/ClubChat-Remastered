@@ -32,7 +32,6 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { pollApi, type PollScope } from '../api.ts';
 import type { PollSummary, PollView } from '../api-types.ts';
-import { useSession } from '../chat-provider.tsx';
 import { formatCountdown, formatInstant, fromDateKey, toDateKey } from '../dates.ts';
 import { CardEyebrow, CardMeta, CardTitle, ContentCard } from '../content-card.tsx';
 import {
@@ -62,7 +61,7 @@ import {
   Tabs,
   ThemedSwitch,
 } from '../ui.tsx';
-import { useLoad } from '../use-load.ts';
+import { useLoad, useRefreshOnReturn } from '../use-load.ts';
 
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 10;
@@ -864,8 +863,22 @@ export function ChatPollCard({
    * traffic it implies is one small authorized read per visible poll card - and a conversation
    * rarely has more than one.
    */
-  const { revision } = useSession();
-  const load = useLoad(() => pollApi.detail(pollId), [pollId, revision]);
+  /*
+   * > **Read on open and on return, NOT on every socket event.** Keyed on `revision` this card
+   * > re-read whenever anything happened anywhere: the trace measured 26 poll cards in one
+   * > conversation read 261 times in two minutes, because sending a message re-read all of them.
+   *
+   * The comment that used to sit here said the arrangement meant "a tally now moves when SOMEBODY
+   * ELSE votes". That was not true and is worth recording rather than quietly deleting: casting a
+   * vote writes no outbox event, so another member's vote raises no frame and bumps no revision.
+   * What actually happened was that an unrelated message arriving triggered a re-read which
+   * happened to pick the vote up. The cost was real and the liveness was a coincidence.
+   *
+   * Your OWN vote still shows immediately - `vote` below reloads, and clears the reader's memory
+   * first so the reload cannot be answered from it.
+   */
+  const load = useLoad(() => pollApi.detail(pollId), [pollId]);
+  useRefreshOnReturn(load, pollId);
 
   const vote = async (optionId: string) => {
     setBusy(true);

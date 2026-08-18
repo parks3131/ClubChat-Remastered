@@ -26,6 +26,10 @@ web-build/
 coverage/
 .playwright-mcp/
 
+# The dev trace's session recordings. Development traffic, but it carries real message
+# bodies and real user ids, so it is never a thing to commit.
+.dev-trace/
+
 # os
 .DS_Store
 

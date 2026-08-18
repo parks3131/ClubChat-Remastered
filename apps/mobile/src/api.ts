@@ -56,6 +56,7 @@ import type {
   SharedClub,
   UserReportRow,
 } from './api-types.ts';
+import { createBatchReader } from './batch-reader.ts';
 import { config } from './config.ts';
 import { sessionStore } from './session.ts';
 
@@ -483,6 +484,43 @@ export const raceApi = {
 /** The scope a poll belongs to. The path names it; there is no body field for it. */
 export type PollScope = 'clubs' | 'races' | 'eboards';
 
+/**
+ * The route's own ceiling on how many ids one request may name. Kept in step with
+ * `MAX_BATCH_IDS` on the server, which answers 400 above it.
+ */
+const BATCH_LIMIT = 100;
+
+/**
+ * One poll read, coalesced with every other poll read in the same instant.
+ *
+ * > **A club chat with 26 poll cards issued 26 requests to draw itself**, plus ten more for its
+ * > event cards, inside one second. Each card reading its own poll is correct and stays; what
+ * > changes is that twenty-six of them now travel together.
+ *
+ * Deliberately swapped in HERE rather than at the call sites. Every card, the poll screen and
+ * the chat's hold sheet all call `pollApi.detail`, and they keep calling it: the promise, the
+ * shape and the failures are the same, so nothing above this line had to be edited and nothing
+ * above this line can forget to. See `batch-reader.ts` for what is and is not shared.
+ */
+const readPoll = createBatchReader<PollView>({
+  fetchMany: (ids) =>
+    apiFetch<{ polls: PollView[] }>(`/polls?ids=${ids.join(',')}`).then((r) => r.polls),
+  keyOf: (poll) => poll.id,
+  // The single route answered 404 for a poll that is gone AND for one the caller may not read.
+  // The batch omits both, so the absence has to become the same error a caller already handles.
+  missing: () => new ApiError(404, 'not_found'),
+  maxPerRequest: BATCH_LIMIT,
+});
+
+/** One event read, coalesced. The twin of `readPoll`, for the event cards beside them. */
+const readEvent = createBatchReader<EventDetail>({
+  fetchMany: (ids) =>
+    apiFetch<{ events: EventDetail[] }>(`/events?ids=${ids.join(',')}`).then((r) => r.events),
+  keyOf: (event) => event.id,
+  missing: () => new ApiError(404, 'not_found'),
+  maxPerRequest: BATCH_LIMIT,
+});
+
 export const pollApi = {
   list: (scope: PollScope, scopeId: string) =>
     apiFetch<{ polls: PollSummary[] }>(`/${scope}/${scopeId}/polls`),
@@ -499,19 +537,35 @@ export const pollApi = {
     },
   ) => apiFetch<{ pollId: string }>(`/${scope}/${scopeId}/polls`, { method: 'POST', body }),
 
-  detail: (pollId: string) => apiFetch<{ poll: PollView }>(`/polls/${pollId}`),
+  detail: async (pollId: string) => ({ poll: await readPoll(pollId) }),
 
-  /** Cast, move or withdraw - one gesture. Addressed by option, which identifies its poll. */
-  vote: (optionId: string) =>
-    apiFetch<{ action: 'cast' | 'withdrawn' | 'moved' }>(`/poll-options/${optionId}/vote`, {
+  /**
+   * Cast, move or withdraw - one gesture. Addressed by option, which identifies its poll.
+   *
+   * Clears the reader's memory FIRST, so the `reload()` every caller does next reads the new
+   * tally rather than the one from before this vote. Ordered deliberately: clearing afterwards
+   * would leave a window in which a card remounting mid-write answers from the stale copy.
+   */
+  vote: (optionId: string) => {
+    readPoll.invalidate();
+    return apiFetch<{ action: 'cast' | 'withdrawn' | 'moved' }>(
+      `/poll-options/${optionId}/vote`,
+      { method: 'POST', body: {} },
+    );
+  },
+
+  setClosed: (pollId: string, closed: boolean) => {
+    readPoll.invalidate();
+    return apiFetch<{ closed: boolean }>(`/polls/${pollId}/closed`, {
       method: 'POST',
-      body: {},
-    }),
+      body: { closed },
+    });
+  },
 
-  setClosed: (pollId: string, closed: boolean) =>
-    apiFetch<{ closed: boolean }>(`/polls/${pollId}/closed`, { method: 'POST', body: { closed } }),
-
-  remove: (pollId: string) => apiFetch<unknown>(`/polls/${pollId}`, { method: 'DELETE' }),
+  remove: (pollId: string) => {
+    readPoll.invalidate();
+    return apiFetch<unknown>(`/polls/${pollId}`, { method: 'DELETE' });
+  },
 };
 
 export const contentApi = {
@@ -558,12 +612,19 @@ export const contentApi = {
       mapUrl?: string | null;
       description?: string | null;
     },
-  ) => apiFetch<{ updated: true }>(`/events/${eventId}`, { method: 'PATCH', body }),
+  ) => {
+    // An edit changes what every card of this event draws, so the remembered copy has to go.
+    readEvent.invalidate();
+    return apiFetch<{ updated: true }>(`/events/${eventId}`, { method: 'PATCH', body });
+  },
 
   /** Every club member, not only the admins who create them. `canManage` rides along. */
-  event: (eventId: string) => apiFetch<{ event: EventDetail }>(`/events/${eventId}`),
+  event: async (eventId: string) => ({ event: await readEvent(eventId) }),
 
-  deleteEvent: (eventId: string) => apiFetch<unknown>(`/events/${eventId}`, { method: 'DELETE' }),
+  deleteEvent: (eventId: string) => {
+    readEvent.invalidate();
+    return apiFetch<unknown>(`/events/${eventId}`, { method: 'DELETE' });
+  },
 
   /** The Monday is required: "this week" is a question about the caller's timezone. */
   meetups: (clubId: string, monday: string) =>
@@ -1021,6 +1082,22 @@ const mediaUrlMemo = new Map<
   { url: string; mime: string; width: number | null; height: number | null; expiresAt: number }
 >();
 
+/**
+ * Resolutions currently on the wire, so the same picture is asked for once.
+ *
+ * > **The memo above fills in only once an answer arrives**, which means everything that asks
+ * > for the same picture in the same instant misses it and asks too. The dev trace caught one
+ * > thumbnail requested three times inside 40ms, and nine such cases in a seventeen-minute
+ * > session - a chat screen has several things wanting the same avatar or the same image at
+ * > the moment it draws.
+ *
+ * Separate from the memo rather than folded into it, because the two answer different
+ * questions: the memo says "this URL is still good", and this says "somebody is already
+ * asking". A single map would have to hold a promise and an expiry, and the expiry cannot be
+ * known until the promise settles.
+ */
+const mediaUrlInFlight = new Map<string, Promise<ResolvedMedia>>();
+
 export type MediaVariant = 'original' | 'display' | 'thumb';
 
 /**
@@ -1071,6 +1148,29 @@ export async function resolveMedia(
     return { url: held.url, mime: held.mime, width: held.width, height: held.height };
   }
 
+  // Already asking. Wait on that one rather than starting a second identical request.
+  const flying = mediaUrlInFlight.get(key);
+  // Spread, so every caller still gets its OWN object. Handing the same reference to several
+  // callers is a shared mutable this function never used to have.
+  if (flying) return { ...(await flying) };
+
+  const request = resolveMediaUncached(mediaId, variant, key);
+  mediaUrlInFlight.set(key, request);
+  try {
+    return { ...(await request) };
+  } finally {
+    // Cleared whether it resolved or threw: a failure must leave the next caller able to retry,
+    // not waiting forever on a promise that already rejected.
+    mediaUrlInFlight.delete(key);
+  }
+}
+
+/** The read itself. Split out only so the in-flight bookkeeping above reads as one thing. */
+async function resolveMediaUncached(
+  mediaId: string,
+  variant: MediaVariant,
+  key: string,
+): Promise<ResolvedMedia> {
   const resolved = await apiFetch<{
     url: string;
     expiresAt: string;

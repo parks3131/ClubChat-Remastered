@@ -31,7 +31,7 @@ import {
   measureRow,
   type PressAnchor,
 } from '../../../../../src/ui.tsx';
-import { useLoad } from '../../../../../src/use-load.ts';
+import { useLoad, useRefreshOnReturn } from '../../../../../src/use-load.ts';
 
 /** How many races the hub previews before "See all". */
 const RACE_PREVIEW = 5;
@@ -116,13 +116,10 @@ export default function ClubHubScreen() {
    * disagree with the chat list and how "it says nine and I cannot find them" happened.
    */
   const states = useLoad(() => channelApi.states(), [revision]);
-  useFocusEffect(
-    useCallback(() => {
-      // Quiet, for the same reason the chat list is: returning to a screen is not a load.
-      states.refresh();
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []),
-  );
+  // Quiet, and NOT on first open: `useLoad` has already read on mount, and firing here too made
+  // this screen ask for `/channels` twice to open. Keyed by club, so walking from one hub
+  // straight into another still counts as a first open for the second.
+  useRefreshOnReturn(states, clubId);
 
   const unreadFor = (channelId: string | null): number => {
     if (channelId === null) return 0;

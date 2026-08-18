@@ -50,15 +50,49 @@ function publish(count: number): void {
 }
 
 /**
- * Read the count, at most one request at a time.
+ * The shortest gap between two reads. Below it, a read is deferred rather than dropped.
+ *
+ * The count is a safety net, and asking for it twice inside a second buys nothing: the trace
+ * caught 102 reads in seventeen minutes, 33 of them repeats within a second or two of each other
+ * while somebody clicked quickly through the app.
+ */
+const COOLDOWN_MS = 700;
+
+/** When the last read STARTED, and the deferred one waiting for the cooldown to pass. */
+let lastReadAt = 0;
+let trailing: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Read the count, at most one request at a time and at most one per cooldown.
  *
  * The in-flight promise is shared rather than queued, deliberately: two callers asking "how many"
  * inside the same moment want the same answer, and a second request would only be a slower copy of
  * the one already on the wire. Sending one message bumps `revision` several times in a few hundred
  * milliseconds, so this is the ordinary case rather than a race.
+ *
+ * > **A suppressed read is DEFERRED, never dropped, and that is not a detail.** The reason this
+ * > hook re-reads on navigation at all is a real bug: approving a join request clears
+ * > notifications over HTTP, raises no socket frame, and left the badge showing the old number.
+ * > "I accepted the request and it still shows 1" was true on screen and false in the database.
+ * > A plain rate limit would put that bug straight back, because the read it swallowed would be
+ * > exactly the one that mattered. So the last asker in a burst always gets a read, it just
+ * > arrives at the end of the cooldown instead of immediately.
  */
 function refresh(): Promise<void> {
   if (inFlight) return inFlight;
+
+  const since = Date.now() - lastReadAt;
+  if (since < COOLDOWN_MS) {
+    if (trailing === null) {
+      trailing = setTimeout(() => {
+        trailing = null;
+        void refresh();
+      }, COOLDOWN_MS - since);
+    }
+    return Promise.resolve();
+  }
+
+  lastReadAt = Date.now();
 
   inFlight = (async () => {
     try {
@@ -95,6 +129,12 @@ function reset(): void {
   if (timer !== null) {
     clearInterval(timer);
     timer = null;
+  }
+  // A deferred read must not outlive the session it belonged to: it would answer 401 at best,
+  // and at worst publish the previous member's count over a signed-out screen.
+  if (trailing !== null) {
+    clearTimeout(trailing);
+    trailing = null;
   }
   publish(0);
 }

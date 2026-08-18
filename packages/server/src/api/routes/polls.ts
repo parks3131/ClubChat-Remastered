@@ -25,7 +25,7 @@ import {
   setPollClosed,
   toggleVote,
 } from '../../domain/polls.ts';
-import { refusalStatus, type AppDeps } from '../plumbing.ts';
+import { parseIdList, refusalStatus, type AppDeps } from '../plumbing.ts';
 
 const CreatePollBody = z.object({
   question: z.string().min(1).max(500),
@@ -111,6 +111,37 @@ export function registerPollRoutes(app: FastifyInstance, deps: AppDeps): void {
     const result = await readPoll(deps.db, request.access!, request.params.id);
     if (!result.ok) return reply.code(refusalStatus(result.code)).send({ error: result.code });
     return result;
+  });
+
+  /**
+   * The same read, for several polls at once.
+   *
+   * > **A conversation was assumed to hold about one poll card, and holds twenty-six.** Each card
+   * > reads its own poll so its tally is current, which is right - a count that only moved when
+   * > you voted would be wrong the moment somebody else did. What was wrong is that there was no
+   * > way to ask for more than one, so opening a club chat cost 36 requests before it could draw
+   * > anything. Measured on the dev trace, 2026-08-18.
+   *
+   * **Authorization is `readPoll`, once per id, exactly as above.** Not a batched query with its
+   * own predicate: the private-poll rules, the voter gating and the own-vote rule all live inside
+   * that function, and a second implementation of them is the row-level-policy mistake this whole
+   * architecture exists to avoid. The saving here is network round trips, which is what actually
+   * cost the phone - not database work, which was never the expensive part at this size.
+   *
+   * A poll the caller may not read, or one that no longer exists, is simply ABSENT from the
+   * answer. That is what lets a stale card in old history fail alone instead of taking the other
+   * twenty-five with it, and it keeps "forbidden" and "gone" indistinguishable.
+   */
+  app.get('/polls', async (request, reply) => {
+    const parsed = parseIdList((request.query as { ids?: unknown }).ids);
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+
+    const polls = [];
+    for (const id of parsed.ids) {
+      const result = await readPoll(deps.db, request.access!, id);
+      if (result.ok) polls.push(result.poll);
+    }
+    return { polls };
   });
 
   /**
