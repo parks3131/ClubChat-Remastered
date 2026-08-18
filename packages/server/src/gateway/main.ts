@@ -12,6 +12,7 @@ import { loadConfig } from '../config.ts';
 import { initMonitoring } from '../monitoring.ts';
 import { createDb, createPool } from '../db/client.ts';
 import { createRateLimiter, createRedis } from '../bus/redis.ts';
+import { createTracer, devTraceEnabled } from '../dev/trace.ts';
 import { createGateway } from './server.ts';
 
 const config = loadConfig();
@@ -60,6 +61,10 @@ const gateway = createGateway(
     rateLimiter,
     gatewayId,
     monitor,
+    // The development trace. A publisher of its own rather than the command connection above,
+    // which is not about subscriber mode here but about isolation: a dev tool must not be able
+    // to stall a publish or a registry write by filling a shared client's command queue.
+    tracer: createTracer(devTraceEnabled() ? createRedis(config.REDIS_URL) : null, 'gateway'),
     log: (level, message, extra) => logger[level](extra ?? {}, message),
   },
   { port: config.GATEWAY_PORT },

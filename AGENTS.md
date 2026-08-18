@@ -361,6 +361,11 @@ npm run dev:gateway          # WebSocket gateway on :3001
 npm run dev:worker           # outbox drain
 npm run dev:mobile           # Expo client
 
+# The wire: one page showing every REST call, every socket frame in both directions, and
+# every outbox effect the worker ran, joined across all three processes. Needs no flag - it
+# mounts itself whenever NODE_ENV is not production. DEV_TRACE=off switches it off.
+open http://localhost:3000/dev/trace
+
 # A worktree, branch, install and free port triple for one agent, so several can work at
 # once without sharing a directory. See section 2.5 for why that is the whole game.
 ./scripts/agent-worktree.sh moderation

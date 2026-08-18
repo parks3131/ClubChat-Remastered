@@ -19,6 +19,7 @@ import {
   reconcilePlatformModerators,
 } from '../domain/platform-moderators.ts';
 import { buildApp } from './app.ts';
+import { createTracer, devTraceEnabled } from '../dev/trace.ts';
 import { S3MediaStore } from '../media/store.ts';
 
 const config = loadConfig();
@@ -130,7 +131,32 @@ const limiter = createKeyedRateLimiter(redis, {
   onFailOpen: (error) => monitor.capture(error, 'api.rateLimiter.failOpen'),
 });
 
-const app = buildApp({ db, auth, config, mediaStore, monitor, limiter, logger });
+/*
+ * The development trace, and nothing at all in production.
+ *
+ * Two connections rather than one: ioredis puts a client into subscriber mode exclusively, so
+ * the dashboard's reader cannot be the publisher and cannot be the limiter's. Both are extra
+ * sockets to Redis that exist only on a laptop.
+ *
+ * `devTraceEnabled()` is checked here as well as inside `createTracer` so the CONNECTIONS are
+ * not opened either. A disabled observer should cost nothing, not merely do nothing.
+ */
+const traceOn = devTraceEnabled();
+const devSubscriber = traceOn ? createRedis(config.REDIS_URL) : undefined;
+const tracer = createTracer(traceOn ? createRedis(config.REDIS_URL) : null, 'api');
+if (traceOn) logger.info('dev trace: dashboard at http://localhost:' + config.API_PORT + '/dev/trace');
+
+const app = buildApp({
+  db,
+  auth,
+  config,
+  mediaStore,
+  monitor,
+  limiter,
+  logger,
+  tracer,
+  devSubscriber,
+});
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, 'shutting down');
@@ -139,6 +165,7 @@ const shutdown = async (signal: string) => {
   // seeing, and also the thing most likely to be still sitting in the queue.
   await monitor.flush();
   await redis.quit().catch(() => undefined);
+  await devSubscriber?.quit().catch(() => undefined);
   await pool.end();
   process.exit(0);
 };

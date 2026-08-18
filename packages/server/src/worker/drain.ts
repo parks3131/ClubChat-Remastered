@@ -19,6 +19,7 @@
 
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
+import { redact } from '../dev/trace.ts';
 import { dispatch, PermanentEffectError, type EffectDeps, type OutboxEvent } from './effects.ts';
 
 export const POLL_INTERVAL_MS = 250;
@@ -138,12 +139,32 @@ export async function drainOnce(db: Db, deps: EffectDeps): Promise<DrainResult> 
         payload: row.payload ?? {},
       };
 
+      /*
+       * The development trace's clock, started before the handler rather than around the whole
+       * loop. What a reader of the dashboard wants to know is how long THIS effect took, which
+       * is the number that answers "why was that push slow" - a per-batch figure would hide a
+       * single slow handler behind forty fast ones.
+       */
+      const startedAt = Date.now();
+      const trace = (outcome: 'ok' | 'retry' | 'parked', error: string | null) =>
+        deps.tracer?.emit({
+          kind: 'effect',
+          outboxId: event.id,
+          eventType: event.eventType,
+          partitionKey: event.partitionKey,
+          payload: redact(event.payload),
+          ms: Date.now() - startedAt,
+          outcome,
+          error,
+        });
+
       try {
         await dispatch(event, deps);
         await tx.execute(sql`
           UPDATE outbox SET processed_at = now() WHERE id = ${row.id}
         `);
         result.processed += 1;
+        trace('ok', null);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         /*
@@ -164,6 +185,8 @@ export async function drainOnce(db: Db, deps: EffectDeps): Promise<DrainResult> 
                  next_attempt_at = now() + (${delayMs} * interval '1 millisecond')
            WHERE id = ${row.id}
         `);
+
+        trace(nextAttempts >= MAX_ATTEMPTS ? 'parked' : 'retry', message);
 
         if (nextAttempts >= MAX_ATTEMPTS) {
           result.parked += 1;

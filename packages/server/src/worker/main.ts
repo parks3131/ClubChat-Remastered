@@ -7,6 +7,7 @@ import { loadConfig } from '../config.ts';
 import { initMonitoring } from '../monitoring.ts';
 import { createDb, createPool } from '../db/client.ts';
 import { createRedis } from '../bus/redis.ts';
+import { createTracer, devTraceEnabled } from '../dev/trace.ts';
 import { startDrainLoop } from './drain.ts';
 import { startScheduler } from './scheduled.ts';
 import type { EffectDeps } from './effects.ts';
@@ -36,6 +37,9 @@ const deps: EffectDeps = {
     accessKeyId: config.S3_ACCESS_KEY_ID,
     secretAccessKey: config.S3_SECRET_ACCESS_KEY,
   }),
+  // Its own publisher, for the same isolation reason the gateway's is: a dev tool must not be
+  // able to stall an effect by filling the connection the effect publishes fan-out on.
+  tracer: createTracer(devTraceEnabled() ? createRedis(config.REDIS_URL) : null, 'worker'),
   log: (level, message, extra) => logger[level](extra ?? {}, message),
 };
 

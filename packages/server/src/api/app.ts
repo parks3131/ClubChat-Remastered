@@ -37,6 +37,8 @@ import {
   passwordResetLimitKey,
 } from './rate-limit.ts';
 import { readIdentity } from '../domain/account.ts';
+import { registerDevDashboard, type RouteEntry } from '../dev/dashboard.ts';
+import { readBody } from '../dev/trace.ts';
 import { registerAccountRoutes } from './routes/account.ts';
 import { registerCalendarRoutes } from './routes/calendar.ts';
 import { registerChatRoutes } from './routes/chat.ts';
@@ -92,6 +94,76 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       trustProxy: trustProxyOption(deps.config.TRUST_PROXY),
     },
   );
+
+  /*
+   * The development trace, and the route table it is measured against.
+   *
+   * Both are inert without `deps.tracer`, which no test and no production boot constructs. The
+   * hooks are registered HERE, before any route, because a Fastify hook only applies to routes
+   * added after it - registering them lower down would silently miss `/api/auth/*` and every
+   * group below, which is the same "a route that forgets" failure the session hook and the
+   * limiter are placed on a scope to avoid.
+   */
+  const devRoutes: RouteEntry[] = [];
+  if (deps.tracer) {
+    const tracer = deps.tracer;
+
+    // `onRoute` fires once per registration and propagates into encapsulated children, so this
+    // sees the whole protected scope even though those routes are added inside `app.register`.
+    app.addHook('onRoute', (route) => {
+      const methods = Array.isArray(route.method) ? route.method : [route.method];
+      for (const method of methods) devRoutes.push({ method, url: route.url });
+    });
+
+    /*
+     * The response body is only readable here.
+     *
+     * `onSend` is the one hook handed the serialized payload; by `onResponse` it has been
+     * written to the socket and is gone. Stored on the side rather than on the request object,
+     * so the shared `FastifyRequest` type does not grow a field that exists in development
+     * only.
+     */
+    const payloads = new WeakMap<FastifyRequest, unknown>();
+
+    app.addHook('onSend', async (request, _reply, payload) => {
+      payloads.set(request, payload);
+      return payload;
+    });
+
+    /*
+     * Emitted on the way out, once, with everything the page needs to draw one row.
+     *
+     * `reply.elapsedTime` is Fastify's own measurement from the moment the request arrived, so
+     * `startedAt` below is a real arrival time rather than this hook's own. That matters for
+     * ordering: a slow request must sort above the effects it caused, not below them.
+     */
+    app.addHook('onResponse', async (request, reply) => {
+      /*
+       * The observer does not observe itself.
+       *
+       * Without this the dashboard's own catalogue fetch is traced, complete with a response
+       * body holding every route note in the spec - so opening the page fills its own replay
+       * buffer with itself, and the SSE stream posts a row every time a browser disconnects.
+       * `/dev` is not part of the app, so nothing is lost by leaving it out.
+       */
+      if (request.url.startsWith('/dev/')) return;
+
+      const ms = Math.round(reply.elapsedTime);
+      tracer.emit({
+        kind: 'http',
+        id: request.id,
+        method: request.method,
+        url: request.url,
+        route: request.routeOptions?.url ?? null,
+        status: reply.statusCode,
+        ms,
+        startedAt: Date.now() - ms,
+        userId: request.userId ?? null,
+        reqBody: readBody(request.body),
+        resBody: readBody(payloads.get(request)),
+      });
+    });
+  }
 
   /*
    * Security headers, on every response, from one plugin.
@@ -372,6 +444,22 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     registerCalendarRoutes(protectedRoutes, deps);
     registerEboardRoutes(protectedRoutes, deps);
   });
+
+  /*
+   * The dashboard, last, and only when a connection to read the trace back was supplied.
+   *
+   * Registered on the root instance rather than inside the protected scope, deliberately: it
+   * must be openable in a browser that holds no app session, because the traffic worth watching
+   * belongs to somebody else. That is only safe because it cannot be constructed outside
+   * development - see `dev/trace.ts` for the three independent gates.
+   */
+  if (deps.devSubscriber) {
+    registerDevDashboard(app, {
+      subscriber: deps.devSubscriber,
+      routes: devRoutes,
+      log: (message) => app.log.info(message),
+    });
+  }
 
   return app;
 }

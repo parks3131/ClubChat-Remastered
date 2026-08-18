@@ -13,7 +13,9 @@
  */
 
 import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from 'fastify';
+import type { Redis } from 'ioredis';
 import type { Auth } from '../auth.ts';
+import type { Tracer } from '../dev/trace.ts';
 import type { Config } from '../config.ts';
 import type { Db } from '../db/client.ts';
 import { getChannelRef } from '../domain/reads.ts';
@@ -57,6 +59,23 @@ export type AppDeps = {
    * `LOG_LEVEL` when this is absent.
    */
   logger?: FastifyBaseLogger;
+  /**
+   * The development trace, when one is attached.
+   *
+   * Optional in the strong sense: absent is the default and the only state that exists in a
+   * test or in production. The entrypoint constructs one only when `devTraceEnabled()`, so
+   * "is the observer running" is answered by whether this field has a value rather than by a
+   * flag read at each call site.
+   */
+  tracer?: Tracer | undefined;
+  /**
+   * A Redis connection dedicated to reading the trace back, for the dashboard's fan-out.
+   *
+   * Separate from the limiter's connection because ioredis puts a client into subscriber mode
+   * exclusively - the same constraint the gateway documents around its own `subscriber`. Its
+   * presence is what mounts `/dev/trace`.
+   */
+  devSubscriber?: Redis | undefined;
 };
 
 /**

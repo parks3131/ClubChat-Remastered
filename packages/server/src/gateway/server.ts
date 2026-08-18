@@ -28,6 +28,7 @@ import {
 } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import type { Monitor } from '../monitoring.ts';
+import { redact, type Tracer } from '../dev/trace.ts';
 import type { Auth } from '../auth.ts';
 import { resolveSessionFromToken } from '../auth.ts';
 import { ChannelGoneError } from '../domain/append-message.ts';
@@ -81,6 +82,13 @@ export type GatewayDeps = {
    * of server error with no HTTP status to carry it: the client sees a frame that never arrives.
    */
   monitor?: Monitor | undefined;
+  /**
+   * The development trace.
+   *
+   * Optional for the same reason `monitor` is: the gateway's tests construct deps unchanged,
+   * and absent is the only state that exists in production. See `dev/trace.ts`.
+   */
+  tracer?: Tracer | undefined;
 };
 
 export type Gateway = {
@@ -118,6 +126,22 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
     if (socket.readyState !== socket.OPEN) return;
     const withId = correlationId === undefined ? frame : { ...frame, id: correlationId };
     socket.send(JSON.stringify(withId));
+
+    /*
+     * Traced AFTER the write, so the page never shows a frame the socket refused.
+     *
+     * Every directed reply passes through here - handshakes, acks, refusals - so one call is
+     * the whole picture rather than a sample. The Redis fan-out is the deliberate exception:
+     * it serializes once for many sockets and is traced at its own site, as one event.
+     */
+    deps.tracer?.emit({
+      kind: 'ws',
+      dir: 'out',
+      type: frame.t,
+      userId: states.get(socket)?.userId ?? null,
+      correlationId: correlationId ?? null,
+      payload: redact((frame as { d?: unknown }).d),
+    });
   };
 
   // ---------------------------------------------------------------------------
@@ -238,9 +262,30 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
         ? { t: 'msg.update', d: relayed.data as MsgUpdate }
         : { t: 'msg.new', d: relayed.data as MessageEnvelope };
     const encoded = JSON.stringify(frame);
+    let delivered = 0;
     for (const socket of sockets) {
-      if (socket.readyState === socket.OPEN) socket.send(encoded);
+      if (socket.readyState === socket.OPEN) {
+        socket.send(encoded);
+        delivered += 1;
+      }
     }
+
+    /*
+     * One trace for the whole fan-out, not one per socket.
+     *
+     * The payload is serialized ONCE above and written to every subscriber, which is the
+     * property ADR-0007 exists to buy - so tracing per recipient would both misrepresent the
+     * work done and drown the page in a large channel. The recipient count is the interesting
+     * number, and it is the one thing a per-socket trace would have made harder to read.
+     */
+    deps.tracer?.emit({
+      kind: 'ws',
+      dir: 'out',
+      type: `${frame.t} -> ${delivered} socket${delivered === 1 ? '' : 's'}`,
+      userId: null,
+      correlationId: published.channelId,
+      payload: redact(frame.d),
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -518,6 +563,23 @@ export function createGateway(deps: GatewayDeps, opts: { port: number }): Gatewa
         send(socket, { t: 'auth.err', d: { code: 'malformed' } });
         return;
       }
+
+      /*
+       * Traced after parsing and before handling.
+       *
+       * After parsing, because a frame that does not satisfy `ClientFrame` has no `t` to label
+       * it with and is already answered above. Before handling, so a frame that goes on to
+       * throw still appears - the trace is meant to show what the client sent, and the case
+       * worth seeing most is the one that failed.
+       */
+      deps.tracer?.emit({
+        kind: 'ws',
+        dir: 'in',
+        type: frame.t,
+        userId: state.userId,
+        correlationId: (frame as { id?: string }).id ?? null,
+        payload: redact((frame as { d?: unknown }).d),
+      });
 
       /*
        * Everything except `auth` requires an authenticated socket.

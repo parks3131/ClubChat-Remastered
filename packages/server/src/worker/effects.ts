@@ -17,6 +17,7 @@ import type { Redis } from 'ioredis';
 import { SYSTEM_ACTOR_ID, type MessageType, type NotificationType } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import type { Monitor } from '../monitoring.ts';
+import type { Tracer } from '../dev/trace.ts';
 import { users } from '../db/schema.ts';
 import { appendMessage, deriveClientMsgId } from '../domain/append-message.ts';
 import { publishToChannel, publishRevocation, publishUpdate } from '../bus/redis.ts';
@@ -90,6 +91,13 @@ export type EffectDeps = {
    * read acknowledgement - see PUSH_DEFERRAL_MS.
    */
   defer?: ((fn: () => Promise<void>, ms: number) => void) | undefined;
+  /**
+   * The development trace.
+   *
+   * Optional for the same reason `monitor` is, and read only by the drain: an effect handler
+   * has no business knowing whether anybody is watching. See `dev/trace.ts`.
+   */
+  tracer?: Tracer | undefined;
 };
 
 function schedule(deps: EffectDeps, fn: () => Promise<void>) {
