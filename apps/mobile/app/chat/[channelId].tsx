@@ -81,7 +81,7 @@ import { ChatMeetingCard } from "../../src/screens/meetings.tsx";
 import { ChatPollCard } from "../../src/screens/polls.tsx";
 import { EmojiPicker } from "../../src/emoji-picker.tsx";
 import { spaceProfileHref, useGoBack } from "../../src/nav.tsx";
-import { useLoad } from "../../src/use-load.ts";
+import { useLoad, useRefreshOnReturn } from "../../src/use-load.ts";
 import { useNotice } from "../../src/use-notice.ts";
 import { KeyboardAvoider } from "../../src/keyboard-avoider.tsx";
 import { hrefForCard } from "../../src/notification-href.ts";
@@ -2460,9 +2460,28 @@ export default function ChatScreen() {
     }
   }, [channelId]);
 
+  /*
+   * The meta read runs on arrival, on return, and after an action that changes it. NOT on
+   * `revision`.
+   *
+   * > **Keyed on `revision`, this fired twice per socket event and cost two requests each
+   * > time.** The provider bumps `revision` for everything it hears about, so sending one
+   * > message - optimistic bubble, `msg.ack`, `msg.new`, read cursor - re-asked "what is this
+   * > channel called" and "who can be mentioned here" six times over. Neither answer can change
+   * > because a message moved: one is a title and a posting rule, the other is a roster.
+   * > Measured on the trace at 12 requests for a single send.
+   *
+   * `useRefreshOnReturn` is what covers the case `revision` was standing in for. A roster does
+   * change when somebody joins a club, and `canPost` changes when a DM peer blocks you - both
+   * while this screen is elsewhere or in the background, and neither announced over the socket.
+   * Re-reading on return catches them at the one moment the answer is about to be looked at,
+   * which is the same argument `use-load.ts` makes about spinners and background reads.
+   */
   useEffect(() => {
     void loadMeta();
-  }, [loadMeta, revision]);
+  }, [loadMeta]);
+
+  useRefreshOnReturn({ refresh: () => void loadMeta() }, channelId ?? "");
 
   /**
    * Go to a message by seq, fetching the history around it if it is not loaded.

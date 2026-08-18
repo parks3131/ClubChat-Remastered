@@ -85,6 +85,64 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const bump = useCallback(() => setRevision((n) => n + 1), []);
 
+  /**
+   * How long the store's changes are folded together before a second announcement.
+   *
+   * Long enough to cover one send end to end - optimistic bubble, `msg.ack`, `msg.new`, read
+   * cursor - and short enough that a person who does something immediately afterwards is not
+   * waiting on it.
+   */
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settlePending = useRef(false);
+
+  /*
+   * The socket's own notification, and the ONLY caller that is coalesced.
+   *
+   * > **`revision` is read by eight screens, and every one of them re-fetches when it changes.**
+   * > The clubs list, a club's page, a poll, the inbox, the profile, the tab badge and the chat
+   * > screen all stay mounted behind whatever you are looking at, so one announcement is not one
+   * > request - it is one request per loaded screen. And the store announces far more often than
+   * > anything a screen draws has changed: connecting announces, finishing a sync announces, and
+   * > a single send announces four or five times on its own.
+   * >
+   * > Measured on the trace: `/conversations`, `/notifications/badge` and `/polls/:id` all fired
+   * > twice within 130ms of each other, from three different screens, because connecting and
+   * > then catching up announced twice in a row.
+   *
+   * Leading edge, so the FIRST change is still instant: a message arriving must appear as it
+   * arrives, and a notification that waits is a chat that feels slow. Everything inside the
+   * window after it is folded into one trailing announcement, which is what collapses a burst.
+   *
+   * Deliberately wrapping the client's `onChange` rather than `bump` itself. Signing in, signing
+   * out and a rejected socket also announce, and those are single deliberate lifecycle events
+   * rather than a stream - delaying one would mean an app that has signed out still drawing the
+   * previous member's screens.
+   */
+  const announce = useCallback(() => {
+    if (settleTimer.current !== null) {
+      settlePending.current = true;
+      return;
+    }
+
+    bump();
+    settleTimer.current = setTimeout(() => {
+      settleTimer.current = null;
+      if (settlePending.current) {
+        settlePending.current = false;
+        bump();
+      }
+    }, 400);
+  }, [bump]);
+
+  // A pending trailing announcement must not outlive the provider, or it lands on an unmounted
+  // tree - the "setState on an unmounted component" warning, and a timer nothing will clear.
+  useEffect(
+    () => () => {
+      if (settleTimer.current !== null) clearTimeout(settleTimer.current);
+    },
+    [],
+  );
+
   const start = useCallback(
     async (token: string, id: string) => {
       const { store, persistent } = await openMessageStore();
@@ -113,7 +171,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         createSocket: (url) => new WebSocket(url) as unknown as SocketLike,
         randomUuid: randomUUID,
         store,
-        onChange: bump,
+        // Coalesced. See `announce`: eight screens re-fetch on `revision`, and the store
+        // announces several times per send.
+        onChange: announce,
         log: (message, extra) => console.log('[chat]', message, extra ?? ''),
       });
 
@@ -174,7 +234,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setAuthState('signed-in');
       bump();
     },
-    [bump],
+    [bump, announce],
   );
 
   // Restore a stored session on launch.

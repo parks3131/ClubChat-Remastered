@@ -952,10 +952,18 @@ export class ChatClient {
    * could permanently miss messages with no error and no indication.
    */
   async syncAll(): Promise<void> {
-    const targets = this.channels.length > 0 ? this.channels.map((c) => c.id) : [];
-    for (const channelId of targets) {
-      await this.syncChannel(channelId, await this.store.localMaxSeq(channelId));
+    /*
+     * The local maxima are read one at a time on purpose.
+     *
+     * They are store reads rather than requests, so there is nothing to win by racing them, and
+     * `Promise.all` over the message store would be a new source of concurrent access to the
+     * thing this class is careful to serialize everywhere else.
+     */
+    const targets: Array<{ channelId: string; from: number }> = [];
+    for (const channel of this.channels) {
+      targets.push({ channelId: channel.id, from: await this.store.localMaxSeq(channel.id) });
     }
+    await this.syncChannels(targets);
   }
 
   /**
@@ -988,80 +996,144 @@ export class ChatClient {
    * would use, and it costs nothing to keep the request honest for both.
    */
   async syncChannel(channelId: string, sinceSeq: number): Promise<void> {
-    this.syncCount += 1;
+    await this.syncChannels([{ channelId, from: sinceSeq }]);
+  }
+
+  /**
+   * Reconcile a SET of channels, in as few requests as the server will allow.
+   *
+   * > **`GET /sync` has always taken a list, and this walked it one entry at a time.** The route
+   * > reads `channels[]` as an array, authorizes each entry independently and refuses only at
+   * > 201 of them ([`routes/inbox.ts`](../../server/src/api/routes/inbox.ts)); the client sent
+   * > one entry per request and awaited each before starting the next. A member of 23 channels
+   * > therefore paid 23 sequential round trips every connect, foreground and reconnect - a
+   * > quarter of a second on a laptop, and the reason an app resumed on cellular sits there
+   * > catching up. Found by watching the trace rather than by reading this file, which had
+   * > looked correct to several readings.
+   *
+   * The paging loop survives, moved up a level: a round asks about every channel that still has
+   * more, so the number of requests is now the DEEPEST channel's page count rather than the sum
+   * of everybody's. In the ordinary case - a client that has been away a moment - that is one.
+   *
+   * Ordering is unchanged in the way that matters: writes still go through the per-channel queue
+   * a live frame uses, so a sync and an arriving message cannot open two transactions on the
+   * same channel. Channels are reconciled concurrently with respect to each OTHER, which they
+   * already were in every sense the store cares about.
+   */
+  private async syncChannels(targets: ReadonlyArray<{ channelId: string; from: number }>): Promise<void> {
+    if (targets.length === 0) return;
+
     /*
-     * **Never allowed to fail the sync it runs in front of.**
+     * Gap repair first, and it is not what made this slow.
      *
-     * Repairing a hole is a repair, not a precondition. Letting it throw here would mean a
-     * failing repair - an expired token, a 500, one bad page - took ordinary reconciliation down
-     * with it, turning "some old messages are missing" into "no new messages arrive at all".
-     * That is a strictly worse failure than the one this exists to fix.
+     * `findGaps` reads the local store; a request only leaves for a channel that actually has a
+     * hole, which is the rare case. Kept per channel because a repair pages on `seq` from below
+     * its own hole - a cursor no other channel shares - and kept in front of the sync, and
+     * never allowed to fail it. A repair is a repair, not a precondition.
      */
-    try {
-      await this.repairGaps(channelId);
-    } catch (error) {
-      this.log('gap repair failed, continuing with the ordinary sync', {
-        channelId,
-        error: String(error),
+    for (const target of targets) {
+      try {
+        await this.repairGaps(target.channelId);
+      } catch (error) {
+        this.log('gap repair failed, continuing with the ordinary sync', {
+          channelId: target.channelId,
+          error: String(error),
+        });
+      }
+    }
+
+    /**
+     * Where each channel has reached. `from` is its ORIGINAL local max, kept for the
+     * pre-revision server guard below, which asks whether the seq cursor moved at all.
+     */
+    const cursors = new Map<string, { since: number; mark: number; from: number }>();
+    for (const target of targets) {
+      cursors.set(target.channelId, {
+        since: target.from,
+        mark: await this.store.syncMark(target.channelId),
+        from: target.from,
       });
     }
-    let since = sinceSeq;
-    let mark = await this.store.syncMark(channelId);
 
-    // Keep pulling while the server says there is more, so a client that has been away
-    // long enough to exceed one page does not stop half way and believe it is caught up.
-    for (;;) {
-      const url = `${this.opts.apiUrl}/sync?channels[]=${syncEntry(channelId, since, mark)}`;
-      const response = await this.fetch(url, {
-        headers: { authorization: `Bearer ${this.opts.token}` },
-      });
-      if (!response.ok) throw new Error(`sync failed: ${response.status}`);
+    /*
+     * How many channels ride in one request.
+     *
+     * The route refuses 201 with `too_many_channels`, so this sits well under its ceiling
+     * rather than on it. The number that matters is that it is not one.
+     */
+    const BATCH = 100;
 
-      const body = (await response.json()) as {
-        channels: Array<{
-          channelId: string;
-          messages: MessageEnvelope[];
-          hasMore: boolean;
-          maxRev?: number;
-        }>;
-      };
-      const result = body.channels.find((entry) => entry.channelId === channelId);
-      if (!result || result.messages.length === 0) return;
+    let pending = targets.map((target) => target.channelId);
 
-      /*
-       * Through the SAME per-channel queue a live frame uses.
-       *
-       * This write used to bypass it entirely, so a sync and an arriving message could open two
-       * SQLite transactions at once - "cannot start a transaction within a transaction", which
-       * kills the insert and loses whichever message was in flight. Failure mode 3 said "apply
-       * frames one at a time per channel"; the sync path was never counted as a frame, and it
-       * writes to the same table.
-       */
-      await this.serialize(channelId, () => this.store.upsert(result.messages));
+    while (pending.length > 0) {
+      const next: string[] = [];
 
-      /*
-       * Advance BOTH marks, and page on the revision.
-       *
-       * The pages arrive ordered by `rev`, not by `seq` - a message changed today sorts after one
-       * sent an hour ago - so taking the last message's seq as the next cursor would page
-       * incoherently. The revision is the cursor; `since` is kept only for the pre-revision
-       * server, where the ordering is by seq and this is still the right value.
-       */
-      if (result.maxRev !== undefined && result.maxRev > mark) {
-        mark = result.maxRev;
-        await this.store.setSyncMark(channelId, mark);
+      for (let start = 0; start < pending.length; start += BATCH) {
+        const chunk = pending.slice(start, start + BATCH);
+        this.syncCount += 1;
+
+        const query = chunk
+          .map((channelId) => {
+            const cursor = cursors.get(channelId)!;
+            return `channels[]=${syncEntry(channelId, cursor.since, cursor.mark)}`;
+          })
+          .join('&');
+
+        const response = await this.fetch(`${this.opts.apiUrl}/sync?${query}`, {
+          headers: { authorization: `Bearer ${this.opts.token}` },
+        });
+        if (!response.ok) throw new Error(`sync failed: ${response.status}`);
+
+        const body = (await response.json()) as {
+          channels: Array<{
+            channelId: string;
+            messages: MessageEnvelope[];
+            hasMore: boolean;
+            maxRev?: number;
+          }>;
+        };
+
+        for (const result of body.channels) {
+          const cursor = cursors.get(result.channelId);
+          // A channel we did not ask about, or one with nothing new. An id the caller may no
+          // longer read is OMITTED by the server rather than refused, and lands here as an
+          // absence - which is the same "done" as an empty page, deliberately.
+          if (!cursor || result.messages.length === 0) continue;
+
+          // Through the SAME per-channel queue a live frame uses. This write used to bypass it
+          // entirely, so a sync and an arriving message could open two SQLite transactions at
+          // once - which kills the insert and loses whichever message was in flight.
+          await this.serialize(result.channelId, () => this.store.upsert(result.messages));
+
+          /*
+           * Advance BOTH marks, and page on the revision.
+           *
+           * The pages arrive ordered by `rev`, not by `seq` - a message changed today sorts
+           * after one sent an hour ago - so taking the last message's seq as the next cursor
+           * would page incoherently. The revision is the cursor; `since` is kept only for the
+           * pre-revision server, where the ordering is by seq and this is still right.
+           */
+          if (result.maxRev !== undefined && result.maxRev > cursor.mark) {
+            cursor.mark = result.maxRev;
+            await this.store.setSyncMark(result.channelId, cursor.mark);
+          }
+          cursor.since = Math.max(cursor.since, ...result.messages.map((message) => message.seq));
+
+          if (!result.hasMore) continue;
+
+          /*
+           * A server with no revisions returns no `maxRev`, so the mark never moves - and paging
+           * on `since` alone would loop forever if it also never moved. Stopping is correct
+           * there: the seq cursor did advance if there was anything new, and if it did not
+           * there is nothing left to fetch.
+           */
+          if (result.maxRev === undefined && cursor.since === cursor.from) continue;
+
+          next.push(result.channelId);
+        }
       }
-      since = Math.max(since, ...result.messages.map((message) => message.seq));
 
-      if (!result.hasMore) return;
-
-      /*
-       * A server with no revisions returns no `maxRev`, so the mark never moves - and paging on
-       * `since` alone would loop forever if it also never moved. Stopping is correct there: the
-       * seq cursor did advance if there was anything new, and if it did not there is nothing
-       * left to fetch.
-       */
-      if (result.maxRev === undefined && since === sinceSeq) return;
+      pending = next;
     }
   }
 

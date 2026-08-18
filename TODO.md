@@ -72,6 +72,15 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
 
 ## Known broken, or quietly wrong
 
+- [ ] **`BadgedIcon` renders twice, and nobody knows why.** Found 2026-08-18 on the dev trace:
+      `GET /notifications/badge` arrived in pairs 20 to 30ms apart, repeating at exactly 60.000s
+      on an idle app - two timers, not one firing twice. There is one call site
+      (`app/(tabs)/_layout.tsx`, the `tabBarIcon` slot) and no StrictMode in this build, so
+      something renders that icon twice. **The cost is gone**: `use-badge.ts` now holds the count,
+      the timer and the request at module scope, so any number of copies share one of each. The
+      duplicate itself is not explained, and it is worth explaining rather than leaving - whatever
+      renders that icon twice is presumably rendering its siblings twice too, and the next
+      component to own a timer will not have been written defensively.
 - [ ] **The README's weekly-meetups screenshot predates the rename.** `docs/screenshots/
       ios-weekly-routine.jpg` shows the activity-type UI. The caption says so, which is honest but
       not a fix - it wants a new capture once the screen has been run on a device.
