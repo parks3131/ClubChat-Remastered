@@ -114,8 +114,13 @@ export default function ClubHubScreen() {
    * The session's `channels` is filled once at sign-in and never replaced, so badging from it
    * showed the counts as they stood when the app started - which is how this screen came to
    * disagree with the chat list and how "it says nine and I cannot find them" happened.
+   *
+   * Scoped to THIS club, and `clubId` is in the dependency list for that reason rather than for
+   * tidiness: the read used to be global, so every hub got the same answer and walking from one
+   * club to another needed no re-read. A scoped read that kept the old `[revision]` list would
+   * show the second club the first club's badges until something else happened to bump it.
    */
-  const states = useLoad(() => channelApi.states(), [revision]);
+  const states = useLoad(() => channelApi.states(clubId), [clubId, revision]);
   // Quiet, and NOT on first open: `useLoad` has already read on mount, and firing here too made
   // this screen ask for `/channels` twice to open. Keyed by club, so walking from one hub
   // straight into another still counts as a first open for the second.

@@ -31,9 +31,34 @@ import { editMessage, setPinned, softDeleteMessage } from '../../domain/send-mes
 import { authorizeChannel, type AppDeps } from '../plumbing.ts';
 
 export function registerChatRoutes(app: FastifyInstance, deps: AppDeps): void {
-  app.get('/channels', async (request) => ({
-    channels: await listAccessibleChannels(deps.db, request.userId!),
-  }));
+  const ChannelStatesQuery = z.object({ clubId: Uuid.optional() });
+
+  /**
+   * Per-channel sync state: ids, scopes, and the two numbers unread is computed from.
+   *
+   * `?clubId=` narrows to one club. The club hub is the only caller and badges one club's
+   * rows, so unfiltered it was sent every club's channels plus every DM and discarded them:
+   * 23 rows to draw 5, measured on the trace 2026-08-19. The cost grows with how many clubs
+   * somebody joins and how many people they talk to, which is the wrong way round.
+   *
+   * **Narrowing adds no authorization surface, and that is why it is a query rather than a
+   * club-scoped route.** `accessibleChannelPredicate` has already decided what this caller may
+   * see; a `club_id` filter can only ever return a subset of that, never a row outside it. So
+   * there is nothing here to re-check, and no second copy of the access join to drift - which
+   * is the failure this file's header names.
+   *
+   * A malformed `clubId` is a 400 rather than an ignored parameter, for the reason the batch
+   * routes give: silently dropping it would answer with every channel the caller has and look
+   * like a success, hiding a client bug behind the fullest possible response.
+   */
+  app.get('/channels', async (request, reply) => {
+    const query = ChannelStatesQuery.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+
+    return {
+      channels: await listAccessibleChannels(deps.db, request.userId!, query.data.clubId),
+    };
+  });
 
   /**
    * The unified chat list: every club chat and every DM, newest activity first.

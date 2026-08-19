@@ -211,8 +211,27 @@ export async function getChannelRef(db: Db, channelId: string): Promise<ChannelR
  * One query, not one per channel, and the access predicate comes from `channel-access.ts`
  * rather than being written here. It used to be written here, and it was one of the four
  * hand-written copies that all missed the race scope.
+ *
+ * ## Why `clubId` is optional rather than required
+ *
+ * > **The two callers want opposite things, and only one of them is a screen.** The gateway
+ * > asks on `auth.ok` and needs EVERY channel, because a list with one club missing is a gap
+ * > the client cannot know it has. The club hub asks to badge one club's rows and threw the
+ * > rest away: a member of eight clubs with eight DMs was sent 23 rows to draw 5.
+ *
+ * So the filter is opt-in. Passing nothing keeps the handshake's meaning exactly as it was,
+ * which is the half that must not become "every channel, unless a caller forgets".
+ *
+ * DMs have no `club_id`, so a filtered read drops them by construction rather than by a
+ * second predicate saying so - which is right, because a club hub has nowhere to draw one.
+ *
+ * @param clubId narrow to one club's channels. Omit for every channel the user can reach.
  */
-export async function listAccessibleChannels(db: Db, userId: string): Promise<ChannelState[]> {
+export async function listAccessibleChannels(
+  db: Db,
+  userId: string,
+  clubId?: string,
+): Promise<ChannelState[]> {
   const result = await db.execute<{
     id: string;
     scope: string;
@@ -232,6 +251,7 @@ export async function listAccessibleChannels(db: Db, userId: string): Promise<Ch
              ON rc.channel_id = c.id
             AND rc.user_id = ${userId}
      WHERE ${accessibleChannelPredicate(userId)}
+       ${clubId === undefined ? sql`` : sql`AND c.club_id = ${clubId}`}
      ORDER BY c.created_at
   `);
 

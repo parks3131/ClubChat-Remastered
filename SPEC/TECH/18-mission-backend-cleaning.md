@@ -1,9 +1,11 @@
 # Mission: backend cleaning
 
-**A standing programme, not a phase.** Everything here was found in one day, 2026-08-18, by
-watching the app talk to its server while somebody used it. None of it was visible any other
-way: every request succeeded, every test passed, no error was ever logged, and nothing crashed.
-The app was simply asking for far more than it needed.
+**A standing programme, not a phase.** 2.1 to 2.10 were found in one day, 2026-08-18, by watching
+the app talk to its server while somebody used it. 2.11 came the next morning from the same method
+against a screen that had already been looked at twice - which is the point of calling this a
+programme rather than a sweep. None of it was visible any other way: every request succeeded, every
+test passed, no error was ever logged, and nothing crashed. The app was simply asking for far more
+than it needed.
 
 > **The one idea.** A wasted request comes back with the right answer. That is what makes this
 > class of defect invisible, and it is why it survived from the day each line was written until
@@ -256,6 +258,52 @@ created somewhere else.
 
 **Status: done.** `app/(tabs)/calendar.tsx`, `app/(tabs)/(main)/clubs/[clubId]/events.tsx`.
 
+### 2.11 A club's hub asked about every club, and every DM, to badge one club
+
+**Found 2026-08-19, on a screen 2.5 had already been through.** `GET /channels` is the per-channel
+sync state the hub badges from, and it took no argument: it answered with every channel the caller
+can reach anywhere. The club hub then discarded all but the one club it was drawing.
+
+**Measured.** Opening Binghamton: **23 rows returned, 5 used** - 4,302 bytes to need 956, so 78%
+of the response was thrown away. Eight of the discarded rows were DMs, which that screen has
+nowhere to draw at all.
+
+**Why it is worse than 78%.** The waste is not a constant. It is `clubs joined + people talked to`,
+paid on every hub open, while the useful part stays at "this club's channels". A member of ten
+clubs with thirty DMs is sent about seventy rows to draw four. **The app got slower the better it
+did**, which is the same shape as 2.1 and is the tell for this whole class.
+
+**The fix.** `GET /channels?clubId=`, and the hub passes its own club.
+
+**Why the parameter is optional, which is the part worth keeping.** The gateway shares this read
+(`gateway/server.ts:330`) to build `auth.ok`, and that caller needs **every** channel: a list with
+one club missing is a gap the client cannot know it has. So the filter is opt-in, and unfiltered
+still means what it always meant. A required parameter would have made the handshake's correctness
+depend on every future caller remembering to ask for everything.
+
+**Narrowing adds no authorization surface, and that is why it is a query rather than a new
+club-scoped route.** `accessibleChannelPredicate` has already decided what the caller may see; a
+`club_id` filter can only return a subset of that. There is nothing to re-check and no second copy
+of the access join to drift - which is the failure pitfall 9 names and the reason 2.7's batch
+routes loop the single-item authorizer instead of writing an `IN` clause.
+
+A malformed `clubId` is a **400**, on 2.7's rule: silently ignoring it would answer with every
+channel the caller has and look like a success, hiding a client bug behind the fullest possible
+response.
+
+**One cost, recorded rather than buried.** The URL now differs per club, so the preflight cache
+from 2.2 holds one entry per club instead of one in total - eight clubs means eight `204`s every
+two hours rather than one. That is the same mechanism as the note under 2.2, running the other way,
+and 13KB saved per open is worth seven empty round trips per two hours.
+
+**Measured after, on the physical iPhone.** 5 rows, 956 bytes, scopes exactly
+`club, eboard, race, race, race`. Verified against the running server that the scoped rows are
+identical to the global read's rows for that club - the same `lastSeq` and `lastReadSeq` - so no
+badge can change, which was the only real risk. An outsider passing a club id gets zero rows.
+
+**Status: done.** `domain/reads.ts`, `routes/chat.ts`, `apps/mobile/src/api.ts`,
+`clubs/[clubId]/index.tsx`.
+
 ---
 
 ## 3. Still open
@@ -311,6 +359,20 @@ counts. The first four cannot be changed by a message arriving. With 2.3 in plac
 per burst rather than five times, so the cost is much smaller - but it is not zero, and the
 question of whether a club rename should reach a mounted screen live is a product one.
 
+**Measured 2026-08-19, and the trigger is not what this entry assumed.** Thirteen seconds of
+ordinary use on the iPhone, with the hub mounted behind the chat: `/channels` read **6 times**,
+`/clubs/:id` **4 times**, `/clubs/:id/races` **4 times**. The driver is not messages arriving. It
+is **`msg.read` frames** - somebody else's read cursor moving, which the session bumps `revision`
+for like everything else.
+
+That reframes the row above. A read receipt genuinely changes an unread count, so `/channels` on
+that screen is defensible. It cannot change a club's **name** or its **race list**, and those two
+are re-read at the same rate by the same signal. This is 2.4 exactly, on a different screen, and
+2.4's fix applies unchanged: read on arrival, on return, and after an action that changes it.
+
+Confirmed pre-existing rather than introduced by 2.11 - the 2026-08-18 trace shows the same pairs
+while `/channels` was still unscoped, so all three reads have always moved together.
+
 ### 3.5 What the server does per request has never been measured
 
 Everything above is about **what the client asks for**. Nothing has ever looked at what the server
@@ -322,10 +384,15 @@ The dev trace already knows the wall time of every request (nothing measured has
 there is no fire), but a per-request query count would be the same trick applied to the layer
 below, and it is the natural next tool to build.
 
-### 3.6 The iPhone has never been measured
+### 3.6 The iPhone has barely been measured
 
-Every number in this document is the web client. The phone runs the same code, so the fixes apply,
-but nothing has been verified there - and the phone is where the round trips actually hurt.
+Every number in 2.1 to 2.10 is the web client. The phone runs the same code, so the fixes apply,
+but almost nothing has been verified there - and the phone is where the round trips actually hurt.
+
+**First device numbers came 2026-08-19** and are in 2.11 and 3.4: the scoped hub read confirmed at
+5 rows, and the read-receipt churn found there rather than on the web. That is one screen. The
+remaining surfaces are unmeasured on a device, and the phone has already produced one finding the
+web session did not, which is the argument for doing the rest there.
 
 ---
 

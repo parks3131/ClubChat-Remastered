@@ -116,7 +116,10 @@ DELETE /me                                   ← anonymize + block future sign-i
 GET    /conversations                        ← the chat list: club chats + DMs, newest first
                                                a club row's unread covers EVERY channel of that
                                                club the caller can reach, not the main chat alone
-GET    /channels                             ← per-channel sync state; what the hub badges from
+GET    /channels?clubId={id}                 ← per-channel sync state; what the hub badges from.
+                                               `clubId` scopes to one club and is what a hub
+                                               should send; omitted means EVERY channel, which
+                                               is what `auth.ok` needs. A malformed id is a 400
 GET    /sync?channels[]={id}:{since_seq}     ← the reconnect / foreground path. The entry is
                                                NEVER percent-encoded by the client, and an entry
                                                that does not parse is a 400 - see below

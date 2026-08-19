@@ -959,8 +959,12 @@ export const channelApi = {
    * A LIVE read. The session's own copy is filled at sign-in and never replaced, so a screen
    * badging from it shows the counts as they stood when the app started - which is exactly how
    * the club hub came to disagree with the chat list.
+   *
+   * **Pass `clubId` unless you genuinely want every channel.** Unscoped, this answers with every
+   * club's channels and every DM: measured at 23 rows to badge a hub that draws 5, and it grows
+   * with clubs joined plus people talked to. A caller that wants one club's badges should say so.
    */
-  states: () => apiFetch<{ channels: ChannelState[] }>('/channels'),
+  states: (clubId?: string) => apiFetch<{ channels: ChannelState[] }>(`/channels${query({ clubId })}`),
 
   pin: (channelId: string, pinned: boolean) =>
     apiFetch<{ pinned: boolean }>(`/channels/${channelId}/pin`, {
