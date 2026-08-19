@@ -66,20 +66,14 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       traffic in a measured window. `GET /media/urls?ids=` took it from 1.15 requests per picture
       to 0.42, verified by scrolling a picture-heavy chat on the phone.
 
-- [ ] **The batch routes are N+1 underneath, and `GET /polls?ids=` is `3 + 5n` queries.**
-      Measured 2026-08-19 with the new counter: 1 id costs 8 round trips, 8 ids cost 43. The
-      conversation measured back in 2.7 held **26 poll cards** - one request now, and **133
-      statements** to answer it. Nothing is slow (12ms locally, because the statements are
-      trivial), and that is the point: it is invisible on the wire and it grows with what a
-      conversation holds.
-
-      The shape of the fix is known and written down in
-      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md) 3.5: four of `readPoll`'s five
-      statements are `WHERE poll_id = ?` and want to be `= ANY(?)` gathered once, **with
-      `canAccessPoll` still called once per id** so 2.7's rule survives. It is a domain-layer
-      change with an authorization rule in the middle, so it wants its own pass with
-      `batch-reads.test.ts` as the gate. `GET /media/urls?ids=` is the same shape and has not
-      been measured.
+- [ ] **`GET /media/urls?ids=` is N+1 underneath.** The poll route was fixed on 2026-08-19
+      (`3 + 5n` round trips became a flat 7, see
+      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md) 2.16); the picture route added the
+      same day has the same shape and has **not been measured live**. By inspection
+      `resolveMediaRedirect` runs two statements per id, so a gallery of 34 pictures is about 68
+      round trips inside one request. Same fix: gather with `= ANY(...)`, keep the per-id access
+      check on the ref that read already loads. The query counter and the regression guard in
+      `batch-reads.test.ts` are both already there to measure it.
 
 - [ ] **Recurrence** is the next real feature, and is deferred rather than pending - see below.
       Nothing else in Weekly Meetups is outstanding: Nudge shipped and was verified on a device on

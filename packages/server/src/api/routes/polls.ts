@@ -21,6 +21,7 @@ import {
   deletePoll,
   listPolls,
   readPoll,
+  readPolls,
   resolvePollScope,
   setPollClosed,
   toggleVote,
@@ -122,7 +123,7 @@ export function registerPollRoutes(app: FastifyInstance, deps: AppDeps): void {
    * > way to ask for more than one, so opening a club chat cost 36 requests before it could draw
    * > anything. Measured on the dev trace, 2026-08-18.
    *
-   * **Authorization is `readPoll`, once per id, exactly as above.** Not a batched query with its
+   * **Authorization is `canAccessPoll`, once per id, exactly as above.** Not a batched query with its
    * own predicate: the private-poll rules, the voter gating and the own-vote rule all live inside
    * that function, and a second implementation of them is the row-level-policy mistake this whole
    * architecture exists to avoid. The saving here is network round trips, which is what actually
@@ -136,12 +137,15 @@ export function registerPollRoutes(app: FastifyInstance, deps: AppDeps): void {
     const parsed = parseIdList((request.query as { ids?: unknown }).ids);
     if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
 
-    const polls = [];
-    for (const id of parsed.ids) {
-      const result = await readPoll(deps.db, request.access!, id);
-      if (result.ok) polls.push(result.poll);
-    }
-    return { polls };
+    /*
+     * `readPolls`, which authorizes each id and fetches the data once.
+     *
+     * This used to loop `readPoll` here, which was right about authorization and cost `3 + 5n`
+     * database round trips - 133 statements for the 26-card conversation this route was built
+     * for. The predicate still runs per id inside `readPolls`; only the fetching is shared.
+     * TECH/18 3.5.
+     */
+    return { polls: await readPolls(deps.db, request.access!, parsed.ids) };
   });
 
   /**

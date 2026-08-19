@@ -26,6 +26,8 @@ import { clubMemberships, mediaObjects } from '../db/schema.ts';
 import { FakeMediaStore } from '../media/store.ts';
 import { silentMonitor } from '../monitoring.ts';
 import { MAX_BATCH_IDS } from '../api/plumbing.ts';
+import { instrumentPool } from '../dev/queries.ts';
+import type { TraceEvent, TraceInput } from '../dev/trace.ts';
 import { allowAll } from './fake-limiter.ts';
 import { startTestDb, type TestDb } from './harness.ts';
 
@@ -34,6 +36,14 @@ let app: FastifyInstance;
 let auth: Auth;
 /** Held rather than inlined, so the media helper below can stand in for the client's PUT. */
 let store: FakeMediaStore;
+/**
+ * Every traced request, so a test can read the query count the real dashboard shows.
+ *
+ * A fake tracer rather than a spy on the pool: this is the number production actually reports,
+ * arriving by the path production uses, so a guard written against it cannot pass while the
+ * thing a person looks at is wrong.
+ */
+let traced: TraceEvent[];
 
 const config = {
   LOG_LEVEL: 'error',
@@ -145,6 +155,8 @@ beforeAll(async () => {
     baseURL: config.BETTER_AUTH_URL,
   });
   store = new FakeMediaStore();
+  traced = [];
+  instrumentPool(h.pool);
   app = buildApp({
     db: h.db,
     auth,
@@ -152,6 +164,7 @@ beforeAll(async () => {
     mediaStore: store,
     monitor: silentMonitor(),
     limiter: allowAll(),
+    tracer: { emit: (event: TraceInput) => traced.push(event as TraceEvent) },
   });
   await app.ready();
 }, 120_000);
@@ -398,5 +411,68 @@ describe('GET /media/urls?ids=', () => {
     const batch = await as(owner, 'GET', '/media/urls?ids=not-a-uuid');
     expect(batch.status).toBe(400);
     expect(batch.body.error).toBe('bad_id');
+  });
+});
+
+/**
+ * The cost of a batch read BELOW the wire.
+ *
+ * > **`GET /polls?ids=` used to be `3 + 5n` database round trips.** The route looped `readPoll`
+ * > once per id, which was right about authorization and wrong about everything else: the
+ * > 26-card conversation these routes were built for turned one tidy 12ms request into 133
+ * > statements. Nothing was slow and nothing was incorrect, so only a query counter could see
+ * > it - TECH/18 2.15 built one, 3.5 recorded the finding, and this locks the fix down.
+ *
+ * Asserted as "the same for 8 as for 1" rather than as a fixed number, so adding a column or a
+ * join to `readPolls` does not fail this - only reintroducing the per-id loop does.
+ */
+describe('a batch read costs the same however many ids it is given', () => {
+  const queriesFor = (): number => {
+    const last = [...traced].reverse().find((e) => e.kind === 'http' && e.route === '/polls');
+    if (!last || last.kind !== 'http' || last.queries === undefined) {
+      throw new Error('no traced /polls request carried a query count');
+    }
+    return last.queries;
+  };
+
+  it('runs no more statements for eight polls than for one', async () => {
+    const owner = await signUp('BatchQueryCount');
+    const { clubId } = await createClubAs(owner);
+    const ids: string[] = [];
+    for (let i = 0; i < 8; i += 1) ids.push(await makePoll(owner, clubId));
+
+    traced.length = 0;
+    expect((await as(owner, 'GET', `/polls?ids=${ids[0]}`)).status).toBe(200);
+    const forOne = queriesFor();
+
+    traced.length = 0;
+    const eight = await as(owner, 'GET', `/polls?ids=${ids.join(',')}`);
+    expect(eight.status).toBe(200);
+    expect(eight.body.polls).toHaveLength(8);
+    const forEight = queriesFor();
+
+    expect(forEight).toBe(forOne);
+  });
+
+  it('reads one poll in the same number of statements through either route', async () => {
+    const owner = await signUp('BatchQuerySingle');
+    const { clubId } = await createClubAs(owner);
+    const only = await makePoll(owner, clubId);
+
+    traced.length = 0;
+    await as(owner, 'GET', `/polls?ids=${only}`);
+    const batch = queriesFor();
+
+    traced.length = 0;
+    await as(owner, 'GET', `/polls/${only}`);
+    const single = [...traced]
+      .reverse()
+      .find((e) => e.kind === 'http' && e.route === '/polls/:id');
+    if (!single || single.kind !== 'http' || single.queries === undefined) {
+      throw new Error('no traced single read carried a query count');
+    }
+
+    // `readPoll` delegates to `readPolls`, so the two cannot drift in cost either.
+    expect(single.queries).toBe(batch);
   });
 });

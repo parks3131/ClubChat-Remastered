@@ -466,6 +466,45 @@ like the tracer, so a production boot and every test get the plain pool.
 **Status: done.** `dev/queries.ts`, `dev/queries.test.ts`, `api/app.ts`, `api/main.ts`,
 `dev/trace.ts`, `dev/dashboard.html`.
 
+### 2.16 The batch poll read was N+1 underneath, and 2.15 found it the day it existed
+
+**Predicted, measured, fixed.** `GET /polls?ids=` looped `readPoll` once per id. That was right
+about authorization and wrong about everything else: the chat screen from 2.7 holds **26 poll
+cards**, so the request that replaced 26 requests ran **133 statements** to answer.
+
+**Measured before.** `3 + 5n` round trips - 8 for one poll, 43 for eight.
+
+| ids | before | after |
+|---|---|---|
+| 1 | 8 | **7** |
+| 8 | 43 | **7** |
+| 16 | 83 | **7** |
+
+**Flat.** And the single route dropped from 8 to 7 with it, because `readPoll` had been fetching
+the same poll row **twice** - once through `pollRef` for the access check, then again for its
+contents. Nobody had counted, so nobody had noticed.
+
+**What was NOT traded, and it is the whole point.** `canAccessPoll` still runs **once per id**.
+It is a pure function over a preloaded context, so per-id authorization never cost anything -
+what cost something was fetching each poll's DATA separately. The refusal now happens before a
+single byte of poll content is fetched, and a race poll is still invisible to a club admin with
+no roster row.
+
+**`readPoll` delegates to `readPolls`** rather than keeping its own body, so the single and batch
+routes cannot answer differently. That is the failure `batch-reads.test.ts` exists to catch,
+removed by construction instead of asserted.
+
+**Voter lists are fetched only for the polls whose voters this caller may see**, rather than
+fetched and then dropped.
+
+**The guard.** Two tests assert the batch costs the same for eight ids as for one, and that a
+single read costs the same either way - read from the **traced query count**, the number the
+dashboard shows, arriving by the path production uses. Written as "same as one" rather than a
+fixed number, so adding a column does not fail it and only the per-id loop does. Proved by
+putting the loop back: **35 against 7**, and the test failed.
+
+**Status: done.** `domain/polls.ts`, `routes/polls.ts`, `test/batch-reads.test.ts`.
+
 ---
 
 ## 3. Still open
@@ -510,41 +549,15 @@ One number worth keeping in view: `/conversations` was measured at **6 reads for
 sent** on 2026-08-19. That is correct in kind and probably not in quantity, and it is the 2.3
 coalescing window rather than this entry.
 
-### 3.5 The batch routes are N+1 one layer down, which is what 2.15 was built to check
+### 3.5 `GET /media/urls?ids=` is still N+1 underneath
 
-**Predicted, then measured, on the day the tool existed.** The batch routes deliberately loop
-their single-item authorizer once per id - `readPoll` per poll, `resolveMediaRedirect` per
-picture - because a second copy of the access rule is the one that forgets that a race poll is
-invisible to a club admin with no roster row. That is right, and it is exactly the shape that
-hides an N+1 beneath it.
+2.16 fixed the poll route; the picture route added the same day has the same shape and has not
+been measured live. By inspection `resolveMediaRedirect` runs **two statements per id** - the
+media row, then `getChannelRef` for the channel that owns it - so a gallery of 34 pictures is
+about 68 round trips inside one request. Half the severity polls had, and the same fix: gather
+the rows with `= ANY(...)`, keep the per-id access check on the ref that read already loads.
 
-`GET /polls?ids=` costs **`3 + 5n` database round trips**:
-
-| ids | queries |
-|---|---|
-| 1 | 8 |
-| 2 | 13 |
-| 4 | 23 |
-| 8 | 43 |
-
-The conversation measured in 2.7 held **26 poll cards**. That screen now makes one request
-instead of 26, and that request runs **133 statements**. The client-side win in 2.7 was real and
-is not undone by this; what changed is that the cost moved somewhere nobody was looking.
-
-**Nothing is on fire.** The slowest of those requests was 12ms, because the statements are
-trivial and the round trip is local. On a managed database across a network boundary it is 133
-of them, and it grows with how much a conversation contains.
-
-**The tension is the point, and it has a known answer.** `readPoll` runs five statements: the
-ref, the row, its options, the caller's votes, and the voter list. Four of the five are
-`WHERE poll_id = ?` and would be `WHERE poll_id = ANY(?)` for the whole batch, gathered once and
-handed to a per-id assembler - **with `canAccessPoll` still called once per id, on the ref it
-already loads**. That keeps the property 2.7 exists to protect while paying for the data once.
-
-Not attempted here: this is a domain-layer change with an authorization rule sitting in the
-middle of it, and it wants its own pass with `batch-reads.test.ts` as the gate.
-
-**`GET /media/urls?ids=` has not been measured** and is the same shape by construction.
+The signing itself is not a database cost and does not batch, which is fine - it is local work.
 
 ### 3.6 The iPhone has barely been measured
 

@@ -291,77 +291,179 @@ export type PollView = {
  * unconditional, `voters` is null when the viewer may not see it, and `votedByMe` is computed
  * from the viewer's own rows rather than by scanning a list they may not be allowed to read.
  */
-export async function readPoll(
+/**
+ * Read many polls at once. **The batch route's read, and the single route's too.**
+ *
+ * > **`GET /polls?ids=` used to cost `3 + 5n` database round trips.** The route looped `readPoll`
+ * > once per id - right for authorization, and exactly the shape that hides an N+1. The chat
+ * > screen measured in 2.7 holds 26 poll cards, so one tidy 12ms request ran **133 statements**.
+ * > Invisible on the wire, invisible in `ms`, and found only once `dev/queries.ts` existed to
+ * > count them. See TECH/18 2.15 and 3.5.
+ *
+ * **Authorization is still once per id, and that is the part that must not be traded away.**
+ * `canAccessPoll` is a pure function over a preloaded context, so calling it per poll costs
+ * nothing - what cost something was fetching each poll's DATA separately. The data is now
+ * gathered with `= ANY(...)` and the predicate still runs on every id, so a race poll stays
+ * invisible to a club admin with no roster row.
+ *
+ * Four statements regardless of how many polls are asked for, and three when nobody may see
+ * voters. The old per-poll pair of `pollRef` then a second `SELECT` on the same row is gone
+ * with it - the single read was fetching the same poll twice.
+ *
+ * An id that does not exist, or that this caller may not read, is simply **absent** from the
+ * result. Order follows the ids asked for.
+ */
+export async function readPolls(
   db: Db,
   ctx: AccessContext,
-  pollId: string,
-): Promise<Result<{ poll: PollView }>> {
-  const ref = await pollRef(db, pollId);
-  if (!ref) return { ok: false, code: 'not_found' };
-  // A race poll is invisible to an admin without a roster row, including by direct URL.
-  if (!canAccessPoll(ctx, ref)) return { ok: false, code: 'not_found' };
+  pollIds: string[],
+): Promise<PollView[]> {
+  if (pollIds.length === 0) return [];
 
-  const meta = await db.select().from(polls).where(eq(polls.id, pollId)).limit(1);
-  const poll = meta[0];
-  if (!poll) return { ok: false, code: 'not_found' };
+  const ids = sql`ANY(${sql.param(pollIds)}::uuid[])`;
 
-  const options = await db
-    .select()
-    .from(pollOptions)
-    .where(eq(pollOptions.pollId, pollId))
-    .orderBy(pollOptions.position);
+  const rows = await db.execute<{
+    id: string;
+    club_id: string;
+    scope: string;
+    scope_id: string;
+    creator_id: string;
+    is_private: boolean;
+    allow_multiple: boolean;
+    question: string;
+    closes_at: string | null;
+    closed: boolean;
+  }>(sql`
+    SELECT id, club_id, scope, scope_id, creator_id, is_private, allow_multiple, question,
+           CASE WHEN closes_at IS NULL THEN NULL ELSE ${isoUtc('closes_at')} END AS closes_at,
+           -- Evaluated here, on every read. A passed deadline reads as closed with nobody
+           -- having closed it, which is why no column stores this.
+           (closed_at IS NOT NULL OR (closes_at IS NOT NULL AND closes_at < now())) AS closed
+      FROM polls WHERE id = ${ids}
+  `);
 
-  const myVotes = await db
-    .select({ optionId: pollVotes.optionId })
-    .from(pollVotes)
-    .where(and(eq(pollVotes.pollId, pollId), eq(pollVotes.userId, ctx.userId)));
-  const mine = new Set(myVotes.map((v) => v.optionId));
+  /*
+   * The refusal, once per id, before a single byte of poll DATA is fetched.
+   *
+   * Deliberately a loop over the same predicate the single read called rather than a `WHERE`
+   * clause expressing the same idea: a second copy of this rule is the one that forgets that a
+   * race poll is invisible to a club admin with no roster row.
+   */
+  const visible = new Map<string, { ref: PollRef & { closed: boolean }; row: (typeof rows.rows)[number] }>();
+  for (const row of rows.rows) {
+    const ref = {
+      id: row.id,
+      clubId: row.club_id,
+      scope: row.scope as PollRef['scope'],
+      scopeId: row.scope_id,
+      creatorId: row.creator_id,
+      isPrivate: row.is_private,
+      closed: row.closed,
+    };
+    if (!canAccessPoll(ctx, ref)) continue;
+    visible.set(row.id, { ref, row });
+  }
+  if (visible.size === 0) return [];
 
-  const showVoters = canSeePollVoters(ctx, ref);
-  const voterRows = showVoters
-    ? await db.execute<{
-        option_id: string;
-        user_id: string;
-        name: string;
-        image: string | null;
-      }>(sql`
-        SELECT pv.option_id, pv.user_id, u.full_name AS name, u.image
-          FROM poll_votes pv JOIN users u ON u.id = pv.user_id
-         WHERE pv.poll_id = ${pollId}
-      `)
-    : null;
+  const allowed = sql`ANY(${sql.param([...visible.keys()])}::uuid[])`;
+
+  const optionRows = await db.execute<{
+    id: string;
+    poll_id: string;
+    label: string;
+    position: number;
+    vote_count: number;
+  }>(sql`
+    SELECT id, poll_id, label, position, vote_count
+      FROM poll_options WHERE poll_id = ${allowed}
+     ORDER BY poll_id, position
+  `);
+
+  const myVoteRows = await db.execute<{ option_id: string }>(sql`
+    SELECT option_id FROM poll_votes
+     WHERE poll_id = ${allowed} AND user_id = ${ctx.userId}
+  `);
+  const mine = new Set(myVoteRows.rows.map((v) => v.option_id));
+
+  // Only the polls whose voters this caller may see, so a private poll's voter list is never
+  // fetched at all rather than fetched and then dropped.
+  const showVoters = [...visible.entries()]
+    .filter(([, entry]) => canSeePollVoters(ctx, entry.ref))
+    .map(([id]) => id);
 
   const votersByOption = new Map<
     string,
     Array<{ userId: string; name: string; image: string | null }>
   >();
-  for (const row of voterRows?.rows ?? []) {
-    const list = votersByOption.get(row.option_id) ?? [];
-    list.push({ userId: row.user_id, name: row.name, image: row.image });
-    votersByOption.set(row.option_id, list);
+  if (showVoters.length > 0) {
+    const voterRows = await db.execute<{
+      option_id: string;
+      user_id: string;
+      name: string;
+      image: string | null;
+    }>(sql`
+      SELECT pv.option_id, pv.user_id, u.full_name AS name, u.image
+        FROM poll_votes pv JOIN users u ON u.id = pv.user_id
+       WHERE pv.poll_id = ANY(${sql.param(showVoters)}::uuid[])
+    `);
+    for (const row of voterRows.rows) {
+      const list = votersByOption.get(row.option_id) ?? [];
+      list.push({ userId: row.user_id, name: row.name, image: row.image });
+      votersByOption.set(row.option_id, list);
+    }
   }
 
-  return {
-    ok: true,
-    poll: {
-      id: poll.id,
-      question: poll.question,
-      scope: poll.scope as PollView['scope'],
-      allowMultiple: poll.allowMultiple,
-      isPrivate: poll.isPrivate,
+  const optionsByPoll = new Map<string, (typeof optionRows.rows)[number][]>();
+  for (const option of optionRows.rows) {
+    const list = optionsByPoll.get(option.poll_id) ?? [];
+    list.push(option);
+    optionsByPoll.set(option.poll_id, list);
+  }
+
+  const canSee = new Set(showVoters);
+  const views: PollView[] = [];
+  for (const pollId of pollIds) {
+    const entry = visible.get(pollId);
+    if (!entry) continue;
+    const { row, ref } = entry;
+    const voters = canSee.has(pollId);
+    views.push({
+      id: row.id,
+      question: row.question,
+      scope: row.scope as PollView['scope'],
+      allowMultiple: row.allow_multiple,
+      isPrivate: row.is_private,
       closed: ref.closed,
-      closesAt: poll.closesAt?.toISOString() ?? null,
-      isCreator: poll.creatorId === ctx.userId,
-      options: options.map((option) => ({
+      closesAt: row.closes_at,
+      isCreator: row.creator_id === ctx.userId,
+      options: (optionsByPoll.get(pollId) ?? []).map((option) => ({
         id: option.id,
         label: option.label,
         position: option.position,
-        voteCount: option.voteCount,
+        voteCount: option.vote_count,
         votedByMe: mine.has(option.id),
-        voters: showVoters ? (votersByOption.get(option.id) ?? []) : null,
+        voters: voters ? (votersByOption.get(option.id) ?? []) : null,
       })),
-    },
-  };
+    });
+  }
+  return views;
+}
+
+/**
+ * One poll.
+ *
+ * Delegates to `readPolls` rather than having its own body, so the two routes can never answer
+ * differently - the failure `batch-reads.test.ts` exists to catch, removed by construction
+ * instead of asserted. An absent result means gone OR not ours, exactly as before.
+ */
+export async function readPoll(
+  db: Db,
+  ctx: AccessContext,
+  pollId: string,
+): Promise<Result<{ poll: PollView }>> {
+  const [poll] = await readPolls(db, ctx, [pollId]);
+  if (!poll) return { ok: false, code: 'not_found' };
+  return { ok: true, poll };
 }
 
 /**
