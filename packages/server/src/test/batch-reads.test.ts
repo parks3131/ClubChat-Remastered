@@ -1,5 +1,6 @@
 /**
- * `GET /polls?ids=` and `GET /events?ids=`, the batch reads a chat screen draws its cards from.
+ * `GET /polls?ids=`, `GET /events?ids=` and `GET /media/urls?ids=` - the batch reads a screen
+ * draws itself from.
  *
  * These exist for speed: a club chat holding 26 poll cards and 10 event cards issued 36 requests
  * to draw itself, one per card, because there was no way to ask for more than one. Measured on
@@ -20,7 +21,8 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../api/app.ts';
 import { createAuth, type Auth } from '../auth.ts';
 import type { Config } from '../config.ts';
-import { clubMemberships } from '../db/schema.ts';
+import { eq } from 'drizzle-orm';
+import { clubMemberships, mediaObjects } from '../db/schema.ts';
 import { FakeMediaStore } from '../media/store.ts';
 import { silentMonitor } from '../monitoring.ts';
 import { MAX_BATCH_IDS } from '../api/plumbing.ts';
@@ -30,6 +32,8 @@ import { startTestDb, type TestDb } from './harness.ts';
 let h: TestDb;
 let app: FastifyInstance;
 let auth: Auth;
+/** Held rather than inlined, so the media helper below can stand in for the client's PUT. */
+let store: FakeMediaStore;
 
 const config = {
   LOG_LEVEL: 'error',
@@ -72,12 +76,12 @@ async function as(
   };
 }
 
-async function createClubAs(actor: Actor): Promise<{ clubId: string }> {
+async function createClubAs(actor: Actor): Promise<{ clubId: string; mainChannelId: string }> {
   const created = await as(actor, 'POST', '/clubs', {
     name: `Club ${crypto.randomUUID().slice(0, 6)}`,
   });
   expect(created.status).toBe(201);
-  return { clubId: created.body.clubId };
+  return { clubId: created.body.clubId, mainChannelId: created.body.mainChannelId };
 }
 
 async function join(clubId: string, actor: Actor, role: 'member' | 'admin' = 'member') {
@@ -102,17 +106,50 @@ const makeEvent = async (actor: Actor, clubId: string, title: string): Promise<s
   return created.body.eventId;
 };
 
+/** A 64px image, encoded once. Small enough to be fast, real enough for the pipeline to probe. */
+let encodedJpeg: Buffer | null = null;
+async function jpegBytes(): Promise<Buffer> {
+  if (encodedJpeg) return encodedJpeg;
+  const sharp = (await import('sharp')).default;
+  encodedJpeg = await sharp({ create: { width: 64, height: 64, channels: 3, background: '#3355aa' } })
+    .jpeg()
+    .toBuffer();
+  return encodedJpeg;
+}
+
+/** Upload a photo the way a client does: intent, PUT to storage, complete. */
+async function makePhoto(actor: Actor, channelId: string): Promise<string> {
+  const bytes = await jpegBytes();
+  const intent = await as(actor, 'POST', '/media/upload-intent', {
+    kind: 'photo',
+    mime: 'image/jpeg',
+    bytes: bytes.byteLength,
+    channelId,
+  });
+  expect(intent.status).toBe(201);
+  const mediaId: string = intent.body.mediaId;
+
+  const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, mediaId)).limit(1);
+  // Stands in for the client PUTting straight to object storage.
+  store.simulateUpload(row[0]!.bucket, row[0]!.objectKey, new Uint8Array(bytes), 'image/jpeg');
+
+  const done = await as(actor, 'POST', `/media/${mediaId}/complete`, {});
+  expect(done.status).toBe(200);
+  return mediaId;
+}
+
 beforeAll(async () => {
   h = await startTestDb();
   auth = createAuth(h.db, {
     secret: 'test-secret-not-a-real-one',
     baseURL: config.BETTER_AUTH_URL,
   });
+  store = new FakeMediaStore();
   app = buildApp({
     db: h.db,
     auth,
     config,
-    mediaStore: new FakeMediaStore(),
+    mediaStore: store,
     monitor: silentMonitor(),
     limiter: allowAll(),
   });
@@ -263,5 +300,103 @@ describe('GET /events?ids=', () => {
 
     const batch = await as(owner, 'GET', `/events?ids=${gone},${alive}`);
     expect(batch.body.events.map((e: { id: string }) => e.id)).toEqual([alive]);
+  });
+});
+
+/**
+ * `GET /media/urls?ids=`, added 2026-08-19.
+ *
+ * The reason it exists is speed - a measured window on the device spent 45% of its requests
+ * resolving picture links one at a time - but the reason this block exists is the same as the
+ * two above: the batch must refuse exactly what the single route refuses. A signed URL is the
+ * one thing in this API that is useful after the request that produced it, so a batch that
+ * leaks one has leaked bytes rather than merely a row.
+ */
+describe('GET /media/urls?ids=', () => {
+  it('returns the same url the single route does, for several at once', async () => {
+    const owner = await signUp('BatchMediaOwner');
+    const { mainChannelId } = await createClubAs(owner);
+    const first = await makePhoto(owner, mainChannelId);
+    const second = await makePhoto(owner, mainChannelId);
+
+    const singles = await Promise.all(
+      [first, second].map((id) => as(owner, 'GET', `/media/${id}/url?variant=thumb`)),
+    );
+    for (const one of singles) expect(one.status).toBe(200);
+
+    const batch = await as(owner, 'GET', `/media/urls?ids=${first},${second}&variant=thumb`);
+    expect(batch.status).toBe(200);
+
+    const byId = new Map(
+      batch.body.urls.map((u: { id: string; url: string }) => [u.id, u.url] as const),
+    );
+    expect(byId.get(first)).toBe(singles[0]!.body.url);
+    expect(byId.get(second)).toBe(singles[1]!.body.url);
+  });
+
+  it('omits a picture from a club the caller is not in, exactly as the single route refuses it', async () => {
+    const owner = await signUp('BatchMediaOwner2');
+    const outsider = await signUp('BatchMediaOutsider');
+    const { mainChannelId } = await createClubAs(owner);
+    const theirs = await makePhoto(owner, mainChannelId);
+
+    const ownClub = await createClubAs(outsider);
+    const mine = await makePhoto(outsider, ownClub.mainChannelId);
+
+    // The single route refuses it...
+    expect((await as(outsider, 'GET', `/media/${theirs}/url`)).status).toBe(404);
+
+    // ...and the batch must not hand back a signed URL for the same picture.
+    const batch = await as(outsider, 'GET', `/media/urls?ids=${theirs},${mine}`);
+    expect(batch.status).toBe(200);
+    expect(batch.body.urls.map((u: { id: string }) => u.id)).toEqual([mine]);
+    expect(JSON.stringify(batch.body)).not.toContain(theirs);
+  });
+
+  it('refuses a malformed id rather than quietly skipping it', async () => {
+    const owner = await signUp('BatchMediaBadId');
+    const { mainChannelId } = await createClubAs(owner);
+    const good = await makePhoto(owner, mainChannelId);
+
+    const batch = await as(owner, 'GET', `/media/urls?ids=${good},not-a-uuid`);
+    expect(batch.status).toBe(400);
+    expect(batch.body.error).toBe('bad_id');
+  });
+
+  it('collapses a repeated id rather than signing it twice', async () => {
+    const owner = await signUp('BatchMediaDupe');
+    const { mainChannelId } = await createClubAs(owner);
+    const one = await makePhoto(owner, mainChannelId);
+
+    const batch = await as(owner, 'GET', `/media/urls?ids=${one},${one},${one}`);
+    expect(batch.body.urls.map((u: { id: string }) => u.id)).toEqual([one]);
+  });
+
+  it('refuses an empty list and an oversized one', async () => {
+    const owner = await signUp('BatchMediaBounds');
+    expect((await as(owner, 'GET', '/media/urls')).status).toBe(400);
+    expect((await as(owner, 'GET', '/media/urls?ids=')).status).toBe(400);
+
+    const tooMany = Array.from({ length: MAX_BATCH_IDS + 1 }, () => crypto.randomUUID()).join(',');
+    const over = await as(owner, 'GET', `/media/urls?ids=${tooMany}`);
+    expect(over.status).toBe(400);
+    expect(over.body.error).toBe('too_many_ids');
+  });
+
+  it('refuses an unauthenticated caller, like every other route', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/media/urls?ids=${crypto.randomUUID()}`,
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('is not swallowed by GET /media/:id, which it sits beside', async () => {
+    const owner = await signUp('BatchMediaRouting');
+    // A static segment must win over the parametric one, or `urls` reads as a media id and this
+    // answers 404 for a picture nobody asked for.
+    const batch = await as(owner, 'GET', '/media/urls?ids=not-a-uuid');
+    expect(batch.status).toBe(400);
+    expect(batch.body.error).toBe('bad_id');
   });
 });

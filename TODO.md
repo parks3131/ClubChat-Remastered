@@ -43,10 +43,11 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       whenever nothing is wrong. Decide what it should say when healthy, or drop it.
 
 - [ ] **The app asks for more than it needs, and the open half of that lives in
-      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md).** Thirteen defects found and fixed by
-      watching the wire, ten on 2026-08-18 and three on 08-19; five remain. **The largest by far
-      is pictures**: one measured window on the device spent 50 of its 110 requests - 45% of all
-      traffic - fetching 34 picture links one at a time. Largest open item: one
+      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md).** Fourteen defects found and fixed by
+      watching the wire, ten on 2026-08-18 and four on 08-19; four remain, and **the batching
+      family is now closed** - `/sync`, the cards, and pictures all take lists. What is left is a
+      different shape: an unexplained double render, a missing event, and two things that have
+      never been measured at all. Largest open item: one
       request per picture, the same shape as the three batching defects already fixed. Largest
       unknown: what the server does to answer one request, which has never been measured at all.
       And **most of 145 routes have never been watched by anything** - that document carries the
@@ -58,6 +59,10 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       inbox announced to the whole app to refresh a number that the write it had just made had
       already returned. Watching the wire finds request counts; both of these needed somebody to
       open the payload.
+
+      **The largest single item is now closed**: pictures were one request each, 45% of all
+      traffic in a measured window. `GET /media/urls?ids=` took it from 1.15 requests per picture
+      to 0.42, verified by scrolling a picture-heavy chat on the phone.
 
 - [ ] **Recurrence** is the next real feature, and is deferred rather than pending - see below.
       Nothing else in Weekly Meetups is outstanding: Nudge shipped and was verified on a device on

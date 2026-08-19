@@ -15,7 +15,7 @@ import {
   readGallery,
   resolveMediaRedirect,
 } from '../../media/pipeline.ts';
-import { mediaConfigOf, type AppDeps } from '../plumbing.ts';
+import { mediaConfigOf, parseIdList, type AppDeps } from '../plumbing.ts';
 
 export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
   const media = mediaConfigOf(deps.config);
@@ -192,6 +192,72 @@ export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
        */
       width: result.width,
       height: result.height,
+    });
+  });
+
+  const BatchQuery = z.object({
+    variant: z.enum(['original', 'display', 'thumb']).optional(),
+  });
+
+  /**
+   * Many signed URLs, in one request.
+   *
+   * > **One request per picture was the largest remaining item in the backend-cleaning mission.**
+   * > A measured window on the device spent 50 of its 110 requests - 45% of all traffic - on 34
+   * > picture links, fetched one at a time. Nothing was duplicated and nothing was slow; it was
+   * > simply not batched. See TECH/18 3.1.
+   *
+   * **Authorization is `resolveMediaRedirect` called once per id - the same function the
+   * single-item route calls.** Not one query with an `IN` clause and the membership predicate
+   * written a second time: the second copy is always the one that forgets that a race photo is
+   * invisible to a club admin with no roster row. This is 2.7's rule, and the reason the loop
+   * below looks naive on purpose.
+   *
+   * An id the caller may not read, or one that no longer exists, is **omitted** rather than an
+   * error, so one dead thumbnail in old history fails alone instead of blanking the other
+   * thirty-three. A **malformed** id is a 400, because skipping it would answer 200 with a
+   * response that simply does not mention it - a client bug hiding behind a success.
+   *
+   * `variant` applies to the whole batch. A caller wanting two variants of the same picture
+   * sends two requests, which is what the client's grouping does and is still far fewer than
+   * one per picture.
+   *
+   * `no-store` for the same reason the single route has it: the client memoizes these until the
+   * hour-aligned expiry the response carries, so an HTTP cache in front saves nothing and would
+   * let a member who lost access keep resolving successfully.
+   */
+  app.get('/media/urls', async (request, reply) => {
+    const query = BatchQuery.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+
+    const parsed = parseIdList((request.query as { ids?: unknown }).ids);
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+
+    const urls = [];
+    for (const id of parsed.ids) {
+      const result = await resolveMediaRedirect(
+        deps.db,
+        deps.mediaStore,
+        media,
+        request.access!,
+        id,
+        { variant: query.data.variant },
+      );
+      if (!result.ok) continue;
+      urls.push({
+        id,
+        url: result.url,
+        mime: result.mime,
+        width: result.width,
+        height: result.height,
+      });
+    }
+
+    return reply.header('cache-control', 'no-store').send({
+      urls,
+      // One expiry for the batch: every URL in it is signed to the same hour-aligned boundary,
+      // which is the property that makes them byte-identical for every viewer in the window.
+      expiresAt: new Date(hourAlignedExpiry(Date.now()) * 1000).toISOString(),
     });
   });
 

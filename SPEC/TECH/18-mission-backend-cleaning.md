@@ -379,21 +379,53 @@ the hub, both arrivals.
 
 **Status: done.** `clubs/[clubId]/index.tsx`, `(tabs)/(profile)/profile/index.tsx`.
 
+### 2.14 One request per picture
+
+**The largest item this mission ever carried, and the last of the batching family.** Resolving a
+signed URL was one request per picture. Nothing was duplicated, nothing was slow, and every answer
+was correct - it simply was not batched, exactly like 2.1 before `/sync` took a list and 2.7 before
+the cards did.
+
+**Measured before.** A window on the device spent **50 of its 110 requests - 45% of all traffic -**
+on 34 picture links: 39 resolves plus 11 preflights.
+
+**The fix.** `GET /media/urls?ids=&variant=`, and a batch reader keyed by `id:variant` dropped in
+beneath `resolveMedia`. Every picture in the app already went through that one function, so no
+screen, card or sheet changed and none of them can forget to.
+
+**Authorization is `resolveMediaRedirect` once per id, the same function the single route calls.**
+2.7's rule, and it matters more here than it did for cards: a poll leaked from a batch is a row,
+a signed URL leaked from a batch is **bytes**. `batch-reads.test.ts` asks the same question of the
+single route and the batch, and asserts the refused id appears nowhere in the response.
+
+**Keyed by `id:variant`, not by id**, because the route takes one variant per request and the same
+picture is legitimately wanted at two sizes. A mixed batch becomes one request per variant, which
+in practice is one.
+
+**The memo stays the cache, and the batch reader is given `freshForMs: 0`.** The reader exists for
+the collection window; `mediaUrlMemo` holds each URL until the hour-aligned expiry the server
+actually signed it to, which is a better answer than a flat fifteen seconds. Two caches with
+different expiries is a way to hand out a dead URL.
+
+**Measured after, scrolling a picture-heavy chat on the device.** 29 distinct pictures, 33
+picture-and-size pairs, **14 requests, 0 single-picture calls, 0 preflights**. Per picture:
+**1.15 requests became 0.42**. The four pictures asked for twice were each asked at two sizes,
+which is correct rather than waste.
+
+> **Why the remaining 14 are not a tuning problem, since the obvious next move is to widen the
+> window.** The gaps between them run from 200ms to 4.7 seconds across fourteen seconds of
+> scrolling. A 400ms collection window would give 9 requests and an 800ms one 8, both at the cost
+> of a placeholder a person can see. Pictures enter the viewport when they enter it; **a batch
+> cannot collect what has not been asked for yet.** The one call carrying 12 ids is the window
+> working, on the occasion when twelve cards did mount together.
+
+**Status: done.** `routes/media.ts`, `apps/mobile/src/api.ts`, `test/batch-reads.test.ts`.
+
 ---
 
 ## 3. Still open
 
 Ranked by what it would cost a member.
-
-### 3.1 One request per picture
-
-**The largest remaining item, and the same shape as 2.1 and 2.7.** Resolving signed URLs is one
-request per picture: a measured session showed 35 requests for 35 distinct pictures. Nothing is
-duplicated - it is simply not batched.
-
-A `GET /media/urls?ids=` reading the same authorized path once per id would collapse a gallery or
-a picture-heavy conversation the way `/polls?ids=` collapsed the cards. The client already funnels
-every call through `resolveMedia`, so the swap is behind that one function.
 
 ### 3.2 `BadgedIcon` renders twice, and nobody knows why
 

@@ -1158,7 +1158,7 @@ export async function resolveMedia(
   // callers is a shared mutable this function never used to have.
   if (flying) return { ...(await flying) };
 
-  const request = resolveMediaUncached(mediaId, variant, key);
+  const request = resolveMediaUncached(key);
   mediaUrlInFlight.set(key, request);
   try {
     return { ...(await request) };
@@ -1169,31 +1169,98 @@ export async function resolveMedia(
   }
 }
 
-/** The read itself. Split out only so the in-flight bookkeeping above reads as one thing. */
-async function resolveMediaUncached(
-  mediaId: string,
-  variant: MediaVariant,
-  key: string,
-): Promise<ResolvedMedia> {
-  const resolved = await apiFetch<{
-    url: string;
-    expiresAt: string;
-    mime: string;
-    width?: number | null;
-    height?: number | null;
-  }>(
-    `/media/${mediaId}/url?variant=${variant}`,
-  );
-  // `?? null`, never bare: an older server omits these entirely, and `undefined` reaching a
-  // caller that checks for null is the shape of failure mode 12.
-  const width = resolved.width ?? null;
-  const height = resolved.height ?? null;
+/** One resolved picture, carrying the `id:variant` key the batch was asked for. */
+type MediaUrlRow = {
+  key: string;
+  url: string;
+  mime: string;
+  width: number | null;
+  height: number | null;
+  expiresAt: number;
+};
+
+/**
+ * Many picture links in one request, beneath the memo rather than beside it.
+ *
+ * > **This was the largest remaining item in the backend-cleaning mission.** A measured window on
+ * > the device spent 50 of its 110 requests - 45% of all traffic - resolving 34 picture links one
+ * > at a time. Nothing was duplicated and nothing was slow; it simply was not batched. TECH/18
+ * > 3.1.
+ *
+ * Keyed by `id:variant` rather than by id, because the route takes one `variant` per request and
+ * the same picture is legitimately wanted at two sizes. `fetchMany` groups a mixed batch back
+ * into one request per variant, which in practice is one: a screen asks for thumbs or it asks for
+ * displays.
+ *
+ * **`freshForMs: 0` on purpose.** This reader is here for the batching window, not for caching -
+ * `mediaUrlMemo` above is the cache, and it is the better one because it holds each URL until the
+ * hour-aligned expiry the server actually signed it to, rather than for a flat fifteen seconds.
+ * Two caches with different expiries would be a way to hand out a dead URL.
+ */
+const readMediaUrl = createBatchReader<MediaUrlRow>({
+  fetchMany: async (keys) => {
+    const byVariant = new Map<string, string[]>();
+    for (const key of keys) {
+      // `lastIndexOf`, not `split`: the id is a uuid and cannot contain a colon, but reading the
+      // key from the right means a variant name is never mistaken for part of an id.
+      const cut = key.lastIndexOf(':');
+      const variant = key.slice(cut + 1);
+      const ids = byVariant.get(variant) ?? [];
+      ids.push(key.slice(0, cut));
+      byVariant.set(variant, ids);
+    }
+
+    const rows: MediaUrlRow[] = [];
+    for (const [variant, ids] of byVariant) {
+      const answer = await apiFetch<{
+        urls: {
+          id: string;
+          url: string;
+          mime: string;
+          width?: number | null;
+          height?: number | null;
+        }[];
+        expiresAt: string;
+      }>(`/media/urls?ids=${ids.join(',')}&variant=${variant}`);
+
+      const expiresAt = new Date(answer.expiresAt).getTime();
+      for (const one of answer.urls) {
+        rows.push({
+          key: `${one.id}:${variant}`,
+          url: one.url,
+          mime: one.mime,
+          // `?? null`, never bare: an older server omits these entirely, and `undefined` reaching
+          // a caller that checks for null is the shape of failure mode 12.
+          width: one.width ?? null,
+          height: one.height ?? null,
+          expiresAt,
+        });
+      }
+    }
+    return rows;
+  },
+  keyOf: (row) => row.key,
+  // The single route answered 404 for a picture that is gone AND for one the caller may not read.
+  // The batch omits both, so the absence has to become the same error a caller already handles.
+  missing: () => new ApiError(404, 'not_found'),
+  maxPerRequest: BATCH_LIMIT,
+  freshForMs: 0,
+});
+
+/**
+ * The read itself. Split out only so the in-flight bookkeeping above reads as one thing.
+ *
+ * Takes the `id:variant` key rather than the two parts: the batch reader is keyed by it, so
+ * splitting it here and rejoining it there would be two places to keep in agreement.
+ */
+async function resolveMediaUncached(key: string): Promise<ResolvedMedia> {
+  const row = await readMediaUrl(key);
   mediaUrlMemo.set(key, {
-    url: resolved.url,
-    mime: resolved.mime,
-    width,
-    height,
-    expiresAt: new Date(resolved.expiresAt).getTime(),
+    url: row.url,
+    mime: row.mime,
+    width: row.width,
+    height: row.height,
+    expiresAt: row.expiresAt,
   });
-  return { url: resolved.url, mime: resolved.mime, width, height };
+  return { url: row.url, mime: row.mime, width: row.width, height: row.height };
 }
