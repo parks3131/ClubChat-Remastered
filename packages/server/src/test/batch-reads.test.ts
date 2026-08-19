@@ -454,6 +454,34 @@ describe('a batch read costs the same however many ids it is given', () => {
     expect(forEight).toBe(forOne);
   });
 
+  it('resolves eight pictures in no more statements than one', async () => {
+    const owner = await signUp('BatchMediaQueryCount');
+    const { mainChannelId } = await createClubAs(owner);
+    const ids: string[] = [];
+    for (let i = 0; i < 8; i += 1) ids.push(await makePhoto(owner, mainChannelId));
+
+    const mediaQueries = (): number => {
+      const last = [...traced].reverse().find((e) => e.kind === 'http' && e.route === '/media/urls');
+      if (!last || last.kind !== 'http' || last.queries === undefined) {
+        throw new Error('no traced /media/urls request carried a query count');
+      }
+      return last.queries;
+    };
+
+    traced.length = 0;
+    expect((await as(owner, 'GET', `/media/urls?ids=${ids[0]}`)).status).toBe(200);
+    const forOne = mediaQueries();
+
+    traced.length = 0;
+    const eight = await as(owner, 'GET', `/media/urls?ids=${ids.join(',')}`);
+    expect(eight.status).toBe(200);
+    expect(eight.body.urls).toHaveLength(8);
+
+    // Two statements per picture before this: the media row, then the channel that owns it. A
+    // gallery is dozens of pictures in ONE channel, so that channel was re-read for every photo.
+    expect(mediaQueries()).toBe(forOne);
+  });
+
   it('reads one poll in the same number of statements through either route', async () => {
     const owner = await signUp('BatchQuerySingle');
     const { clubId } = await createClubAs(owner);

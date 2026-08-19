@@ -19,7 +19,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
-import { mediaObjects, outbox } from '../db/schema.ts';
+import { channels, mediaObjects, outbox } from '../db/schema.ts';
 import { clearedFloor, type AccessContext } from '../policy/context.ts';
 import { canPostInChannel, isChannelMember, type ChannelRef } from '../policy/predicates.ts';
 import { getChannelRef } from '../domain/reads.ts';
@@ -451,12 +451,139 @@ export type MediaRedirect = {
 };
 
 /**
+ * Resolve many pictures at once. **The batch route's read, and the single route's too.**
+ *
+ * > **`GET /media/urls?ids=` was N+1 underneath, the same as the poll route in 2.16.** Two
+ * > statements per picture - the media row, then the channel that owns it, for the membership
+ * > check - so a gallery of 34 pictures was about 68 round trips inside one request that looked
+ * > perfectly healthy on the wire. Found by inspection after 2.15 gave us a way to see it, and
+ * > measured properly here. TECH/18 3.5.
+ *
+ * **The membership check still runs once per picture.** `isChannelMember` is a pure function
+ * over a preloaded context, so per-id authorization never cost anything - what cost something
+ * was fetching each picture's row and each owning channel separately. Both are now gathered with
+ * one query each, and the predicate still decides every id on its own.
+ *
+ * Two statements regardless of how many pictures are asked for, and one when none of them belong
+ * to a channel. Signing is local work, not a round trip, so it stays per picture.
+ *
+ * A picture that does not exist, is not `ready`, or belongs to a channel this caller is not in
+ * is simply **absent** from the map - `not_found` and `forbidden` stay indistinguishable, which
+ * is the property the single route was written to hold.
+ */
+export async function resolveMediaRedirects(
+  db: Db,
+  store: MediaStore,
+  config: MediaConfig,
+  ctx: AccessContext,
+  mediaIds: string[],
+  opts: { variant?: 'original' | 'display' | 'thumb' | undefined; nowMs?: number } = {},
+): Promise<Map<string, MediaRedirect>> {
+  const resolved = new Map<string, MediaRedirect>();
+  if (mediaIds.length === 0) return resolved;
+
+  const rows = await db
+    .select()
+    .from(mediaObjects)
+    .where(
+      and(
+        sql`${mediaObjects.id} = ANY(${sql.param(mediaIds)}::uuid[])`,
+        eq(mediaObjects.status, 'ready'),
+      ),
+    );
+  if (rows.length === 0) return resolved;
+
+  /*
+   * Every owning channel, in one query rather than one per picture.
+   *
+   * A conversation's gallery is dozens of pictures in ONE channel, so this is usually a single
+   * row however many were asked for - which is the whole shape of the defect: the same channel
+   * was being read again for every photo in it.
+   */
+  const channelIds = [...new Set(rows.map((row) => row.channelId).filter((id) => id !== null))];
+  const channelsById = new Map<string, ChannelRef>();
+  if (channelIds.length > 0) {
+    const found = await db
+      .select()
+      .from(channels)
+      .where(sql`${channels.id} = ANY(${sql.param(channelIds)}::uuid[])`);
+    for (const row of found) {
+      channelsById.set(row.id, {
+        id: row.id,
+        scope: row.scope as ChannelRef['scope'],
+        clubId: row.clubId,
+        scopeId: row.scopeId,
+      });
+    }
+  }
+
+  const nowMs = opts.nowMs ?? Date.now();
+  const requested = opts.variant ?? 'original';
+
+  for (const media of rows) {
+    // Decided per picture, on the same predicate the single read used. A second copy of this
+    // rule expressed as a WHERE clause is the one that would forget a scope.
+    if (media.channelId !== null) {
+      const channel = channelsById.get(media.channelId);
+      if (!channel || !isChannelMember(ctx, channel)) continue;
+    }
+    // An avatar has no channel and is public content; being signed in is the whole check.
+
+    const variants = (media.variants ?? {}) as Record<string, string>;
+    // Fall back to the original when a derived variant does not exist yet - the worker may not
+    // have run, and a missing thumbnail must degrade to a slower image rather than a broken one.
+    const objectKey =
+      requested === 'original' ? media.objectKey : (variants[requested] ?? media.objectKey);
+    // Derived variants are WebP (see `derive.ts`); the original is whatever was uploaded. Read off
+    // the SAME branch the key was, so the two can never describe different bytes.
+    const mime = objectKey === media.objectKey ? media.mime : 'image/webp';
+
+    // Whoever is going to serve the bytes has to be the one whose signature they carry.
+    const url =
+      config.urlMode === 'presign'
+        ? await (async () => {
+            const window = hourAlignedSigningWindow(nowMs);
+            return store.presignDownload({
+              bucket: media.bucket,
+              objectKey,
+              signingDateMs: window.signingDateMs,
+              expiresInSeconds: window.expiresInSeconds,
+            });
+          })()
+        : signedMediaUrl(config, objectKey, nowMs);
+
+    resolved.set(media.id, {
+      url,
+      mime,
+      /*
+       * The shape of the picture, so a client can lay out the space before the bytes arrive.
+       *
+       * **The same numbers for every variant, and that is correct rather than sloppy.** A
+       * thumbnail is the display image resized by width, so it has the same aspect - and aspect
+       * is the only thing a caller uses these for.
+       *
+       * Null for anything uploaded before the columns existed, which every caller already
+       * handles.
+       */
+      width: media.width,
+      height: media.height,
+      cacheControl: 'private, max-age=600',
+    });
+  }
+
+  return resolved;
+}
+
+/**
  * Resolve `/media/:id` to a redirect, authorizing first.
  *
  * The authorization is the same membership predicate that protects the message, evaluated on
  * **every** request. Nothing about the signed URL grants access - it grants *fetchability of
  * bytes whose key is already unguessable*, which is a different thing, and is why this hop
  * cannot be skipped or cached publicly.
+ *
+ * Delegates to `resolveMediaRedirects` rather than keeping its own body, so the redirect hop and
+ * the batch route can never authorize differently - the same reason `readPoll` delegates in 2.16.
  */
 export async function resolveMediaRedirect(
   db: Db,
@@ -466,65 +593,12 @@ export async function resolveMediaRedirect(
   mediaId: string,
   opts: { variant?: 'original' | 'display' | 'thumb' | undefined; nowMs?: number } = {},
 ): Promise<Result<MediaRedirect>> {
-  const rows = await db
-    .select()
-    .from(mediaObjects)
-    .where(and(eq(mediaObjects.id, mediaId), eq(mediaObjects.status, 'ready')))
-    .limit(1);
-  const media = rows[0];
+  const resolved = await resolveMediaRedirects(db, store, config, ctx, [mediaId], opts);
+  const one = resolved.get(mediaId);
   // 'not_found' rather than 'forbidden' for a missing object AND for an unauthorized one:
   // telling somebody an object exists but is not theirs is itself a disclosure.
-  if (!media) return { ok: false, code: 'not_found' };
-
-  if (media.channelId !== null) {
-    const channel = await getChannelRef(db, media.channelId);
-    if (!channel || !isChannelMember(ctx, channel)) return { ok: false, code: 'not_found' };
-  }
-  // An avatar has no channel and is public content; being signed in is the whole check.
-
-  const variants = (media.variants ?? {}) as Record<string, string>;
-  const requested = opts.variant ?? 'original';
-  // Fall back to the original when a derived variant does not exist yet - the worker may not
-  // have run, and a missing thumbnail must degrade to a slower image rather than a broken one.
-  const objectKey = requested === 'original' ? media.objectKey : (variants[requested] ?? media.objectKey);
-  // Derived variants are WebP (see `derive.ts`); the original is whatever was uploaded. Read off
-  // the SAME branch the key was, so the two can never describe different bytes.
-  const mime = objectKey === media.objectKey ? media.mime : 'image/webp';
-
-  const nowMs = opts.nowMs ?? Date.now();
-  // Whoever is going to serve the bytes has to be the one whose signature they carry.
-  const url =
-    config.urlMode === 'presign'
-      ? await (async () => {
-          const window = hourAlignedSigningWindow(nowMs);
-          return store.presignDownload({
-            bucket: media.bucket,
-            objectKey,
-            signingDateMs: window.signingDateMs,
-            expiresInSeconds: window.expiresInSeconds,
-          });
-        })()
-      : signedMediaUrl(config, objectKey, nowMs);
-
-  /*
-   * The shape of the picture, so a client can lay out the space before the bytes arrive.
-   *
-   * **The same numbers for every variant, and that is correct rather than sloppy.** A thumbnail
-   * is the display image resized by width, so it has the same aspect - and aspect is the only
-   * thing a caller uses these for. Sending the thumbnail's literal pixel size would be a second
-   * fact to keep in step with `VARIANTS` for no gain.
-   *
-   * Null for anything uploaded before the columns existed, which every caller already handles:
-   * that was the only case for the life of the product until now.
-   */
-  return {
-    ok: true,
-    url,
-    mime,
-    width: media.width,
-    height: media.height,
-    cacheControl: 'private, max-age=600',
-  };
+  if (!one) return { ok: false, code: 'not_found' };
+  return { ok: true, ...one };
 }
 
 // ---------------------------------------------------------------------------

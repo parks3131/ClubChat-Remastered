@@ -503,7 +503,16 @@ dashboard shows, arriving by the path production uses. Written as "same as one" 
 fixed number, so adding a column does not fail it and only the per-id loop does. Proved by
 putting the loop back: **35 against 7**, and the test failed.
 
-**Status: done.** `domain/polls.ts`, `routes/polls.ts`, `test/batch-reads.test.ts`.
+**The picture route had the same defect and was fixed in the same session.**
+`resolveMediaRedirect` ran **two statements per picture** - the media row, then the channel that
+owns it - and a gallery is dozens of pictures in ONE channel, so that channel was re-read for
+every photo in it. Measured by putting the loop back: **19 statements for eight pictures, 5 with
+the fix**, and flat from there. `resolveMediaRedirect` now delegates to `resolveMediaRedirects`,
+so the redirect hop and the batch route cannot authorize differently, and `isChannelMember` still
+decides every id on its own.
+
+**Status: done.** `domain/polls.ts`, `routes/polls.ts`, `media/pipeline.ts`, `routes/media.ts`,
+`test/batch-reads.test.ts`.
 
 ---
 
@@ -548,16 +557,6 @@ Profile tab's own profile, club list and identity - moved to arrival-and-return 
 One number worth keeping in view: `/conversations` was measured at **6 reads for one message
 sent** on 2026-08-19. That is correct in kind and probably not in quantity, and it is the 2.3
 coalescing window rather than this entry.
-
-### 3.5 `GET /media/urls?ids=` is still N+1 underneath
-
-2.16 fixed the poll route; the picture route added the same day has the same shape and has not
-been measured live. By inspection `resolveMediaRedirect` runs **two statements per id** - the
-media row, then `getChannelRef` for the channel that owns it - so a gallery of 34 pictures is
-about 68 round trips inside one request. Half the severity polls had, and the same fix: gather
-the rows with `= ANY(...)`, keep the per-id access check on the ref that read already loads.
-
-The signing itself is not a database cost and does not batch, which is fine - it is local work.
 
 ### 3.6 The iPhone has barely been measured
 
@@ -704,3 +703,104 @@ And two about method rather than code:
    route that fired once and never again, which every other technique in this document would have
    read as a success. A screen that never re-reads is a correctness bug wearing the costume of a
    fast one.
+
+---
+
+## 6. What else could watch this, and what to build next
+
+**Requested 2026-08-19, after the query counter found two N+1s on the day it was built.** This is
+a survey, not a plan: nothing below is committed to. The counter is one technique out of about
+eight, and it is deliberately the cheapest - roughly 120 lines, development only, no service to
+run. The rest are what the industry actually uses, ordered by what would earn its keep here
+first.
+
+**The one honest caveat about all of it.** Every tool below tells you what a system DID. None of
+them tells you what it should have done, which is the judgement each of the fourteen findings in
+section 2 actually needed. Instrumentation shortens the search; it never ends it.
+
+### 6.1 Sentry performance tracing - already paid for, not switched on
+
+`@sentry/node` is **already a dependency** and already catching errors. Its performance half adds
+distributed tracing: each request becomes a trace, each database call a span, with the tree and
+the timings. Turning it on is a config change, not a build.
+
+**Why it is first.** Everything measured in this document is a laptop against a database on the
+same machine. The 133-statement poll read cost 12ms locally and would cost far more across a
+network boundary on Fly.io - and **nothing currently measures production at all**. This is the
+only entry that changes that without new infrastructure.
+
+Costs: sampling rate has to be chosen (1-10% of traces is normal), and spans carrying query text
+need the same redaction rule the dev tracer already applies.
+
+### 6.2 `pg_stat_statements` - what the database thinks is expensive
+
+A Postgres extension that aggregates every statement it has ever run, normalised, with call
+counts, total time and rows. `CREATE EXTENSION pg_stat_statements` and one config line.
+
+**Why it complements the counter rather than repeating it.** The counter answers "what did THIS
+request cost". This answers "what is this database spending its life on", across every process
+including the worker and the gateway, with **no application instrumentation at all**. It is how
+you find the query nobody suspected, rather than confirming the one you did.
+
+It would have shown the poll N+1 as one statement with an absurd call count.
+
+### 6.3 `EXPLAIN (ANALYZE, BUFFERS)` and `auto_explain` - why one query is slow
+
+The counter says how MANY. This says why one of them is bad: a sequential scan where an index was
+expected, a join blowing up, a sort spilling to disk. `auto_explain` logs the plan automatically
+for anything over a threshold, so it catches the slow query nobody was watching for.
+
+**Not yet needed here, and worth saying why.** No statement measured has been slow; the defect
+was always their number. That changes the day the tables are large, and this is the tool for that
+day rather than this one.
+
+### 6.4 Query-count assertions in tests - built, and cheap to extend
+
+`batch-reads.test.ts` now asserts that eight ids cost no more statements than one, read from the
+same traced number the dashboard shows. **Both fixes in 2.16 were proved by putting the old loop
+back and watching the test fail** - 35 against 7 for polls, 19 against 5 for pictures.
+
+The pattern generalises to any route where cost should not scale with input, and it is the only
+entry here that prevents a regression rather than reporting one after the fact. Cheapest next
+step: extend it to the other list routes as they are touched.
+
+### 6.5 Load and soak testing with realistic fixtures - the gap that let this survive
+
+**This is the actual reason the N+1 lived so long.** Every test in this repo creates one or two
+rows. The trace found the defects because a real account had 26 poll cards in one conversation;
+no automated test has ever built a conversation like that.
+
+A seeded "large" fixture - a club with hundreds of members, a chat with dozens of cards, a
+gallery with fifty photos - run under `k6` or plain scripted load, would have made both N+1s
+obvious without anybody watching. It is more work than everything above and it is the one that
+finds this class *before* a person does.
+
+### 6.6 RED metrics and histograms - Prometheus, or Fly's own
+
+Rate, Errors, Duration per route, as **histograms rather than averages**. An average hides the
+tail; p99 is where members actually live. Pairs with alerting: "p99 on `/sync` doubled" is a
+statement a metric can make and a trace cannot.
+
+Worth it once there are enough real members for a tail to exist. Not yet.
+
+### 6.7 Continuous profiling - Pyroscope, or a hosted equivalent
+
+CPU and heap by function, sampled continuously in production. Answers "what is this process
+actually doing" when the answer is not the database at all - JSON serialisation, `sharp`, crypto
+in the media signer. Nothing here has suggested a CPU problem, so this is the furthest away.
+
+### 6.8 The client half - RUM, and what the dev trace already does better
+
+Real User Monitoring reports what a real device experienced: time to first paint, request waterfalls
+on real networks. For a mobile app this is Sentry's mobile SDK again.
+
+Worth noting the dev trace already gives a **better** answer for development, because it joins
+all three processes. What it cannot do is watch somebody else's phone in another country.
+
+### Recommended order
+
+1. **Turn on Sentry performance tracing** - already paid for, and it is the only production visibility.
+2. **`pg_stat_statements`** - one config line, finds what nobody suspected.
+3. **A large seeded fixture** - the thing that would have caught both N+1s automatically.
+
+Everything after that waits for real load.

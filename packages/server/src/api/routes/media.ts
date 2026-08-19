@@ -14,6 +14,7 @@ import {
   hourAlignedExpiry,
   readGallery,
   resolveMediaRedirect,
+  resolveMediaRedirects,
 } from '../../media/pipeline.ts';
 import { mediaConfigOf, parseIdList, type AppDeps } from '../plumbing.ts';
 
@@ -233,25 +234,31 @@ export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
     const parsed = parseIdList((request.query as { ids?: unknown }).ids);
     if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
 
-    const urls = [];
-    for (const id of parsed.ids) {
-      const result = await resolveMediaRedirect(
-        deps.db,
-        deps.mediaStore,
-        media,
-        request.access!,
-        id,
-        { variant: query.data.variant },
-      );
-      if (!result.ok) continue;
-      urls.push({
-        id,
-        url: result.url,
-        mime: result.mime,
-        width: result.width,
-        height: result.height,
-      });
-    }
+    /*
+     * One resolve for the whole list, authorized per id inside.
+     *
+     * This looped `resolveMediaRedirect` when the route shipped, which was two database round
+     * trips per picture - the row, then the channel that owns it - so a gallery of 34 was about
+     * 68 statements in one request. `isChannelMember` still decides every id on its own; only
+     * the fetching is shared. TECH/18 3.5.
+     */
+    const resolved = await resolveMediaRedirects(
+      deps.db,
+      deps.mediaStore,
+      media,
+      request.access!,
+      parsed.ids,
+      { variant: query.data.variant },
+    );
+
+    // Built from the ids ASKED FOR, so the answer keeps their order and an absent one is simply
+    // skipped rather than appearing as a hole.
+    const urls = parsed.ids.flatMap((id) => {
+      const one = resolved.get(id);
+      return one
+        ? [{ id, url: one.url, mime: one.mime, width: one.width, height: one.height }]
+        : [];
+    });
 
     return reply.header('cache-control', 'no-store').send({
       urls,

@@ -47,9 +47,10 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       watching the wire, ten on 2026-08-18 and four on 08-19, and **the batching family is closed**
       - `/sync`, the cards, and pictures all take lists.
 
-      **The wire has now been read out.** 2.15 built the layer below it: every request carries the
-      number of database round trips it cost, on the trace and on the dashboard. It immediately
-      found what it was built to look for - see the next item. Largest open item: one
+      **The wire has now been read out, and the layer below it too.** 2.15 built a per-request
+      database round-trip counter; 2.16 used it the same day to find and fix N+1s in both batch
+      routes. `GET /polls?ids=` went from `3 + 5n` statements to a flat 7, and `/media/urls?ids=`
+      from `3 + 2n` to a flat 5 - both now guarded by tests that fail if the per-id loop returns. Largest open item: one
       request per picture, the same shape as the three batching defects already fixed. Largest
       unknown: what the server does to answer one request, which has never been measured at all.
       And **most of 145 routes have never been watched by anything** - that document carries the
@@ -66,14 +67,20 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       traffic in a measured window. `GET /media/urls?ids=` took it from 1.15 requests per picture
       to 0.42, verified by scrolling a picture-heavy chat on the phone.
 
-- [ ] **`GET /media/urls?ids=` is N+1 underneath.** The poll route was fixed on 2026-08-19
-      (`3 + 5n` round trips became a flat 7, see
-      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md) 2.16); the picture route added the
-      same day has the same shape and has **not been measured live**. By inspection
-      `resolveMediaRedirect` runs two statements per id, so a gallery of 34 pictures is about 68
-      round trips inside one request. Same fix: gather with `= ANY(...)`, keep the per-id access
-      check on the ref that read already loads. The query counter and the regression guard in
-      `batch-reads.test.ts` are both already there to measure it.
+- [ ] **Turn on Sentry performance tracing, and add `pg_stat_statements`.** The query counter
+      built on 2026-08-19 measures **development only**, and every number in
+      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md) is a laptop against a database on the
+      same machine - the 133-statement poll read cost 12ms there and would cost far more across a
+      network on Fly. **Nothing measures production at all.** `@sentry/node` is already a
+      dependency and already catching errors; its performance half is a config change rather than
+      a build. `TECH/18` section 6 surveys the eight techniques and recommends an order: Sentry
+      first, `pg_stat_statements` second, a large seeded fixture third.
+
+- [ ] **No test has ever built a realistic amount of data, and that is why both N+1s survived.**
+      Every fixture in this repo creates one or two rows; the trace found the defects because a
+      real account had 26 poll cards in one conversation. A seeded "large" club - hundreds of
+      members, dozens of cards in a chat, fifty photos in a gallery - is the thing that would
+      have caught them automatically. See `TECH/18` 6.5.
 
 - [ ] **Recurrence** is the next real feature, and is deferred rather than pending - see below.
       Nothing else in Weekly Meetups is outstanding: Nudge shipped and was verified on a device on
