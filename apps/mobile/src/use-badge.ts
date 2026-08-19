@@ -63,6 +63,16 @@ let lastReadAt = 0;
 let trailing: ReturnType<typeof setTimeout> | null = null;
 
 /**
+ * Bumped by every answer that lands, so a slower one cannot overwrite a faster one.
+ *
+ * Needed because `adoptCount` below can publish while a read is still on the wire: leaving the
+ * inbox fires a navigation read and a mark-read write in the same instant, and the read is the
+ * one that started first and carries the count from BEFORE the write. Without this the stale
+ * answer wins by arriving last.
+ */
+let generation = 0;
+
+/**
  * Read the count, at most one request at a time and at most one per cooldown.
  *
  * The in-flight promise is shared rather than queued, deliberately: two callers asking "how many"
@@ -94,10 +104,13 @@ function refresh(): Promise<void> {
 
   lastReadAt = Date.now();
 
+  const asked = ++generation;
+
   inFlight = (async () => {
     try {
       const result = await inboxApi.badge();
-      publish(result.count);
+      // Only if nothing newer has landed while this was in flight. See `generation`.
+      if (asked === generation) publish(result.count);
     } catch {
       // A failed badge read is not worth surfacing: the number is an enhancement, and the
       // inbox itself has a real error state. Leaving the last known value is less wrong than
@@ -137,6 +150,33 @@ function reset(): void {
     trailing = null;
   }
   publish(0);
+}
+
+/**
+ * Take a count that a WRITE handed back, instead of asking for one.
+ *
+ * > **The number was already in the response, and the app threw it away.**
+ * > `POST /notifications/read` returns `{ cleared, badge }` - the count recomputed after the
+ * > mark, by the same `badgeCount` the GET route calls. Leaving the inbox used to discard it and
+ * > call `notifyChanged()` instead, which bumps the session revision that EIGHT screens re-fetch
+ * > on. Measured on the iPhone 2026-08-19: one tab exit cost 8 requests, including the chat list
+ * > with every DM in it, and a club's name and race list - none of which a read receipt on the
+ * > inbox can change. It was a global broadcast sent to update one number that had already
+ * > arrived.
+ *
+ * The cooldown is stamped and the deferred read cancelled, because both exist to make sure a
+ * suppressed read still happens eventually - and an answer computed by the server AFTER the
+ * write is strictly better than the one that read would have returned. A later change still
+ * defers a fresh read normally, so nothing is dropped that could not be re-asked.
+ */
+export function adoptBadgeCount(count: number): void {
+  generation += 1;
+  lastReadAt = Date.now();
+  if (trailing !== null) {
+    clearTimeout(trailing);
+    trailing = null;
+  }
+  publish(count);
 }
 
 export function useBadge(): number {

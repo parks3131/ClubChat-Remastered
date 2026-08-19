@@ -63,6 +63,7 @@ import { hrefFor } from '../../src/notification-href.ts';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { color, radius, space, tabBarSpace, type } from '../../src/theme.ts';
 import { Avatar, DataScreen, DestinationHeader, Row } from '../../src/ui.tsx';
+import { adoptBadgeCount } from '../../src/use-badge.ts';
 import { useLoad, usePullToRefresh } from '../../src/use-load.ts';
 
 /**
@@ -101,7 +102,7 @@ type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
 export default function NotificationsScreen() {
   // The tab bar floats OVER this list, so the last row has to be able to scroll clear of it.
   const insets = useSafeAreaInsets();
-  const { authState, revision, notifyChanged } = useSession();
+  const { authState, revision } = useSession();
   const load = useLoad(() => inboxApi.page(), [revision]);
 
   /** Whether this screen has been opened before, so a return can be told from a first open. */
@@ -208,23 +209,34 @@ export default function NotificationsScreen() {
 
       return () => {
         /*
-         * Mark on the way out, and TELL somebody once it lands.
+         * Mark on the way out, and take the count the write hands back.
          *
          * The badge re-reads on navigation, which happens at this same instant - so the read
-         * raced this write and usually won, fetching the count from before the mark. The number
+         * races this write and usually wins, carrying the count from before the mark. The number
          * then sat wrong until the next navigation, which is why it only appeared to clear on
-         * coming back to this screen. Notifying after the write settles is the whole fix; doing
-         * it beside the write would just be the same race with more steps.
+         * coming back to this screen.
+         *
+         * > **This used to call `notifyChanged()`, and that was a global broadcast sent to update
+         * > one number.** It bumps the session revision that eight screens re-fetch on, so
+         * > leaving this tab re-read the chat list with every DM in it, plus a club's name and
+         * > its race list - none of which reading the inbox can change. Measured at 8 requests
+         * > per tab exit on the iPhone, 2026-08-19.
+         *
+         * `markRead` already returns `badge`, recomputed by the server after the mark, so the
+         * right answer was in the response the whole time. `adoptBadgeCount` publishes it and
+         * orders it correctly against the navigation read still on the wire.
          */
         void inboxApi
           .markRead()
-          .then(() => notifyChanged())
+          .then(({ badge }) => adoptBadgeCount(badge))
           .catch(() => undefined);
       };
       // `load.reload` is deliberately not a dependency: it changes identity on every render, and
       // depending on it would re-fire this on every render rather than on focus.
+      // `adoptBadgeCount` is a module-scope function with a stable identity, so unlike the
+      // `notifyChanged` it replaced it does not belong in this list at all.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [authState, notifyChanged]),
+    }, [authState]),
   );
 
   if (authState === 'checking') return <View style={styles.flex} />;

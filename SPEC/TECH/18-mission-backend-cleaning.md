@@ -3,9 +3,9 @@
 **A standing programme, not a phase.** 2.1 to 2.10 were found in one day, 2026-08-18, by watching
 the app talk to its server while somebody used it. 2.11 came the next morning from the same method
 against a screen that had already been looked at twice - which is the point of calling this a
-programme rather than a sweep. None of it was visible any other way: every request succeeded, every
-test passed, no error was ever logged, and nothing crashed. The app was simply asking for far more
-than it needed.
+programme rather than a sweep, and 2.12 came from the founder driving two accounts at once an hour
+after that. None of it was visible any other way: every request succeeded, every test passed, no
+error was ever logged, and nothing crashed. The app was simply asking for far more than it needed.
 
 > **The one idea.** A wasted request comes back with the right answer. That is what makes this
 > class of defect invisible, and it is why it survived from the day each line was written until
@@ -303,6 +303,49 @@ badge can change, which was the only real risk. An outsider passing a club id ge
 
 **Status: done.** `domain/reads.ts`, `routes/chat.ts`, `apps/mobile/src/api.ts`,
 `clubs/[clubId]/index.tsx`.
+
+### 2.12 Leaving the inbox broadcast to the whole app to update one number
+
+**Found 2026-08-19 by the founder, driving two accounts at once.** The notifications tab marks
+itself read on the way out, and then called `notifyChanged()` - the session-wide announcement that
+**eight screens re-fetch on**. So closing the inbox re-read the chat list with every DM in it, a
+club's name, its race list and its channels.
+
+**Measured.** Eight follow-up requests per tab exit, every time, including `/conversations` and
+`/channels` **twice each** and a badge re-read 690ms later. Reading your own inbox cannot rename a
+club or change who you have DMs with.
+
+**The part that makes it worth writing down: the answer was already in the response.**
+`POST /notifications/read` returns `{ cleared, badge }`, the count recomputed by the same
+`badgeCount` the GET route calls, after the mark. The client discarded it and announced to the
+whole app so that one number could be fetched again. **A global broadcast to deliver a value that
+had already arrived.**
+
+**The fix.** `adoptBadgeCount(badge)` takes the count from the write. No announcement, and the
+deferred re-read is cancelled because a count the server computed *after* the write is strictly
+better than the one that read would have returned.
+
+**A race the old code had, kept and closed.** The badge also re-reads on navigation, which happens
+in the same instant as the write - so the read starts first, carries the count from BEFORE the
+mark, and wins if it lands last. A generation counter now means the newer answer always wins.
+
+**Measured after, one hour apart on the same server.** The phone, hot-reloaded with the fix: **1
+to 2** requests per exit. The web tab, still on the old bundle: **7 to 8**, every time. The same
+action, the same account state - the only variable was which bundle was running, which is as clean
+a before/after as this mission has produced.
+
+The `/conversations` still on the fixed exits is **correct** and not a leftover: it is the chat
+list refreshing because it is the screen being navigated TO.
+
+> **Two things that looked like defects and were not, both costing time before the real one was
+> found.** The badge appeared to flicker between 0 and 1 in the trace; it was **two accounts**,
+> each polling correctly on its own minute, and the `userId` column says so. And the badge stayed
+> at 1 after the inbox was marked read, which is right: `badgeCount` is unread notifications
+> **plus** channels with unread messages, and that 1 was a `chat_unread` row that only reading the
+> chat can clear. Rule 2 of section 1 caught the first. The second is an argument for reading a
+> route's own query before believing a number is stale.
+
+**Status: done.** `apps/mobile/src/use-badge.ts`, `app/(tabs)/notifications.tsx`.
 
 ---
 

@@ -43,17 +43,19 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       whenever nothing is wrong. Decide what it should say when healthy, or drop it.
 
 - [ ] **The app asks for more than it needs, and the open half of that lives in
-      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md).** Eleven defects found and fixed by
-      watching the wire, ten on 2026-08-18 and one on 08-19; six remain. Largest open item: one
+      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md).** Twelve defects found and fixed by
+      watching the wire, ten on 2026-08-18 and two on 08-19; six remain. Largest open item: one
       request per picture, the same shape as the three batching defects already fixed. Largest
       unknown: what the server does to answer one request, which has never been measured at all.
       And **most of 145 routes have never been watched by anything** - that document carries the
       checklist, grouped so a session can pick a surface and go.
 
-      **The 08-19 one is worth reading as a method note rather than a fix.** The club hub had
-      already been through this mission twice and was still sending 23 rows to draw 5, because
-      nobody had asked what was *inside* a response that was fast and correct. Watching the wire
-      finds request counts; this one needed somebody to open the payload.
+      **The two 08-19 ones are worth reading as method notes rather than fixes.** The club hub
+      had already been through this mission twice and was still sending 23 rows to draw 5, because
+      nobody had asked what was *inside* a response that was fast and correct. And leaving the
+      inbox announced to the whole app to refresh a number that the write it had just made had
+      already returned. Watching the wire finds request counts; both of these needed somebody to
+      open the payload.
 
 - [ ] **A club's hub re-reads its name and its race list every time a read receipt arrives.**
       Measured on the iPhone 2026-08-19: thirteen seconds of ordinary use cost 6 reads of
