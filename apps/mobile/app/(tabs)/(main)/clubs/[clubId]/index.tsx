@@ -102,8 +102,31 @@ export default function ClubHubScreen() {
   const [confirmClear, setConfirmClear] = useState<RaceListItem | null>(null);
   const [confirmLeave, setConfirmLeave] = useState<RaceListItem | null>(null);
 
-  const club = useLoad(() => clubApi.detail(clubId), [clubId, revision]);
-  const races = useLoad(() => raceApi.list(clubId), [clubId, revision]);
+  /*
+   * A club's name and its race list, read on arrival and on RETURN - never on `revision`.
+   *
+   * > **A read receipt was re-reading both of them.** `revision` is bumped for everything the
+   * > socket hears about, and `msg.read` frames are the loudest of those: somebody else's read
+   * > cursor moving. Measured on the iPhone 2026-08-19, thirteen seconds of ordinary use with
+   * > this screen mounted behind the chat cost 4 reads of the club and 4 of the race list, and
+   * > the answer was identical every time. A message being read cannot rename a club or add a
+   * > race to it.
+   *
+   * This is 2.4 exactly - the chat screen re-reading its own title on every message - on a
+   * different screen, so it takes 2.4's fix unchanged.
+   *
+   * **What this trades away, stated rather than discovered later.** A rename or a new race made
+   * by somebody else no longer lands on a mounted hub the instant it happens; it lands when the
+   * screen is next returned to. That is the same trade 2.4 made for the chat title, and `act`
+   * below still refreshes both after anything done from this screen.
+   *
+   * `states` keeps `revision` deliberately: unread counts are what a `msg.read` frame genuinely
+   * changes, so that one read is doing exactly the job the signal is for.
+   */
+  const club = useLoad(() => clubApi.detail(clubId), [clubId]);
+  const races = useLoad(() => raceApi.list(clubId), [clubId]);
+  useRefreshOnReturn(club, clubId);
+  useRefreshOnReturn(races, clubId);
   // Inside this club for as long as this screen is mounted, and carrying its name so every
   // header below can show the club's identity rather than the screen's.
   useDeclareClub(clubId, club.data?.club.name, club.data?.club.image);

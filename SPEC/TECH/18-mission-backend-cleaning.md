@@ -347,6 +347,38 @@ list refreshing because it is the screen being navigated TO.
 
 **Status: done.** `apps/mobile/src/use-badge.ts`, `app/(tabs)/notifications.tsx`.
 
+### 2.13 Two screens re-read themselves every time somebody else read a message
+
+**This is 3.4's actionable half, closed.** The club hub keyed its club detail and race list on
+`revision`, and the Profile tab keyed all three of its reads on it. `revision` is bumped for
+everything the socket hears about, and the loudest of those is not a message arriving - it is
+**`msg.read`**, somebody else's read cursor moving.
+
+**Measured on the iPhone 2026-08-19.** Thirteen seconds of ordinary use, with the hub mounted
+behind the chat: 4 reads of `/clubs/:id` and 4 of `/clubs/:id/races`, every answer identical. A
+message being read cannot rename a club, add a race to it, change your email, or join you to
+anything.
+
+Profile matters more than it looks, because **a tab screen stays mounted once opened** (2.10) - so
+that screen sat behind whatever was on top, answering socket traffic all day.
+
+**The fix.** 2.4's, unchanged: read on arrival, on return via `useRefreshOnReturn`, and after an
+action that changes it. `act` on the hub already refreshed both after anything done there.
+
+**What `/channels` keeps, and why it is not an inconsistency.** The hub's unread read stays on
+`revision` deliberately. Unread counts are exactly what a `msg.read` frame changes, so that one is
+the signal doing its job rather than being misused - which is the whole distinction 3.4 was drawing
+and had never been acted on.
+
+**The trade, stated rather than discovered.** A rename or a new race made by somebody else reaches
+a mounted hub on the next return rather than instantly. Same trade 2.4 made for the chat title.
+
+**Measured after, on the device.** Six `msg.read` frames arrived; **zero** club or race reads
+followed any of them. The two that remain in the window are an app start and the navigation into
+the hub, both arrivals.
+
+**Status: done.** `clubs/[clubId]/index.tsx`, `(tabs)/(profile)/profile/index.tsx`.
+
 ---
 
 ## 3. Still open
@@ -384,37 +416,22 @@ Two honest options, neither taken yet:
   that actually happened. This is feature work, not cleanup, and it belongs with
   [PRD/11](../PRD/11-polls.md) rather than here.
 
-### 3.4 Six reads on three screens still key on `revision`
+### 3.4 Three reads still key on `revision`, and all three are correct
 
-Left deliberately, because they are not the same defect as 2.4 - they use "something changed" as a
-general signal, and that is defensible:
+**Closed by 2.13, apart from the ones that were right all along.** What remains:
 
-| Screen | Read |
-|---|---|
-| Profile | own profile, own club list, own identity |
-| A club's hub | club detail, race list |
-| The inbox | the notification page |
-| The chat list | `/conversations` |
-| A club's hub | `/channels` |
+| Screen | Read | Why it stays |
+|---|---|---|
+| The inbox | the notification page | a message genuinely changes an inbox |
+| The chat list | `/conversations` | a message genuinely changes a chat list |
+| A club's hub | `/channels` | a read receipt genuinely changes unread counts |
 
-The last three are **correct**: a message genuinely changes an inbox, a chat list and unread
-counts. The first four cannot be changed by a message arriving. With 2.3 in place each fires once
-per burst rather than five times, so the cost is much smaller - but it is not zero, and the
-question of whether a club rename should reach a mounted screen live is a product one.
+The five that could not be changed by socket traffic - a club's detail, its race list, and the
+Profile tab's own profile, club list and identity - moved to arrival-and-return in 2.13.
 
-**Measured 2026-08-19, and the trigger is not what this entry assumed.** Thirteen seconds of
-ordinary use on the iPhone, with the hub mounted behind the chat: `/channels` read **6 times**,
-`/clubs/:id` **4 times**, `/clubs/:id/races` **4 times**. The driver is not messages arriving. It
-is **`msg.read` frames** - somebody else's read cursor moving, which the session bumps `revision`
-for like everything else.
-
-That reframes the row above. A read receipt genuinely changes an unread count, so `/channels` on
-that screen is defensible. It cannot change a club's **name** or its **race list**, and those two
-are re-read at the same rate by the same signal. This is 2.4 exactly, on a different screen, and
-2.4's fix applies unchanged: read on arrival, on return, and after an action that changes it.
-
-Confirmed pre-existing rather than introduced by 2.11 - the 2026-08-18 trace shows the same pairs
-while `/channels` was still unscoped, so all three reads have always moved together.
+One number worth keeping in view: `/conversations` was measured at **6 reads for one message
+sent** on 2026-08-19. That is correct in kind and probably not in quantity, and it is the 2.3
+coalescing window rather than this entry.
 
 ### 3.5 What the server does per request has never been measured
 

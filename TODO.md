@@ -43,8 +43,10 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       whenever nothing is wrong. Decide what it should say when healthy, or drop it.
 
 - [ ] **The app asks for more than it needs, and the open half of that lives in
-      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md).** Twelve defects found and fixed by
-      watching the wire, ten on 2026-08-18 and two on 08-19; six remain. Largest open item: one
+      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md).** Thirteen defects found and fixed by
+      watching the wire, ten on 2026-08-18 and three on 08-19; five remain. **The largest by far
+      is pictures**: one measured window on the device spent 50 of its 110 requests - 45% of all
+      traffic - fetching 34 picture links one at a time. Largest open item: one
       request per picture, the same shape as the three batching defects already fixed. Largest
       unknown: what the server does to answer one request, which has never been measured at all.
       And **most of 145 routes have never been watched by anything** - that document carries the
@@ -56,15 +58,6 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       inbox announced to the whole app to refresh a number that the write it had just made had
       already returned. Watching the wire finds request counts; both of these needed somebody to
       open the payload.
-
-- [ ] **A club's hub re-reads its name and its race list every time a read receipt arrives.**
-      Measured on the iPhone 2026-08-19: thirteen seconds of ordinary use cost 6 reads of
-      `/channels`, 4 of `/clubs/:id` and 4 of `/clubs/:id/races`, driven by `msg.read` frames
-      rather than by messages arriving. Unread counts genuinely change when somebody reads
-      something; a club's **name** and its **race list** cannot. This is
-      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md) 2.4 on a different screen, and 2.4's
-      fix applies unchanged - read on arrival, on return, and after an action that changes it.
-      Pre-existing rather than new: the 08-18 trace shows the same pairs.
 
 - [ ] **Recurrence** is the next real feature, and is deferred rather than pending - see below.
       Nothing else in Weekly Meetups is outstanding: Nudge shipped and was verified on a device on

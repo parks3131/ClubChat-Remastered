@@ -42,10 +42,10 @@ import {
   SearchField,
   SectionHeader,
 } from '../../../../src/ui.tsx';
-import { useLoad } from '../../../../src/use-load.ts';
+import { useLoad, useRefreshOnReturn } from '../../../../src/use-load.ts';
 
 export default function ProfileScreen() {
-  const { authState, userId, signOut, revision } = useSession();
+  const { authState, userId, signOut } = useSession();
   const router = useRouter();
   // The tab bar floats OVER this screen - "Edit Profile" was the row it was cutting in half.
   const insets = useSafeAreaInsets();
@@ -79,13 +79,32 @@ export default function ProfileScreen() {
   };
   const [clubSearch, setClubSearch] = useState('');
 
+  /*
+   * Your own profile, your own clubs, your own identity - on arrival and on RETURN, not on
+   * `revision`.
+   *
+   * > **All three were re-read whenever anything happened on the socket**, and none of them can
+   * > be changed by it. A message arriving, or somebody else's read cursor moving, does not
+   * > rename you, does not change your email, and does not join you to a club. This is the
+   * > entry TECH/18 3.4 lists as "Profile: own profile, own club list, own identity", and it is
+   * > 2.4's defect a third time.
+   *
+   * A tab screen stays mounted once opened (2.10), so before this the Profile tab kept answering
+   * socket traffic from behind whatever you were actually looking at.
+   *
+   * Joining or leaving a club still shows up, because that is a return to this screen - the same
+   * mechanism 2.10 gave the calendar. Actions taken here already call `reload` themselves.
+   */
   const profile = useLoad(
     () => (userId ? accountApi.profile(userId) : Promise.reject(new Error('no session'))),
-    [userId, revision],
+    [userId],
   );
-  const clubs = useLoad(() => clubApi.mine(), [revision]);
+  const clubs = useLoad(() => clubApi.mine(), []);
   // The email lives on the identity read, never on a profile - see `readIdentity`.
-  const identity = useLoad(() => accountApi.me(), [revision]);
+  const identity = useLoad(() => accountApi.me(), []);
+  useRefreshOnReturn(profile, userId ?? '');
+  useRefreshOnReturn(clubs, userId ?? '');
+  useRefreshOnReturn(identity, userId ?? '');
   const allClubs = clubs.data?.clubs ?? [];
   const clubCount = allClubs.length;
 
