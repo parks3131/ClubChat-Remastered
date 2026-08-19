@@ -26,6 +26,7 @@ import {
   withinEditWindow,
   VISIBLE_REACTION_PILLS,
   SYSTEM_ACTOR_ID,
+  type ChannelScope,
   type MessageEnvelope,
   type MessageReaction,
   type MessageReplyRef,
@@ -220,6 +221,36 @@ const DENIED_TEXT: Record<
  *
  * Every target is addressed by the SCOPE id, which is why the channel meta carries it.
  */
+/**
+ * The line under the conversation's name, when the socket is healthy.
+ *
+ * > **It read "ClubChat" until 2026-08-18** - hardcoded, so a status line showed the app's own
+ * > name whenever nothing was wrong, and said something only when something was. A second line
+ * > that is furniture is worse than no second line: it occupies the one place a header can
+ * > answer a question and answers none.
+ *
+ * What it answers instead is **which of the four kinds of conversation this is**, which is the
+ * question somebody arriving from a notification actually has. The name above it identifies the
+ * space; this says what the space *is*. Both are already in hand from the channel's own meta, so
+ * this costs no request - which is why it is this rather than a member count, the other honest
+ * candidate. See `SPEC/TECH/18`.
+ *
+ * Takes the full `ChannelScope` rather than the three that have a space, so a DM gets a real
+ * answer rather than an empty line, and a fifth scope is a type error here.
+ */
+function scopeSubtitle(scope: ChannelScope): string {
+  switch (scope) {
+    case "club":
+      return "Club chat";
+    case "race":
+      return "Race chat";
+    case "eboard":
+      return "Eboard chat";
+    case "dm":
+      return "Direct message";
+  }
+}
+
 function scopeLinks(
   scope: "club" | "race" | "eboard",
   meta: { scopeId: string; clubId: string | null; channelId: string },
@@ -2159,16 +2190,6 @@ export default function ChatScreen() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  /** The dropdown of this conversation's other screens. */
-  const [gridOpen, setGridOpen] = useState(false);
-  /**
-   * The header's bottom edge, measured, so the dropdown can hang off it.
-   *
-   * Measured rather than computed from `insets.top` plus a constant: the header's height is the
-   * sum of a safe-area inset, its own padding and the tallest thing in its row, and a constant
-   * that duplicated that arithmetic would be wrong on the first device with a different notch.
-   */
-  const [headerBottom, setHeaderBottom] = useState(0);
   /** True while bytes are in flight, so the "+" cannot start a second upload. */
   const [uploading, setUploading] = useState(false);
   /**
@@ -3444,15 +3465,38 @@ export default function ChatScreen() {
   };
 
   /*
-   * What the DM header's "..." offers: the two things that hang off a conversation with no club
-   * around it.
+   * What the header's "..." offers: this conversation's other screens in a club, race or Eboard
+   * space, and the two things that hang off a DM, which has no space to navigate.
+   *
+   * > **One list, one control, one treatment, from 2026-08-18.** These were two separate menus
+   * > in the same header, one glyph apart, and they had drifted: the DM's became a `ContextMenu`
+   * > on 2026-08-17 and so blurred and dimmed behind itself, while the group's stayed a bare
+   * > anchored panel over a transparent scrim. The *same header* therefore treated the screen
+   * > behind it two different ways depending only on whether the conversation was a DM - not a
+   * > decision anybody made, just the order the two were built in. Merging them is the fix that
+   * > cannot come apart again, where matching the treatments by hand is one somebody has to keep
+   * > re-making.
    *
    * Icon and label only, like every other menu in the product. The explanatory second line each
-   * of these used to carry went two different ways rather than being dropped wholesale - mute's
-   * says the same thing its toast already says, and block's became the confirmation below, since
-   * it was the only statement anywhere of what a block does.
+   * of the DM's items used to carry went two different ways rather than being dropped wholesale -
+   * mute's says the same thing its toast already says, and block's became the confirmation below,
+   * since it was the only statement anywhere of what a block does.
    */
   const menuItems: ContextMenuItem[] = [];
+  if (meta !== null && spaceScope !== undefined) {
+    for (const link of scopeLinks(spaceScope, meta)) {
+      menuItems.push({
+        label: link.label,
+        icon: link.icon,
+        // Closed before the push, not after: leaving the menu open behind a screen that has
+        // already been replaced is what the old panel did on a slow navigation.
+        onPress: () => {
+          setMenuAnchor(null);
+          router.push(link.href);
+        },
+      });
+    }
+  }
   if (meta?.scope === "dm") {
     menuItems.push({
       label: meta.muted ? "Unmute" : "Mute",
@@ -3522,10 +3566,6 @@ export default function ChatScreen() {
         intensity={80}
         tint="light"
         style={[styles.header, { paddingTop: insets.top + space.sm }]}
-        onLayout={(event) => {
-          const { y, height } = event.nativeEvent.layout;
-          setHeaderBottom(y + height);
-        }}
       >
         <Pressable
           onPress={goBack}
@@ -3603,7 +3643,7 @@ export default function ChatScreen() {
             {meta?.name ?? (metaResolved ? "Chat" : "")}
           </Text>
           <Text style={styles.headerSubtitle} numberOfLines={1}>
-            {meta === null ? "" : offline ? "Reconnecting" : "ClubChat"}
+            {meta === null ? "" : offline ? "Reconnecting" : scopeSubtitle(meta.scope)}
           </Text>
         </Pressable>
         {/*
@@ -3622,19 +3662,12 @@ export default function ChatScreen() {
           one glyph a phone user reads as "there is more behind this" without being taught, and it
           is what every other menu in this app already uses.
         */}
-        {meta !== null && meta.scope !== "dm" && (
-          <Pressable
-            onPress={() => setGridOpen((open) => !open)}
-            accessibilityRole="button"
-            accessibilityLabel="This conversation's screens"
-            hitSlop={space.sm}
-            style={styles.headerAction}
-          >
-            <MaterialIcons name="more-vert" size={20} color={color.accent} />
-          </Pressable>
-        )}
-        {meta?.scope === "dm" && menuItems.length > 0 && (
+        {menuItems.length > 0 && (
           /*
+            ONE control for every scope, which is the point rather than a tidy-up: two buttons
+            in one corner, each raising its own menu, is how the two menus came to treat the
+            background differently. See `menuItems`.
+
             `collapsable={false}` so the view survives to be measured. React Native flattens a
             view that only wraps another one, and a flattened host has no node for
             `measureInWindow` to report - the menu would then open at the fallback touch point
@@ -3655,12 +3688,18 @@ export default function ChatScreen() {
                 )
               }
               accessibilityRole="button"
-              accessibilityLabel="Conversation options"
+              /*
+                The control is one; what it opens is not, so the name it announces still says
+                which. A screen reader hearing "options" on a list of five destinations has been
+                told the wrong thing about where a tap goes.
+              */
+              accessibilityLabel={
+                meta?.scope === "dm" ? "Conversation options" : "This conversation's screens"
+              }
               hitSlop={space.sm}
               style={styles.headerAction}
             >
-              {/* Vertical, like the group header beside it: one corner, one glyph, whatever the
-                  conversation is. It held the horizontal pair while the group chats held a grid. */}
+              {/* Vertical: one corner, one glyph, whatever the conversation is. */}
               <MaterialIcons name="more-vert" size={20} color={color.accent} />
             </Pressable>
           </View>
@@ -3668,49 +3707,7 @@ export default function ChatScreen() {
       </BlurView>
 
       {/*
-        The dropdown: where this conversation's other screens live.
-
-        Anchored under the header rather than shown as a permanent strip, because these are places
-        you go occasionally and a row of six chips above every conversation spends the screen's
-        most valuable space on navigation.
-
-        > **`top` is measured, and leaving it unset was the whole bug.** An absolutely positioned
-        > view with no `top` lays out at the top of its container, which here is the screen - so
-        > the panel opened OVER the status bar and the header, clipping the title and the back
-        > button into what looked like a divided header. The comment above already said "anchored
-        > under the header"; the anchor itself was never written, and nothing failed because a
-        > menu in the wrong place still renders and still works.
-      */}
-      {gridOpen && meta !== null && meta.scope !== "dm" && (
-        <>
-          <Pressable
-            style={styles.gridScrim}
-            onPress={() => setGridOpen(false)}
-            accessibilityRole="button"
-            accessibilityLabel="Close"
-          />
-          <View style={[styles.gridMenu, { top: headerBottom + space.xs }]}>
-            {scopeLinks(meta.scope, meta).map((item) => (
-              <Pressable
-                key={item.href}
-                style={styles.gridRow}
-                onPress={() => {
-                  setGridOpen(false);
-                  router.push(item.href);
-                }}
-                accessibilityRole="button"
-                accessibilityLabel={item.label}
-              >
-                <MaterialIcons name={item.icon} size={18} color={color.accent} />
-                <Text style={styles.gridRowLabel}>{item.label}</Text>
-              </Pressable>
-            ))}
-          </View>
-        </>
-      )}
-
-      {/*
-        v1's floating pinned strip.
+        v1's pinned strip.
 
         The point of a pin is that it stays reachable without scrolling, and Highlights alone does
         not do that: it is a screen you have to go to. Horizontal, because a channel can carry
@@ -3796,10 +3793,17 @@ export default function ChatScreen() {
           contentContainerStyle={styles.pinnedStripContent}
         >
           {pinnedRows.map((message) => (
-            <BlurView
+            /*
+              A plain view, not a `BlurView`, from 2026-08-18.
+
+              The strip sits in normal flow and the conversation begins below it, so there has
+              never been anything behind these cards to blur - which is the design review's own
+              "a translucent surface over a scene that ends beneath it is an opaque surface with
+              extra steps", and it cost a `UIVisualEffectView` per notice to say it. Seating the
+              strip in `chrome` is what the blur was standing in for: separation from the page.
+            */
+            <View
               key={message.seq}
-              intensity={60}
-              tint="light"
               style={styles.pinnedCard}
             >
               <Pressable
@@ -3846,7 +3850,7 @@ export default function ChatScreen() {
                   color={color.textSecondary}
                 />
               </Pressable>
-            </BlurView>
+            </View>
           ))}
         </ScrollView>
         </Animated.View>
@@ -5736,7 +5740,10 @@ const styles = StyleSheet.create({
    * one place the product's own title stopped looking like a title.
    */
   headerTitle: { ...type.headerTitle, color: color.accent },
-  /** 9px, v1's value. Doubles as the connection state, which chat is the one screen to care. */
+  /**
+   * 9px, v1's value. Says which kind of conversation this is, and the connection state when
+   * there is one to report - see `scopeSubtitle` for why it is no longer the app's own name.
+   */
   headerSubtitle: { ...type.label, fontSize: 9, color: color.textSecondary },
   /*
     The attachment panel, which stands in the keyboard's place.
@@ -5766,29 +5773,6 @@ const styles = StyleSheet.create({
   },
   attachTileLabel: { ...type.bodySmall, color: color.textPrimary },
 
-  // Full-bleed, so a tap anywhere outside the card closes it.
-  gridScrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 60 },
-  /** `top` is supplied at render from the measured header, and is not optional - see the note there. */
-  gridMenu: {
-    position: 'absolute',
-    right: space.md,
-    zIndex: 61,
-    backgroundColor: color.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.hairline,
-    paddingVertical: space.sm,
-    minWidth: 220,
-  },
-  gridRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.md,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm + 2,
-  },
-  gridRowLabel: { ...type.body, color: color.textPrimary },
-
   /*
    * The overflow control, matched to the back control beside it.
    *
@@ -5817,12 +5801,40 @@ const styles = StyleSheet.create({
    * `overflow: hidden` is what makes the slide a slide: without it the content translating up
    * simply draws over the header instead of disappearing behind it, which looks like a bug
    * rather than like motion.
+   *
+   * > **`chrome`, the header's own surface, from 2026-08-18 - the strip is SEATED, not floating.**
+   * > It had no background at all, so the conversation began the instant the cards ended and its
+   * > topmost row was sheared flat eight points under them. A sent bubble is peach and
+   * > right-aligned, so what a member saw was an accent-tinted rounded shape with one straight
+   * > edge, sitting under a peach-accented notice card, cut off where the next card began: read
+   * > from a device on 2026-08-14 as something escaping the cards, and reported as a clipping
+   * > bug in a `BlurView`. Nothing was escaping anything. There was simply nothing between a
+   * > floating-looking object and the conversation it was floating over.
+   * >
+   * > Seating it also earns the cards their contrast. White on `chrome` reads as a card; white
+   * > on `appBackground`, which is what they had, is a hairline holding up a shape.
    */
-  pinnedStripClip: { overflow: "hidden" },
+  pinnedStripClip: { overflow: "hidden", backgroundColor: color.chrome },
+  /*
+   * The rail, and the hairline that ends the chrome.
+   *
+   * > **The hairline lives here, inside the clip, rather than on the clip itself.** On the clip it
+   * > would survive the collapse - a bordered box of zero height still draws its border - leaving
+   * > a doubled rule under the header whenever something is pinned and the strip is hidden, which
+   * > is most of the time. Inside, it is clipped away with everything else, and on the way out it
+   * > rides the bottom edge of the shrinking band rather than detaching from it.
+   *
+   * Padded top and bottom rather than top alone, so the cards sit in the band the way the title
+   * sits in the header above it. Without the bottom half the cards met the conversation directly,
+   * which is half of why the sheared row read as part of them.
+   */
   pinnedStrip: {
     flexGrow: 0,
     paddingHorizontal: space.md,
-    paddingTop: space.sm,
+    paddingVertical: space.sm,
+    borderBottomWidth: 1,
+    // The header's own bottom rule, so the two ends of the chrome match.
+    borderBottomColor: "rgba(0,0,0,0.05)",
   },
   pinnedStripContent: { gap: space.sm, alignItems: "center" },
   pinnedCard: {

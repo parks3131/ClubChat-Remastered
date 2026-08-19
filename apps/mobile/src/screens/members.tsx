@@ -71,7 +71,7 @@ export type MemberRow = {
   tag: string | null;
   /** Which section this row belongs under. Sections render in the order given to the screen. */
   section: string;
-  /** The caller's own row: it gets a lock instead of a menu, and can never be acted on. */
+  /** The caller's own row: it is marked "You" rather than locked, and can never be acted on. */
   isSelf: boolean;
 };
 
@@ -206,6 +206,32 @@ export function MembersScreen({
       ? rows
       : rows.filter((row) => row.name.toLowerCase().includes(needle));
   }, [rows, filter]);
+
+  /**
+   * Whether this viewer can act on anybody here at all, which is what decides whether the lock
+   * on an unactionable row means anything.
+   *
+   * > **The lock marks an EXCEPTION, so it needs a rule to be an exception to.** For an admin,
+   * > who has a menu on most rows, a lock says "this one, unlike the others, has nothing behind
+   * > it" - which is the whole reason it is drawn rather than left as a blank gap. For a plain
+   * > member, who has a menu on no row, it is not the exception, it is every row: nine locks
+   * > down a roster of nine people, saying the club's own member list is somehow sealed. Worse,
+   * > the same glyph already carries a real and actionable meaning one screen away - a race on
+   * > the club hub that this viewer cannot reach - so the roster teaches them to read "locked"
+   * > as "you are shut out" and then says it about everybody they know.
+   *
+   * Computed over `rows` rather than `visible`, so it is a fact about the viewer rather than
+   * about the search: filtering down to the one person an admin cannot act on must not make the
+   * locks vanish from a roster that had them a keystroke ago.
+   *
+   * Deliberately not a `useMemo`. Every caller builds `actionsFor` inline, so its identity
+   * changes on every render and a memo keyed on it would recompute every time anyway - while
+   * claiming in the code that it does not. `some` stops at the first row with an action, which
+   * for an admin is usually the first row it looks at.
+   */
+  const viewerCanActOnSomebody = rows.some(
+    (row) => !row.isSelf && actionsFor(row).length > 0,
+  );
 
   /**
    * Open a person: the card over the list when the caller supplies one, the profile screen
@@ -393,9 +419,15 @@ export function MembersScreen({
                       </View>
                       {row.isSelf && <Text style={styles.you}>You</Text>}
                       {busy === row.userId && <ActivityIndicator color={color.accent} />}
-                      {!row.isSelf && busy !== row.userId && actions.length === 0 && (
-                        // A row with nothing to do to it gets a lock rather than a blank gap,
-                        // so "no menu here" reads as deliberate rather than as a missing control.
+                      {!row.isSelf &&
+                        busy !== row.userId &&
+                        actions.length === 0 &&
+                        viewerCanActOnSomebody && (
+                        // A row with nothing to do to it gets a lock rather than a blank gap, so
+                        // "no menu here" reads as deliberate rather than as a missing control -
+                        // but only for a viewer who has a menu somewhere else on this roster. See
+                        // `viewerCanActOnSomebody`: to somebody who can act on nobody, this is
+                        // not an exception, it is a wall.
                         <MaterialIcons
                           name="lock"
                           size={16}
