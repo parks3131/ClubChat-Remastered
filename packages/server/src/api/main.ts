@@ -19,11 +19,20 @@ import {
   reconcilePlatformModerators,
 } from '../domain/platform-moderators.ts';
 import { buildApp } from './app.ts';
+import { instrumentPool } from '../dev/queries.ts';
 import { createTracer, devTraceEnabled } from '../dev/trace.ts';
 import { S3MediaStore } from '../media/store.ts';
 
 const config = loadConfig();
 const pool = createPool(config.DATABASE_URL);
+/*
+ * Count the statements each request runs, in development only.
+ *
+ * Before `createDb`, because drizzle keeps its own reference to the pool from that moment on.
+ * Behind the same gate as the tracer, and for the same reason: this is the only place that
+ * decides, so a production boot and every test get the plain pool. See `dev/queries.ts`.
+ */
+if (devTraceEnabled()) instrumentPool(pool);
 const db = createDb(pool);
 
 /*

@@ -44,10 +44,12 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
 
 - [ ] **The app asks for more than it needs, and the open half of that lives in
       [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md).** Fourteen defects found and fixed by
-      watching the wire, ten on 2026-08-18 and four on 08-19; four remain, and **the batching
-      family is now closed** - `/sync`, the cards, and pictures all take lists. What is left is a
-      different shape: an unexplained double render, a missing event, and two things that have
-      never been measured at all. Largest open item: one
+      watching the wire, ten on 2026-08-18 and four on 08-19, and **the batching family is closed**
+      - `/sync`, the cards, and pictures all take lists.
+
+      **The wire has now been read out.** 2.15 built the layer below it: every request carries the
+      number of database round trips it cost, on the trace and on the dashboard. It immediately
+      found what it was built to look for - see the next item. Largest open item: one
       request per picture, the same shape as the three batching defects already fixed. Largest
       unknown: what the server does to answer one request, which has never been measured at all.
       And **most of 145 routes have never been watched by anything** - that document carries the
@@ -63,6 +65,21 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       **The largest single item is now closed**: pictures were one request each, 45% of all
       traffic in a measured window. `GET /media/urls?ids=` took it from 1.15 requests per picture
       to 0.42, verified by scrolling a picture-heavy chat on the phone.
+
+- [ ] **The batch routes are N+1 underneath, and `GET /polls?ids=` is `3 + 5n` queries.**
+      Measured 2026-08-19 with the new counter: 1 id costs 8 round trips, 8 ids cost 43. The
+      conversation measured back in 2.7 held **26 poll cards** - one request now, and **133
+      statements** to answer it. Nothing is slow (12ms locally, because the statements are
+      trivial), and that is the point: it is invisible on the wire and it grows with what a
+      conversation holds.
+
+      The shape of the fix is known and written down in
+      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md) 3.5: four of `readPoll`'s five
+      statements are `WHERE poll_id = ?` and want to be `= ANY(?)` gathered once, **with
+      `canAccessPoll` still called once per id** so 2.7's rule survives. It is a domain-layer
+      change with an authorization rule in the middle, so it wants its own pass with
+      `batch-reads.test.ts` as the gate. `GET /media/urls?ids=` is the same shape and has not
+      been measured.
 
 - [ ] **Recurrence** is the next real feature, and is deferred rather than pending - see below.
       Nothing else in Weekly Meetups is outstanding: Nudge shipped and was verified on a device on

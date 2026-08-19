@@ -36,6 +36,12 @@ times. The measurement is the method:
 open http://localhost:3000/dev/trace          # the live page
 rm -f .dev-trace/trace.jsonl                  # start a clean session
 curl -s localhost:3000/dev/trace/recording    # is it still recording
+
+# What each request cost BELOW the wire, added 2026-08-19 (2.15). Every http event carries
+# `queries` and `dbMs`, and the row shows a badge that turns colour past 12 and past 30.
+jq -r 'select(.kind=="http" and .queries != null)
+       | "\(.queries)q \(.dbMs)ms  \(.method) \(.route)"' .dev-trace/trace.jsonl \
+  | sort -rn | head -20                       # the most expensive answers, not the slowest
 ```
 
 Every REST request, every socket frame in both directions, and every outbox effect, from all
@@ -421,6 +427,45 @@ which is correct rather than waste.
 
 **Status: done.** `routes/media.ts`, `apps/mobile/src/api.ts`, `test/batch-reads.test.ts`.
 
+### 2.15 What the server does per request, measured for the first time
+
+**Everything in 2.1 to 2.14 is about what the CLIENT asks for.** Nothing had ever looked at what
+the server does to answer one question. The dev trace knew the wall time of every request and
+nothing had exceeded 85ms, so there was no fire to follow - which is exactly the shape of this
+whole mission, one layer down.
+
+**The tool.** A counter in async context, opened by the API's `onRequest` hook and read back in
+`onResponse`, with every pooled client wrapped so it reports each statement. `queries` and `dbMs`
+now ride on every HTTP trace event and show on the dashboard row beside `ms`.
+
+`AsyncLocalStorage` rather than a field on the request, because a query is run by `domain/` code
+that has no idea a request exists - and that boundary is the point. Threading a counter through
+every signature to measure something would leave the measurement one forgotten parameter away
+from being quietly wrong.
+
+**Three ways it was wrong before it was right, all found by its own test in the first hour.** They
+are worth recording because each produced a plausible number:
+
+| Attempt | Reported | Why |
+|---|---|---|
+| Wrapped `pool.query` **and** the client | **double** | `Pool.query` is not a separate path; it acquires a client and runs `client.query` |
+| Wrapped only the promise form of `connect` | **zero** | `Pool.query` acquires through the CALLBACK form |
+| Read the counter when the query **returned** | **zero, or somebody else's** | pg fires completion in its own async context, rooted where that pooled connection was first opened |
+
+The fix for the third is the one worth keeping: **the counter is captured when a query is sent,
+never when it comes back.** A query belongs to the code that asked for it.
+
+> **A measuring instrument needs a test more than the code it measures does.** A number wrong in
+> the flattering direction closes an investigation; one wrong the other way starts a hunt for a
+> defect that is not there. The first numbers this tool produced were exactly twice the truth and
+> looked entirely reasonable.
+
+**Inert outside development.** `instrumentPool` is called from one place behind `devTraceEnabled()`,
+like the tracer, so a production boot and every test get the plain pool.
+
+**Status: done.** `dev/queries.ts`, `dev/queries.test.ts`, `api/app.ts`, `api/main.ts`,
+`dev/trace.ts`, `dev/dashboard.html`.
+
 ---
 
 ## 3. Still open
@@ -465,16 +510,41 @@ One number worth keeping in view: `/conversations` was measured at **6 reads for
 sent** on 2026-08-19. That is correct in kind and probably not in quantity, and it is the 2.3
 coalescing window rather than this entry.
 
-### 3.5 What the server does per request has never been measured
+### 3.5 The batch routes are N+1 one layer down, which is what 2.15 was built to check
 
-Everything above is about **what the client asks for**. Nothing has ever looked at what the server
-does to answer one question - whether a single request becomes twenty database round trips. The
-batch routes in 2.7 deliberately loop `readPoll` per id, which is right for authorization and is
-exactly the shape that hides an N+1 one layer down.
+**Predicted, then measured, on the day the tool existed.** The batch routes deliberately loop
+their single-item authorizer once per id - `readPoll` per poll, `resolveMediaRedirect` per
+picture - because a second copy of the access rule is the one that forgets that a race poll is
+invisible to a club admin with no roster row. That is right, and it is exactly the shape that
+hides an N+1 beneath it.
 
-The dev trace already knows the wall time of every request (nothing measured has exceeded 85ms, so
-there is no fire), but a per-request query count would be the same trick applied to the layer
-below, and it is the natural next tool to build.
+`GET /polls?ids=` costs **`3 + 5n` database round trips**:
+
+| ids | queries |
+|---|---|
+| 1 | 8 |
+| 2 | 13 |
+| 4 | 23 |
+| 8 | 43 |
+
+The conversation measured in 2.7 held **26 poll cards**. That screen now makes one request
+instead of 26, and that request runs **133 statements**. The client-side win in 2.7 was real and
+is not undone by this; what changed is that the cost moved somewhere nobody was looking.
+
+**Nothing is on fire.** The slowest of those requests was 12ms, because the statements are
+trivial and the round trip is local. On a managed database across a network boundary it is 133
+of them, and it grows with how much a conversation contains.
+
+**The tension is the point, and it has a known answer.** `readPoll` runs five statements: the
+ref, the row, its options, the caller's votes, and the voter list. Four of the five are
+`WHERE poll_id = ?` and would be `WHERE poll_id = ANY(?)` for the whole batch, gathered once and
+handed to a per-id assembler - **with `canAccessPoll` still called once per id, on the ref it
+already loads**. That keeps the property 2.7 exists to protect while paying for the data once.
+
+Not attempted here: this is a domain-layer change with an authorization rule sitting in the
+middle of it, and it wants its own pass with `batch-reads.test.ts` as the gate.
+
+**`GET /media/urls?ids=` has not been measured** and is the same shape by construction.
 
 ### 3.6 The iPhone has barely been measured
 

@@ -38,6 +38,7 @@ import {
 } from './rate-limit.ts';
 import { readIdentity } from '../domain/account.ts';
 import { registerDevDashboard, type RouteEntry } from '../dev/dashboard.ts';
+import { beginQueryCount, type QueryCount } from '../dev/queries.ts';
 import { readBody } from '../dev/trace.ts';
 import { registerAccountRoutes } from './routes/account.ts';
 import { registerCalendarRoutes } from './routes/calendar.ts';
@@ -125,6 +126,23 @@ export function buildApp(deps: AppDeps): FastifyInstance {
      */
     const payloads = new WeakMap<FastifyRequest, unknown>();
 
+    /*
+     * The query counter, established as early as a hook can run.
+     *
+     * `onRequest` is the first hook in Fastify's lifecycle, so everything a handler does below
+     * it - including the session lookup and the rate limiter, which are themselves reads - is
+     * inside the count. That is deliberate: "what did this request cost" has to include the
+     * plumbing, or the number flatters every route equally.
+     *
+     * Stored on the side like `payloads` above, so the shared `FastifyRequest` type does not
+     * grow a field that exists in development only.
+     */
+    const counters = new WeakMap<FastifyRequest, QueryCount>();
+
+    app.addHook('onRequest', async (request) => {
+      counters.set(request, beginQueryCount());
+    });
+
     app.addHook('onSend', async (request, _reply, payload) => {
       payloads.set(request, payload);
       return payload;
@@ -149,6 +167,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       if (request.url.startsWith('/dev/')) return;
 
       const ms = Math.round(reply.elapsedTime);
+      // Spread rather than assigned: `exactOptionalPropertyTypes` is on, so an absent counter
+      // has to mean an absent field rather than a present `undefined`.
+      const counted = counters.get(request);
       tracer.emit({
         kind: 'http',
         id: request.id,
@@ -161,6 +182,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         userId: request.userId ?? null,
         reqBody: readBody(request.body),
         resBody: readBody(payloads.get(request)),
+        ...(counted ? { queries: counted.queries, dbMs: counted.dbMs } : {}),
       });
     });
   }

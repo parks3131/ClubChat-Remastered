@@ -119,6 +119,9 @@
   .row .time { color: var(--dimmer); font-size: 11px; flex: none; }
   .row .path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row .ms { color: var(--dimmer); font-size: 11px; flex: none; }
+  .row .q { color: var(--dimmer); font-size: 11px; flex: none; font-variant-numeric: tabular-nums; }
+  .row .q.warn { color: #d19a66; }
+  .row .q.bad { color: #e06c75; font-weight: 600; }
   .note {
     padding: 0 12px 6px 62px; color: var(--dimmer); font-size: 11.5px;
     font-style: italic; line-height: 1.45;
@@ -503,11 +506,26 @@
     return 'ok';
   }
 
+  /*
+   * How many database round trips this request cost.
+   *
+   * The number `ms` cannot show: a tidy 15ms answer that ran 133 statements is the defect this
+   * exists to make visible, and it is invisible on the wire by construction. Coloured rather
+   * than plain because the whole point is that nobody goes looking for a number on a request
+   * that already succeeded quickly - see TECH/18 3.5.
+   */
+  function queryBadge(ev) {
+    if (typeof ev.queries !== 'number') return '';
+    var cls = ev.queries >= 30 ? 'q bad' : ev.queries >= 12 ? 'q warn' : 'q';
+    return '<span class="' + cls + '" title="database round trips">' + ev.queries + 'q</span>';
+  }
+
   function rowHtml(ev, id, child) {
     var pill, right = '', arrow = '';
     if (ev.kind === 'http') {
       pill = '<span class="pill m-' + esc(ev.method) + '">' + esc(ev.method) + '</span>';
       right = '<span class="st ' + statusClass(ev) + '">' + ev.status + '</span>' +
+              queryBadge(ev) +
               '<span class="ms">' + ev.ms + 'ms</span>';
     } else if (ev.kind === 'ws') {
       pill = '<span class="pill m-WS">WS</span>';
@@ -607,6 +625,9 @@
       html += '<dl>' +
         '<dt>status</dt><dd class="' + statusClass(ev) + '">' + ev.status + '</dd>' +
         '<dt>took</dt><dd>' + ev.ms + ' ms</dd>' +
+        (typeof ev.queries === 'number'
+          ? '<dt>queries</dt><dd>' + ev.queries + ' round trips, ' + ev.dbMs + ' ms in the database</dd>'
+          : '') +
         '<dt>caller</dt><dd>' + esc(ev.userId || 'unauthenticated') + '</dd>' +
         '<dt>at</dt><dd>' + clock(ev.at) + '</dd>' +
         '</dl>';

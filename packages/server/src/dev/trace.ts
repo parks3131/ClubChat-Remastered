@@ -68,6 +68,19 @@ export type HttpTrace = {
   userId: string | null;
   reqBody: unknown;
   resBody: unknown;
+  /**
+   * Database round trips this request cost, and the time spent on them.
+   *
+   * > **The layer below `ms`.** Everything else here is what the client asked for; this is what
+   * > answering it cost. A tidy 15ms request that ran twenty statements is the defect this
+   * > exists to make visible, and no amount of watching the wire could ever have shown it.
+   *
+   * Optional because it is wired in one process: the API establishes a counter per request, and
+   * a gateway or worker event has none. `dbMs` sums each statement's own wait, so a handler
+   * running queries in parallel can report more of it than the request's whole `ms`.
+   */
+  queries?: number;
+  dbMs?: number;
 };
 
 /**
