@@ -13,6 +13,50 @@ Newest first.
 
 ---
 
+## 2026-08-19 - The calendar tab kept reading for a screen nobody was on
+
+Reported from the phone as a question rather than a fault: walking from the hub into a club and
+back out, why is `GET /calendar` on the wire at all, when the Calendar tab was never touched?
+
+The dev trace answered it flatly. Eighteen `GET /calendar` in the eight minutes before the fix,
+seven of them club-scoped and eleven cross-club, one per crossing in each direction, with the tab
+never once in front of anybody. The recording in `.dev-trace/trace.jsonl` is what made that a
+count rather than an impression, and it is the second time in three days that file has settled a
+question the code alone would have argued about.
+
+The cause is four links, none of them wrong on its own:
+
+- The Calendar destination follows whichever club is current, which `PRD/15` requires.
+- It does that by holding the club in a `useLoad` dep, so the club changing is a re-read.
+- A tab screen mounts lazily and then **never unmounts**, so the screen was live for the rest of
+  the session after one visit early on.
+- Entering a club declares it and leaving clears it, so every crossing moved that dep.
+
+An off-screen screen was therefore paying for data nobody could look at. `useFocusedValue` in
+`use-load.ts` is the fix: it returns a value as of the last time the screen was focused, because
+`useFocusEffect` runs its effect only while focused, so a change arriving while blurred is held
+rather than acted on and adopted on the next focus. The read is keyed on the deferred id and
+built from it too, since `useLoad` calls the newest `read` it was given and a closure over the
+live prop would have fetched the new club under the old key.
+
+**`useRefreshOnReturn` deliberately keeps the LIVE club**, and that asymmetry is load-bearing. On
+the focus that adopts a new club its key has already moved, so it counts that focus as a first
+open and stays quiet while the load runs. Handed the deferred value instead, both fire on the same
+focus and the screen makes the two round trips the deferral exists to remove, which is exactly the
+defect recorded under 2026-08-17 above, one hook further down.
+
+The trade-off is stated where it is made: the tab now shows a load when opened after a club
+change, instead of having been pre-fetched for a visit that may never come. That is what every
+other screen here does on arrival.
+
+**Verified:** mobile type check, the full suite, and the trace across a club entry and exit
+carrying no calendar read at all. **Not verified:** that the tab still shows the right club's feed
+when it IS opened after a change. The tree had remounted before the walk, so the tab was not
+mounted during it, and zero reads is the expected result under either version. The test that
+isolates it is to open Calendar once, then cross in and out.
+
+---
+
 ## 2026-08-17 - Four stale specs, and a save that erased what it never asked about
 
 A reading session that turned into a data-loss fix. Nothing here was reported from a phone; all

@@ -71,6 +71,44 @@ without being restated. Section 5 is the repo-specific part.
    can allocate, such as the running stack and the phone in section 2.5. A choice with an
    obvious default is made, mentioned, and moved past.
 
+### Re-entering
+
+10. **Write every user-facing message for cold re-entry.** The founder is juggling several
+    projects, each with several concurrent sessions, and has usually lost the thread by the time
+    he comes back to any one of them. Every message you write is a cold start for its reader:
+    assume he remembers nothing from the scrollback.
+
+    - **Open with a recap.** Before any summary, decision point, or question: two or three plain
+      sentences on what was being worked on, why, and where it stands now.
+    - **Plain language.** No invented codenames, no abbreviations, and no callbacks like "the
+      earlier fix" or "option B from before". Restate the thing in place, every time.
+    - **Self-contained questions.** A question must carry everything needed to answer it: the
+      background, the options, the trade-offs, and your recommendation. Never require scrolling
+      back. This is instruction 9 with the context included rather than assumed.
+    - **One question at a time.** When several questions or next steps are open at once, say so up
+      front ("three decisions are waiting, here is the first"), then present only the first and
+      wait for the answer before raising the next. Never dump them all at once; it is too much
+      mental load to hold.
+    - **Anchor the work.** Name the project, the branch and the worktree when reporting status.
+      Several other sessions look exactly like this one, and section 2.5 means two of them can sit
+      in different trees on different branches at the same commit.
+    - **End with the next action.** Close a long update with the single thing waiting on him, or
+      say explicitly that nothing is.
+
+### Testing
+
+11. **Failing test first, then implement, then verify.** Write the test that states the behaviour
+    you want and watch it FAIL, implement the least that turns it green, then run the full suite
+    and the type check. A test written after the code and passing on its first run has proved
+    nothing: it has never been seen to fail, so it may be asserting something that was already
+    true. When fixing a bug, that failing test IS the reproduction instruction 4 asks for.
+
+    **Where a layer has no test harness, the reproduction in the running app is the red step, and
+    not an excuse to skip one.** The mobile app is tested as pure functions only; there is
+    deliberately no component or hook harness, so a defect that exists only on a device is
+    reproduced on the device before the fix and re-run on it afterwards. What is never acceptable
+    is neither: no failing test and no reproduction is a guess with a commit message attached.
+
 ---
 
 ## 1. Non-negotiables
@@ -192,6 +230,12 @@ in this section is chosen to convert the silent case into the loud one.
    you typecheck against another agent's half-written code. It produced an error in a file nobody
    had touched, which is a bad hour.
 
+   **A tree belongs to a task, not to an agent.** Cut it from the latest base branch when the work
+   starts, and once that work is merged, take it down: `git worktree remove <path>`, then delete
+   the branch. Never carry an old tree into the next task. Its base moved underneath it while it
+   sat there, so the conflicts it produces are against work that merged days ago rather than
+   against anything anybody is doing now, and the ports it holds stay allocated to nothing.
+
 2. **The running stack and the phone are exclusive, and they are not yours by default.** One tree
    holds 3000 / 3001 / 8081, the dev database and the iPhone. Everywhere else, `npm test` is
    self-sufficient - the handler tests start their own throwaway containers.
@@ -277,6 +321,31 @@ in this section is chosen to convert the silent case into the loud one.
    inside a `sql` template did exactly that on 2026-08-15. Metro is the same hazard pointed at the
    phone: an unfinished save is a red screen in his hand. Write imports before usage, and prefer
    one whole-file write to a sequence of partial ones.
+
+9. **A builder never drives its own verification.** The agent that just wrote a feature is carrying
+   the whole transcript that produced it, routinely 150k to 200k tokens. Verification is the
+   opposite shape of work: many turns of watching a run, answering a prompt, and applying a small
+   fix. Every one of those turns resends the builder's entire context, so a park, decide and resume
+   roundtrip costs around 30k tokens driven by a fresh agent against around 200k driven by the
+   builder. The context that made the code good is worth nothing to the check that follows it.
+
+   So split the two:
+
+   - **The builder builds, commits on its branch, and ends its task with a `HANDOFF: INTENT`
+     paragraph**: what changed, why, and what a reviewer should look hardest at. That transcript is
+     then read once and never resumed to drive a check.
+   - **A fresh, small driver agent per worktree runs the verification**, starting from that
+     paragraph alone. Here that means section 2.3 in order - type check, full suite, live smoke
+     test - plus `npm run gate:surface` where routes changed. `gate:surface` needs a running API,
+     so a driver that needs it obeys item 2 above before touching any stack.
+   - **The driver's standing rules:** apply anything mechanically fixable, accept anything
+     informational, and PARK anything that needs a human judgement - quote the finding verbatim,
+     end the task, and let the orchestrator carry it to the founder, then resume the driver with
+     his answer. Resume the BUILDER only when a finding needs real code written; that is the one
+     thing its context is still worth paying for.
+   - **Never end a subagent's turn while a run it started is still going.** Its background
+     processes are orphaned the moment the turn ends, and a half-finished verification reports
+     nothing while looking exactly like one that passed.
 
 ---
 

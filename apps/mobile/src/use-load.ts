@@ -162,6 +162,45 @@ export function useRefreshOnReturn(load: { refresh: () => void }, key: string): 
 }
 
 /**
+ * The value as it was when this screen was last LOOKED AT.
+ *
+ * > **A tab screen that stays mounted keeps reading for a screen nobody is on.** The Calendar
+ * > destination follows whichever club is current (`PRD/15`), which it does by holding that club
+ * > in a `useLoad` dep. Tab screens mount lazily and then never unmount, so once Calendar has
+ * > been opened once, every walk into a club and back out re-read its whole feed from an
+ * > off-screen tab. Found 2026-08-19 in the dev trace: eighteen `GET /calendar` in eight
+ * > minutes, not one of them with the tab in front of anybody.
+ *
+ * Following the club is still right. Paying for it while blurred is not, so the change is
+ * deferred rather than dropped: the value is adopted on focus, and a screen returned to reads
+ * once for whatever is current by then instead of once per crossing while away.
+ *
+ * `useFocusEffect` runs its effect only while the screen IS focused, and that is the whole
+ * mechanism rather than an implementation detail. A change arriving while blurred re-renders
+ * this hook and nothing else; the effect that would adopt it does not run until somebody looks.
+ *
+ * Two things it asks of a caller:
+ *
+ *  - **Give `useRefreshOnReturn` the LIVE value, not this one.** The focus that changes the value
+ *    must be a load and not also a quiet refresh, and the two hooks tell those apart by having
+ *    seen different keys. Handed the same deferred value, both fire on that focus and the screen
+ *    makes the two round trips this exists to remove.
+ *  - **Primitives only.** The bail-out is React's, so comparison is `Object.is`; an object rebuilt
+ *    each render would never settle.
+ */
+export function useFocusedValue<T>(value: T): T {
+  const [focused, setFocused] = useState(value);
+
+  useFocusEffect(
+    useCallback(() => {
+      setFocused(value);
+    }, [value]),
+  );
+
+  return focused;
+}
+
+/**
  * The pull control's state, which is **not** the loader's state.
  *
  * > **A refresh spinner answers "did you ask for this?", not "is a request in flight".** Bound

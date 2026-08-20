@@ -40,7 +40,7 @@ import {
   type MonthCursor,
 } from '../../src/month-pager.tsx';
 import { DataScreen, DestinationHeader, EmptyState } from '../../src/ui.tsx';
-import { useLoad, useRefreshOnReturn } from '../../src/use-load.ts';
+import { useFocusedValue, useLoad, useRefreshOnReturn } from '../../src/use-load.ts';
 
 /*
  * The month vocabulary and the swipe both live in `src/month-pager.tsx` now, so this screen and
@@ -113,10 +113,25 @@ export function CalendarView({ clubId }: { clubId?: string } = {}) {
    * know which days carry something AND the tapped day needs its items, and asking twice would
    * make the dots and the list two answers to the same question. The feed is one query per
    * feature per club either way.
+   *
+   * **Keyed on the club as of the last time somebody LOOKED at this screen, not as of now.**
+   *
+   * > **This destination stays mounted and kept reading for a screen nobody was on.** It follows
+   * > the current club by design (`PRD/15`), and a tab screen never unmounts once opened - so
+   * > every step into a club and back out re-read the whole feed from behind the Clubs tab. The
+   * > dev trace on 2026-08-19 has eighteen `GET /calendar` across eight minutes of walking in
+   * > and out of one club, with the tab never once in front of the reader.
+   *
+   * `useFocusedValue` holds the change until the tab is focused, which is the first moment the
+   * answer can be looked at and therefore the first moment it is worth having. The request is
+   * built from the deferred id rather than from `clubId` so the two can never disagree: `read`
+   * is re-created every render and `useLoad` calls the latest one, so a closure over the live
+   * prop would fetch the new club under the old key.
    */
+  const focusedClubId = useFocusedValue(clubId);
   const feed = useLoad(
-    () => calendarApi.feed({ ...(clubId ? { club: clubId } : {}), when: 'all' }),
-    [clubId],
+    () => calendarApi.feed({ ...(focusedClubId ? { club: focusedClubId } : {}), when: 'all' }),
+    [focusedClubId],
   );
 
   /*
@@ -133,6 +148,13 @@ export function CalendarView({ clubId }: { clubId?: string } = {}) {
    * for the new one. This is the same treatment the chat list and the club hub carry, for the
    * complaint stated in `use-load.ts`: coming back to a list and seeing what it said ten minutes
    * ago.
+   *
+   * **The LIVE club here, deliberately, where the read above takes the deferred one.**
+   *
+   * That difference is what keeps a club change to ONE request. On the focus that adopts a new
+   * club this key has already changed, so this counts the focus as a first open and stays quiet
+   * while the load above runs. Handed the deferred id instead, both would fire on that focus and
+   * the screen would make the two round trips the deferral exists to remove.
    */
   useRefreshOnReturn(feed, clubId ?? 'all-clubs');
 
