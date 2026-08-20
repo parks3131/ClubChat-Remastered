@@ -176,6 +176,7 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0039](decisions/0039-a-post-says-where-with-a-name-and-a-link.md) | A post says where it happened with a name and a link, not a place search |
 | [0040](decisions/0040-a-post-names-people-from-its-own-club.md) | A post names people, from its own club, through the picker that already exists |
 | [0041](decisions/0041-a-document-opens-in-the-platforms-own-viewer.md) | A document opens in the platform's own viewer, through a local native module |
+| [0042](decisions/0042-a-membership-write-carries-the-role-it-was-authorized-against.md) | A membership write carries the role it was authorized against, and a lost race is a refusal |
 
 ## Templates
 
