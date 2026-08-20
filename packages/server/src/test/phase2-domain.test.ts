@@ -68,7 +68,6 @@ import type { EffectDeps } from '../worker/effects.ts';
 
 let h: TestDb;
 let push: RecordingPushSender;
-let deferred: Array<() => Promise<void>>;
 let deps: EffectDeps;
 /**
  * Every Redis publish an effect made.
@@ -100,7 +99,6 @@ afterAll(async () => {
 beforeEach(async () => {
   await h.db.execute(sql`TRUNCATE notifications, outbox, push_deliveries, devices RESTART IDENTITY CASCADE`);
   push = new RecordingPushSender();
-  deferred = [];
   published = [];
   deps = {
     db: h.db,
@@ -112,15 +110,23 @@ beforeEach(async () => {
     } as never,
     push,
     log: silent,
-    defer: (fn) => deferred.push(fn),
+    // Zero, so a deferred push row is claimable on the very next pass instead of in eight real
+    // seconds. See `drainAll`.
+    pushDeferralMs: 0,
   };
 });
 
+/**
+ * Drain the outbox, then drain again to deliver the pushes the first pass scheduled.
+ *
+ * The second pass IS the eight seconds. A deferred push is an outbox row due at
+ * `now() + PUSH_DEFERRAL_MS`; `pushDeferralMs: 0` above makes it due immediately, so the next
+ * claim picks it up. There is no test-only branch in the code being exercised, which is the
+ * point: the fire-and-forget `setTimeout` this replaced was the one path no test ever took.
+ */
 async function drainAll() {
   await drainOnce(h.db, deps);
-  const pending = [...deferred];
-  deferred = [];
-  for (const fn of pending) await fn();
+  await drainOnce(h.db, deps);
 }
 
 /**

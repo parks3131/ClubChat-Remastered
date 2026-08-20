@@ -64,7 +64,8 @@ beforeEach(async () => {
     } as never,
     push: new RecordingPushSender(),
     log: silent,
-    defer: () => undefined,
+    // Left at the real deferral: a reaction pushes nobody, and the rows other effects enqueue
+    // are not claimable within a test.
   };
 });
 

@@ -118,9 +118,9 @@ async function drainOutbox(): Promise<Array<{ topic: string; payload: string }>>
     } as never,
     push: new RecordingPushSender(),
     log: () => undefined,
-    // Pushes are deferred by eight real seconds in production. Dropped here: this test is about
-    // what lands in the channel, and nothing about it depends on a push having gone out.
-    defer: () => undefined,
+    // Pushes are deferred by eight real seconds, and this leaves them there: the deferred row
+    // stays un-claimable for the life of the test. This file is about what lands in the channel,
+    // and nothing about it depends on a push having gone out.
   });
   return published;
 }

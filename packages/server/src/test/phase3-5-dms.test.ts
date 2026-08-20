@@ -70,7 +70,6 @@ import type { EffectDeps } from '../worker/effects.ts';
 
 let h: TestDb;
 let push: RecordingPushSender;
-let deferred: Array<() => Promise<void>>;
 let deps: EffectDeps;
 
 const silent = () => undefined;
@@ -84,7 +83,6 @@ afterAll(async () => {
 
 beforeEach(async () => {
   push = new RecordingPushSender();
-  deferred = [];
   // Several assertions below are deliberately unfiltered - "no push at all" is a stronger claim
   // than "no push to this person", and it only means anything if each test starts empty.
   // Truncating is safe here and nowhere else: this is a throwaway container.
@@ -98,16 +96,23 @@ beforeEach(async () => {
     redis: { publish: async () => 1 } as never,
     push,
     log: silent,
-    defer: (fn) => deferred.push(fn),
+    // Zero, so a deferred push row is claimable on the very next pass instead of in eight real
+    // seconds. See `drainAndPush`.
+    pushDeferralMs: 0,
   };
 });
 
-/** Drain the outbox, then run whatever push evaluation it deferred. */
+/**
+ * Drain the outbox, then drain again to deliver the pushes the first pass scheduled.
+ *
+ * The second pass IS the eight seconds. A deferred push is an outbox row due at
+ * `now() + PUSH_DEFERRAL_MS`; `pushDeferralMs: 0` above makes it due immediately, so the next
+ * claim picks it up. There is no test-only branch in the code being exercised, which is the
+ * point: the fire-and-forget `setTimeout` this replaced was the one path no test ever took.
+ */
 async function drainAndPush(): Promise<void> {
   await drainOnce(h.db, deps);
-  const pending = [...deferred];
-  deferred = [];
-  for (const fn of pending) await fn();
+  await drainOnce(h.db, deps);
 }
 
 const ctxFor = (id: string) => loadAccessContext(h.db, id);
@@ -854,7 +859,8 @@ describe('GATE: a muted conversation produces no push while its unread count sti
       markRead: m.advanceReadCursor,
     }));
     await markRead(h.db, f.bobId, f.dmChannelId, sent.ok ? sent.message.seq : 0);
-    for (const fn of deferred) await fn();
+    // Now the deferral elapses, which here is the second claim of the same outbox.
+    await drainOnce(h.db, deps);
 
     expect(push.sent).toHaveLength(0);
   });

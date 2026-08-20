@@ -31,7 +31,6 @@ let h: TestDb;
 let app: FastifyInstance;
 let auth: Auth;
 let push: RecordingPushSender;
-let deferred: Array<() => Promise<void>> = [];
 
 const config = {
   LOG_LEVEL: 'error',
@@ -117,18 +116,25 @@ async function registerDevice(actor: Actor): Promise<void> {
   });
 }
 
-/** Drain the outbox, then run the push evaluations it deferred. */
+/**
+ * Drain the outbox, then drain again to deliver the pushes the first pass scheduled.
+ *
+ * The second pass IS the eight seconds. A deferred push is an outbox row due at
+ * `now() + PUSH_DEFERRAL_MS`; `pushDeferralMs: 0` above makes it due immediately, so the next
+ * claim picks it up. There is no test-only branch in the code being exercised, which is the
+ * point: the fire-and-forget `setTimeout` this replaced was the one path no test ever took.
+ */
 async function drainAndDeliver(): Promise<void> {
-  await drainOnce(h.db, {
+  const deps = {
     db: h.db,
     redis: { publish: async () => 0 } as never,
     push,
     log: () => undefined,
-    defer: (fn) => deferred.push(fn),
-  });
-  const pending = [...deferred];
-  deferred = [];
-  for (const fn of pending) await fn();
+    // Zero, so a deferred push row is claimable on the very next pass.
+    pushDeferralMs: 0,
+  };
+  await drainOnce(h.db, deps);
+  await drainOnce(h.db, deps);
 }
 
 async function notificationTypesFor(userId: string): Promise<string[]> {
@@ -166,7 +172,6 @@ beforeEach(async () => {
     sql`TRUNCATE notifications, push_deliveries, devices, outbox RESTART IDENTITY CASCADE`,
   );
   push.reset();
-  deferred = [];
 });
 
 describe('what makes a post valid', () => {

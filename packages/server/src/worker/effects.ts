@@ -30,7 +30,8 @@ import {
   writeNotifications,
   type WriteNotificationsInput,
 } from './notify.ts';
-import { dispatchPush, PUSH_DEFERRAL_MS } from '../push/dispatch.ts';
+import { dispatchPush, PUSH_DEFERRAL_MS, type DispatchInput } from '../push/dispatch.ts';
+import { DeferredPushPayload, enqueueDeferredPush } from '../push/deferral.ts';
 import type { PushSender } from '../push/sender.ts';
 import type { MediaStore } from '../media/store.ts';
 import { deriveVariants } from '../media/derive.ts';
@@ -84,13 +85,15 @@ export type EffectDeps = {
    */
   monitor?: Monitor | undefined;
   /**
-   * Schedule the deferred push evaluation.
+   * How long a push waits before it is evaluated. Defaults to `PUSH_DEFERRAL_MS`.
    *
-   * Injected so tests can run it immediately instead of waiting eight seconds. The
-   * deferral is real in production and exists to lose a race against the recipient's own
-   * read acknowledgement - see PUSH_DEFERRAL_MS.
+   * A number rather than the injected scheduler function this used to be, and the difference is
+   * the whole of failure (a) below: `defer` was a hook set in seven test files and in no
+   * production entrypoint, so the branch that actually ran in production - a bare `setTimeout`
+   * with a `void` catch - was the one branch nothing exercised. The wait is now a `next_attempt_at`
+   * on a real outbox row, so a test shortens it to zero and takes the identical path.
    */
-  defer?: ((fn: () => Promise<void>, ms: number) => void) | undefined;
+  pushDeferralMs?: number | undefined;
   /**
    * The development trace.
    *
@@ -100,18 +103,39 @@ export type EffectDeps = {
   tracer?: Tracer | undefined;
 };
 
-function schedule(deps: EffectDeps, fn: () => Promise<void>) {
-  if (deps.defer) {
-    deps.defer(fn, PUSH_DEFERRAL_MS);
-    return;
-  }
-  setTimeout(() => {
-    void fn().catch((error) =>
-      deps.log('error', 'deferred push evaluation failed', {
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    );
-  }, PUSH_DEFERRAL_MS).unref?.();
+/**
+ * Hand a push to the outbox, to be evaluated once the deferral has elapsed.
+ *
+ * > **This was a `setTimeout` until 2026-08-19, and every push in the product was
+ * > fire-and-forget.** `drain.ts` stamps `processed_at = now()` as soon as `dispatch()` returns
+ * > and nothing awaited the timer, so the row that caused the push closed eight seconds before
+ * > the push was evaluated. A transient Postgres failure inside `dispatchPush` threw into a
+ * > `void` and produced one log line with no event id, no notification type, no recipients and no
+ * > `monitor.capture`; a `SIGTERM` on any deploy destroyed the pending timer with the row already
+ * > marked done. `dm_message` and `chat_message` write no notification row by design, so for
+ * > those there was no durable trace anywhere that a push had ever been attempted.
+ * > `TECH/11` claimed a failed push send was "retried by the worker". No code path did.
+ *
+ * The row is the retry. See `push/deferral.ts` for why the outbox is already a scheduler and
+ * what the payload has to carry; the short version is that `next_attempt_at` is a due-at the
+ * drain's claim query already filters on, so a deferred push inherits redelivery, backoff,
+ * parking and the parked alarm without any of them being written twice.
+ *
+ * **Awaited, and that is load-bearing.** If the insert fails, the handler throws and the causing
+ * event is retried - which is the direction that cannot lose a push. The old call was a bare
+ * statement, so the enqueue could not fail even in principle.
+ *
+ * `immediate` is for the two report types, which deliberately do not wait: see their handlers.
+ */
+async function schedulePush(
+  deps: EffectDeps,
+  input: DispatchInput & { partitionKey: string },
+  opts: { immediate?: boolean } = {},
+): Promise<void> {
+  await enqueueDeferredPush(deps.db, {
+    ...input,
+    delayMs: opts.immediate === true ? 0 : (deps.pushDeferralMs ?? PUSH_DEFERRAL_MS),
+  });
 }
 
 /**
@@ -151,14 +175,14 @@ async function notifyAndPush<K extends NotificationType>(
    * exception that genuinely needed immediacy - a report landing in a review queue - says so in
    * its own comment rather than being an option on this.
    */
-  schedule(deps, async () => {
-    const outcome = await dispatchPush(deps.db, deps.push, {
-      outboxEventId: input.outboxEventId,
-      type: input.type,
-      params: input.params as Record<string, unknown>,
-      recipients: input.recipients,
-    });
-    deps.log('info', `${input.type} push dispatched`, { ...outcome });
+  await schedulePush(deps, {
+    outboxEventId: input.outboxEventId,
+    type: input.type,
+    params: input.params as Record<string, unknown>,
+    recipients: input.recipients,
+    // No channel to order against, so the club is the ordering domain. `push/deferral.ts`
+    // prefixes it, which keeps these off the club's own partition.
+    partitionKey: input.clubId ?? String(input.outboxEventId),
   });
 
   return result;
@@ -214,13 +238,27 @@ async function postSystemMessage(
   });
 
   if (result.deduplicated) {
-    // Redelivery. The message already exists and was already published, so republishing
-    // would deliver a duplicate to every open client.
-    deps.log('info', 'system message already posted, skipping publish', {
+    /*
+     * Redelivery, and it still publishes.
+     *
+     * > **This used to return here**, on the reasoning that a message which already exists was
+     * > already published. That treats the append and the publish as one act, and they are two
+     * > statements with a commit between them: an attempt that wrote the row and died before
+     * > `publishToChannel` below leaves a message nobody was ever told about, and the retry then
+     * > skipped the fan-out **forever**. The message is durable, so it surfaced on the next sync
+     * > - which is why the symptom was "the card did not show up until I backgrounded the app"
+     * > rather than a missing message.
+     *
+     * A duplicate is strictly cheaper than a loss here. The client applies `msg.new` under the
+     * gap rule (SPEC/TECH/03), and `decideGap` answers `ignore` for any seq at or below the local
+     * maximum - the frame is upserted on `(channel_id, seq)` and no backfill is triggered. So a
+     * second publish of a seq the client holds costs one idempotent upsert; a skipped publish
+     * costs the fan-out.
+     */
+    deps.log('info', 'system message already posted, publishing again', {
       eventId: args.eventId,
       seq: result.message.seq,
     });
-    return;
   }
 
   await publishToChannel(deps.redis, args.channelId, result.message);
@@ -412,16 +450,14 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
     // Deferred, then the cursor is re-read. Scheduling happens regardless of `created`,
     // because the push ledger - not the notification insert - is what makes the buzz
     // idempotent, and a redelivery after a crash between the two must still push.
-    schedule(deps, async () => {
-      const outcome = await dispatchPush(deps.db, deps.push, {
-        outboxEventId: notificationKey(event.id, 0),
-        type: 'announcement',
-        params,
-        recipients: buzzed,
-        channelId,
-        seq,
-      });
-      deps.log('info', 'announcement push dispatched', { eventId: event.id, ...outcome });
+    await schedulePush(deps, {
+      outboxEventId: notificationKey(event.id, 0),
+      type: 'announcement',
+      params,
+      recipients: buzzed,
+      channelId,
+      seq,
+      partitionKey: channelId,
     });
   }
 
@@ -454,19 +490,17 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
     // **No notification row.** The inbox representation of an unread DM is the same computed
     // chat-unread row every other scope gets, so writing one per message would both flood the
     // feed and contradict "computed on read, never stored". Push only. See ADR-0015.
-    schedule(deps, async () => {
-      const outcome = await dispatchPush(deps.db, deps.push, {
-        outboxEventId: notificationKey(event.id, 2),
-        type: 'dm_message',
-        params,
-        recipients,
-        // Both suppressions apply here and neither is DM-specific: the read cursor silences a
-        // recipient who is already looking at the conversation, and a mute silences the buzz
-        // while the unread count keeps climbing.
-        channelId,
-        seq,
-      });
-      deps.log('info', 'direct message push dispatched', { eventId: event.id, ...outcome });
+    await schedulePush(deps, {
+      outboxEventId: notificationKey(event.id, 2),
+      type: 'dm_message',
+      params,
+      recipients,
+      // Both suppressions apply here and neither is DM-specific: the read cursor silences a
+      // recipient who is already looking at the conversation, and a mute silences the buzz
+      // while the unread count keeps climbing.
+      channelId,
+      seq,
+      partitionKey: channelId,
     });
   }
 
@@ -502,16 +536,14 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
       clubId: context.clubId,
     });
 
-    schedule(deps, async () => {
-      const outcome = await dispatchPush(deps.db, deps.push, {
-        outboxEventId: notificationKey(event.id, 1),
-        type: 'mentioned',
-        params,
-        recipients,
-        channelId,
-        seq,
-      });
-      deps.log('info', 'mention push dispatched', { eventId: event.id, ...outcome });
+    await schedulePush(deps, {
+      outboxEventId: notificationKey(event.id, 1),
+      type: 'mentioned',
+      params,
+      recipients,
+      channelId,
+      seq,
+      partitionKey: channelId,
     });
   }
 
@@ -548,22 +580,20 @@ const onMessageCreated: EffectHandler = async (event, deps) => {
      * per message. Slot 3, which `NOTIFICATION_SLOTS` has been holding for the next kind since
      * the keys were banded.
      */
-    schedule(deps, async () => {
-      const outcome = await dispatchPush(deps.db, deps.push, {
-        outboxEventId: notificationKey(event.id, 3),
-        type: 'chat_message',
-        params,
-        recipients,
-        /*
-         * Both suppressions matter more here than anywhere else in the catalogue, because this
-         * is the only push that fires on every single message. The cursor means an open
-         * conversation never buzzes at all, and mute means a member can switch a loud club off
-         * without losing its unread count.
-         */
-        channelId,
-        seq,
-      });
-      deps.log('info', 'chat message push dispatched', { eventId: event.id, ...outcome });
+    await schedulePush(deps, {
+      outboxEventId: notificationKey(event.id, 3),
+      type: 'chat_message',
+      params,
+      recipients,
+      /*
+       * Both suppressions matter more here than anywhere else in the catalogue, because this
+       * is the only push that fires on every single message. The cursor means an open
+       * conversation never buzzes at all, and mute means a member can switch a loud club off
+       * without losing its unread count.
+       */
+      channelId,
+      seq,
+      partitionKey: channelId,
     });
   }
 };
@@ -1320,14 +1350,12 @@ async function notifyNamedInPost(
   // Deferred and scheduled regardless of whether rows were created, for the reason the
   // announcement branch gives: the push ledger is what makes the buzz idempotent, not the
   // notification insert, so a redelivery after a crash between the two must still push.
-  schedule(deps, async () => {
-    const outcome = await dispatchPush(deps.db, deps.push, {
-      outboxEventId: key,
-      type: 'news_post_tagged',
-      params: input.params,
-      recipients: input.named,
-    });
-    deps.log('info', 'news_post_tagged push dispatched', { eventId: input.event.id, ...outcome });
+  await schedulePush(deps, {
+    outboxEventId: key,
+    type: 'news_post_tagged',
+    params: input.params,
+    recipients: input.named,
+    partitionKey: input.clubId,
   });
 }
 
@@ -1392,17 +1420,12 @@ function makeCreationHandler(config: {
         clubId,
       });
 
-      schedule(deps, async () => {
-        const outcome = await dispatchPush(deps.db, deps.push, {
-          outboxEventId: notificationKey(event.id),
-          type: config.notificationType,
-          params,
-          recipients,
-        });
-        deps.log('info', `${config.notificationType} push dispatched`, {
-          eventId: event.id,
-          ...outcome,
-        });
+      await schedulePush(deps, {
+        outboxEventId: notificationKey(event.id),
+        type: config.notificationType,
+        params,
+        recipients,
+        partitionKey: clubId,
       });
     }
 
@@ -2033,16 +2056,14 @@ export const handlers: Record<string, EffectHandler> = {
       clubId: context.clubId,
     });
 
-    schedule(deps, async () => {
-      const outcome = await dispatchPush(deps.db, deps.push, {
-        outboxEventId: notificationKey(event.id, 0),
-        type: 'mentioned',
-        params,
-        recipients,
-        channelId,
-        seq,
-      });
-      deps.log('info', 'edit mention push dispatched', { eventId: event.id, ...outcome });
+    await schedulePush(deps, {
+      outboxEventId: notificationKey(event.id, 0),
+      type: 'mentioned',
+      params,
+      recipients,
+      channelId,
+      seq,
+      partitionKey: channelId,
     });
 
     deps.log('info', 'message.edited published', {
@@ -2105,19 +2126,36 @@ export const handlers: Record<string, EffectHandler> = {
     });
 
     /*
-     * Pushed immediately, and WITHOUT `channelId`/`seq`.
+     * Pushed with no deferral, and WITHOUT `channelId`/`seq`.
      *
      * Those two are what let `dispatchPush` suppress a push for somebody whose read cursor has
      * already passed the message - the right rule for an announcement, and the wrong one here.
      * Having read the conversation is not having reviewed the report; suppressing on it would
      * silence exactly the admin who is most active in that channel.
+     *
+     * > **It was `await dispatchPush(...)` inline until 2026-08-19, which put a call to Expo
+     * > inside the drain's transaction** (`drain.ts` holds one open across the whole batch). One
+     * > stalled provider request therefore froze the entire outbox - every system message, every
+     * > card and every other notification - to make one report arrive a few hundred milliseconds
+     * > sooner. It was also the only push in the product with no retry at all: a failure threw
+     * > out of the handler, which is correct, but it took the causing event's whole attempt
+     * > budget with it rather than retrying the push on its own.
+     *
+     * `immediate` keeps what the immediacy was for. The row is claimable on the next drain tick
+     * rather than in eight seconds, so a moderator is told within about 250ms instead of
+     * instantly - and the push now retries, alarms and survives a deploy like every other one.
      */
-    const outcome = await dispatchPush(deps.db, deps.push, {
-      outboxEventId: notificationKey(event.id, 0),
-      type: 'message_reported',
-      params,
-      recipients,
-    });
+    await schedulePush(
+      deps,
+      {
+        outboxEventId: notificationKey(event.id, 0),
+        type: 'message_reported',
+        params,
+        recipients,
+        partitionKey: context.clubId ?? channelId,
+      },
+      { immediate: true },
+    );
 
     deps.log('info', 'message.reported notified', {
       eventId: event.id,
@@ -2125,7 +2163,6 @@ export const handlers: Record<string, EffectHandler> = {
       scope: context.scope,
       recipients: recipients.length,
       created,
-      pushed: outcome.pushed,
     });
   },
 
@@ -2168,19 +2205,26 @@ export const handlers: Record<string, EffectHandler> = {
       clubId: null,
     });
 
-    const outcome = await dispatchPush(deps.db, deps.push, {
-      outboxEventId: notificationKey(event.id, 0),
-      type: 'user_reported',
-      params,
-      recipients,
-    });
+    // No deferral and no channel, for the reason the type above gives - and off the drain's
+    // transaction for the reason it gives too. `immediate` is the whole difference from an
+    // ordinary push: the row is due now rather than in eight seconds.
+    await schedulePush(
+      deps,
+      {
+        outboxEventId: notificationKey(event.id, 0),
+        type: 'user_reported',
+        params,
+        recipients,
+        partitionKey: subjectId,
+      },
+      { immediate: true },
+    );
 
     deps.log('info', 'user.reported notified', {
       eventId: event.id,
       subjectId,
       recipients: recipients.length,
       created,
-      pushed: outcome.pushed,
     });
   },
 
@@ -2549,14 +2593,12 @@ export const handlers: Record<string, EffectHandler> = {
       });
 
       const buzzed = recipients.filter((userId) => !namedSet.has(userId));
-      schedule(deps, async () => {
-        const outcome = await dispatchPush(deps.db, deps.push, {
-          outboxEventId: notificationKey(event.id, 0),
-          type: 'news_post_created',
-          params,
-          recipients: buzzed,
-        });
-        deps.log('info', 'news_post_created push dispatched', { eventId: event.id, ...outcome });
+      await schedulePush(deps, {
+        outboxEventId: notificationKey(event.id, 0),
+        type: 'news_post_created',
+        params,
+        recipients: buzzed,
+        partitionKey: clubId,
       });
     }
 
@@ -2635,6 +2677,63 @@ export const handlers: Record<string, EffectHandler> = {
       return;
     }
     deps.log('info', 'derived media variants', { mediaId, ...result });
+  },
+
+  /**
+   * Evaluate a push whose deferral has elapsed.
+   *
+   * The consumer half of `push/deferral.ts`, and the only handler in this file that is produced
+   * by another handler rather than by a command. Everything it needs is in the payload, because
+   * the point of writing the row was that the process which scheduled it may be gone: a deploy,
+   * a crash or an OOM between the two is the case this exists for.
+   *
+   * **The cursor and the mute are read HERE, now**, which is the whole reason the wait is a wait.
+   * Capturing them at enqueue time would defeat ADR-0008 and buzz somebody who is looking at the
+   * message as it arrives.
+   *
+   * **The provider call now happens inside the drain's transaction, and that is the trade this
+   * makes.** Every effect in this engine does - `media.uploaded` downloads an object and re-encodes
+   * it there - so a push is not a new kind of guest, but it is a far more frequent one now that
+   * every chat message pushes. What bounds it is a timeout on the sender; without one, a provider
+   * that hangs delays the batch behind it. Nothing is lost either way, because a row that is not
+   * stamped is a row that is redelivered. The alternative, a second loop of its own for pushes,
+   * is a redesign of the engine rather than a fix to it.
+   *
+   * **It rethrows**, so a failure is retried on the drain's backoff and finally parks with the
+   * alarm `drain.ts` raises - which is what makes `TECH/11`'s "retried by the worker" true. The
+   * message is decorated on the way out because a parked alarm reading "push.deferred #4181
+   * failed: connection terminated" names nothing anybody can act on; what was lost, and how many
+   * people did not hear about it, are the two facts worth carrying.
+   */
+  'push.deferred': async (event, deps) => {
+    const parsed = DeferredPushPayload.safeParse(event.payload);
+    if (!parsed.success) {
+      // Permanent: the payload was written once and is frozen, so it will not parse on attempt
+      // eight either. Worth reporting now rather than in two hours.
+      throw new PermanentEffectError(
+        `push.deferred payload does not parse: ${parsed.error.message}`,
+      );
+    }
+
+    const input = parsed.data;
+    try {
+      const outcome = await dispatchPush(deps.db, deps.push, input);
+      deps.log('info', `${input.type} push dispatched`, {
+        eventId: event.id,
+        notificationKey: input.outboxEventId,
+        ...outcome,
+      });
+    } catch (error) {
+      // A classification the dispatch made deliberately is not ours to overwrite.
+      if (error instanceof PermanentEffectError) throw error;
+      const n = input.recipients.length;
+      throw new Error(
+        `deferred ${input.type} push failed for ${n} recipient${n === 1 ? '' : 's'} (key ${input.outboxEventId})`,
+        // The driver's error stays on the chain rather than being flattened into a string:
+        // AGENTS.md 5.3 entry 1 is about exactly this, and a pg error code lives two causes down.
+        { cause: error },
+      );
+    }
   },
 };
 

@@ -45,11 +45,10 @@ let h: TestDb;
 let app: FastifyInstance;
 let auth: Auth;
 let push: RecordingPushSender;
-let deferred: Array<() => Promise<void>>;
 let deps: EffectDeps;
 
 /**
- * Drain the outbox, then run whatever push evaluation it deferred.
+ * Drain the outbox, then drain again to deliver the pushes the first pass scheduled.
  *
  * The report writes a row and an event in one transaction; nothing reaches a moderator until the
  * worker runs. Asserting on the outbox alone would be asserting that a producer produced, which
@@ -57,9 +56,9 @@ let deps: EffectDeps;
  */
 async function drainAndPush(): Promise<void> {
   await drainOnce(h.db, deps);
-  const pending = [...deferred];
-  deferred = [];
-  for (const fn of pending) await fn();
+  // The second pass IS the deferral elapsing: a push is an outbox row due at
+  // `now() + PUSH_DEFERRAL_MS`, shortened to zero above, so the next claim picks it up.
+  await drainOnce(h.db, deps);
 }
 
 const config = {
@@ -184,7 +183,6 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   push = new RecordingPushSender();
-  deferred = [];
   /*
    * "Nobody else at all" is a stronger claim than "not this person", and it only means anything if
    * each test starts empty. Truncating is safe here and nowhere else: this is a throwaway
@@ -199,7 +197,9 @@ beforeEach(async () => {
     redis: { publish: async () => 1 } as never,
     push,
     log: () => undefined,
-    defer: (fn) => deferred.push(fn),
+    // Zero, so a deferred push row is claimable on the very next pass instead of in eight real
+    // seconds. See `drainAndPush`.
+    pushDeferralMs: 0,
   };
 });
 

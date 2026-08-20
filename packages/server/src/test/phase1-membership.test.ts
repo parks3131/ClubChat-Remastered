@@ -67,7 +67,8 @@ beforeEach(async () => {
     } as never,
     push: new RecordingPushSender(),
     log: silent,
-    defer: () => undefined,
+    // Left at the real eight seconds, so the push rows these effects enqueue are never due
+    // within a test. The revocation instruction is what is under test here.
   };
 });
 
