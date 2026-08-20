@@ -23,7 +23,8 @@ server, not in the database.
 | How we got here, bug by bug | [`../HISTORY.md`](../HISTORY.md) |
 
 **Start here:** [PRD/00-overview.md](PRD/00-overview.md) →
-[TECH/00-overview.md](TECH/00-overview.md) →
+[TECH/19-system-synthesis.md](TECH/19-system-synthesis.md) (the whole system in one read, pointing
+into everything below) →
 [TECH/14-engineering-pitfalls.md](TECH/14-engineering-pitfalls.md).
 
 **Two things to know before changing anything.** This is a *remaster*: v1 shipped and worked, on
@@ -90,6 +91,8 @@ other specs.
 | 16 | [Build phases](TECH/16-build-phases.md) | The phased plan, and the v1 debt each phase pays off |
 | 17 | [Diagrams](TECH/17-diagrams.md) | System overview, message flows, fan-out topology, failure behaviour |
 | 18 | [Mission: backend cleaning](TECH/18-mission-backend-cleaning.md) | **The request economy.** What the app asks for that it need not, what was fixed, and the routes nobody has watched yet |
+| 19 | [System synthesis](TECH/19-system-synthesis.md) | **The whole system in one read.** What each part is and where its truth lives; points down into the file that owns the detail, never restates it |
+| 20 | [Road to the first club](TECH/20-road-to-the-first-club.md) | The remaining milestones to a pilot club using it daily, each with checkable exit criteria and no dates. Milestone 1 is the 2026-08-19 review's eight merges, in their required order |
 
 ## DESIGN - what a surface looks like
 
