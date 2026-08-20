@@ -767,6 +767,42 @@ export const notifications = pgTable(
     index('notifications_unread')
       .on(t.recipientId)
       .where(sql`read_at is null`),
+    /*
+     * The join-request resolver's index, and the only one of the four that is an EXPRESSION.
+     *
+     * > **Every join-request decision used to scan this whole table.** `resolvePendingRequests`
+     * > settles every admin's copy of a request with
+     * > `WHERE type = $1 AND params ->> <scope> = $2 AND params ->> 'requesterId' = $3 AND
+     * > params ->> 'decision' IS NULL`, and none of the three indexes above covers `type` or any
+     * > `jsonb` path. Nothing about that was visible from the wire or from a statement counter:
+     * > it is one round trip, and it stayed one round trip while the table grew. It compounds at
+     * > the caller, which runs this once per member added and accepts up to 100 ids per request.
+     *
+     * **Partial, and that is the whole design.** `notifications` has no retention job - unlike
+     * `outbox`, nothing prunes it - so a total index here would be an unbounded index on an
+     * unbounded table, maintained on every notification ever written, to serve a query that
+     * only ever wants a handful of rows. The predicate keeps it to the rows that are actually
+     * searchable: an UNDECIDED request of one of the three request types. A decided request
+     * leaves the index the moment this UPDATE stamps it, so the index holds open requests only.
+     * Same argument as `outbox_unprocessed` above, and the same house style.
+     *
+     * `(type, requesterId)` and deliberately not the scope. The three types carry their target
+     * under three different keys (`clubId`, `raceId`, `eboardId`), so indexing it would mean
+     * three indexes or an expression the query does not write; and `(type, requesterId)` already
+     * narrows to one person's open requests of one kind, which is a handful of rows before the
+     * scope is even looked at.
+     *
+     * **The cost of naming the types here is that the list can drift from `REQUEST_SCOPE_KEY` in
+     * `worker/notify.ts`.** That is failure mode 9 exactly, so it is paid for rather than
+     * accepted: `test/hot-path-plans.test.ts` iterates that map and asserts a plan for every
+     * entry, so a fourth request type added without a matching migration is a red suite instead
+     * of one type silently back on a full scan.
+     */
+    index('notifications_pending_request')
+      .on(t.type, sql`(params ->> 'requesterId')`)
+      .where(
+        sql`type in ('club_join_request', 'race_join_request', 'eboard_join_request') and params ->> 'decision' is null`,
+      ),
   ],
 );
 
@@ -1336,6 +1372,34 @@ export const pollVotes = pgTable(
     uniqueIndex('poll_votes_single_choice')
       .on(t.pollId, t.userId)
       .where(sql`not allow_multiple`),
+    /*
+     * The same two columns again, without the predicate - and it is not redundant.
+     *
+     * > **The index above is PARTIAL, so it can serve a read only if that read restates
+     * > `NOT allow_multiple`.** None of the four reads that ask "who voted in this poll" does,
+     * > because none of them may: a poll that allows several answers has votes too, and a read
+     * > that filtered them out would return a wrong answer rather than a slow one. So every one
+     * > of them scanned the whole table:
+     * >
+     * >  - the batch read's "my own votes", `poll_id = ANY(...) AND user_id = $n`
+     * >  - the batch read's voter list, `pv.poll_id = ANY(...)`
+     * >  - `toggleVote`'s "is there a vote to move", `poll_id = $1 AND user_id = $2`
+     * >  - the scope poll list's `EXISTS`, once per poll in the scope
+     * >
+     * > `GET /polls?ids=` is a flat number of statements however many polls are asked for
+     * > (`batch-reads.test.ts` holds it there), and two of those statements were reading every
+     * > vote ever cast on the platform. A round-trip counter reports that as cheap.
+     *
+     * **An index rather than a reshape**, because there is no reshape available: the partial
+     * index by construction contains only single-choice votes, and these reads have to return
+     * multiple-choice ones. Restating `NOT allow_multiple` to reach it would change the answer.
+     *
+     * The write cost is one more entry per vote cast or withdrawn, on a table bounded by polls
+     * times members and written to at human speed. The storage overlap with the partial index
+     * above is the single-choice rows, held twice - which is a small multiple of a small table
+     * against a full scan on every poll card drawn.
+     */
+    index('poll_votes_by_poll').on(t.pollId, t.userId),
     foreignKey({
       columns: [t.pollId, t.allowMultiple],
       foreignColumns: [polls.id, polls.allowMultiple],

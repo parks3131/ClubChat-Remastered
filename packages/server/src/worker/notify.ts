@@ -99,8 +99,15 @@ export async function writeNotifications<K extends NotificationType>(
   return { created: rows.length };
 }
 
-/** Which scope key a request type carries its target under. */
-const REQUEST_SCOPE_KEY = {
+/**
+ * Which scope key a request type carries its target under.
+ *
+ * Exported because the index that keeps `resolvePendingRequests` off a full scan is PARTIAL on
+ * exactly these three type strings, and a fourth entry added here without a matching migration
+ * would silently put that one type back on a sequential scan of an unbounded table. The plan
+ * test iterates this map, so the divergence is a red suite rather than nothing at all.
+ */
+export const REQUEST_SCOPE_KEY = {
   club_join_request: 'clubId',
   race_join_request: 'raceId',
   eboard_join_request: 'eboardId',

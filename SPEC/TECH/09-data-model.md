@@ -275,8 +275,17 @@ poll_options          id, poll_id, label, position, vote_count    ← counts pub
 poll_votes            poll_id, option_id, user_id, allow_multiple, created_at
                       PK (option_id, user_id)                     ← identity gated
                       UNIQUE (poll_id, user_id) WHERE NOT allow_multiple
+                      INDEX (poll_id, user_id)                    ← the same pair, TOTAL
                       FOREIGN KEY (poll_id, allow_multiple)
                           REFERENCES polls (id, allow_multiple)
+                      -- The unique index above is PARTIAL, so a read reaches it only by
+                      -- restating NOT allow_multiple - and none of the four reads that
+                      -- ask "who voted in this poll" may, because a poll allowing
+                      -- several answers has votes too. So all four scanned the table:
+                      -- the batch read's own-votes and voter-list queries, toggleVote's
+                      -- "is there a vote to move", and the scope list's EXISTS per poll.
+                      -- The total index serves them; the partial one still carries the
+                      -- single-choice invariant. Neither replaces the other.
                       -- allow_multiple is denormalised from the poll for the same
                       -- reason race_id is denormalised onto car_group_members, and
                       -- with the same composite FK keeping it honest. It makes the
@@ -576,6 +585,30 @@ media_objects         id, owner_type, owner_id, bucket, object_key, mime, bytes,
 notifications         id, recipient_id, actor_id NULL, club_id NULL, type, params jsonb,
                       outbox_event_id, read_at, created_at
                       UNIQUE (outbox_event_id, recipient_id)       ← at-least-once safety
+                      INDEX (recipient_id, created_at DESC)        ← the inbox feed
+                      INDEX (recipient_id) WHERE read_at IS NULL   ← the badge
+                      INDEX (type, (params ->> 'requesterId'))
+                          WHERE type IN ('club_join_request','race_join_request',
+                                         'eboard_join_request')
+                            AND params ->> 'decision' IS NULL      ← request resolution
+                      -- The only EXPRESSION index in the schema, and the only place a
+                      -- jsonb path is indexed. resolvePendingRequests settles every
+                      -- admin's copy of a decided request by (type, scope, requester,
+                      -- undecided), and none of the three indexes above covers type or
+                      -- any params path - so every decision scanned the whole table,
+                      -- once per member added, up to 100 per roster request.
+                      -- PARTIAL because this table has NO retention job: a total index
+                      -- here would grow forever alongside it, to answer a question that
+                      -- only ever concerns open requests. A decision removes its own
+                      -- rows from the index, so the index holds pending requests only.
+                      -- Same shape and same argument as outbox_unprocessed.
+                      -- The scope key is deliberately NOT indexed: the three types carry
+                      -- it under three different names, and (type, requesterId) already
+                      -- narrows to a handful of rows.
+                      -- Naming the three types here duplicates REQUEST_SCOPE_KEY in
+                      -- worker/notify.ts. test/hot-path-plans.test.ts iterates that map
+                      -- and asserts a plan per entry, so a fourth type added without a
+                      -- migration fails the suite instead of silently losing its index.
                       -- outbox_event_id is NOT a raw outbox id. One event can produce
                       -- more than one KIND of notification (an announcement that also
                       -- mentions somebody), so the key is eventId * 4 + slot, which
