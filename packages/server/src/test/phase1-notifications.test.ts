@@ -136,10 +136,10 @@ function drainsTheInstantItCommits(): Db {
  * The fixture has to actually drain what it says it drains.
  */
 async function drainBootstrap() {
-  await drainOnce(h.db, { ...deps, redis: { publish: async () => 0 } as never });
-  const pending = [...deferred];
-  deferred = [];
-  for (const fn of pending) await fn();
+  const publishing = { ...deps, redis: { publish: async () => 0 } as never };
+  await drainOnce(h.db, publishing);
+  // The second pass delivers the pushes the first one scheduled. See `drainAndDeliver`.
+  await drainOnce(h.db, publishing);
 }
 
 async function makeUser(name: string): Promise<string> {
