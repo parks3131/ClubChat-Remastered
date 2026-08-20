@@ -28,9 +28,9 @@ Every command handler writes domain rows **and** outbox events in one transactio
 land or neither does - a guarantee an external queue like Kafka cannot give you, and the reason
 we are not adding one.
 
-A relay claims batches with `FOR UPDATE SKIP LOCKED`, publishes them in `id` order within a
-partition key, and marks `published_at`. Failures retry with backoff; after N attempts the row
-is parked and alerted on.
+A relay claims batches with `FOR UPDATE SKIP LOCKED`, runs them in `id` order within a partition
+key, and marks `published_at`. Failures retry with backoff; after N attempts the row is parked
+and alerted on.
 
 **The backoff is the load-bearing half of that sentence, and it was missing until 2026-08-04.**
 A failed row carries `next_attempt_at`, and the claim query will not take it before that time.
@@ -45,7 +45,9 @@ the answer is available immediately and nothing would be reported for an hour. A
 type is deliberately **not** in that class - the commonest cause is a rolling deploy, which
 heals itself well inside the schedule.
 
-**Parking means an effect never ran, and nothing else may be allowed to mean it.** The retry
+**Parking means an effect never ran, and nothing else may be allowed to mean it.** Since
+2026-08-19 it also means its partition moves on without it (see "Ordering within a partition"
+below), so the alarm is the only thing left standing between a parked event and silence. The retry
 path is built for a transient fault; a permanent one produces N identical failures and then an
 alarm that can never clear, because the retention sweep deliberately never prunes a parked row.
 So an effect that can fail on **bad input** must record that and complete rather than throw -
@@ -68,6 +70,79 @@ and keeps effect latency well inside anything a human perceives. It is also what
 | System message / card | `client_msg_id` derived deterministically from the outbox event id, against `UNIQUE (channel_id, sender_id, client_msg_id)` - **relies on `sender_id` being the non-null system actor, see [Message flows](03-message-flows.md)** |
 | Push send | Dedupe on `(outbox_event_id, device_id)` |
 | Membership cascade | Naturally idempotent (deletes) |
+
+### Ordering within a partition: what is enforced, and where
+
+**"Within a partition key" described a query that did not exist, until 2026-08-19.** The claim
+had no partition gate of any kind: `WHERE processed_at IS NULL AND attempts < MAX_ATTEMPTS AND
+next_attempt_at <= now() ORDER BY id`. A failing event is pushed two and a half seconds into the
+future by the backoff above, so event N+1 in the SAME channel was claimed on the very next 250 ms
+tick and overtook it, and a parked row was skipped forever while its whole partition sailed past.
+The tell was sitting in the schema the entire time: `outbox_unprocessed` is a partial index on
+`(partition_key, id)`, declared for this claim, and no query had ever mentioned `partition_key`.
+
+The gate now lives in `claimBatch` in `packages/server/src/worker/drain.ts`:
+
+```sql
+AND NOT EXISTS (
+  SELECT 1 FROM outbox earlier
+   WHERE earlier.partition_key = o.partition_key
+     AND earlier.processed_at IS NULL
+     AND earlier.id < o.id
+     AND earlier.attempts < MAX_ATTEMPTS    -- a PARKED row is not a blocker; see below
+     AND earlier.next_attempt_at > now()    -- leased by a worker, or backing off after a failure
+)
+```
+
+**The guarantee, in one sentence: within a partition key, no event's effect begins until every
+earlier event in that partition has either completed or parked.** Across partition keys there is
+no ordering and there never was, which is the entire reason `partition_key` is on the row. The
+plan is a nested loop anti join driven by `outbox_unprocessed`, so the index and the query finally
+describe the same design.
+
+Two halves, because a single predicate cannot cover both:
+
+| Where the overtake happened | What stops it |
+|---|---|
+| Across ticks: N fails and backs off, N+1 is claimed 250 ms later | The `NOT EXISTS` above |
+| Within one batch: N and N+1 are claimed together and N then fails | The drain loop stops the partition and hands the rest of its rows back unrun |
+
+**A parked row deliberately does NOT block its partition** (`earlier.attempts < MAX_ATTEMPTS`).
+A parked effect will never run, so holding its successors behind it stops that channel's system
+messages and notifications permanently rather than losing one of them. [ADR-0006](../decisions/0006-kafka-downstream-of-the-outbox.md) already made this
+call for the Kafka era ("a poisoned event goes to the DLQ rather than blocking its partition
+forever"); this is the same choice one layer down, and it is why parking is alerted on rather
+than merely recorded.
+
+### A claim is a lease, and the attempt is counted before the handler runs
+
+`attempts` counts **dispatches begun, not failures**. It is stamped `attempts + 1` in the
+claiming statement itself, committed there, and the row is pushed `CLAIM_LEASE_MS` (one minute)
+into the future so nothing else takes it. A row that succeeds on its first try therefore carries
+`attempts = 1`; the column that means "this effect failed" is `last_error`.
+
+That is not bookkeeping taste, it is the fix for a failure the retry column could not see. Until
+2026-08-19 the drain wrapped its whole 50-row batch in one transaction while every handler's own
+writes went through a different pool connection and committed as they happened, and `attempts`
+was incremented only in the `catch`. So a handler that **kills the process** rather than
+throwing (an out-of-memory deriving variants for a large image is the case that exists) had
+its effects performed, its `processed_at` rolled back, and its attempt counter with it. It was
+retried forever, never reached `MAX_ATTEMPTS`, and never fired the park alarm that exists for
+exactly this. Redelivery was never the problem: delivery is at-least-once and every effect is
+idempotent. An event that can never make progress and never raises its hand was.
+
+Consequences worth knowing before reading the code:
+
+- **No transaction spans the batch.** Each row's outcome is written on its own, so a process
+  death costs one row's `processed_at` rather than fifty.
+- **A row handed back unrun gives its increment back**, because it was never dispatched. The
+  claim is optimistic and this is its only correction.
+- **A replay is `UPDATE outbox SET processed_at = NULL, attempts = 0`**, and the success path
+  resets `next_attempt_at` so a replayed row is claimable at once rather than waiting out a lease
+  nobody remembers stamping.
+- **A hung handler, as opposed to a crashed one, is still not bounded by anything.** The lease
+  expires and another worker may run the same effect concurrently, which idempotency absorbs.
+  Cancelling the first one is a separate piece of work.
 
 ### Explicit ordering, not implicit
 
@@ -142,7 +217,9 @@ Consequences of the relay split:
   over.
 - A poisoned event goes to `clubchat.events.dlq` after N consumer failures rather than blocking
   its partition forever. Anything in the DLQ is alerted on, because a stuck partition means
-  system messages and notifications silently stop for that channel.
+  system messages and notifications silently stop for that channel. The pre-Kafka drain already
+  resolves this the same way and for the same reason: parking is what takes a poisoned event out
+  of its partition's way, so the DLQ is a better place to put it rather than a new policy.
 - The outbox pruning job (housekeeping, below) keys off `published_at`, and must not prune faster
   than Kafka's own retention, or replay stops being possible.
 
