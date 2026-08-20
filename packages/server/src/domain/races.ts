@@ -737,6 +737,13 @@ export async function assignToCarGroup(
  * The Incharge **must be a current member of that group**. Naming somebody who is not in the
  * car is not a mild inconsistency - it is the one person everyone will call when the car does
  * not show up.
+ *
+ * > **The check and the write are one transaction, holding the membership row.** They used to
+ * > be two statements with nothing between them, so somebody leaving the car in that window
+ * > was named in charge of a car they were no longer in - and nothing in the schema forbids
+ * > that, because "the Incharge is in the group" spans two tables and no constraint can say
+ * > it. `FOR UPDATE` on the row whose existence is the question makes the departure and this
+ * > call take turns: whichever is second sees what the first did. See ADR-0042.
  */
 export async function setCarGroupIncharge(
   db: Db,
@@ -752,17 +759,23 @@ export async function setCarGroupIncharge(
   if (!race) return { ok: false, code: 'not_found' };
   if (!canManageCarGroups(ctx, race)) return { ok: false, code: 'forbidden' };
 
-  if (userId !== null) {
-    const inGroup = await db
-      .select()
-      .from(carGroupMembers)
-      .where(and(eq(carGroupMembers.carGroupId, groupId), eq(carGroupMembers.userId, userId)))
-      .limit(1);
-    if (inGroup.length === 0) return { ok: false, code: 'invalid' };
+  // Clearing names nobody, so there is no membership to be true about.
+  if (userId === null) {
+    await db.update(carGroups).set({ inchargeUserId: null }).where(eq(carGroups.id, groupId));
+    return { ok: true, inchargeUserId: null };
   }
 
-  await db.update(carGroups).set({ inchargeUserId: userId }).where(eq(carGroups.id, groupId));
-  return { ok: true, inchargeUserId: userId };
+  return await db.transaction(async (tx) => {
+    const inGroup = await tx
+      .select({ userId: carGroupMembers.userId })
+      .from(carGroupMembers)
+      .where(and(eq(carGroupMembers.carGroupId, groupId), eq(carGroupMembers.userId, userId)))
+      .for('update');
+    if (inGroup.length === 0) return { ok: false, code: 'invalid' } as const;
+
+    await tx.update(carGroups).set({ inchargeUserId: userId }).where(eq(carGroups.id, groupId));
+    return { ok: true, inchargeUserId: userId } as const;
+  });
 }
 
 /** Leave, or be removed from, a car group without leaving the race. */
@@ -796,6 +809,16 @@ export async function leaveCarGroup(
  * > losing a passenger is not.
  *
  * Takes a transaction so it composes with leaving the race, which must be atomic with it.
+ *
+ * > **Whether they were the Incharge is decided BY the clearing statement, not before it.** A
+ * > `wasIncharge` read a moment earlier is a value about a row nothing is holding: an admin
+ * > naming a replacement in that window had their choice silently overwritten with NULL, and
+ * > the club was told the group needed an Incharge it had just been given. Reading `car_groups`
+ * > inside this transaction does not help, because at READ COMMITTED the read sees the old
+ * > value and the write still lands on the new one. Putting the departing member IN the `WHERE`
+ * > clause is what ties the two together: Postgres re-checks it against the committed row, so
+ * > the update matches nothing and the event that follows from it is never emitted. See
+ * > ADR-0042.
  */
 async function departCarGroup(
   tx: Parameters<Parameters<Db['transaction']>[0]>[0],
@@ -811,13 +834,6 @@ async function departCarGroup(
   const found = membership[0];
   if (!found) return;
 
-  const group = await tx
-    .select()
-    .from(carGroups)
-    .where(eq(carGroups.id, found.carGroupId))
-    .limit(1);
-  const wasIncharge = group[0]?.inchargeUserId === input.userId;
-
   await tx
     .delete(carGroupMembers)
     .where(
@@ -827,14 +843,18 @@ async function departCarGroup(
       ),
     );
 
-  if (wasIncharge) {
-    // Cleared, and the group persists with nobody in charge until an admin names one. The
-    // group is NOT dissolved and the other members are NOT moved.
-    await tx
-      .update(carGroups)
-      .set({ inchargeUserId: null })
-      .where(eq(carGroups.id, found.carGroupId));
+  // Cleared only if they are still the Incharge, and the group persists with nobody in charge
+  // until an admin names one. The group is NOT dissolved and the other members are NOT moved.
+  const cleared = await tx
+    .update(carGroups)
+    .set({ inchargeUserId: null })
+    .where(
+      and(eq(carGroups.id, found.carGroupId), eq(carGroups.inchargeUserId, input.userId)),
+    )
+    .returning({ number: carGroups.number });
 
+  const vacated = cleared[0];
+  if (vacated) {
     await tx.insert(outbox).values({
       partitionKey: input.clubId,
       eventType: 'race.incharge_left',
@@ -842,7 +862,7 @@ async function departCarGroup(
         clubId: input.clubId,
         raceId: input.raceId,
         groupId: found.carGroupId,
-        groupNumber: group[0]?.number ?? 0,
+        groupNumber: vacated.number,
         userId: input.userId,
       },
     });
