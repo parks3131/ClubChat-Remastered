@@ -447,6 +447,38 @@ anything they can do and any one of them can undo all of it.
 site, per failure mode 10: "may impose" and "may lift" are two capabilities that are deliberately
 different, and the difference is the entire point of the feature.
 
+**Whether somebody is banned is admin-only for the club in question, and that holds wherever the
+fact is served.** `canReadClubBans` gates the club's ban list *and* the `banned` field on the
+member card, which is the only other place the answer is exposed. Three properties keep it honest,
+and each is the answer to a way it went wrong:
+
+- **`false` is withheld along with `true`.** "This club has not barred this person" is as much a
+  statement about that club's moderation as the other answer, so a caller who may not read the ban
+  list receives **no field at all** rather than `false`. Absent means "not answered"; the clients
+  render it identically to `false`, so nothing is hidden that a stranger could previously see.
+- **The predicate decides whether the query runs**, not what happens to its result. A read that is
+  performed and then discarded is one `return` away from being disclosed again.
+- **A caller-chosen `clubId` carries no standing.** `GET /users/:id?clubId=` lets the caller name
+  any club, and its gate is `canViewProfile` - "do we share *some* club" - which says nothing about
+  the club named. Every club-scoped field in that response therefore asks its own predicate about
+  `clubId`; nothing upstream has asked for it. The three capability flags beside `banned`
+  (`canRemove`, `canBan`, `canLiftBan`) all terminate in `isClubAdmin` or `isClubOwner` for that
+  club and so answer `false` to a stranger by construction, and the target's membership role is
+  read only as an input to them and never returned.
+
+> **This is a correction, and it was live from Phase 3.75 until 2026-08-19.** The `banned` field was
+> a bare `SELECT` against `club_bans` with no predicate in front of it, while its three neighbours
+> in the same block all routed through the policy module - so the block read as uniformly gated and
+> `canReadClubBans` appeared at exactly one call site in the codebase. Alice and Bob share club A;
+> Bob is banned from club B, which Alice has never joined. Alice finds B's id through
+> `GET /clubs/search`, which returns ids for clubs she is not in, asks
+> `GET /users/{bob}?clubId={B}`, and is told `banned: true`. Note the shape, because it is neither
+> of the two traps already recorded here: not an alias hiding a capability (failure mode 10) and not
+> a capability with no predicate at all (`canViewProfile`, above), but a predicate that existed,
+> was named, was documented in this file - and was never called from the second place that needed
+> it. **A predicate with one call site is worth auditing for a second**; the question is not "does
+> this rule exist" but "how many places serve this fact".
+
 The ban check itself lives in `admit`, the one function every way into a club passes through -
 open join, invite link, admin add, approved request - so it is one line rather than four places
 that must remember. Asking to join does not pass through `admit`, so `fileJoinRequest` - the one

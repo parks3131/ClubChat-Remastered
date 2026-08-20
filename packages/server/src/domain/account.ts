@@ -20,6 +20,7 @@ import type { ClubRole } from '@clubchat/shared';
 import {
   canBanFromClub,
   canLiftClubBan,
+  canReadClubBans,
   canRemoveMember,
   canReportUser,
   canViewProfile,
@@ -61,8 +62,21 @@ export type ProfileClubActions = {
   clubId: string;
   canRemove: boolean;
   canBan: boolean;
-  /** Whether this person is currently barred, so the card can offer Unban instead. */
-  banned: boolean;
+  /**
+   * Whether this person is currently barred, so the card can offer Unban instead.
+   *
+   * > **Absent unless the caller may read this club's bans, and absent rather than `false`.**
+   * > `false` is an answer too - "club B has not barred this person" is a fact about club B's
+   * > moderation, and somebody with no standing there may not have either answer. The three
+   * > flags beside it are capabilities, which are safe to state as `false` because they describe
+   * > the *caller*; this one describes the *club*, and that is the difference.
+   *
+   * Gated on `canReadClubBans`, the same predicate the roster's Banned section goes through, so
+   * there is one definition of who may see a ban rather than two. The route's only gate is
+   * `canViewProfile`, which asks whether the pair share *some* club and never whether the caller
+   * stands in the one `?clubId=` names - so nothing upstream has already asked this.
+   */
+  banned?: boolean;
   canLiftBan: boolean;
 };
 
@@ -248,15 +262,42 @@ export async function readProfile(
    *
    * Absent rather than all-false when no club is named, so a screen that forgets to pass one
    * renders no controls instead of the wrong ones.
+   *
+   * **The caller chooses `opts.clubId` and nothing has checked they stand in it.** The route's
+   * gate is `canViewProfile`, which asks only whether the pair share *some* club, so everything
+   * below has to carry its own answer to "may this caller ask about THIS club". The role read is
+   * safe on that test and deliberately so: the role never reaches the response, and both
+   * predicates it feeds terminate in `isClubAdmin` or `isClubOwner` for the named club, so a
+   * caller with no standing gets `false` whatever the target's rank turns out to be. It is an
+   * input to a decision, not a disclosure.
    */
   const membership = await db.execute<{ role: string }>(sql`
     SELECT role::text AS role FROM club_memberships
      WHERE club_id = ${opts.clubId} AND user_id = ${userId}
   `);
-  const banned = await db.execute<{ user_id: string }>(sql`
-    SELECT user_id::text AS user_id FROM club_bans
-     WHERE club_id = ${opts.clubId} AND user_id = ${userId}
-  `);
+  /*
+   * The ban, only for somebody who may read this club's bans.
+   *
+   * **The predicate decides whether the query runs at all**, rather than the query running and
+   * its answer being dropped afterwards. A read that is performed and then discarded is one
+   * `return` away from being disclosed by the next person to touch this block, and it costs a
+   * round trip on every roster card besides.
+   *
+   * Until 2026-08-19 there was no predicate here of any kind. Its three neighbours all routed
+   * through the policy module and all correctly answered `false` to a stranger, which made the
+   * block look uniformly gated; this one was a bare `SELECT` against `club_bans` on whatever
+   * `?clubId=` the caller chose to name. Since the route's gate is `canViewProfile` - "do we
+   * share SOME club" - one clubmate could name a club they had never joined and be told whether
+   * its admins had barred the other. A club's moderation record, readable by anybody who could
+   * see the person's face.
+   */
+  const mayReadBan = canReadClubBans(ctx, opts.clubId);
+  const banned = mayReadBan
+    ? await db.execute<{ user_id: string }>(sql`
+        SELECT user_id::text AS user_id FROM club_bans
+         WHERE club_id = ${opts.clubId} AND user_id = ${userId}
+      `)
+    : undefined;
 
   const role = membership.rows[0]?.role as ClubRole | undefined;
 
@@ -272,7 +313,7 @@ export async function readProfile(
           ? false
           : canRemoveMember(ctx, opts.clubId, { role, userId: row.id }),
       canBan: canBanFromClub(ctx, opts.clubId, { role, userId: row.id }),
-      banned: banned.rows.length > 0,
+      ...(banned ? { banned: banned.rows.length > 0 } : {}),
       canLiftBan: canLiftClubBan(ctx, opts.clubId),
     },
   };

@@ -658,7 +658,15 @@ export type ProfileClubActions = {
   clubId: string;
   canRemove: boolean;
   canBan: boolean;
-  banned: boolean;
+  /**
+   * **Absent unless the viewer may read this club's bans**, and absent rather than `false`.
+   *
+   * The three flags beside it are capabilities and describe the viewer, so `false` is a safe
+   * thing to say. This one describes the club: "not banned" is as much a fact about that club's
+   * moderation as "banned" is, and somebody with no standing there gets neither. Treat absent as
+   * "not answered" and render the same as `false` - which is what a truthy check already does.
+   */
+  banned?: boolean;
   canLiftBan: boolean;
 };
 
