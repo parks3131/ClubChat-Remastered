@@ -17,6 +17,7 @@ Client A                Gateway 1          API            Postgres        Redis 
    │                       │                ├────────────────►│ BEGIN       │            │          │
    │                       │                │                 │ seq++       │            │          │
    │                       │                │                 │ INSERT msg  │            │          │
+   │                       │                │                 │ INSERT mentions          │          │
    │                       │                │                 │ INSERT outbox            │          │
    │                       │                │                 │ COMMIT      │            │          │
    │                       │                │◄────────────────┤ {seq, ts}   │            │          │
@@ -34,6 +35,23 @@ Notes:
 
 - **The ack is sent the instant the transaction commits**, before any fan-out. Perceived send
   latency is one round trip plus one Postgres commit.
+- **`message_mentions` is inside that transaction, not after it.** The rows are resolved before
+  the append - who may be named is an authorization question, answered by `send-message.ts` - and
+  written by `appendMessage` through its `mentions` parameter, alongside the message and the
+  outbox event. They were written by the caller after the commit until 2026-08-19, and it lost
+  notifications: `message.created` is visible the instant the transaction commits, the drain
+  polls every 250ms and claims on visibility, and the effect resolves the mentioned by reading
+  these rows. A drain landing in the gap found none, so the named member got no `mentioned` row,
+  no mention push, and the weaker generic chat buzz instead - silently, and only sometimes. The
+  general rule is [the effects engine](04-effects-engine.md)'s: an event must not be able to
+  exist without the domain rows its effect will read.
+- **The media owner pointer and an auto-filed content report are deliberately still after the
+  commit**, and neither is the same class. `media_objects.owner_id` is read only by the nightly
+  orphan GC, which deletes only where the pointer is set and its message is gone - so losing that
+  write leaks an object rather than removing a live one. `fileReport` writes its report row and
+  its own `message.reported` event in one transaction of its own, so it is internally atomic and
+  reads nothing `message.created` produced; keeping it out of the append transaction is the
+  choice not to hold the `last_seq` row lock across it.
 - The published payload carries `{channel_id, seq}` plus the full envelope. Gateways forward the
   envelope directly - recipients do not re-fetch. ([Engineering pitfalls](14-engineering-pitfalls.md) 24 says *don't diff realtime
   payloads into local state* - that lesson was about reconciling insert/update/delete events
