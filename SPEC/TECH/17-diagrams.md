@@ -156,6 +156,14 @@ The ack is sent the instant the transaction commits, before any fan-out. Sender 
 devices receive the message by the same path, since they subscribe to the same channel. There
 is no special case for multi-device.
 
+**A retried send publishes too, and that is not a special case either.** The commit and the
+publish are two writes with nothing spanning them, so an attempt that committed and then died is
+a message that is durable and was never fanned out. `appendMessage` answering `deduplicated: true`
+proves the row exists and proves nothing about whether anybody was told, so the gateway publishes
+on both paths and lets the client drop what it already holds - `decideGap` ignores any seq at or
+below the local maximum. A duplicate publish is strictly cheaper than a lost one. Notifications
+are unaffected, because they ride the outbox event and a deduplicated retry writes none.
+
 ---
 
 ## 4. Send, recipients offline

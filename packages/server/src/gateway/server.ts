@@ -596,11 +596,49 @@ export function createGateway(
         correlationId,
       );
 
-      // Only then publish. A deduplicated retry must not republish: the original was
-      // already delivered, and a second publish would push a duplicate to every open
-      // client.
-      if (!result.deduplicated) {
+      /*
+       * Only then publish - and publish for a DEDUPLICATED retry too.
+       *
+       * > **This used to skip the publish when `appendMessage` reported a retry, on the reasoning
+       * > that "the original was already delivered". That reasoning assumes the append and the
+       * > publish are atomic, and they are not.** They are a Postgres commit and a Redis publish,
+       * > in that order, with nothing spanning them - so a first attempt that committed the row
+       * > and then died, or whose publish threw, leaves a message that is durable and was never
+       * > fanned out. The client retries with the same `client_msg_id`, this recognises it,
+       * > returns the original `seq`, and skips the fan-out **forever**. `deduplicated: true`
+       * > proves the row exists. It proves nothing at all about whether anybody was told.
+       *
+       * The symptom is the one reported as "it did not show up until I backgrounded the app":
+       * the message really is in the channel log, so every other member finds it on their next
+       * `/sync`. Only realtime was lost, and it was lost silently.
+       *
+       * **A duplicate publish is strictly cheaper than a lost one**, and three client rules make
+       * it a no-op rather than a duplicate message: `decideGap` answers `ignore` for any seq at
+       * or below the local maximum, `applyIncoming` upserts and backfills nothing on an `ignore`,
+       * and the device's store is `ON CONFLICT (channel_id, seq) DO UPDATE`. Notifications are
+       * untouched either way - they ride the outbox event, and `appendMessage` writes no outbox
+       * event for a deduplicated retry. The same defect shape was fixed in `worker/effects.ts`
+       * `postSystemMessage` on 2026-08-20.
+       *
+       * The publish has a catch of its own for the same reason it now happens unconditionally.
+       * Falling into the handler's catch below would report a committed, acked message as
+       * `send failed` and answer `msg.err` after an `msg.ack` has already gone out - which the
+       * client drops, because the outbox entry the ack resolved is gone. So the one failure that
+       * actually loses a fan-out was the one nothing could see. Realtime is an enhancement and
+       * the message is durable, so the send stands; what must not stand is the silence.
+       */
+      try {
         await publishToChannel(deps.redis, payload.channelId, result.message);
+      } catch (error) {
+        deps.log('error', 'the message committed but could not be published', {
+          channelId: payload.channelId,
+          seq: result.message.seq,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        deps.monitor?.capture(error, 'gateway.publish', {
+          channelId: payload.channelId,
+          seq: result.message.seq,
+        });
       }
     } catch (error) {
       if (error instanceof ChannelGoneError) {
