@@ -29,6 +29,16 @@ it describes causes a publish to a gateway that no longer holds the connection, 
 harmless no-op. An entry that outlived the socket while *also* gating push delivery would cause
 silent missed notifications, which is why that coupling does not exist.
 
+> **The registry write is best effort, and failing it does not fail the handshake.** It is a
+> Redis write on `maxRetriesPerRequest: 3`, so a Redis restart makes it reject in a second or
+> two - and it used to be awaited on the handshake path, where a rejection took the whole
+> connection down without answering the client. Refusing a socket because Redis blinked is the
+> wrong trade twice over: [Failure modes](11-failure-modes.md) requires a wiped Redis to
+> *degrade* the system rather than break it, and per-channel fan-out means nothing reads this
+> hash at all today - the gateway subscribes to `chan:{id}` and fans out in process, so routing
+> never consults it. A socket that works is worth more than a routing hint that is accurate. The
+> failure is logged and reported, because an empty registry has no other symptom.
+
 **Simplification vs. WhatsApp:** the transcript's presence service exists largely to power
 *user-visible* online/offline and "last seen". [Chat](../PRD/05-chat.md) puts presence, typing indicators
 and read receipts explicitly **out of scope**. So:
@@ -42,10 +52,45 @@ ever wanted as a product feature, it is added on top of the registry that alread
 
 ### Heartbeats and the reaper
 
-Client → server ping every 30s; server closes a socket silent for 90s. A gateway that dies
+Client → server `ping` every 30s; server closes a socket silent for 90s. A gateway that dies
 without closing sockets leaves stale Redis entries which expire by TTL. A publish to a stale
 entry is a no-op - and it does not matter, because the message is already durable in the
 channel log and the client will sync on reconnect.
+
+> **Both halves of that sentence were unimplemented until 2026-08-19, and the reaper was
+> therefore a machine for disconnecting live members.** No client ever sent a `ping` - the
+> gateway handled the frame and nothing produced it - and `lastSeenAt` advanced only on an
+> inbound application frame. So a member reading the clubs tab for ninety seconds without typing
+> had their socket terminated underneath them. Nothing reconnected it either: the client's
+> `onclose` nulled the socket and returned, and the only two callers of `reconnect()` were a
+> send retry and the app-foreground listener, neither of which fires for somebody already
+> looking at the app. They received no live message until they sent one or opened a chat, and
+> nothing anywhere reported it: history still loaded over REST, their own sends still acked, and
+> the failure looked exactly like a quiet afternoon.
+
+**Three mechanisms, and each covers what the others cannot.**
+
+1. **The client pings every 30s** (`packages/client-core/src/chat-client.ts`), which is what
+   keeps a quiet socket unreaped and what refreshes the registry TTL. Three chances inside a 90s
+   window, so one dropped frame is survivable. It runs only while the socket is authenticated,
+   because the gateway closes a socket that speaks before `auth`.
+2. **The server pings every 30s too**, on the reaper's own tick, and counts the protocol-level
+   `pong` as liveness exactly like an inbound frame. This exists for the failure the client's
+   ping cannot see: a **half-open** socket, where the peer is gone but no FIN ever arrived. A
+   client in that state believes it is connected, sends its pings into a dead pipe, and
+   reconnects nothing - and from the gateway it is indistinguishable from a quiet member until a
+   ping goes unanswered. WebSocket peers answer a ping at the protocol level with no application
+   involvement, so this needs nothing of the client and works for app builds already on phones.
+
+   Note what it changes about the word *silent*: it now means "did not answer a ping in 90s"
+   rather than "sent nothing in 90s", which is the property actually worth measuring.
+3. **The client reconnects itself**, with exponential backoff from 500ms to a 30s ceiling, plus
+   jitter - because the event that produces a great many reconnects at once is a gateway
+   restarting, and every client returning in the same millisecond is how a restart becomes an
+   outage. The reconnect re-authenticates, resubscribes every channel and runs `/sync`, which is
+   what the channel log exists to make correct. A refusal the server states - `invalid_token` or
+   `signin_blocked` - ends the loop rather than retrying it; every other failure is a moment
+   rather than a verdict.
 
 ### The handshake, and the frames that arrive during it
 
@@ -68,6 +113,33 @@ effect, while the handshake is still in flight.
 > discards a frame from an unauthenticated socket *and closes the connection* means an early frame
 > does not merely fail, it takes the conversation down - so the client must not send one. Each end
 > is the other's blast radius.
+
+**Every terminating path of the handshake produces exactly one `auth.ok` or `auth.err`, and the
+socket is closed on the second.** Not "usually", and not "unless something throws": the client
+awaits that reply and its only other rejector is the socket closing, so a path that returns
+without answering leaves the app on its loading spinner permanently - the outcome
+[Accounts and profile](../PRD/03-accounts-and-profile.md) rules out absolutely.
+
+Two rules keep it true, and both were missing until 2026-08-19:
+
+- **The auth timer outlives the handler rather than being cleared on entry to it.** It is armed
+  at 5s for the `auth` frame to arrive, and re-armed at 10s for the handshake to be answered.
+  Clearing it on entry meant that from the moment the frame arrived, nothing was watching -
+  and the generic per-frame catch deliberately keeps the socket open and says nothing, which is
+  right for one bad `msg.send` and fatal here. A throw inside the handler therefore sent no
+  reply, no refusal and no close. The likeliest thrower was the registry write above: Redis
+  restarts for thirty seconds and every phone that cold-opens in that window hangs.
+- **The client bounds its own wait** at 12s, deliberately longer than the server's 10s window so
+  that a server which is *alive* always answers first and the client acts on a reason rather
+  than on a silence. The client's timer is the backstop for a server that is not there at all.
+
+> **A handshake that fails for a server-side reason answers `auth.err {"code":"timeout"}`, and
+> that is a compromise rather than a description.** The code set in [Protocol](10-protocol.md) is
+> closed, and of the six, `timeout` is the only one that says "this handshake did not complete"
+> without blaming the credential. The two that describe the token - `invalid_token` and
+> `signin_blocked` - are the ones a client acts on by **signing the member out**, so reaching for
+> either would turn a Redis blip into a mass sign-out. A distinct `server_error` code is a
+> protocol change and belongs with that document and the schemas in `packages/shared`.
 
 Until 2026-08-09 neither held, and the pair cost a member their session: the refusal was reported
 as `invalid_token`, which the client reads as proof the session is dead. See

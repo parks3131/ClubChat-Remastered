@@ -27,7 +27,12 @@ import { AppState, Platform, type AppStateStatus } from 'react-native';
  * and only ever on the primary platform: web has the global, so every browser check passed.
  */
 import { randomUUID } from 'expo-crypto';
-import { AuthRejectedError, ChatClient, type SocketLike } from '@clubchat/client-core';
+import {
+  AuthRejectedError,
+  ChatClient,
+  TERMINAL_AUTH_CODES,
+  type SocketLike,
+} from '@clubchat/client-core';
 import type { ChannelState } from '@clubchat/shared';
 import { config } from './config.ts';
 import { capture } from './monitoring.ts';
@@ -202,10 +207,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
          * `signin_blocked` is the same category - the server has refused this account, not
          * failed to answer - so both end the session rather than degrading.
          */
-        if (
-          error instanceof AuthRejectedError &&
-          (error.code === 'invalid_token' || error.code === 'signin_blocked')
-        ) {
+        /*
+         * The same set the client's own reconnect loop stops on, imported rather than repeated.
+         * Two copies of "which refusals are final" is one copy too many: the loop and this
+         * branch have to agree, or a session ends in one place and retries forever in the other.
+         */
+        if (error instanceof AuthRejectedError && TERMINAL_AUTH_CODES.has(error.code)) {
           console.warn('[chat] the gateway rejected this session, signing out', error.code);
           /*
            * Reported, because this is the one refusal that ENDS somebody's session, and on
@@ -283,7 +290,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [start]);
 
-  // Reconcile on foreground. The other trigger, socket reconnect, lives in the client.
+  /*
+   * Reconcile on foreground. The other trigger, socket reconnect, lives in the client - and
+   * from 2026-08-19 it genuinely does: `ChatClient` pings every thirty seconds and reconnects
+   * a dropped socket on its own, with backoff. This comment described that arrangement for two
+   * phases before any of it existed, which is how a socket reaped while somebody was reading a
+   * screen went unnoticed: the app was already foregrounded, so this listener never fired, and
+   * nothing else was watching.
+   *
+   * Both triggers are kept. This one is not redundant: coming back from the background needs a
+   * reconcile whether or not the socket survived, because a suspended app misses frames without
+   * the socket ever closing.
+   */
   useEffect(() => {
     const onAppStateChange = (next: AppStateStatus) => {
       if (next !== 'active') return;
