@@ -35,6 +35,22 @@
 - [ ] If two rows must change in a fixed order to satisfy a constraint, is that order explicit
       and commented? (Ownership transfer demotes before promoting, because the one-owner
       constraint is checked per statement.)
+- [ ] **Does this build an index on a table that already has rows in it, and if so, is the
+      write freeze it costs acceptable?** A plain `CREATE INDEX` holds `SHARE` on the table
+      until the build finishes, which blocks every writer for that long - readers are fine.
+      On an empty table that is free, which is why `0016` and `0018` built indexes on
+      `messages` without anyone noticing.
+
+      **`CREATE INDEX CONCURRENTLY` is the alternative and it cannot run inside a transaction
+      block**, so it is not available from a generated migration: drizzle-kit emits plain
+      `CREATE INDEX`, and the migrator wraps every file in a transaction. Getting the
+      concurrent build means taking the statement out of the migration and running it by hand
+      against each environment, and accepting that it can fail and leave an `INVALID` index
+      behind that has to be dropped and rebuilt. That is a real cost, so it is a judgement
+      rather than a default.
+
+      State which one you took and why, in the migration's own header. The number that
+      decides it is the row count of that table in production, not in development.
 
 ## Alongside the migration
 

@@ -1,0 +1,35 @@
+-- Two hot-path reads that had no index behind them.
+--
+-- Neither is visible from the wire and neither is visible to a statement counter, because both
+-- are ONE round trip whose cost grows with the whole table rather than with what was asked for.
+--
+--  1. `notifications_pending_request`. Every join-request decision runs one
+--     `UPDATE notifications ... WHERE type = $1 AND params ->> <scope> = $2
+--     AND params ->> 'requesterId' = $3 AND params ->> 'decision' IS NULL`, and the table's
+--     four existing indexes cover `type` and those jsonb paths not at all. `notifications` has
+--     no retention job, so it grows platform-wide forever and so did that scan. It compounds at
+--     the caller, which runs the resolver once per member added and takes up to 100 ids.
+--
+--     PARTIAL on the three request types and on an undecided request, so the index holds only
+--     rows that can still match - a set bounded by the open requests on the platform rather than
+--     by its whole notification history. Same argument as `outbox_unprocessed`. The cost is that
+--     the type list can drift from `REQUEST_SCOPE_KEY` in `worker/notify.ts`, which
+--     `test/hot-path-plans.test.ts` turns into a failing test rather than a silent regression.
+--
+--  2. `poll_votes_by_poll`. `poll_votes` had `PRIMARY KEY (option_id, user_id)` and
+--     `UNIQUE (poll_id, user_id) WHERE NOT allow_multiple`, and the second is partial - so it
+--     serves a read only if that read restates `NOT allow_multiple`. None of the four reads that
+--     ask "who voted in this poll" can: a poll allowing several answers has votes too, and
+--     filtering them out would be a wrong answer rather than a slow one. The partial unique
+--     index STAYS; it carries the single-choice invariant and this one carries the reads.
+--
+-- Neither index is built CONCURRENTLY, and that is a decision rather than an oversight.
+-- `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block and every migration here
+-- runs inside one, so it is not available without stepping outside the migrator. A plain
+-- `CREATE INDEX` holds SHARE on the table for the build, which blocks writers - inserts into
+-- `notifications` and votes - for that long. Today those tables hold 1,692 and 75 rows and the
+-- build is milliseconds, so the lock is paid without anyone noticing. The checklist item added
+-- alongside this migration is what makes the next person weigh it rather than inherit it.
+
+CREATE INDEX "notifications_pending_request" ON "notifications" USING btree ("type",(params ->> 'requesterId')) WHERE type in ('club_join_request', 'race_join_request', 'eboard_join_request') and params ->> 'decision' is null;--> statement-breakpoint
+CREATE INDEX "poll_votes_by_poll" ON "poll_votes" USING btree ("poll_id","user_id");
