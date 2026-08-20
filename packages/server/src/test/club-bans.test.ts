@@ -466,6 +466,85 @@ describe('what the client is told it may do', () => {
     });
     expect(elsewhere.ok && elsewhere.club?.banned).toBe(false);
   });
+
+  /*
+   * The forbidden action, attempted as the unprivileged actor: reading a club's ban list one
+   * person at a time, from outside the club.
+   *
+   * `?clubId=` is a question the caller chooses, and `canViewProfile` - the only gate on the
+   * route - asks whether the pair share SOME club, never whether the caller stands in the club
+   * named. So a clubmate could name a club they have never joined and be told whether that
+   * club's admins have barred the person. Every capability flag beside it read `false`
+   * correctly; `banned` was a bare query with no predicate in front of it, which is exactly the
+   * shape failure mode 10 warns about from the other side: three of four fields routed through
+   * the policy module and the fourth did not, so the block looked uniformly gated.
+   *
+   * A ban is moderation data. `canReadClubBans` is the predicate that already says who may read
+   * it, and it says the same thing here as it does for the list.
+   */
+  it('refuses the ban to a clubmate with no standing in the club it was imposed in', async () => {
+    // Club A, where the two share standing - this is what gets the card open at all.
+    const shared = await setup('open');
+    const outsider = shared.ownerId;
+    const member = await makeUser('Member');
+    await joinClub(h.db, member, shared.clubId);
+
+    // Club B, which the outsider has never joined and cannot see into.
+    const elsewhere = await setup('open');
+    await joinClub(h.db, member, elsewhere.clubId);
+    await joinClub(h.db, elsewhere.ownerId, shared.clubId); // so the admin's own card stays open
+    await banFromClub(h.db, await ctxFor(elsewhere.ownerId), elsewhere.clubId, member);
+
+    const card = await readProfile(h.db, await ctxFor(outsider), member, {
+      clubId: elsewhere.clubId,
+    });
+    // The card itself is legitimate: they share club A, so the profile opens.
+    expect(card.ok).toBe(true);
+    if (!card.ok) return;
+
+    // And it says nothing whatsoever about club B's moderation. Absent, not `false`: "not
+    // banned" is itself an answer about a ban list this caller may not read.
+    expect(card.club?.banned).toBeUndefined();
+    expect('banned' in (card.club ?? {})).toBe(false);
+    expect(card.club?.canBan).toBe(false);
+    expect(card.club?.canRemove).toBe(false);
+    expect(card.club?.canLiftBan).toBe(false);
+
+    // The positive case, so the refusal is a rule and not a removal: club B's own admin still
+    // gets the answer, and the Unban control the card exists to offer.
+    const admin = await readProfile(h.db, await ctxFor(elsewhere.ownerId), member, {
+      clubId: elsewhere.clubId,
+    });
+    expect(admin.ok).toBe(true);
+    if (!admin.ok) return;
+    expect(admin.club?.banned).toBe(true);
+    expect(admin.club?.canLiftBan).toBe(true);
+  });
+
+  it('refuses the ban to a plain member of the club it was imposed in', async () => {
+    // The predicate is the admin tier, not membership: a club's own rank and file do not read
+    // its ban list either, on this card any more than in the roster's Banned section.
+    const { clubId, ownerId } = await setup('open');
+    const bystander = await makeUser('Bystander');
+    const member = await makeUser('Member');
+    await joinClub(h.db, bystander, clubId);
+    await joinClub(h.db, member, clubId);
+
+    const second = await createClub(h.db, {
+      name: 'Second Club',
+      joinPolicy: 'open',
+      creatorId: bystander,
+    });
+    await drainOnce(h.db, deps);
+    await joinClub(h.db, member, second.clubId);
+
+    await banFromClub(h.db, await ctxFor(ownerId), clubId, member);
+
+    const card = await readProfile(h.db, await ctxFor(bystander), member, { clubId });
+    expect(card.ok).toBe(true);
+    if (!card.ok) return;
+    expect(card.club?.banned).toBeUndefined();
+  });
 });
 
 describe('what the club is told, and what the person is told', () => {
