@@ -64,9 +64,9 @@ beforeEach(async () => {
     redis: { publish: async () => 1 } as never,
     push: { send: async () => [] } as never,
     log: silent,
-    // Push evaluation is not what these tests are about; dropping the deferred work keeps
-    // them to the inbox rows, which is the thing that was wrong.
-    defer: () => undefined,
+    // Push evaluation is not what these tests are about. Left at the real eight-second
+    // deferral, so the rows it enqueues are never claimable here and these stay about the
+    // inbox rows, which is the thing that was wrong.
   };
 });
 

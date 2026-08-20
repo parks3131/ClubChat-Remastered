@@ -64,7 +64,10 @@ beforeEach(async () => {
     push: new RecordingPushSender(),
     media: store,
     log: silent,
-    defer: () => undefined,
+    // Zero, so a deferred push is claimable on the next drain pass rather than in eight real
+    // seconds. This file asserts that nothing is left unprocessed, which is only a true claim
+    // if the push rows an upload produces are drained too.
+    pushDeferralMs: 0,
   };
 });
 
@@ -934,6 +937,10 @@ describe('bytes that are not an image', () => {
     // The fact is recorded rather than lost: this is what the parked row used to be evidence of.
     const after = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, intent.mediaId));
     expect(after[0]?.deriveError).toContain('libpng');
+
+    // The deferred push rows the batch enqueued are due immediately here, so a second pass is
+    // the eight seconds elapsing. Without it the check below would count them as unprocessed.
+    await drainOnce(h.db, deps);
 
     // And nothing is left unprocessed for the retention sweep to keep shouting about.
     const unprocessed = await h.db.execute<{ n: string }>(sql`

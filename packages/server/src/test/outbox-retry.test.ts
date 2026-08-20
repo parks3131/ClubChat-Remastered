@@ -43,7 +43,8 @@ function deps(): EffectDeps {
     redis: { publish: async () => 1 } as never,
     push: new RecordingPushSender(),
     log: silent,
-    defer: () => undefined,
+    // The retry ledger is the subject here, not the push. Without `pushDeferralMs` a deferred
+    // push row is not claimable for eight seconds, so nothing it enqueues joins the counts.
   };
 }
 

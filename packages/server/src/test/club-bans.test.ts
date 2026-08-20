@@ -59,7 +59,8 @@ beforeEach(async () => {
     redis: { publish: async () => 1 } as never,
     push: new RecordingPushSender(),
     log: () => undefined,
-    defer: () => undefined,
+    // No `pushDeferralMs`, so the deferred push rows these effects enqueue sit eight seconds
+    // out and are never claimed here. Bans are about who may rejoin, not about a buzz.
   };
 });
 

@@ -41,8 +41,6 @@ import type { EffectDeps } from '../worker/effects.ts';
 
 let h: TestDb;
 let push: RecordingPushSender;
-/** Deferred pushes, run on demand instead of after eight real seconds. */
-let deferred: Array<() => Promise<void>>;
 let deps: EffectDeps;
 
 const silent = () => undefined;
@@ -57,7 +55,6 @@ afterAll(async () => {
 
 beforeEach(async () => {
   push = new RecordingPushSender();
-  deferred = [];
 
   // Clear the volatile tables between tests, so an assertion like "no notifications at
   // all" means what it says. Several assertions below are deliberately unfiltered - that
@@ -79,16 +76,23 @@ beforeEach(async () => {
     redis: null as never,
     push,
     log: silent,
-    defer: (fn) => deferred.push(fn),
+    // Zero, so a deferred push row is claimable on the very next pass instead of in eight real
+    // seconds. See `drainAndDeliver`.
+    pushDeferralMs: 0,
   };
 });
 
-/** Drain the outbox, then run whatever push evaluations it scheduled. */
+/**
+ * Drain the outbox, then drain again to deliver the pushes the first pass scheduled.
+ *
+ * The second pass IS the eight seconds. A deferred push is an outbox row due at
+ * `now() + PUSH_DEFERRAL_MS`; `pushDeferralMs: 0` above makes it due immediately, so the next
+ * claim picks it up. There is no test-only branch in the code being exercised, which is the
+ * point: the fire-and-forget `setTimeout` this replaced was the one path no test ever took.
+ */
 async function drainAndDeliver() {
   await drainOnce(h.db, deps);
-  const pending = [...deferred];
-  deferred = [];
-  for (const fn of pending) await fn();
+  await drainOnce(h.db, deps);
 }
 
 /**
@@ -324,7 +328,8 @@ describe('push suppression is by read cursor, never by liveness', () => {
     // The read lands after scheduling, before evaluation.
     await advanceReadCursor(h.db, f.memberId, f.channelId, sent.message.seq);
 
-    for (const fn of deferred) await fn();
+    // Now the deferral elapses, which here is the second claim of the same outbox.
+    await drainOnce(h.db, deps);
     expect(push.sent, 'the cursor was captured too early').toHaveLength(0);
   });
 
@@ -776,10 +781,10 @@ describe('membership and requests reach a phone', () => {
    * this describe block exists to check, so it would have been a convincing false negative.
    */
   async function drainPublishing() {
-    await drainOnce(h.db, { ...deps, redis: { publish: async () => 0 } as never });
-    const pending = [...deferred];
-    deferred = [];
-    for (const fn of pending) await fn();
+    const publishing = { ...deps, redis: { publish: async () => 0 } as never };
+    await drainOnce(h.db, publishing);
+    // The second pass delivers the pushes the first one scheduled. See `drainAndDeliver`.
+    await drainOnce(h.db, publishing);
   }
 
   it('rings every admin when somebody asks to join', async () => {
