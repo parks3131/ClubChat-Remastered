@@ -137,7 +137,118 @@ export type S3Config = {
   region: string;
   accessKeyId: string;
   secretAccessKey: string;
+  /**
+   * The three deadlines below, and the retry ceiling, overridable for tests only.
+   *
+   * Production and development both take the defaults - a timeout that differs between the two
+   * is a timeout that has never been exercised where it matters. `store.test.ts` scales them
+   * down so an assertion about giving up does not cost ten seconds of wall clock each time.
+   */
+  connectionTimeoutMs?: number;
+  requestTimeoutMs?: number;
+  socketTimeoutMs?: number;
+  maxAttempts?: number;
 };
+
+/**
+ * How long establishing the TCP connection may take.
+ *
+ * A connect to an object store that has not completed in three seconds is a broken network path,
+ * not a slow one. Both MinIO on the same host and R2 from a Fly machine answer in milliseconds.
+ */
+export const STORE_CONNECTION_TIMEOUT_MS = 3_000;
+
+/**
+ * How long the store has to produce a response - meaning its HEADERS, not its whole body.
+ *
+ * The distinction is load-bearing and is easy to get backwards. `@smithy/node-http-handler`
+ * clears this timer the moment the response callback fires, which is when the status line and
+ * headers have arrived; the body then streams under `socketTimeout` below. So ten seconds here
+ * is not a ceiling on downloading a 25 MB photo, which would be far too tight. It is a ceiling
+ * on the store saying anything at all.
+ */
+export const STORE_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * How long the socket may go completely silent before the request is destroyed.
+ *
+ * This is the half `requestTimeout` cannot cover: a store that sends headers and then stalls
+ * mid-body leaves `transformToByteArray()` waiting forever, because the request-level timer has
+ * already been cleared. Five seconds of *no bytes at all* is a dead connection on any transfer
+ * that is still making progress.
+ *
+ * **It must stay under six seconds.** The handler registers the socket listener immediately for
+ * values below 6000 ms and defers registration by a second above it - and that deferred
+ * registration is cancelled when the response arrives. A larger value would therefore silently
+ * never arm on exactly the fast-headers-then-stall case it exists for.
+ */
+export const STORE_SOCKET_TIMEOUT_MS = 5_000;
+
+/**
+ * How many times one call may be attempted.
+ *
+ * Pinned rather than inherited, because it is a multiplier on every deadline above and the
+ * arithmetic matters: three attempts bounds a single storage call at roughly forty seconds, and
+ * `db/client.ts` sizes `idle_in_transaction_session_timeout` against that number. Leaving it to
+ * the SDK's default would let a dependency bump move a ceiling this codebase reasons about.
+ */
+export const STORE_MAX_ATTEMPTS = 3;
+
+/**
+ * A storage operation that did not produce a usable answer.
+ *
+ * > **The one thing this exists to prevent: "not there" and "cannot ask" being the same value.**
+ * > `head` used to catch everything and return `{ exists: false }`, so a real 404, a 403 from a
+ * > rotated credential, a DNS failure and a timeout were indistinguishable - and `completeUpload`
+ * > answered all four with `not_uploaded`, which tells the client to finish the upload and retry.
+ * > A mistyped R2 secret therefore looked exactly like members abandoning uploads, in a system
+ * > where nothing was reported to the monitor either.
+ *
+ * Every path through the S3 adapter that fails now throws this, carrying the operation and the
+ * object so the report says which call against which key went wrong. The original SDK error is
+ * on `cause`, per the rule in AGENTS.md 5.3 entry 1 about not losing the layer underneath.
+ *
+ * The credential is deliberately not in here. This error is logged and captured, and
+ * non-negotiable 5 says a key that bypasses authorization never appears in a log.
+ */
+export type MediaStoreOperation = 'head' | 'get' | 'put' | 'remove';
+
+export class MediaStoreError extends Error {
+  readonly operation: MediaStoreOperation;
+  readonly bucket: string;
+  readonly objectKey: string;
+
+  constructor(
+    operation: MediaStoreOperation,
+    target: { bucket: string; objectKey: string },
+    cause: unknown,
+  ) {
+    const detail = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
+    super(`media store ${operation} of ${target.bucket}/${target.objectKey} failed - ${detail}`, {
+      cause,
+    });
+    this.name = 'MediaStoreError';
+    this.operation = operation;
+    this.bucket = target.bucket;
+    this.objectKey = target.objectKey;
+  }
+}
+
+/**
+ * Did the store answer, definitively, that this object is not there?
+ *
+ * The only negative answer `head` is allowed to return without throwing. A HEAD carries no body,
+ * so the status code is the whole of what the SDK has to classify by - which is also why nothing
+ * subtler than this is possible or wanted. Anything else, including a 403 and a 5xx, is the
+ * store failing to answer the question rather than answering it "no".
+ */
+function isDefinitelyAbsent(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+  if (status !== undefined) return status === 404;
+  const name = (error as { name?: string }).name;
+  return name === 'NotFound' || name === 'NoSuchKey';
+}
 
 /**
  * S3-compatible storage. MinIO in development, Cloudflare R2 in production.
@@ -201,6 +312,37 @@ export class S3MediaStore implements MediaStore {
            */
           requestChecksumCalculation: 'WHEN_REQUIRED',
           responseChecksumValidation: 'WHEN_REQUIRED',
+          /*
+           * **Without this block a storage call has no deadline of any kind, and the SDK's retry
+           * never engages - because nothing throws.**
+           *
+           * Every default here is 0, meaning no timeout. Storage that accepts the TCP connection
+           * and then never answers therefore leaves `store.get()` neither resolved nor rejected,
+           * forever. That is not a hypothetical shape: it is what a hung load balancer, a
+           * saturated bucket and a half-open connection through a NAT all look like from here.
+           *
+           * Where it lands worst: the `media.uploaded` handler awaits `store.get` through
+           * `deriveVariants`, and `worker/drain.ts` awaits that handler INSIDE its transaction,
+           * holding `FOR UPDATE` on up to fifty claimed outbox rows. One silent endpoint stops
+           * every partition's effects indefinitely - no notifications, no cards, no system
+           * messages - with no error, no retry, no parked row and nothing in the log. The
+           * request path has the same shape one layer up: `/media/:id/complete` HEADs and GETs
+           * the object while the caller holds a connection.
+           *
+           * **`throwOnRequestTimeout` is the load-bearing line and reads like boilerplate.**
+           * `requestTimeout` on its own does NOT abort anything: `@smithy/node-http-handler`
+           * only logs a warning when it lapses, and says so in its own source - the flag is
+           * required to turn that warning into a `TimeoutError`. Setting the timeout without
+           * the flag is a fix that typechecks, reads correctly, and leaves the bug exactly
+           * where it was.
+           */
+          requestHandler: {
+            connectionTimeout: this.config.connectionTimeoutMs ?? STORE_CONNECTION_TIMEOUT_MS,
+            requestTimeout: this.config.requestTimeoutMs ?? STORE_REQUEST_TIMEOUT_MS,
+            throwOnRequestTimeout: true,
+            socketTimeout: this.config.socketTimeoutMs ?? STORE_SOCKET_TIMEOUT_MS,
+          },
+          maxAttempts: this.config.maxAttempts ?? STORE_MAX_ATTEMPTS,
         });
         return { client, lib, presign };
       })();
@@ -274,19 +416,29 @@ export class S3MediaStore implements MediaStore {
         bytes: Number(result.ContentLength ?? 0),
         mime: result.ContentType ?? null,
       };
-    } catch {
-      return { exists: false, bytes: 0, mime: null };
+    } catch (error) {
+      // The ONE non-throwing negative answer this port has, and it is now narrow: the store
+      // said 404. Everything else means the question was not answered, and answering it "no"
+      // anyway is what made a rotated credential indistinguishable from an abandoned upload.
+      if (isDefinitelyAbsent(error)) return { exists: false, bytes: 0, mime: null };
+      throw new MediaStoreError('head', input, error);
     }
   }
 
   async get(input: { bucket: string; objectKey: string }): Promise<Uint8Array> {
     const { client, lib } = await this.sdk();
-    const result = await client.send(
-      new lib.GetObjectCommand({ Bucket: input.bucket, Key: input.objectKey }),
-    );
-    const bytes = await result.Body?.transformToByteArray();
-    if (!bytes) throw new Error(`object ${input.objectKey} had no body`);
-    return bytes;
+    try {
+      const result = await client.send(
+        new lib.GetObjectCommand({ Bucket: input.bucket, Key: input.objectKey }),
+      );
+      // Inside the try on purpose: the body streams AFTER the response resolves, so a store
+      // that sends headers and then stalls fails here rather than at the send above.
+      const bytes = await result.Body?.transformToByteArray();
+      if (!bytes) throw new Error('the response carried no body');
+      return bytes;
+    } catch (error) {
+      throw new MediaStoreError('get', input, error);
+    }
   }
 
   async put(input: {
@@ -296,21 +448,29 @@ export class S3MediaStore implements MediaStore {
     mime: string;
   }): Promise<void> {
     const { client, lib } = await this.sdk();
-    await client.send(
-      new lib.PutObjectCommand({
-        Bucket: input.bucket,
-        Key: input.objectKey,
-        Body: input.body,
-        ContentType: input.mime,
-      }),
-    );
+    try {
+      await client.send(
+        new lib.PutObjectCommand({
+          Bucket: input.bucket,
+          Key: input.objectKey,
+          Body: input.body,
+          ContentType: input.mime,
+        }),
+      );
+    } catch (error) {
+      throw new MediaStoreError('put', input, error);
+    }
   }
 
   async remove(input: { bucket: string; objectKey: string }): Promise<void> {
     const { client, lib } = await this.sdk();
-    await client.send(
-      new lib.DeleteObjectCommand({ Bucket: input.bucket, Key: input.objectKey }),
-    );
+    try {
+      await client.send(
+        new lib.DeleteObjectCommand({ Bucket: input.bucket, Key: input.objectKey }),
+      );
+    } catch (error) {
+      throw new MediaStoreError('remove', input, error);
+    }
   }
 }
 
@@ -331,6 +491,13 @@ export class FakeMediaStore implements MediaStore {
   readonly removed: string[] = [];
   /** Set to simulate a client that uploaded something other than what it declared. */
   headOverride: ((key: string) => ObjectHead | null) | null = null;
+  /**
+   * Set to simulate storage that cannot be reached, as distinct from an object that is not there.
+   *
+   * The two used to be the same value and that was the bug - see `MediaStoreError`. A fake with
+   * no way to express "the store did not answer" cannot test the difference.
+   */
+  failWith: MediaStoreError | null = null;
 
   private key(bucket: string, objectKey: string) {
     return `${bucket}/${objectKey}`;
@@ -367,6 +534,7 @@ export class FakeMediaStore implements MediaStore {
   }
 
   async head(input: { bucket: string; objectKey: string }): Promise<ObjectHead> {
+    if (this.failWith) throw this.failWith;
     const override = this.headOverride?.(input.objectKey);
     if (override) return override;
     const found = this.objects.get(this.key(input.bucket, input.objectKey));
@@ -375,6 +543,7 @@ export class FakeMediaStore implements MediaStore {
   }
 
   async get(input: { bucket: string; objectKey: string }): Promise<Uint8Array> {
+    if (this.failWith) throw this.failWith;
     const found = this.objects.get(this.key(input.bucket, input.objectKey));
     if (!found) throw new Error('not found');
     return found.bytes;

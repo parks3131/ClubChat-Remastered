@@ -16,6 +16,7 @@ import {
   resolveMediaRedirect,
   resolveMediaRedirects,
 } from '../../media/pipeline.ts';
+import { MediaStoreError } from '../../media/store.ts';
 import { mediaConfigOf, parseIdList, type AppDeps } from '../plumbing.ts';
 
 export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
@@ -75,13 +76,37 @@ export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
     const body = CompleteBody.safeParse(request.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'invalid_body' });
 
-    const result = await completeUpload(
-      deps.db,
-      deps.mediaStore,
-      request.access!,
-      request.params.id,
-      body.data.crop,
-    );
+    /*
+     * The one call site of `completeUpload`, and the one place a storage fault has to be told
+     * apart from a member who changed their mind.
+     *
+     * > `store.head` used to answer `{ exists: false }` for a 403, a DNS failure and a timeout as
+     * > readily as for a real 404, and this route turned every one of them into `not_uploaded` -
+     * > which per SPEC/TECH/07 tells the client to finish the upload and retry. A rotated R2
+     * > secret typed with one character wrong therefore looked exactly like members abandoning
+     * > uploads, and nothing was reported, so the only evidence was a graph.
+     *
+     * Caught here rather than left to the app-wide error handler for two reasons: 503 says "ours,
+     * try later" where a 500 says nothing, and the report gets its own `where`, so an outage does
+     * not group into the same issue as every other route that happened to throw.
+     */
+    let result: Awaited<ReturnType<typeof completeUpload>>;
+    try {
+      result = await completeUpload(
+        deps.db,
+        deps.mediaStore,
+        request.access!,
+        request.params.id,
+        body.data.crop,
+      );
+    } catch (error) {
+      if (!(error instanceof MediaStoreError)) throw error;
+      deps.monitor.capture(error, 'api.media.complete', {
+        mediaId: request.params.id,
+        operation: error.operation,
+      });
+      return reply.code(503).send({ error: 'storage_unavailable' });
+    }
     if (!result.ok) {
       // 422 for bytes that arrived intact and are not an image: the request was well formed and
       // the object is the problem, which is a different thing for a client to say than either
