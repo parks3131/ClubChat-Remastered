@@ -10,7 +10,7 @@
  * Authority comes from the policy module. Nothing here re-derives a predicate.
  */
 
-import { and, eq, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import type { ClubRole, JoinPolicy } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import { isUniqueViolation } from '../db/errors.ts';
@@ -44,7 +44,24 @@ import { mintInviteToken } from './create-club.ts';
 
 export type Refusal = {
   ok: false;
-  code: 'forbidden' | 'not_found' | 'already_member' | 'already_pending' | 'invalid' | 'banned';
+  /**
+   * `conflict` is the one that is not about the caller: **somebody else changed the row
+   * between the read this command authorized against and the write it then made.** Every
+   * other code here answers "you may not" or "there is no such thing", which are both stable
+   * facts about the request; this one says the request was fine and the world moved. The
+   * client's remedy is to re-read and decide again, which is why it must not be reported as
+   * `forbidden` - that reads as a permanent refusal and `refusalStatus` answers it 404, so a
+   * caller could not tell a lost race from a club they may not touch. Anything not
+   * `forbidden` or `not_found` is already a 409, which is exactly what this is.
+   */
+  code:
+    | 'forbidden'
+    | 'not_found'
+    | 'already_member'
+    | 'already_pending'
+    | 'invalid'
+    | 'banned'
+    | 'conflict';
 };
 export type Ok<T> = { ok: true } & T;
 export type Result<T> = Ok<T> | Refusal;
@@ -434,6 +451,16 @@ export async function setJoinPolicy(
  * separate, and for the Eboard they are the same thing. Done in the same transaction as the
  * role change, so the space can never drift out of sync with who is actually an admin -
  * which is exactly the v1 failure that made the space request-only in the first place.
+ *
+ * > **The write carries the role it was authorized against.** The read above is its own
+ * > statement on its own snapshot, so between it and the transaction another request can
+ * > commit a different role for this same person - an ownership transfer to them, most of
+ * > all. An unguarded `SET role = ...` would then apply a decision made about a member to a
+ * > row that is now the Owner, and leave the club with NO owner at all. The one-owner unique
+ * > index cannot catch that: it forbids two owners, and zero satisfies it perfectly.
+ * >
+ * > Guarded, that write matches no rows instead, and no rows is a `conflict` rather than a
+ * > silent success. See ADR-0042.
  */
 export async function changeRole(
   db: Db,
@@ -451,11 +478,25 @@ export async function changeRole(
 
   const eboardId = await eboardIdFor(db, clubId);
 
-  await db.transaction(async (tx) => {
-    await tx
+  const applied = await db.transaction(async (tx) => {
+    const moved = await tx
       .update(clubMemberships)
       .set({ role: newRole })
-      .where(and(eq(clubMemberships.clubId, clubId), eq(clubMemberships.userId, userId)));
+      .where(
+        and(
+          eq(clubMemberships.clubId, clubId),
+          eq(clubMemberships.userId, userId),
+          // The role this call was authorized against, and the whole guard. A row that has
+          // moved since the read does not match, so nothing is written and nothing below
+          // runs - rather than the Eboard and the outbox recording a change that did not
+          // happen.
+          eq(clubMemberships.role, current),
+        ),
+      )
+      .returning({ userId: clubMemberships.userId });
+
+    // Nothing written yet, so returning here commits an empty transaction.
+    if (moved.length === 0) return false;
 
     if (eboardId) {
       if (newRole === 'admin') {
@@ -480,8 +521,11 @@ export async function changeRole(
       eventType: 'club.role_changed',
       payload: { clubId, userId, actorId: ctx.userId, newRole, previousRole: current },
     });
+
+    return true;
   });
 
+  if (!applied) return { ok: false, code: 'conflict' };
   return { ok: true, role: newRole };
 }
 
@@ -495,6 +539,18 @@ export async function changeRole(
  * **An ownership transfer is a no-op for Eboard membership** - both parties stay
  * admin-tier - and it posts ONE system message, not two, which is why it emits its own
  * event type rather than two role changes.
+ *
+ * > **Both rows are locked and re-read inside the transaction, not guarded one at a time.**
+ * > This is the difference between transfer and `changeRole`: two rows have to move together,
+ * > and each of them can be moved by somebody else in the window after a read. A transfer to
+ * > a member who was removed a moment ago demotes the Owner and then promotes nobody, which
+ * > leaves the club with NO owner and reports success - and `club_memberships_one_owner`
+ * > never fires, because a unique index forbids two owners and zero satisfies it.
+ * >
+ * > `SELECT ... FOR UPDATE` over both rows in one statement makes the pair of them a single
+ * > decision: the roles it reads are the roles the writes will apply to, because nothing else
+ * > can change them while the locks are held. Ordering by `user_id` means two transfers in
+ * > the same club take their locks in the same order and so cannot deadlock. See ADR-0042.
  */
 export async function transferOwnership(
   db: Db,
@@ -505,13 +561,32 @@ export async function transferOwnership(
   if (!canTransferOwnership(ctx, clubId)) return { ok: false, code: 'forbidden' };
   if (toUserId === ctx.userId) return { ok: false, code: 'invalid' };
 
-  const target = await roleOf(db, clubId, toUserId);
-  // Transferable to any CURRENT member, so someone outside the club cannot be handed it.
-  if (target === null) return { ok: false, code: 'not_found' };
-
   const eboardId = await eboardIdFor(db, clubId);
 
-  await db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx) => {
+    const locked = await tx
+      .select({ userId: clubMemberships.userId, role: clubMemberships.role })
+      .from(clubMemberships)
+      .where(
+        and(
+          eq(clubMemberships.clubId, clubId),
+          inArray(clubMemberships.userId, [ctx.userId, toUserId]),
+        ),
+      )
+      .orderBy(clubMemberships.userId)
+      .for('update');
+
+    const target = locked.find((row) => row.userId === toUserId);
+    // Transferable to any CURRENT member, so someone outside the club cannot be handed it -
+    // including someone who was a member when the request arrived and is not one now.
+    if (!target) return 'not_found' as const;
+
+    // The authority is re-asked here rather than trusted from the access context, which was
+    // loaded before the request did anything. An owner who has already transferred the club
+    // to somebody else is an admin by now, and an admin may not transfer.
+    const actor = locked.find((row) => row.userId === ctx.userId);
+    if (actor?.role !== 'owner') return 'conflict' as const;
+
     // Order is load-bearing. Demote first.
     await tx
       .update(clubMemberships)
@@ -537,8 +612,11 @@ export async function transferOwnership(
       eventType: 'club.ownership_transferred',
       payload: { clubId, fromUserId: ctx.userId, toUserId },
     });
+
+    return 'ok' as const;
   });
 
+  if (outcome !== 'ok') return { ok: false, code: outcome };
   return { ok: true, previousOwnerId: ctx.userId };
 }
 
@@ -565,7 +643,8 @@ export async function removeMember(
     return { ok: false, code: 'forbidden' };
   }
 
-  await cascadeOut(db, { clubId, userId, actorId: ctx.userId, reason: 'removed' });
+  const cascade = await cascadeOut(db, { clubId, userId, actorId: ctx.userId, reason: 'removed' });
+  if (cascade === 'is_owner') return { ok: false, code: 'conflict' };
   return { ok: true, removed: true };
 }
 
@@ -620,7 +699,13 @@ export async function banFromClub(
     .onConflictDoNothing({ target: [clubBans.clubId, clubBans.userId] });
 
   if (current !== undefined) {
-    await cascadeOut(db, { clubId, userId, actorId: ctx.userId, reason: 'banned' });
+    const cascade = await cascadeOut(db, { clubId, userId, actorId: ctx.userId, reason: 'banned' });
+    // The target became the Owner between the read above and the cascade, and the Owner is
+    // not removable by anybody (`canBanFromClub` says so from the role it was handed). The
+    // bar is left standing on purpose: it is the reversible half - it appears in the ban list
+    // with this admin's name against it and any admin may lift it - whereas ejecting the
+    // Owner is the half with no recovery path.
+    if (cascade === 'is_owner') return { ok: false, code: 'conflict' };
   } else {
     /*
      * Not a member, so there is no cascade to run - but a pending request may still be sitting
@@ -736,7 +821,16 @@ export async function leaveClub(
   if (!isClubMember(ctx, clubId)) return { ok: false, code: 'not_found' };
   if (!canLeaveClub(ctx, clubId)) return { ok: false, code: 'forbidden' };
 
-  await cascadeOut(db, { clubId, userId: ctx.userId, actorId: null, reason: 'left' });
+  // Both checks above read the access context, which was loaded when the request arrived.
+  // Being handed the club in the meantime is exactly the case `canLeaveClub` refuses and
+  // cannot see, so the cascade asks again while holding the row.
+  const cascade = await cascadeOut(db, {
+    clubId,
+    userId: ctx.userId,
+    actorId: null,
+    reason: 'left',
+  });
+  if (cascade === 'is_owner') return { ok: false, code: 'conflict' };
   return { ok: true, left: true };
 }
 
@@ -754,6 +848,17 @@ export async function leaveClub(
  * The emitted event is also what triggers force-unsubscribe: deleting the row alone leaves
  * the departing member's socket receiving messages from a channel they no longer belong to,
  * and nothing reports it (ADR-0007).
+ *
+ * > **It will not delete the Owner's row, whatever its caller believed.** Removal, leaving and
+ * > banning all forbid it, and all three decided that from a role read before this transaction
+ * > opened. An ownership transfer committing in that window turns any of them into the one act
+ * > with no recovery path - a club with no owner, which nobody can transfer, delete or promote
+ * > out of. Locking the row and asking again is what makes the three answers agree with the
+ * > row they act on. Returns `is_owner` for the caller to refuse; see ADR-0042.
+ *
+ * A membership row that is simply GONE is not a conflict and never was: two removals of the
+ * same person, or a retried "leave", must stay idempotent, so the cascade runs its deletes
+ * over nothing and reports done.
  */
 async function cascadeOut(
   db: Db,
@@ -763,10 +868,20 @@ async function cascadeOut(
     actorId: string | null;
     reason: 'removed' | 'left' | 'banned';
   },
-): Promise<void> {
+): Promise<'done' | 'is_owner'> {
   const eboardId = await eboardIdFor(db, input.clubId);
 
-  await db.transaction(async (tx) => {
+  return await db.transaction(async (tx) => {
+    const held = await tx
+      .select({ role: clubMemberships.role })
+      .from(clubMemberships)
+      .where(
+        and(eq(clubMemberships.clubId, input.clubId), eq(clubMemberships.userId, input.userId)),
+      )
+      .for('update');
+    // Nothing has been written yet, so this commits an empty transaction.
+    if (held[0]?.role === 'owner') return 'is_owner' as const;
+
     if (eboardId) {
       await tx
         .delete(eboardMemberships)
@@ -840,6 +955,8 @@ async function cascadeOut(
         actorId: input.actorId,
       },
     });
+
+    return 'done' as const;
   });
 }
 

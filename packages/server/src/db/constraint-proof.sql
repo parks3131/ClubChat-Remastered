@@ -120,6 +120,33 @@ SELECT pg_temp.assert_rejected(
      WHERE club_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
        AND user_id = '22222222-2222-4222-8222-222222222222'$$);
 
+-- The half of invariant 1 the index does NOT hold, asserted here because assuming otherwise
+-- is what let two concurrent role changes empty a club of owners (ADR-0042). A partial UNIQUE
+-- index forbids a SECOND owner; it says nothing whatsoever about the FIRST, so zero owners
+-- satisfies it perfectly - and an ownerless club has no recovery path, since transferring,
+-- deleting and promoting are all Owner-only. Nothing below is a defect in the schema: it is
+-- the boundary of what a unique index can express, written down where somebody reaching for
+-- "the constraint will catch it" will read it.
+--
+-- What holds the other half is `domain/membership.ts`: every write there carries the role it
+-- was authorized against in its WHERE clause, or holds the row with SELECT ... FOR UPDATE and
+-- re-reads it. If a deferred constraint or a trigger is ever added, this assertion flips to
+-- assert_rejected and this comment goes with it.
+SELECT pg_temp.assert_accepted(
+  'invariant 1 - a club with ZERO owners is accepted, which is why the domain layer guards it',
+  $$UPDATE club_memberships SET role = 'admin'
+     WHERE club_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+       AND user_id = '11111111-1111-4111-8111-111111111111'$$);
+
+-- Restored for everything below, and the restore is the point made twice: the ONLY way back
+-- from the state above is a promotion by somebody with the authority to make one, and in an
+-- ownerless club nobody has it.
+SELECT pg_temp.assert_accepted(
+  'invariant 1 - promoting back into an ownerless club',
+  $$UPDATE club_memberships SET role = 'owner'
+     WHERE club_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+       AND user_id = '11111111-1111-4111-8111-111111111111'$$);
+
 SELECT pg_temp.assert_rejected(
   'club_memberships - an invented role tier',
   $$INSERT INTO club_memberships (club_id, user_id, role)
