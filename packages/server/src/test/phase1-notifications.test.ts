@@ -117,6 +117,27 @@ function drainsTheInstantItCommits(): Db {
   return racing;
 }
 
+/**
+ * Drain the club bootstrap, with a Redis that swallows publishes.
+ *
+ * `club.created` posts the opening system message into the new club chat, and publishing that
+ * goes over Redis - which this file passes as `null` on purpose, so anything on the PUSH path
+ * reaching for it fails loudly. The bootstrap is not on that path, and with the null stub it
+ * simply throws and backs off.
+ *
+ * That was harmless until 2026-08-19, when the drain started holding a partition behind an
+ * unresolved event: a bootstrap left failing now blocks every later effect in the same club, so
+ * "rings every admin when somebody asks to join" read as "membership does not push" - which is
+ * exactly the false negative the note on `drainPublishing` describes, arriving one event earlier.
+ * The fixture has to actually drain what it says it drains.
+ */
+async function drainBootstrap() {
+  await drainOnce(h.db, { ...deps, redis: { publish: async () => 0 } as never });
+  const pending = [...deferred];
+  deferred = [];
+  for (const fn of pending) await fn();
+}
+
 async function makeUser(name: string): Promise<string> {
   const id = crypto.randomUUID();
   await h.db.insert(users).values({
@@ -150,7 +171,7 @@ async function setupClub(): Promise<Fixture> {
   ]);
 
   // Drain the club.created bootstrap so it does not confuse later assertions.
-  await drainAndDeliver();
+  await drainBootstrap();
   push.reset();
 
   return {

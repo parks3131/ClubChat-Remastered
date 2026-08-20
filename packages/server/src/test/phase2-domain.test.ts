@@ -946,9 +946,12 @@ describe('chat cards', () => {
     expect(deletedMeeting.ok, 'the meeting delete was refused').toBe(true);
     await drainAll();
 
+    // `last_error`, not `attempts > 0`: since 2026-08-19 the drain stamps the attempt in the
+    // claiming statement, so a row that succeeded first time carries `attempts = 1`. The column
+    // that means "this effect failed" is the one that records the failure.
     const parked = await h.db.execute<{ event_type: string; last_error: string | null }>(sql`
       SELECT event_type, last_error FROM outbox
-       WHERE attempts > 0 AND event_type IN ('event.deleted', 'meeting.deleted')
+       WHERE last_error IS NOT NULL AND event_type IN ('event.deleted', 'meeting.deleted')
     `);
     expect(parked.rows, `an effect failed: ${JSON.stringify(parked.rows)}`).toHaveLength(0);
 
@@ -1695,8 +1698,10 @@ describe('the Eboard tells its own members', () => {
 
   /** Nothing may be left parked: a parked effect is a notification that will never arrive. */
   async function expectNothingParked() {
+    // `last_error`, not `attempts > 0`. See the note on the same query in "chat cards": the
+    // attempt is now counted at claim time, so every processed row has attempted once.
     const parked = await h.db.execute<{ event_type: string; last_error: string | null }>(sql`
-      SELECT event_type, last_error FROM outbox WHERE attempts > 0
+      SELECT event_type, last_error FROM outbox WHERE last_error IS NOT NULL
     `);
     expect(parked.rows, `an effect failed: ${JSON.stringify(parked.rows)}`).toHaveLength(0);
   }
