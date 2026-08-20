@@ -199,7 +199,7 @@ sequenceDiagram
     participant API as API
     participant PG as Postgres
 
-    Note over B,G: socket connect, OR app foreground,<br/>OR network regained
+    Note over B,G: socket connect, OR the socket DROPPING,<br/>OR app foreground, OR network regained
     B->>G: auth {token, device_id}
     G->>API: verify
     API-->>G: ok
@@ -214,6 +214,14 @@ sequenceDiagram
     API-->>B: batched backlog
     Note over B,G: no state exists in which the client<br/>believes it is caught up and is not
 ```
+
+**"OR the socket dropping" is the trigger that did not exist until 2026-08-19**, and its absence
+made this whole diagram a description of something the client could not do. `onclose` nulled the
+socket and returned; the only callers of `reconnect()` were a send retry and the app-foreground
+listener, so a socket lost while somebody was reading a screen started none of the sequence
+above. `ChatClient` now pings every 30s to keep the socket unreaped and reconnects a dropped one
+on its own with backoff, which is what makes the run below true rather than intended. See
+[Connection layer](01-connection-layer.md).
 
 ---
 
@@ -263,7 +271,7 @@ What each component's death does. The full table with recovery detail is
 
 ```mermaid
 flowchart LR
-    K1["Gateway dies"] --> R1["Clients reconnect elsewhere,<br/>sync by seq<br/><br/>NO DATA LOSS"]
+    K1["Gateway dies"] --> R1["Clients notice the close, back off,<br/>reconnect elsewhere, resubscribe,<br/>sync by seq<br/><br/>NO DATA LOSS"]
     K2["All gateways die"] --> R2["REST reads still serve every screen,<br/>sends queue in the client outbox<br/><br/>DEGRADED, NOT BROKEN"]
     K3["Redis wiped"] --> R3["Realtime stops, push unaffected,<br/>rate limiting fails open<br/><br/>NO DATA LOSS"]
     K4["Worker dies"] --> R4["Chat still works.<br/>Effects delayed, replayed in order on restart<br/><br/>NO DATA LOSS"]
@@ -277,3 +285,14 @@ flowchart LR
 
 The invariant that makes all of this hold: **nothing is acknowledged before it is durable, and
 nothing durable is ever only in Redis or only in a gateway's memory.**
+
+> **The first row described client behaviour that did not exist, for two phases.** It read
+> "Gateway dies -> clients reconnect elsewhere, sync by seq, NO DATA LOSS", and no client
+> reconnected: the socket's `onclose` nulled it and returned. The durable half was always true -
+> the channel log holds everything and `/sync` will hand it back - but nothing was going to ask,
+> so what actually happened was a member who received no live message until they sent one or
+> reopened a chat. This file's own rule is that where a diagram disagrees with the repo the repo
+> is right and the diagram is the bug; here the repo has been changed to match the diagram
+> instead, which is the other legitimate way to settle it, and the box now names the mechanism
+> so the claim can be checked against `packages/client-core/src/chat-client.ts` rather than
+> believed.

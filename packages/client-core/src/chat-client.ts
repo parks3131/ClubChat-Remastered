@@ -76,6 +76,51 @@ export class AuthRejectedError extends Error {
   }
 }
 
+/**
+ * `auth.err` codes that mean the session itself is over, rather than that the moment was bad.
+ *
+ * > **Only these two are grounds to stop trying.** A client that treats every refusal as final
+ * > signs a member out over a Redis blip; a client that treats none of them as final reconnects
+ * > forever against a server that has already said no, which is a loop nothing stops for the
+ * > life of the app. `chat-provider.tsx` has drawn this exact line since 2026-08-09 and drew it
+ * > inline - which made it a rule with two copies the moment the reconnect loop needed it too.
+ */
+export const TERMINAL_AUTH_CODES: ReadonlySet<string> = new Set([
+  'invalid_token',
+  'signin_blocked',
+]);
+
+/**
+ * The keepalive, specified in SPEC/TECH/01-connection-layer.md and SPEC/TECH/10-protocol.md.
+ *
+ * > **The gateway reaps a socket silent for ninety seconds, and until this existed nothing on
+ * > any client ever sent one.** A member reading the clubs tab for two minutes without typing
+ * > had their connection terminated underneath them, received nothing live afterwards, and had
+ * > no way to find out: history still loaded over REST and their own sends still worked.
+ *
+ * Thirty seconds against a ninety second window is three chances to be heard, which is what
+ * makes one dropped frame survivable.
+ */
+const PING_INTERVAL_MS = 30_000;
+
+/**
+ * How long `connect()` waits for `auth.ok` or `auth.err` before giving up on the socket.
+ *
+ * Deliberately LONGER than the gateway's own handshake window, so in every case where the
+ * server is alive it answers first and the client acts on a reason rather than on a silence.
+ * This is the backstop for a server that says nothing at all - a black hole rather than a
+ * refusal - which used to leave the app on its loading spinner permanently.
+ */
+const AUTH_REPLY_TIMEOUT_MS = 12_000;
+
+/** First automatic reconnect delay. It doubles from here, up to the ceiling. */
+const RECONNECT_BASE_DELAY_MS = 500;
+/**
+ * And the ceiling. Long enough that a gateway that stays down does not take a battery with it,
+ * short enough that a member who put their phone down does not come back to a dead app.
+ */
+const RECONNECT_MAX_DELAY_MS = 30_000;
+
 /** Minimal socket surface, so Node's `ws` and the RN/browser global both fit. */
 export interface SocketLike {
   send(data: string): void;
@@ -116,6 +161,10 @@ export type ChatClientOptions = {
   store?: MessageStore;
   /** Attempts before a queued send is surfaced as failed. */
   maxSendAttempts?: number;
+  /** Overridable so a test does not have to wait twelve seconds for a silent server. */
+  authTimeoutMs?: number;
+  /** Overridable for the same reason. Production is `PING_INTERVAL_MS`. */
+  pingIntervalMs?: number;
   onChange?: () => void;
   log?: (message: string, extra?: unknown) => void;
 };
@@ -199,6 +248,22 @@ export class ChatClient {
   private authResolved: ((value: void) => void) | null = null;
   private authRejected: ((error: Error) => void) | null = null;
   private closedByUs = false;
+  /** The 30s keepalive, running only while a socket is authenticated. */
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  /** An automatic reconnect waiting out its backoff. At most one exists. */
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** How many automatic attempts have been made since the last successful connect. */
+  private reconnectAttempts = 0;
+  /**
+   * Whether a connect or a reconnect is already in flight.
+   *
+   * > **Two recovery loops racing is worse than none**, because each one abandons the other's
+   * > socket mid-handshake and neither ever settles. Every automatic path checks these before
+   * > arming anything: a close that happens while somebody is already reconnecting belongs to
+   * > that attempt, not to a new one.
+   */
+  private connecting = false;
+  private reconnecting = false;
   /**
    * Per-channel serialization for message application.
    *
@@ -249,6 +314,21 @@ export class ChatClient {
   async connect(): Promise<void> {
     this.closedByUs = false;
     this.authenticated = false;
+    this.connecting = true;
+    this.cancelScheduledReconnect();
+    this.stopPinging();
+
+    /*
+     * Any previous socket is abandoned here rather than left behind.
+     *
+     * `reconnect()` is called on app foreground with a perfectly live socket, and without this
+     * every foreground left the old one open: on the server until the reaper took it ninety
+     * seconds later, and here as a set of handlers still wired to a client that had moved on.
+     */
+    const previous = this.socket;
+    this.socket = null;
+    previous?.close();
+
     const socket = this.opts.createSocket(this.opts.wsUrl);
     this.socket = socket;
 
@@ -281,23 +361,165 @@ export class ChatClient {
         waiter.reject(new Error('socket closed'));
       }
       this.waiters.clear();
+
+      // A close from a socket we have already replaced is bookkeeping and nothing more. It must
+      // not null the live socket out from under the connection that replaced it.
+      if (this.socket !== socket) return;
+
+      this.stopPinging();
       this.socket = null;
       this.authenticated = false;
-      if (!this.closedByUs) this.authRejected?.(new Error('socket closed before auth'));
+      // A no-op unless `connect()` is still waiting on this socket's handshake.
+      this.settleAuth(new Error('socket closed before auth'));
+
+      /*
+       * **The line that was missing, and the whole of the second half of the defect.**
+       *
+       * This used to null the socket and return. Nothing reconnected: `reconnect()` existed but
+       * was reachable only from a send retry and from the app-foreground listener - and a
+       * socket reaped while somebody is reading a screen fires neither, because the app is
+       * already in the foreground and they are not typing. They stayed offline, receiving
+       * nothing, with every screen looking exactly as it does when nothing has been said.
+       *
+       * Not attempted when the app closed the socket itself, and not while a connect is already
+       * in flight - that attempt owns its own outcome.
+       */
+      if (!this.closedByUs && !this.connecting && !this.reconnecting) this.scheduleReconnect();
     };
 
     socket.onerror = () => {
       /* surfaced through onclose */
     };
 
-    await authed;
+    /*
+     * **The wait is bounded, because a server that says nothing must not cost the app forever.**
+     *
+     * `connect()` awaited this promise with no timeout and its only rejector was `onclose`. A
+     * gateway that accepted the socket and then answered nothing - which is exactly what a
+     * handshake that threw used to do - left the app on its loading spinner until it was
+     * force-quit, the one outcome SPEC/PRD/03 rules out absolutely.
+     */
+    const timeout = setTimeout(
+      () => this.settleAuth(new Error('the handshake timed out')),
+      this.opts.authTimeoutMs ?? AUTH_REPLY_TIMEOUT_MS,
+    );
+
+    try {
+      await authed;
+    } catch (error) {
+      /*
+       * Abandoned before it is closed, so the close below is bookkeeping rather than a trigger:
+       * this failure belongs to whoever called `connect()`, and a scheduled reconnect racing
+       * their retry would produce two sockets and two handshakes.
+       */
+      if (this.socket === socket) {
+        this.socket = null;
+        this.authenticated = false;
+      }
+      socket.close();
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      this.connecting = false;
+    }
+
+    this.startPinging();
   }
 
   async close(): Promise<void> {
     this.closedByUs = true;
     this.authenticated = false;
-    this.socket?.close();
+    this.cancelScheduledReconnect();
+    this.stopPinging();
+    const socket = this.socket;
     this.socket = null;
+    socket?.close();
+  }
+
+  /**
+   * Settle the handshake promise once, and only once.
+   *
+   * The resolver and the rejector are dropped as they are used, so every later caller - the
+   * timeout, `onclose`, a second frame - is a no-op rather than a second settle on a promise
+   * that has already answered. That is also what makes "is a handshake still pending" a
+   * question this class can ask itself.
+   */
+  private settleAuth(error?: Error) {
+    const resolve = this.authResolved;
+    const reject = this.authRejected;
+    this.authResolved = null;
+    this.authRejected = null;
+    if (error) reject?.(error);
+    else resolve?.();
+  }
+
+  /**
+   * The 30s `ping`, started once the server has accepted the socket.
+   *
+   * Only once authenticated: the gateway closes a socket that sends anything before `auth`, so
+   * a keepalive on an unfinished handshake would take the connection down rather than hold it
+   * open. `send` refuses in that state anyway, which is the belt to this braces.
+   */
+  private startPinging() {
+    this.stopPinging();
+    this.pingTimer = setInterval(() => {
+      try {
+        this.send({ t: 'ping', d: {} });
+      } catch {
+        // Not usable. The socket's own close handler owns the recovery, not this timer.
+      }
+    }, this.opts.pingIntervalMs ?? PING_INTERVAL_MS);
+  }
+
+  private stopPinging() {
+    if (this.pingTimer === null) return;
+    clearInterval(this.pingTimer);
+    this.pingTimer = null;
+  }
+
+  private cancelScheduledReconnect() {
+    if (this.reconnectTimer === null) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
+  /**
+   * Arm one automatic reconnect, after a backoff.
+   *
+   * > **Backed off and jittered rather than immediate**, because the case that produces a great
+   * > many of these at once is a gateway restarting - and every client in the cluster reconnecting
+   * > in the same millisecond is how a restart becomes an outage.
+   *
+   * At most one is ever armed. The attempt itself goes through `reconnect()`, so the recovery
+   * an automatic drop gets is exactly the recovery a foreground gets: re-auth, resubscribe,
+   * reconcile. The channel log exists to make that correct.
+   */
+  private scheduleReconnect() {
+    if (this.closedByUs || this.connecting || this.reconnecting) return;
+    if (this.reconnectTimer !== null) return;
+
+    const attempt = this.reconnectAttempts;
+    this.reconnectAttempts += 1;
+    const delay =
+      Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * 2 ** attempt) +
+      Math.random() * RECONNECT_BASE_DELAY_MS;
+    this.log('socket dropped, reconnecting', { attempt: attempt + 1, inMs: Math.round(delay) });
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.reconnect({ retries: 1 }).catch((error: unknown) => {
+        /*
+         * A refusal ends the loop. The server answered and said no, so asking again cannot
+         * change the answer, and a loop that kept asking would hammer the gateway for the life
+         * of the app. Anything else is a moment rather than a verdict, and is retried.
+         */
+        if (error instanceof AuthRejectedError && TERMINAL_AUTH_CODES.has(error.code)) {
+          this.log('the gateway refused this session, not reconnecting', { code: error.code });
+          return;
+        }
+        this.scheduleReconnect();
+      });
+    }, delay);
   }
 
   /**
@@ -364,7 +586,7 @@ export class ChatClient {
        * > already, from `crypto.randomUUID` throwing during sign-in.
        */
       if (decoded.type === 'auth.ok' || decoded.type === 'auth.err') {
-        this.authRejected?.(new Error('auth reply could not be understood'));
+        this.settleAuth(new Error('auth reply could not be understood'));
         return;
       }
 
@@ -397,12 +619,12 @@ export class ChatClient {
         // Held while the handshake was in flight, in the order a caller asked for them.
         this.flushSubscribes();
         this.flushReads();
-        this.authResolved?.();
+        this.settleAuth();
         this.opts.onChange?.();
         break;
       }
       case 'auth.err': {
-        this.authRejected?.(new AuthRejectedError(frame.d.code));
+        this.settleAuth(new AuthRejectedError(frame.d.code));
         break;
       }
       case 'msg.ack': {
@@ -927,21 +1149,42 @@ export class ChatClient {
    */
   async reconnect(opts: { retries?: number } = {}): Promise<void> {
     const retries = opts.retries ?? 10;
-    for (let attempt = 0; attempt < retries; attempt += 1) {
-      try {
-        await this.connect();
-        const channelIds = this.channels.map((channel) => channel.id);
-        if (channelIds.length > 0) this.subscribe(channelIds);
-        await this.syncAll();
-        return;
-      } catch {
-        // Backoff with jitter, so a gateway restart does not bring every client back
-        // in the same millisecond.
-        const backoff = Math.min(1_000, 50 * 2 ** attempt);
-        await new Promise((resolve) => setTimeout(resolve, backoff + Math.random() * 50));
+    this.cancelScheduledReconnect();
+    this.reconnecting = true;
+    try {
+      for (let attempt = 0; attempt < retries; attempt += 1) {
+        try {
+          await this.connect();
+          const channelIds = this.channels.map((channel) => channel.id);
+          if (channelIds.length > 0) this.subscribe(channelIds);
+          await this.syncAll();
+          // Back to zero, so the next drop starts its backoff from half a second rather than
+          // from wherever the last outage left it.
+          this.reconnectAttempts = 0;
+          return;
+        } catch (error) {
+          /*
+           * > **A refusal is not an outage, and this loop used to swallow the difference.**
+           * > Every failure was caught bare and retried, and after ten attempts the whole thing
+           * > threw `reconnect failed` - so the one error a caller can act on, the gateway
+           * > explicitly saying the session is dead, arrived as a generic connect failure with
+           * > its code stripped off. Nothing could sign the member out, and nothing could stop
+           * > the loop asking again.
+           */
+          if (error instanceof AuthRejectedError && TERMINAL_AUTH_CODES.has(error.code)) {
+            throw error;
+          }
+          if (attempt === retries - 1) break;
+          // Backoff with jitter, so a gateway restart does not bring every client back
+          // in the same millisecond.
+          const backoff = Math.min(1_000, 50 * 2 ** attempt);
+          await new Promise((resolve) => setTimeout(resolve, backoff + Math.random() * 50));
+        }
       }
+      throw new Error('reconnect failed');
+    } finally {
+      this.reconnecting = false;
     }
-    throw new Error('reconnect failed');
   }
 
   /**

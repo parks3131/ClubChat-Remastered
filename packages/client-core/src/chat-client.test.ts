@@ -9,7 +9,7 @@
  * it is caught up forever after, with no error anywhere.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MessageEnvelope } from '@clubchat/shared';
 import { ChatClient, syncEntry, type SocketLike } from './chat-client.ts';
 import { findGaps } from './store.ts';
@@ -860,6 +860,235 @@ describe('ChatClient waits for auth before sending', () => {
     authOk(socket);
     await connected;
     await opening;
+
+    await client.close();
+  });
+});
+
+/**
+ * The keepalive, and what happens when the socket goes away.
+ *
+ * > **The defect these exist for: nothing kept a socket alive and nothing reconnected it.** The
+ * > gateway reaps any socket silent for ninety seconds and the protocol's answer is a client
+ * > `ping` every thirty - which no client sent. So a member reading the clubs tab for two
+ * > minutes without typing had their connection terminated underneath them, and `onclose` nulled
+ * > the socket and returned. The app was already foregrounded, so no `AppState` change fired,
+ * > and they received no live message until they sent one or opened a chat. Nothing anywhere
+ * > reported it: history still loaded, sends still worked, and the only symptom was messages
+ * > arriving in a batch when you next touched the app.
+ */
+describe('the keepalive and the reconnect', () => {
+  /** Only the clocks this client uses. `queueMicrotask` stays real, so the fake socket answers. */
+  const fakeTimers = () =>
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+
+  const AUTH_OK = {
+    t: 'auth.ok',
+    d: {
+      sessionId: 'sess',
+      userId: USER,
+      displayName: 'Test Sender',
+      displayImage: null,
+      serverTime: new Date(2026, 0, 1).toISOString(),
+      channels: [
+        { id: CHANNEL, scope: 'club', scopeId: CLUB, clubId: CLUB, lastSeq: 0, lastReadSeq: 0 },
+      ],
+    },
+  };
+
+  /**
+   * A client whose sockets behave like a real one: they open on their own, and a server answers
+   * the handshake. Every socket it ever built is kept, because "did it make another one" is the
+   * question a reconnect test asks.
+   */
+  function liveClient(opts: { answerAuth?: (socket: FakeSocket, attempt: number) => void } = {}) {
+    const sockets: FakeSocket[] = [];
+    const syncCalls: string[] = [];
+
+    const fetchImpl = vi.fn(async (input: unknown) => {
+      syncCalls.push(String(input));
+      return new Response(JSON.stringify({ channels: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const client = new ChatClient({
+      wsUrl: 'ws://test',
+      apiUrl: 'http://test',
+      token: 'token',
+      deviceId: '22222222-2222-4222-8222-222222222222',
+      platform: 'ios',
+      createSocket: () => {
+        const socket = new FakeSocket();
+        const attempt = sockets.length;
+        sockets.push(socket);
+        socket.onSendFrame = (frame) => {
+          if (frame.t !== 'auth') return;
+          if (opts.answerAuth) opts.answerAuth(socket, attempt);
+          else socket.deliver(AUTH_OK);
+        };
+        // A real socket opens by itself. On a promise rather than a timer, so a test holding
+        // the clock still gets an open socket.
+        void Promise.resolve().then(() => socket.open());
+        return socket;
+      },
+      randomUuid: () => crypto.randomUUID(),
+      fetchImpl,
+      authTimeoutMs: 5_000,
+      pingIntervalMs: 30_000,
+    });
+
+    return { client, sockets, syncCalls };
+  }
+
+  const pings = (socket: FakeSocket) => socket.sent.filter((frame) => frame.t === 'ping').length;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('pings every thirty seconds, which is the only thing keeping the socket unreaped', async () => {
+    fakeTimers();
+    const { client, sockets } = liveClient();
+    await client.connect();
+
+    expect(pings(sockets[0]!), 'a ping before the interval elapsed').toBe(0);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(pings(sockets[0]!)).toBe(1);
+
+    // Ninety seconds is the reaper window. Three pings inside it is the margin that matters.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(pings(sockets[0]!)).toBe(3);
+
+    await client.close();
+  });
+
+  it('sends no ping on a socket the handshake never finished', async () => {
+    fakeTimers();
+    const { client, sockets } = liveClient({ answerAuth: () => undefined });
+    const connecting = client.connect().catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(pings(sockets[0]!), 'pinged an unauthenticated socket, which closes it').toBe(0);
+
+    await connecting;
+    await client.close();
+  });
+
+  it('stops pinging once the client is closed', async () => {
+    fakeTimers();
+    const { client, sockets } = liveClient();
+    await client.connect();
+    await vi.advanceTimersByTimeAsync(30_000);
+    const before = pings(sockets[0]!);
+
+    await client.close();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(pings(sockets[0]!)).toBe(before);
+  });
+
+  /**
+   * THE ONE THAT MATTERS.
+   *
+   * The socket drops with nobody awaiting anything - no send in flight, no screen mounting, the
+   * app already foregrounded so no `AppState` change coming. Before this the client nulled the
+   * socket and returned, and the member was offline until they typed.
+   */
+  it('reconnects on its own after the socket drops, and resubscribes and syncs', async () => {
+    fakeTimers();
+    const { client, sockets, syncCalls } = liveClient();
+    await client.connect();
+    expect(sockets).toHaveLength(1);
+
+    // What the reaper does, and what a gateway restart does.
+    sockets[0]!.close();
+    expect(sockets, 'reconnecting instantly would stampede a restarting gateway').toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(sockets.length, 'nothing reconnected the dropped socket').toBeGreaterThan(1);
+    const revived = sockets[sockets.length - 1]!;
+    expect(
+      revived.sent.filter((frame) => frame.t === 'subscribe'),
+      'reconnected without resubscribing, so the socket is live and delivers nothing',
+    ).toHaveLength(1);
+    expect(syncCalls.length, 'reconnected without reconciling the gap it was away for').toBeGreaterThan(0);
+
+    await client.close();
+  });
+
+  it('keeps pinging the socket it reconnected with', async () => {
+    fakeTimers();
+    const { client, sockets } = liveClient();
+    await client.connect();
+    sockets[0]!.close();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const revived = sockets[sockets.length - 1]!;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(pings(revived)).toBeGreaterThan(0);
+
+    await client.close();
+  });
+
+  it('does not reconnect a socket the app closed on purpose', async () => {
+    fakeTimers();
+    const { client, sockets } = liveClient();
+    await client.connect();
+
+    await client.close();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(sockets, 'signing out and then reconnecting is a session that will not end').toHaveLength(1);
+  });
+
+  /**
+   * A gateway that answers and refuses is not an outage, and retrying cannot change its answer.
+   * A loop that kept asking would hammer it for the life of the app.
+   */
+  it('stops reconnecting when the gateway refuses the session', async () => {
+    fakeTimers();
+    const { client, sockets } = liveClient({
+      answerAuth: (socket, attempt) => {
+        if (attempt === 0) socket.deliver(AUTH_OK);
+        else socket.deliver({ t: 'auth.err', d: { code: 'invalid_token' } });
+      },
+    });
+    await client.connect();
+
+    sockets[0]!.close();
+    await vi.advanceTimersByTimeAsync(10_000);
+    const afterRefusal = sockets.length;
+    expect(afterRefusal).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(sockets.length, 'kept retrying a session the server has refused').toBe(afterRefusal);
+  });
+
+  /**
+   * The client's half of "the handshake always answers".
+   *
+   * The server now guarantees an `auth.ok` or an `auth.err` on every path, but a client whose
+   * only rejector is `onclose` is one silent server away from a permanent spinner - which is
+   * what `SPEC/PRD/03` rules out absolutely. So the wait is bounded here too.
+   */
+  it('fails the connect rather than hanging when the handshake is never answered', async () => {
+    fakeTimers();
+    const { client } = liveClient({ answerAuth: () => undefined });
+
+    const settled = vi.fn();
+    const connecting = client.connect().then(settled, settled);
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(settled, 'gave up on the handshake before the server had a chance to answer').not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await connecting;
+    expect(settled).toHaveBeenCalledOnce();
+    expect(String(settled.mock.calls[0]?.[0])).toContain('timed out');
 
     await client.close();
   });
