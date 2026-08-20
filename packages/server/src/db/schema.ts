@@ -778,9 +778,12 @@ export const notifications = pgTable(
      * > it is one round trip, and it stayed one round trip while the table grew. It compounds at
      * > the caller, which runs this once per member added and accepts up to 100 ids per request.
      *
-     * **Partial, and that is the whole design.** `notifications` has no retention job - unlike
-     * `outbox`, nothing prunes it - so a total index here would be an unbounded index on an
-     * unbounded table, maintained on every notification ever written, to serve a query that
+     * **Partial, and that is the whole design.** Not because the table is unbounded: it is
+     * pruned, and an earlier draft of this comment said otherwise. `worker/retention.ts` drops
+     * read rows at 90 days and unread at 180, from the same housekeeping slot as the media
+     * sweep. But retention bounds the table's AGE, not its WIDTH, and width is what an index
+     * pays for: every notification anybody receives sits here for those months, so a total
+     * index would carry all of them and be maintained on every write, to serve a query that
      * only ever wants a handful of rows. The predicate keeps it to the rows that are actually
      * searchable: an UNDECIDED request of one of the three request types. A decided request
      * leaves the index the moment this UPDATE stamps it, so the index holds open requests only.
