@@ -165,6 +165,18 @@ export async function sendMessage(
     documentName: type === 'document' ? document?.name ?? null : null,
     documentSize: type === 'document' ? document?.size ?? null : null,
     replyToSeq: input.replyToSeq ?? null,
+    /*
+     * Handed over rather than inserted here after the call, so the rows land inside the same
+     * transaction as `message.created` - the event whose effect reads them back. They were
+     * written here, after that transaction had committed, until 2026-08-19; see the note on
+     * `AppendMessageInput.mentions` for what a drain landing in the gap cost.
+     *
+     * Nothing guards on `deduplicated` any more and nothing needs to: only the insert path
+     * opens that transaction, so a retry resolving to an existing message never reaches the
+     * write. `editMessageBody` already replaced its mentions and its outbox event together -
+     * the send path was the outlier.
+     */
+    mentions,
   });
 
   // Point the object back at the message that owns it, which is what lets the nightly GC
@@ -202,19 +214,6 @@ export async function sendMessage(
         seq: result.message.seq,
       }),
     );
-  }
-
-  if (!result.deduplicated && mentions.length > 0) {
-    await db
-      .insert(messageMentions)
-      .values(
-        mentions.map((mention) => ({
-          messageId: result.message.id,
-          userId: mention.userId,
-          name: mention.name,
-        })),
-      )
-      .onConflictDoNothing();
   }
 
   return { ok: true, ...result };

@@ -35,6 +35,7 @@ import {
   notifications,
   users,
 } from '../db/schema.ts';
+import type { Db } from '../db/client.ts';
 import { startTestDb, type TestDb } from './harness.ts';
 import type { EffectDeps } from '../worker/effects.ts';
 
@@ -88,6 +89,32 @@ async function drainAndDeliver() {
   const pending = [...deferred];
   deferred = [];
   for (const fn of pending) await fn();
+}
+
+/**
+ * A database handle that drains the outbox the instant an append transaction commits.
+ *
+ * The worker cannot see an event before its transaction commits, and may see it at any moment
+ * after - the drain polls every 250ms and claims on visibility. So this is the EARLIEST legal
+ * moment for it to run, and therefore the worst case for anything a command handler writes
+ * after that commit. It stands in for a poll tick landing in that gap, which is real and a few
+ * milliseconds wide, and so cannot be waited for reliably enough to assert on.
+ *
+ * Only the FIRST transaction triggers it. That is `appendMessage`'s, the one carrying the
+ * `message.created` event; the send path opens others afterwards for its own reasons.
+ */
+function drainsTheInstantItCommits(): Db {
+  const racing: Db = Object.create(h.db);
+  let drained = false;
+  racing.transaction = (async (run: never) => {
+    const result = await h.db.transaction(run);
+    if (!drained) {
+      drained = true;
+      await drainOnce(h.db, deps);
+    }
+    return result;
+  }) as Db['transaction'];
+  return racing;
 }
 
 async function makeUser(name: string): Promise<string> {
@@ -1045,6 +1072,73 @@ describe('mentions', () => {
     const byToken = new Map(push.sent.map((m) => [m.token, m]));
     expect(byToken.get(memberToken)?.data['type']).toBe('mentioned');
     expect(byToken.get(ownerToken)?.data['type']).toBe('chat_message');
+  });
+
+  /**
+   * > **The mention rows and the message have to commit together.**
+   *
+   * They did not until 2026-08-19. `sendMessage` wrote `message_mentions` through `db` AFTER
+   * `appendMessage`'s transaction had committed, and behind two further round trips - a media
+   * owner update and a possible report filing. The `message.created` event was already visible
+   * in the outbox for all of that time, so a drain landing in the gap read it with no mention
+   * rows behind it: no `mentioned` notification, no mention push, and the named member got the
+   * weaker generic `chat_message` buzz instead.
+   *
+   * The symptom is the worst kind. It is silent - every row that does exist is correct - and it
+   * is unreproducible by hand, because whether you lose the race depends on where the 250ms
+   * poll tick happens to fall relative to one commit. All anybody can report is "I was not
+   * notified when someone @'d me", occasionally.
+   *
+   * So the interleaving is forced rather than waited for. `drainsTheInstantItCommits` hands the
+   * send path a database handle that drains the outbox the moment the append transaction
+   * commits, which is the first instant the real worker could possibly see the event.
+   */
+  it('notifies the mentioned member even when the outbox drains the instant the message commits', async () => {
+    const f = await setupClub();
+    for (const userId of [f.ownerId, f.memberId]) {
+      await registerDevice(h.db, {
+        userId,
+        pushToken: `ExponentPushToken[r-${userId.slice(0, 8)}]`,
+        platform: 'ios',
+      });
+    }
+
+    const ctx = await loadAccessContext(h.db, f.adminId);
+    const channel = await getChannelRef(h.db, f.channelId);
+    const sent = await sendMessage(drainsTheInstantItCommits(), ctx, channel!, {
+      channelId: f.channelId,
+      clientMsgId: crypto.randomUUID(),
+      body: '@Member can you drive on Saturday?',
+      mentions: [f.memberId],
+    });
+    expect(sent.ok).toBe(true);
+    const messageId = sent.ok ? sent.message.id : '';
+
+    // The rows are there either way - it is only WHEN they landed that was ever in question.
+    const stored = await h.db
+      .select()
+      .from(messageMentions)
+      .where(eq(messageMentions.messageId, messageId));
+    expect(stored.map((row) => row.userId)).toEqual([f.memberId]);
+
+    // The event was already claimed by the drain above; this only runs the push evaluation it
+    // deferred. A second claim finds nothing, which is the point: the worker gets ONE look.
+    await drainAndDeliver();
+
+    const rows = await h.db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.recipientId, f.memberId));
+    expect(
+      rows.map((row) => row.type),
+      'the drain saw message.created before the mention rows it needed',
+    ).toEqual(['mentioned']);
+
+    const memberToken = `ExponentPushToken[r-${f.memberId.slice(0, 8)}]`;
+    expect(
+      push.sent.filter((m) => m.token === memberToken).map((m) => m.data['type']),
+      'the named member was demoted to the generic chat buzz',
+    ).toEqual(['mentioned']);
   });
 
   it('drops a mention of someone who cannot access the chat', async () => {

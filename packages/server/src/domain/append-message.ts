@@ -18,7 +18,7 @@ import {
   type MessageType,
 } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
-import { messages, outbox, users } from '../db/schema.ts';
+import { messageMentions, messages, outbox, users } from '../db/schema.ts';
 import { isUniqueViolation } from '../db/errors.ts';
 
 export type AppendMessageInput = {
@@ -45,6 +45,25 @@ export type AppendMessageInput = {
    * the database rather than by a check this function could forget to make.
    */
   replyToSeq?: number | null | undefined;
+  /**
+   * The people this message names, written in the SAME transaction as the message.
+   *
+   * Resolved by the caller - who may be named here is an authorization question and this
+   * function does not answer those - but written here, because WHEN they are written is a
+   * durability question and this function owns those.
+   *
+   * > **They were written by the caller after the commit until 2026-08-19, and that lost
+   * > notifications.** `message.created` is visible in the outbox the instant this transaction
+   * > commits, the drain polls every 250ms and claims on visibility, and the worker resolves
+   * > the mentioned by reading these rows. A drain landing in the gap therefore read the event
+   * > with no mentions behind it: no `mentioned` notification row, no mention push, and the
+   * > named member demoted to the weaker generic chat buzz. Nothing errored and nothing logged,
+   * > so all that reached anybody was an occasional "I was not notified when someone @'d me".
+   *
+   * This is the same rule the outbox row below is here for, applied to a domain row: the event
+   * must not be able to exist without the state its effect will read.
+   */
+  mentions?: ReadonlyArray<{ userId: string; name: string }>;
   /**
    * Extra outbox events to write in the SAME transaction as the message. Used by
    * command handlers that need an effect to be atomic with the message itself.
@@ -317,6 +336,32 @@ export async function appendMessage(
 
       const row = inserted[0];
       if (!row) throw new Error('insert returned no row');
+
+      /*
+       * The mentions, before the event whose effect reads them back.
+       *
+       * Written here and not by the caller, because "either both land or neither does" is
+       * about the domain rows an effect depends on as much as it is about the outbox row
+       * itself - see the note on `AppendMessageInput.mentions` for what writing them a few
+       * milliseconds later actually cost.
+       *
+       * `onConflictDoNothing` because a duplicate must not roll the message back. The caller's
+       * resolution already yields one row per user, so this is unreachable rather than routine
+       * - but a unique violation raised HERE would surface at the catch below as an
+       * idempotency race that has no winner to find, which is a confusing way to lose a send.
+       */
+      if (input.mentions && input.mentions.length > 0) {
+        await tx
+          .insert(messageMentions)
+          .values(
+            input.mentions.map((mention) => ({
+              messageId: row.id,
+              userId: mention.userId,
+              name: mention.name,
+            })),
+          )
+          .onConflictDoNothing();
+      }
 
       // Domain rows and outbox events in ONE transaction. Either both land or
       // neither does - the guarantee an external queue cannot give you, and the
