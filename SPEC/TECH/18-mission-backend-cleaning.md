@@ -514,6 +514,49 @@ decides every id on its own.
 **Status: done.** `domain/polls.ts`, `routes/polls.ts`, `media/pipeline.ts`, `routes/media.ts`,
 `test/batch-reads.test.ts`.
 
+### 2.17 Creating one poll re-read three screens nobody was on
+
+**Reported from the phone**, in the words that turned out to be exactly right: creating a poll
+"is calling the whole conversation pulling up, which is not required."
+
+**Measured** on the phone 2026-08-19 at 22:46:52. One `POST /clubs/:id/polls` raised `msg.new` and
+then three `msg.read` receipts from the creator's own device. The provider folded those into a
+leading and a trailing announcement (2.3), and each announcement re-read three screens that were
+mounted behind the poll screen: `/conversations`, `/channels?clubId=` and the badge. **Six requests
+for one poll, none of them on a screen anybody could see.**
+
+**Not the defect 3.4 was looking for.** That entry examined these same three reads and called them
+correct, and it was right: a message genuinely changes a chat list, and a read receipt genuinely
+changes an unread count. The keying was never wrong. What was missing is that a screen behind
+another one cannot show anybody the difference, and the same read on return produces the same
+answer - so the announcement should be deferred rather than ignored or obeyed.
+
+`useFocusedValue` (2.10, written for the calendar the same evening) does exactly that, and the
+three reads now key on `revision` **as of the last time the screen was looked at**. Live while in
+front of a reader, once on the way back otherwise.
+
+**One asymmetry is load-bearing and cost a wrong first attempt.** `useRefreshOnReturn` must key on
+the LIVE revision where the read takes the deferred one. At focus time the deferred value has not
+been adopted yet, so keying both on it lets the return refresh fire alongside the adopted read -
+two requests where the change exists to remove them. The inbox rolls its own return guard on a
+callback keyed to `[authState]`, so it reaches the live value through a ref for the same reason.
+
+**Two batching numbers were measured wrong in 2.8 and corrected here.** The busy window was 150ms
+against card arrivals 89 to 191ms apart, so cards flushed alone; the freshness window was 15s
+against returns 17 to 56s apart, so it expired just before nearly every case it existed for. Now
+400ms and 60s. Also in this entry: the chat screen's metadata re-read got a 30s floor on the return
+path only, after three returns in thirty seconds cost six requests (22:41:07, 22:41:31, 22:41:37).
+
+**Verified on the device.** The same action at 23:11:49: `/conversations` gone, `/channels?clubId=`
+gone, badge down from two to one, and the cards arriving at **4.0 ids per request** against 1.0 for
+most of the previous night.
+
+**Status: done.** `use-load.ts`, `batch-reader.ts`, `chat/[channelId].tsx`, `clubs/index.tsx`,
+`clubs/[clubId]/index.tsx`, `notifications.tsx`.
+
+**What this does not fix:** cards that genuinely arrive seconds apart during a slow scroll still
+cost a request each, and no window closes that without making a card visibly late.
+
 ---
 
 ## 3. Still open
@@ -543,7 +586,8 @@ Two honest options, neither taken yet:
 
 ### 3.4 Three reads still key on `revision`, and all three are correct
 
-**Closed by 2.13, apart from the ones that were right all along.** What remains:
+**Closed by 2.17.** Kept here rather than deleted, because the entry was right about the thing it
+examined and wrong about the question to ask, and that is worth being able to find again.
 
 | Screen | Read | Why it stays |
 |---|---|---|
@@ -551,12 +595,17 @@ Two honest options, neither taken yet:
 | The chat list | `/conversations` | a message genuinely changes a chat list |
 | A club's hub | `/channels` | a read receipt genuinely changes unread counts |
 
+Every line of that table is still true, and all three still key on `revision`. The question it did
+not ask is **when**: none of these screens is usually the one being looked at when the announcement
+arrives, and a re-read nobody can see is a round trip spent on nothing. 2.17 defers them to focus
+rather than removing the keying.
+
 The five that could not be changed by socket traffic - a club's detail, its race list, and the
 Profile tab's own profile, club list and identity - moved to arrival-and-return in 2.13.
 
-One number worth keeping in view: `/conversations` was measured at **6 reads for one message
-sent** on 2026-08-19. That is correct in kind and probably not in quantity, and it is the 2.3
-coalescing window rather than this entry.
+The number this entry flagged as "correct in kind and probably not in quantity" - **6 reads of
+`/conversations` for one message sent** - was half a coalescing problem (2.3) and half a visibility
+one. Deferring took the six to zero without touching the window.
 
 ### 3.6 The iPhone has barely been measured
 

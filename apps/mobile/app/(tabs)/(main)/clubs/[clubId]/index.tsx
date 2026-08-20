@@ -31,7 +31,7 @@ import {
   measureRow,
   type PressAnchor,
 } from '../../../../../src/ui.tsx';
-import { useLoad, useRefreshOnReturn } from '../../../../../src/use-load.ts';
+import { useFocusedValue, useLoad, useRefreshOnReturn } from '../../../../../src/use-load.ts';
 
 /** How many races the hub previews before "See all". */
 const RACE_PREVIEW = 5;
@@ -143,11 +143,20 @@ export default function ClubHubScreen() {
    * club to another needed no re-read. A scoped read that kept the old `[revision]` list would
    * show the second club the first club's badges until something else happened to bump it.
    */
-  const states = useLoad(() => channelApi.states(clubId), [clubId, revision]);
+  /*
+   * `revision` as of the last look, for the reason the chat list carries the same treatment: a
+   * read receipt genuinely moves an unread count, and cannot move a visible one on a hub that is
+   * behind the chat screen. Measured 2026-08-19, this fired twice per poll created from the club
+   * polls screen. Deferring keeps the count correct at the only moment it is read - arrival.
+   */
+  const focusedRevision = useFocusedValue(revision);
+  const states = useLoad(() => channelApi.states(clubId), [clubId, focusedRevision]);
   // Quiet, and NOT on first open: `useLoad` has already read on mount, and firing here too made
   // this screen ask for `/channels` twice to open. Keyed by club, so walking from one hub
   // straight into another still counts as a first open for the second.
-  useRefreshOnReturn(states, clubId);
+  // The LIVE revision joins the key, so the focus that adopts one is a load and not also a
+  // refresh. See the chat list in `clubs/index.tsx` for why it must not be the deferred value.
+  useRefreshOnReturn(states, `${clubId}:${revision}`);
 
   const unreadFor = (channelId: string | null): number => {
     if (channelId === null) return 0;

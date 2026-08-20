@@ -64,7 +64,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { color, radius, space, tabBarSpace, type } from '../../src/theme.ts';
 import { Avatar, DataScreen, DestinationHeader, Row } from '../../src/ui.tsx';
 import { adoptBadgeCount } from '../../src/use-badge.ts';
-import { useLoad, usePullToRefresh } from '../../src/use-load.ts';
+import { useFocusedValue, useLoad, usePullToRefresh } from '../../src/use-load.ts';
 
 /**
  * The glyph for a notification type, matching v1's.
@@ -103,10 +103,37 @@ export default function NotificationsScreen() {
   // The tab bar floats OVER this list, so the last row has to be able to scroll clear of it.
   const insets = useSafeAreaInsets();
   const { authState, revision } = useSession();
-  const load = useLoad(() => inboxApi.page(), [revision]);
+  /*
+   * `revision` as of the last look at THIS tab, not as of now.
+   *
+   * A message genuinely changes an inbox, so `TECH/18` 3.4 is right that the read belongs on
+   * `revision`. It is wrong only about when to pay for it: a tab screen stays mounted once opened,
+   * so this list answered every socket announcement from behind whatever was actually on screen.
+   * Deferring makes it live while it is being read and silent while it is not.
+   */
+  const focusedRevision = useFocusedValue(revision);
+  const load = useLoad(() => inboxApi.page(), [focusedRevision]);
 
-  /** Whether this screen has been opened before, so a return can be told from a first open. */
-  const opened = useRef(false);
+  /*
+   * The live revision, reachable from the focus effect below.
+   *
+   * That effect is keyed on `[authState]` alone, so anything it reads from the render body is
+   * whatever was current when authentication last changed. A ref written every render is the
+   * same device `useRefreshOnReturn` uses, and it has to be the LIVE revision rather than the
+   * deferred one: at focus time the deferred value is still the old one, so comparing against it
+   * would let the guard below refresh while the adopted read was already running.
+   */
+  const liveRevision = useRef(revision);
+  liveRevision.current = revision;
+
+  /**
+   * The revision this screen was last opened at, or null before the first open.
+   *
+   * A boolean until 2026-08-19, when the read above became deferred: a focus that adopts a new
+   * revision already re-reads page one, so the refresh below would be a second request for the
+   * same answer. Holding the revision rather than a flag is what tells those two focuses apart.
+   */
+  const opened = useRef<number | null>(null);
 
   /*
    * `revision` above is why this is needed rather than optional. The socket bumps it for
@@ -198,14 +225,16 @@ export default function NotificationsScreen() {
        * The pagination reset is inside the guard for the same reason and at no cost: on a first
        * open there is nothing paged in yet, so skipping it changes nothing.
        */
-      if (opened.current) {
-        load.refresh();
+      if (opened.current !== null) {
+        // Paged rows go whichever read repaints page one, so this is outside the guard below.
         setOlder([]);
         setOlderCursor(null);
         setExhausted(false);
-      } else {
-        opened.current = true;
+        // Only when nothing was announced while away. If it was, the deferred read is already
+        // running and this would ask the same question twice.
+        if (opened.current === liveRevision.current) load.refresh();
       }
+      opened.current = liveRevision.current;
 
       return () => {
         /*

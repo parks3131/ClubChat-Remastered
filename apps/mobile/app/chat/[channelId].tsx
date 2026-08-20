@@ -131,6 +131,25 @@ const PINNED_STRIP_SLIDE_MS = 180;
  */
 const JUMP_HIGHLIGHT_MS = 2200;
 
+/**
+ * How long a meta read stands before a RETURN will make another one.
+ *
+ * > **Three returns in thirty seconds cost six requests**, measured on the trace 2026-08-19 at
+ * > 22:41:07, 22:41:31 and 22:41:37. `loadMeta` fetches two things, and nothing sat between the
+ * > focus and the wire - so stepping out to the club's polls screen and back, twice, re-asked
+ * > what the channel is called and who can be mentioned in it, six times over.
+ *
+ * The reason for reading on return is real and is argued where it is used: a roster changes while
+ * this screen is elsewhere and nothing announces it. What was missing is a floor. Half a minute
+ * is longer than a step out and back and far shorter than the time it takes somebody to join a
+ * club, so it drops the repeats without weakening the case the read exists for.
+ *
+ * **Only the return path consults this.** A read that follows an action must never be skipped:
+ * that one runs BECAUSE something changed, and answering it from a stale stamp would show the
+ * name the channel had before it was renamed.
+ */
+const META_FRESH_FOR_MS = 30_000;
+
 /*
  * `Row`, the markers and the arithmetic that places them live in `src/chat-rows.ts`, where they
  * can be tested. They were here, and both of their bugs shipped: this file is 3,400 lines and a
@@ -2443,6 +2462,9 @@ export default function ChatScreen() {
     [rows, dismissedPins],
   );
 
+  /** When `loadMeta` last went to the server. Read only by the return path. */
+  const metaReadAt = useRef(0);
+
   /**
    * Load the channel's title and whether the composer is live.
    *
@@ -2452,6 +2474,9 @@ export default function ChatScreen() {
    */
   const loadMeta = useCallback(async () => {
     if (!channelId) return;
+    // Stamped on the way IN rather than on completion, so two returns in quick succession cannot
+    // both pass the floor below while the first read is still in flight.
+    metaReadAt.current = Date.now();
     /*
      * The `@` pool, fetched once with the meta rather than per keystroke. It is a roster: it
      * changes when somebody joins a club, not while you are typing, and holding it locally is
@@ -2502,7 +2527,17 @@ export default function ChatScreen() {
     void loadMeta();
   }, [loadMeta]);
 
-  useRefreshOnReturn({ refresh: () => void loadMeta() }, channelId ?? "");
+  useRefreshOnReturn(
+    {
+      refresh: () => {
+        // See META_FRESH_FOR_MS: a return that lands seconds after the last read is somebody
+        // stepping out and back, and nothing it would ask about can have changed in between.
+        if (Date.now() - metaReadAt.current < META_FRESH_FOR_MS) return;
+        void loadMeta();
+      },
+    },
+    channelId ?? "",
+  );
 
   /**
    * Go to a message by seq, fetching the history around it if it is not loaded.

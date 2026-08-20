@@ -55,11 +55,25 @@
 /** The first ask after a pause. Short enough that a screen opening does not wait on a timer. */
 const IDLE_WINDOW_MS = 12;
 
-/** Asks that follow one closely. Long enough to cover a list committing its rows in passes. */
-const BUSY_WINDOW_MS = 150;
+/**
+ * Asks that follow one closely. Long enough to cover a list committing its rows in passes.
+ *
+ * > **150ms was measured to be just under what a chat list actually does.** On 2026-08-19 the
+ * > trace caught six cards arriving 89, 171, 183 and 191ms apart, so each one waited out its own
+ * > window and flushed alone: six requests for six ids. A four-second scroll through the same
+ * > conversation produced sixteen requests of which eleven carried a single id. The window was
+ * > not too clever, it was ten milliseconds too short, which is the least satisfying kind of
+ * > wrong number and the easiest to leave in place.
+ */
+const BUSY_WINDOW_MS = 400;
 
-/** How long after a flush the next ask still counts as part of the same arrival. */
-const BUSY_FOR_MS = 600;
+/**
+ * How long after a flush the next ask still counts as part of the same arrival.
+ *
+ * Raised with the window above and for the same measurement: a list commits its rows over most of
+ * a second, so 600ms declared the arrival over while it was still happening.
+ */
+const BUSY_FOR_MS = 1_500;
 
 /**
  * How long an answer is reused before it is read again.
@@ -73,8 +87,14 @@ const BUSY_FOR_MS = 600;
  * Short on purpose, and it is the number that decides how stale a tally may be. Any WRITE clears
  * this entirely (see `invalidate`), so your own vote is never answered from it - which is the one
  * case where a cache would be visibly wrong rather than merely old.
+ *
+ * > **15 seconds was shorter than the interval it had to cover, which made it almost a no-op.**
+ * > Measured 2026-08-19: returns to a chat came 17 to 56 seconds apart and a scrolled-away card
+ * > came back after 70, so the window expired just before nearly every case it existed for. The
+ * > same six ids reloaded at 22:29:24 and again at 22:30:20. A minute covers the gap between
+ * > leaving a screen and coming back to it, which is the interval the reads actually arrive on.
  */
-const FRESH_FOR_MS = 15_000;
+const FRESH_FOR_MS = 60_000;
 
 export type BatchReaderOptions<T> = {
   /** Read many, in one request. May be called more than once if the ids exceed `maxPerRequest`. */

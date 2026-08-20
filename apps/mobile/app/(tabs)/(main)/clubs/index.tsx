@@ -62,7 +62,12 @@ import {
   measureRow,
   type PressAnchor,
 } from '../../../../src/ui.tsx';
-import { useLoad, usePullToRefresh, useRefreshOnReturn } from '../../../../src/use-load.ts';
+import {
+  useFocusedValue,
+  useLoad,
+  usePullToRefresh,
+  useRefreshOnReturn,
+} from '../../../../src/use-load.ts';
 
 /**
  * The four chips, in the order the design shows them.
@@ -192,7 +197,22 @@ export default function ChatsScreen() {
   const [confirmClear, setConfirmClear] = useState<ConversationSummary | null>(null);
   const [confirmLeave, setConfirmLeave] = useState<ConversationSummary | null>(null);
 
-  const load = useLoad(() => channelApi.conversations(), [revision]);
+  /*
+   * Keyed on `revision` as of the last time this screen was LOOKED AT.
+   *
+   * > **Creating one poll cost six requests from screens nobody was on.** Measured 2026-08-19 at
+   * > 22:46:52: the write raised `msg.new` and then three `msg.read` receipts, the provider
+   * > coalesced those into a leading and a trailing announcement, and each announcement re-read
+   * > `/conversations` here, `/channels` on the club hub and the badge - while the reader was on
+   * > the poll screen and could see none of it.
+   *
+   * `TECH/18` 3.4 calls this read correct, and it is: a message genuinely changes a chat list.
+   * What it cannot do is change one nobody is looking at in any way that matters, and the same
+   * read on return produces the same answer. So the announcement is not ignored, it is deferred -
+   * live while this list is in front of somebody, once on the way back otherwise.
+   */
+  const focusedRevision = useFocusedValue(revision);
+  const load = useLoad(() => channelApi.conversations(), [focusedRevision]);
 
   /*
    * Re-read whenever this screen comes back into view.
@@ -215,7 +235,20 @@ export default function ChatsScreen() {
    * This is the exact defect `useRefreshOnReturn` was written for on 2026-08-17, and its doc
    * comment describes this screen's symptom. It simply was never moved over.
    */
-  useRefreshOnReturn(load, 'chats');
+  /*
+   * The key carries the deferred revision, which is what keeps a return to ONE request.
+   *
+   * On the focus that adopts a new revision this key has already moved, so the return counts as a
+   * first open and stays quiet while the read above runs. On a focus where nothing was announced
+   * while away, the key is unchanged and this does its usual quiet refresh - which is still
+   * needed, because another device reading a chat announces nothing to this one.
+   *
+   * **Keyed on the LIVE revision, not the deferred one**, which is the same asymmetry the
+   * calendar carries. On the focus that adopts a new revision the live value has already moved,
+   * so this counts the focus as a first open and stays quiet while the read above runs; the
+   * deferred value is still the old one at effect time and would let both fire.
+   */
+  useRefreshOnReturn(load, `chats:${revision}`);
 
   /**
    * A pull, and only a pull, spins the control. A background refresh must look like nothing.

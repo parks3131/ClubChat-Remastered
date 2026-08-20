@@ -49,11 +49,20 @@ The trade-off is stated where it is made: the tab now shows a load when opened a
 change, instead of having been pre-fetched for a visit that may never come. That is what every
 other screen here does on arrival.
 
-**Verified:** mobile type check, the full suite, and the trace across a club entry and exit
-carrying no calendar read at all. **Not verified:** that the tab still shows the right club's feed
-when it IS opened after a change. The tree had remounted before the walk, so the tab was not
-mounted during it, and zero reads is the expected result under either version. The test that
-isolates it is to open Calendar once, then cross in and out.
+**Verified on the device, and it took two runs because the first one proved nothing.** That walk
+happened after the tree had remounted, so the Calendar tab was not mounted during it, and zero
+calendar reads is what EITHER version produces from an unmounted screen. Worth recording as a
+near miss: the trace said exactly what the fix wanted it to say, and meant nothing.
+
+The isolating run opens the tab first. `GET /calendar?when=all` at 22:21:02 is that mount, and
+then four club boundaries at 22:21:14, 22:21:16, 22:21:19 and 22:21:32, in and out twice, with no
+calendar read on any of them. Four requests that the old code would have spent, in half a minute.
+Type check and the full suite green alongside it, 1,492 tests across the four workspaces.
+
+**Still not exercised:** focusing the tab from INSIDE a club, which is the adopting half of
+`useFocusedValue` rather than the deferring half. A hook stuck on its first value would draw the
+identical trace above, because both produce silence. One tap settles it: from the club hub, open
+Calendar and expect exactly one `?club=` read and the club's name on the header.
 
 ---
 
