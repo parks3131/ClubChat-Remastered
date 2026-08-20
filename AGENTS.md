@@ -1000,3 +1000,62 @@ that records how to recognise the class._
     Nothing was asserting on where a handle could be touched, so nothing could fail. The fix put
     the drag arithmetic and the grip layout into `crop-rect.ts` beside the conversions, where both
     are now properties a test states out loud.
+
+34. **`requestTimeout` on an AWS SDK client aborts nothing. It logs a warning and lets the request
+    hang.** Symptom: the outbox drain awaits object storage from inside the transaction that claimed
+    its rows, so a store that accepts a connection and then never answers freezes every partition's
+    effects behind it - and the obvious fix, `requestTimeout` on the `S3Client`'s `requestHandler`,
+    typechecks, reads correctly in review, and leaves that defect fully intact. Root cause: the
+    timer fires and then asks a *second* flag what to do with it.
+    `node_modules/@smithy/node-http-handler/dist-cjs/index.js` line 83 builds its message as
+    `[${throwOnRequestTimeout ? "ERROR" : "WARN"}]`, and when the flag is absent it appends the
+    literal `Init client requestHandler with throwOnRequestTimeout=true to turn this into an error.`
+    and hands the string to `logger.warn`. The request itself is never touched. **Rule:
+    `requestTimeout` is inert without `throwOnRequestTimeout: true`, and the two are one setting.**
+
+    **A second ceiling in the same object, covering the half the first one cannot.**
+    `requestTimeout` stops counting the moment response HEADERS arrive, so a store that answers and
+    then stalls mid-body streams unbounded under a timeout that has already been cleared.
+    `socketTimeout` is what bounds that, **and it must stay under 6000 ms**: below that the handler
+    registers the socket's `timeout` listener immediately, at or above it the registration is itself
+    deferred behind a 3000 ms timer - which the arriving response cancels along with every other
+    pending timer, so the listener meant to catch the stalled body is never installed at all. A
+    number picked for comfort ("thirty seconds seems safe") silently buys no protection whatsoever.
+
+    How to recognise the class: **an SDK option named for a behaviour it does not perform on its
+    own.** Nothing in the type, the name, or the review makes the omission visible, and the only
+    artefact that does is the vendor's own shipped source - which is non-negotiable 1 read one level
+    lower than usual: for a dependency this size `node_modules` IS the pinned documentation, and
+    reading the fifteen lines that implement the option is cheaper than trusting its name. Compare
+    entry 12, where a check against a field the library does not return reads `undefined` forever.
+    Both are code that runs, can never fire, and looks correct to everybody. Found on 2026-08-20
+    while giving the media store the timeout it had never had.
+
+35. **A connection that dies while no statement is running takes the process down, and the ceiling
+    added to prevent a freeze is what makes that routine rather than rare.** Symptom:
+    `pool-timeouts.test.ts` reporting four passing assertions and two exceptions escaping the file,
+    which is precisely the shape of a fix that looks finished. Root cause: adding
+    `idle_in_transaction_session_timeout` as a pool startup parameter means Postgres terminates the
+    backend and sends `FATAL 25P03` **while nothing is in flight for it to reject** - and `pg`
+    routes an error with no active query to `client.emit('error')`. `pg-pool` attaches its own
+    listener to a client while it is IDLE and removes it again on checkout, so a client held open
+    inside a transaction, which is exactly the client this timeout exists to kill, has none. An
+    `EventEmitter` emitting `error` unheard throws, and the API installs no `uncaughtException`
+    handler. The socket close that follows arrives the same way, as a second
+    `Connection terminated unexpectedly`. **Rule: `createPool` listens for `error` on the pool AND
+    on every client it hands out.** Without both, the timeout trades a silent freeze for a crash
+    loop, which is the worse of the two.
+
+    **Those two listeners are not a swallow, and saying so is what stops a later reader deleting
+    them.** The authoritative report of the fault still reaches the caller by the ordinary path: the
+    drain's next statement rejects, `db.transaction` rolls back, the claimed rows are released, and
+    the outbox retries them on its own schedule. What the listeners absorb is the *duplicate*
+    notification, which has no caller to reach and no effect except ending the process, and it is
+    logged rather than discarded so that "the database dropped our connection" is never invisible.
+
+    How to recognise the class: **a fault you deliberately introduced arrives by a delivery path the
+    ordinary faults never use.** Every error this codebase handles comes back as a rejected query,
+    so every handler is written for one; a backend terminated between statements has no query to
+    reject and reaches an emitter instead. Found on 2026-08-20 in the same change as entry 34, and
+    the general form belongs with it: adding a timeout is adding a new failure, and the new failure
+    needs its own path traced before the timeout can be called a fix.
