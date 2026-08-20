@@ -42,7 +42,6 @@ function deps(overrides: Partial<EffectDeps> = {}): EffectDeps {
     redis: { publish: async () => 1 } as never,
     push: new RecordingPushSender(),
     log: silent,
-    defer: () => undefined,
     ...overrides,
   };
 }
