@@ -65,6 +65,7 @@ client PUTs directly to object storage
 
 POST /media/:id/complete
   → HEAD the object, verify size/type actually match what was declared
+  → a HEAD that fails for any reason other than 404 is 503 storage_unavailable
   → for an image, decode it: bytes that are not an image are refused 422 undecodable
   → status='ready'; enqueue outbox('media.uploaded') → worker derives thumbnails
 ```
@@ -90,6 +91,27 @@ the event. See [effects engine](04-effects-engine.md) for why the distinction ma
 `media_not_ready`, deliberately distinct from `forbidden`: the client's correct response is to
 finish the upload and retry the same `client_msg_id`, not to give up. Collapsing it into a
 generic failure would turn a recoverable state into a lost message.
+
+**"The object is not there" and "we could not ask" are different answers, and `404 not_uploaded`
+means only the first.** `not_uploaded` is an instruction to the client: finish the upload and try
+again. That is right for a member who backgrounded the app mid-PUT and wrong for every other way a
+HEAD can fail, so the store returns `{ exists: false }` for a genuine 404 and throws for anything
+else - a 403 from a rotated credential, a DNS failure, a 5xx, a timeout. Those answer `503
+storage_unavailable` and are reported to the monitor under `api.media.complete`.
+
+> The version this replaces caught everything and returned `{ exists: false }`, so an R2 secret
+> rotated and re-typed with one character wrong looked exactly like members abandoning uploads:
+> every complete answered `not_uploaded`, every client dutifully re-uploaded bytes that were
+> already in the bucket, and nothing was captured anywhere. The only evidence was a graph of
+> uploads that started and never finished, which is also what a normal Tuesday looks like.
+
+**Every storage call has a deadline, and the deadline has to be asked for twice.** The S3 client
+sets `connectionTimeout`, `requestTimeout` and `socketTimeout` on its request handler, because all
+three default to zero - meaning no timeout at all - so storage that accepts the TCP connection and
+never answers leaves the call neither resolved nor rejected, and the SDK's retry never engages
+because nothing throws. `requestTimeout` alone does **not** abort: `@smithy/node-http-handler` only
+logs a warning unless `throwOnRequestTimeout` is also set. See `media/store.ts` for the three
+values and why `socketTimeout` must stay under six seconds.
 
 **The object must belong to the sending member and to that channel.** Otherwise a member could
 attach somebody else's private upload, or move a photo out of a channel they can read into one

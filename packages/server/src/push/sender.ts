@@ -34,6 +34,23 @@ export interface PushSender {
 }
 
 /**
+ * How long one batch may take before it is abandoned.
+ *
+ * There is a caller-shaped reason for this rather than a round number, the same as the one on
+ * `ResendMailer`: `worker/effects.ts` awaits `dispatchPush` INLINE for `message.reported` and
+ * `user.reported`, rather than handing it to `schedule()` like every other type. Those two awaits
+ * happen inside the drain's transaction, which is holding `FOR UPDATE` on up to fifty claimed
+ * outbox rows. A `fetch` with no signal against a host that accepts the connection and never
+ * answers does not fail, retry or park - it simply never settles, so the transaction never
+ * commits and every partition's effects stop with nothing in the log to say why.
+ *
+ * Ten seconds is well past a healthy Expo response and well short of anything worth waiting for.
+ * A push that is abandoned is a phone that does not buzz; a drain that is stalled is a whole
+ * product that has quietly stopped, so the trade is not close.
+ */
+export const PUSH_TIMEOUT_MS = 10_000;
+
+/**
  * Expo Push Service.
  *
  * The right transport because the client is Expo and this abstracts APNs, FCM and web
@@ -42,13 +59,17 @@ export interface PushSender {
 export class ExpoPushSender implements PushSender {
   private readonly endpoint: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
 
-  constructor(opts: { endpoint?: string; fetchImpl?: typeof fetch } = {}) {
+  constructor(opts: { endpoint?: string; fetchImpl?: typeof fetch; timeoutMs?: number } = {}) {
     this.endpoint = opts.endpoint ?? 'https://exp.host/--/api/v2/push/send';
     // Bound, not bare. A getter returning the raw global and then being called as a
     // method throws "Illegal invocation" in a browser and silently works in Node - see
     // AGENTS.md 5.3 entry 6, which cost real time on the client side of this codebase.
     this.fetchImpl = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+    // Overridable for tests only. A timeout that differs between production and the suite is a
+    // timeout that has never been exercised where it matters.
+    this.timeoutMs = opts.timeoutMs ?? PUSH_TIMEOUT_MS;
   }
 
   async send(messages: readonly PushMessage[]): Promise<PushReceipt[]> {
@@ -74,6 +95,14 @@ export class ExpoPushSender implements PushSender {
               sound: 'default',
             })),
           ),
+          /*
+           * A fresh deadline per batch, not one shared across all of them.
+           *
+           * A 300-member club announcement is three requests, and a single signal started before
+           * the first would leave the last inheriting a clock that has already been running -
+           * so a large club would fail purely for being large. Each batch gets the full window.
+           */
+          signal: AbortSignal.timeout(this.timeoutMs),
         });
 
         if (!response.ok) {
@@ -106,6 +135,9 @@ export class ExpoPushSender implements PushSender {
           });
         });
       } catch (error) {
+        // Where the deadline above lands, alongside a refused connection and a DNS failure.
+        // `tokenInvalid` stays false for all of them: a provider that did not answer is not a
+        // device that has gone away, and confusing the two silences a phone permanently.
         receipts.push(
           ...batch.map((m) => ({
             token: m.token,
