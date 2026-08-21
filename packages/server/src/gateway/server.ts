@@ -273,10 +273,23 @@ export function createGateway(
     /*
      * The peer may be gone, and on shutdown it usually is.
      *
-     * `close()` destroys in-flight connections rather than waiting for them, so a readiness probe
-     * that was still running when SIGTERM arrived finishes seconds later against a socket that no
-     * longer exists. Writing to it would reject a promise nobody is holding, which in Node is a
-     * process-ending unhandled rejection - during shutdown, from the health endpoint.
+     * `closeAllConnections()` destroys in-flight connections rather than waiting for them, so a
+     * readiness probe still running when SIGTERM arrived settles seconds later against a socket
+     * that no longer exists. That much is real: at write time `response.destroyed` is genuinely
+     * true on that path.
+     *
+     * > **This comment used to claim the unguarded write is a process-ending unhandled rejection.
+     * > It is not, and the correction is kept because the false version is the more plausible
+     * > one.** Measured on the pinned runtime, `node:24-trixie-slim` / v24.19.0, inside the
+     * > deployment image: `writeHead` plus `end` against a destroyed response returns normally,
+     * > throws nothing, emits no `error` event, and produces no `uncaughtException` and no
+     * > `unhandledRejection`. Node discards the write.
+     *
+     * So this guard is cheap insurance and a statement of intent rather than a crash fix, and
+     * nothing observable changes if it is removed. It stays because "answer only a live response"
+     * is the property we want to hold regardless of which Node version is underneath, and because
+     * a future runtime is free to make that write loud. Do not delete it on the grounds that the
+     * tests still pass without it; they do.
      */
     if (response.destroyed || response.writableEnded) return;
     const payload = JSON.stringify(body);

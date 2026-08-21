@@ -152,6 +152,35 @@ export async function probeDependencies(opts: {
   return { postgres: graded.postgres.state, redis: graded.redis.state, errors };
 }
 
+/**
+ * The most specific message in an error's cause chain.
+ *
+ * > **An ORM error's own message names the query, not the reason.** Drizzle catches the driver's
+ * > error and rethrows `DrizzleQueryError`, whose message is always `Failed query: <sql>` and is
+ * > byte-identical whether Postgres refused the connection, rejected the password, ran out of
+ * > connections, or was missing a grant. The reason is on `.cause`, one level down.
+ *
+ * `AGENTS.md` failure mode 1 already records this class, found when an error code checked at the
+ * top level silently matched nothing. The same shape reaches here as an emptied log line rather
+ * than a wrong branch: the verdict stays correct, because grading never inspects the error, while
+ * the line an operator tails during the outage says only that a query failed.
+ *
+ * Walks to the deepest cause rather than the first, because a driver error can be wrapped twice,
+ * and carries a `seen` set because a cause chain is not guaranteed to be acyclic.
+ */
+function reasonOf(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  let deepest = error;
+  const seen = new Set<Error>([error]);
+  let next: unknown = error.cause;
+  while (next instanceof Error && !seen.has(next)) {
+    deepest = next;
+    seen.add(next);
+    next = next.cause;
+  }
+  return deepest.message;
+}
+
 export type ReadinessLog = (
   level: 'info' | 'error',
   message: string,
@@ -220,7 +249,8 @@ export function createReadinessCheck(opts: {
         // Whether this instance is now out of rotation, which is the operational difference
         // between the two dependencies and the first thing anybody reading this wants.
         removedFromRotation: dependency === 'postgres',
-        error: error instanceof Error ? error.message : String(error),
+        // The driver's reason, not the ORM's wrapper around it. See `reasonOf`.
+        error: reasonOf(error),
       });
 
       /*
