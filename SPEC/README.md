@@ -93,6 +93,7 @@ other specs.
 | 18 | [Mission: backend cleaning](TECH/18-mission-backend-cleaning.md) | **The request economy.** What the app asks for that it need not, what was fixed, and the routes nobody has watched yet |
 | 19 | [System synthesis](TECH/19-system-synthesis.md) | **The whole system in one read.** What each part is and where its truth lives; points down into the file that owns the detail, never restates it |
 | 20 | [Road to the first club](TECH/20-road-to-the-first-club.md) | The remaining milestones to a pilot club using it daily, each with checkable exit criteria and no dates. Milestone 1 is the 2026-08-19 review's eight merges, in their required order |
+| 21 | [Deployment](TECH/21-deployment.md) | How a change reaches a person: what runs where, the three ship paths and their speeds, and the twelve rules a deploy must not break. **Written before the first deploy**, because the compatibility rules are free to follow from day one and cannot be retrofitted once builds are installed |
 
 ## DESIGN - what a surface looks like
 
