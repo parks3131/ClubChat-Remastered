@@ -1,0 +1,46 @@
+# The worker role. No ingress at all: nothing reaches it, and it reaches out.
+#
+# It polls the outbox every 250ms and runs the effects. SPEC/TECH/04 requires every effect
+# to be idempotent, and TECH/21 rule 11 records why that matters here specifically: a
+# rolling deploy sends SIGTERM part-way through a drain, which is the commonest cause of an
+# outbox event being handled twice. A deploy is the routine event that tests that
+# requirement, so an effect idempotent only in theory fails on an ordinary Tuesday.
+
+app = 'clubchat-worker'
+primary_region = 'iad'
+
+[build]
+  dockerfile = '../Dockerfile'
+
+# No release_command here. Migrations run exactly once per release, from fly/api.toml.
+[deploy]
+  strategy = 'rolling'
+
+[processes]
+  app = 'node packages/server/src/worker/main.ts'
+
+[env]
+  LOG_LEVEL = 'info'
+  SENTRY_ENVIRONMENT = 'production'
+
+# No [http_service] and no [[services]] blocks, deliberately.
+#
+# The worker has no listening port, so there is nothing for Fly Proxy to route to and
+# nothing for an HTTP check to ask. Declaring a service here would make Fly wait for a port
+# that never opens and fail every deploy.
+#
+# The consequence, stated rather than left implicit: THIS ROLE HAS NO HEALTH GATE. A worker
+# that boots, connects, and then silently stops draining looks identical to a healthy one
+# from outside. The evidence that an effect never ran is a PARKED OUTBOX EVENT, which is
+# durable and already captured to Sentry, so the alerting on parked events is not a nice to
+# have for this role - it is the only signal there is.
+#
+# Exactly one machine. The drain claims rows with a lease and a per-partition gate, so a
+# second machine is safe rather than harmful, but there is no reason to pay for one until
+# outbox depth says so, and one machine keeps "did the effect run" a question with a single
+# place to look.
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'
+  processes = ['app']

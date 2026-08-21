@@ -1,0 +1,73 @@
+# Everything listed here is excluded from the build context.
+
+# Host node_modules. Built on macOS/arm64 and full of dev trees, it would shadow the clean
+# Linux install and drag @img/sharp-darwin-arm64 into a Linux image. That is not a build
+# failure: sharp is imported at module top by media/pipeline.ts, so the wrong binary is a
+# boot crash on every role that touches media.
+**/node_modules
+
+# Secrets. A value baked into a layer stays in that layer for the life of the image even if
+# a later layer deletes it, so this is the one exclusion with no recovery.
+# Deny every .env spelling rather than the ones we thought of: .gitignore:8-13 records that
+# the list was `.env`, `.env.local` and `.env.*.local` until `.env.bak` matched none of them
+# and sat in git for months. .env.example is denied too - nothing in the image reads it.
+.env*
+
+# Development traffic carrying real message bodies and real user ids (.gitignore:31).
+.dev-trace/
+.playwright-mcp/
+
+# The Expo client. Never in a server image: its own node_modules is roughly 1GB, and
+# @sentry/react-native pulls @sentry/cli, a native install script with no business here.
+# The `npm ci --workspace` flag already excludes its dependencies; this excludes its source,
+# so the two do not have to agree for the exclusion to hold.
+apps/
+
+# Git history. Also a secret surface, for the .env.bak reason above.
+.git
+.github
+.gitignore
+
+# Tests and their fixtures. Not just size: these import vitest and testcontainers, which
+# --omit=dev leaves absent, so they would be unloadable files in a production image.
+**/*.test.ts
+packages/server/src/test/
+packages/*/vitest.config.ts
+coverage/
+
+# The load test, excluded by name rather than by folder, because src/dev/ must SHIP:
+# api/main.ts imports dev/queries.ts and dev/trace.ts and both self-gate at runtime.
+# load-test.ts is the one file in there that reaches a devDependency, through
+# ../test/large-fixture.ts into testcontainers.
+packages/server/src/dev/load-test.ts
+
+# drizzle-kit's config. Only `db:generate` reads it and drizzle-kit is a devDependency.
+# NOT excluded: packages/server/src/db/migrations/, which the release_command needs.
+packages/*/drizzle.config.ts
+
+# Local-only tooling and compose services.
+docker-compose.yml
+scripts/
+.claude/
+.expo/
+.vscode/
+
+# Docs, specs and screenshots. None of it is read at runtime.
+*.md
+SPEC/
+docs/
+learnings/
+*.png
+calendar-walk.yml
+
+# Build leftovers that should never exist here anyway, since there is no build step, but
+# would be stale if they did.
+**/dist/
+**/build/
+**/*.tsbuildinfo
+.DS_Store
+
+# The image definition itself, and the deploy configs that reference it.
+Dockerfile
+.dockerignore
+fly/

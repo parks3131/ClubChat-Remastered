@@ -1,0 +1,89 @@
+# The api role. Fastify over HTTPS, reached by the client at api.<domain>.
+#
+# One of three apps built from ONE image. The image is built and pushed once, then deployed
+# to all three by digest, because the Fly registry is scoped per organization rather than
+# per app. See SPEC/TECH/21-deployment.md.
+#
+# Why three apps rather than one app with three process groups: Fly Proxy selects a service
+# by PORT and has no hostname discriminator inside an app, so api.<domain> and ws.<domain>
+# cannot be separated within one app without running our own routing hop. And `fly deploy`
+# updates every process group as a group, which would make "an api deploy must not drop
+# every live socket" an operator habit instead of a property of the system.
+
+app = 'clubchat-api'
+primary_region = 'iad'
+
+[build]
+  dockerfile = '../Dockerfile'
+
+# Schema, then server. TECH/21 rule 1, enforced by the platform rather than by discipline.
+#
+# release_command runs in a temporary Machine on the NEWLY BUILT image, once per deploy
+# attempt, before any machine is updated, with full access to secrets. If it fails the
+# deploy stops. Because it is the same image, the migrations can never drift from the code
+# that expects them.
+#
+# It is declared HERE and on neither of the other two apps, so it runs exactly once per
+# release rather than three times. Deploy this app first.
+#
+# Not `npm run db:migrate`: that script hardcodes `--env-file=../../.env`, and there is no
+# .env in the image.
+#
+# Rollback, stated plainly: this gives forward safety only. `fly deploy` rolls machines
+# back; it cannot un-apply a migration. That is survivable precisely because rules 4 to 7
+# make every migration additive, so the previous image still runs against the new schema.
+# Do not add a down-migration path. Follow forward.
+[deploy]
+  release_command = 'node packages/server/src/db/migrate.ts'
+  strategy = 'rolling'
+
+[processes]
+  app = 'node packages/server/src/api/main.ts'
+
+[env]
+  API_PORT = '3000'
+  LOG_LEVEL = 'info'
+  SENTRY_ENVIRONMENT = 'production'
+
+  # `1`, not `true`, and the difference is the whole point. config.ts documents it: Fly's
+  # edge proxy is the only ingress and appends the client address to X-Forwarded-For, so a
+  # hop count of 1 is exactly right. Left at `false`, request.ip is the proxy's address and
+  # every caller in the world shares one rate-limit bucket, which makes the per-IP sign-in
+  # limit useless as credential-stuffing protection. Set to `true`, any caller can forge a
+  # header and get a fresh bucket, which removes the limit rather than loosening it.
+  TRUST_PROXY = '1'
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  processes = ['app']
+
+  # A chat backend has no cold-start budget: a stopped machine means a member waits for a
+  # boot before their first message sends. Keep one running.
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+# The check that gates BOTH traffic routing and deploy success, which is why it points at
+# /ready and never at /health.
+#
+# /health answers from process memory and cannot fail, so it can never gate anything; it
+# exists so a future restart policy has something to ask that does not restart-loop a
+# process whose dependency merely blipped. /ready actually reaches Postgres.
+#
+# Readiness fails on Postgres and NOT on Redis, deliberately. TECH/11 records Redis being
+# unavailable as a degrade with no data loss: realtime stops, REST keeps working, clients
+# recover by sync. Every instance shares one Redis, so failing readiness on it would pull
+# every instance out of rotation at once and turn a documented degrade into a total outage.
+[[http_service.checks]]
+  method = 'GET'
+  path = '/ready'
+  interval = '15s'
+
+  # Above the readiness handler's own 2s per-probe ceiling, so a slow dependency is reported
+  # by the endpoint as a 503 rather than being cut off here as an ambiguous timeout.
+  timeout = '5s'
+
+  # Config is parsed and validated at startup and the process fails fast on a bad value, so
+  # a machine that is going to boot boots quickly. This covers the Postgres first-connect.
+  grace_period = '15s'

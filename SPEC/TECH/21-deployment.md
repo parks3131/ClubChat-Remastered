@@ -35,6 +35,27 @@ boundary, so how many deployables there are stays a deploy-time choice rather th
 The gateway is a separate deployable from the api because it is the only role whose restart is felt
 by every connected client at once. It should be able to hold connections while the api rolls.
 
+**Three Fly apps, not one app with three process groups**, decided 2026-08-21 in
+[ADR-0043](../decisions/0043-the-three-roles-deploy-as-three-fly-apps.md). One image is built and
+pushed once, then deployed to all three by digest, because the Fly registry is scoped per
+organization. Each app's config lives in `fly/<role>.toml`.
+
+**`DATABASE_URL` is Neon's DIRECT endpoint, never the pooled one, and this is not a preference.**
+`db/client.ts` sends `statement_timeout` and `idle_in_transaction_session_timeout` as startup
+parameters. Neon's pooled endpoint accepts five startup parameters and no others, and fails the
+connection outright with `unsupported startup parameter` on anything else; PgBouncer's
+`track_extra_parameters` cannot cover them because it can only track parameters Postgres reports
+back, and neither timeout is one. So the pooled endpoint was never available while those two
+ceilings exist, and the ceilings are the thing stopping a runaway query from holding a connection
+forever. The restriction applies only to the pooled endpoint.
+
+That makes connection count a real budget rather than an afterthought. Each role opens one pool at
+`max: 20`, so one machine per role is 60 connections, and 80 while a migration runs, against the 97
+usable on Neon's smallest compute. **Two machines per role does not fit**, and the choice at that
+point is a larger compute or a lower `max`, made deliberately. Related, and worth knowing before the
+first invoice: the worker polls the outbox four times a second forever, so the compute never idles
+long enough to scale to zero.
+
 ---
 
 ## How a change reaches a person
@@ -141,6 +162,48 @@ idempotent only in theory fails on an ordinary Tuesday.
 
 ---
 
+## Health checks, and what they gate
+
+Fly gates **both** traffic routing and deploy success on the health check, which makes a check that
+cannot fail actively dangerous: a deploy against an unreachable Neon would go green and then take
+live traffic. Two endpoints, on the api and the gateway, and the distinction between them is the
+whole point.
+
+| Path | Answers from | Fly points its check at | Purpose |
+|---|---|---|---|
+| `/health` | Process memory. Touches nothing | **Never** | Liveness. It cannot fail, so it can never gate anything. It exists so a future restart policy has something to ask that does not restart-loop a process whose dependency merely blipped |
+| `/ready` | A real round trip to Postgres | **Yes** | Readiness. `200`, or `503` with a body of exactly `{"error":"not_ready"}` |
+
+**Readiness fails on Postgres and deliberately does not fail on Redis.**
+[Failure modes](11-failure-modes.md) records Redis being wiped or unavailable as a *degrade* with no
+data loss: realtime stops, clients keep working over REST and recover by sync, and the limiter fails
+open. Every instance shares one Redis, so failing readiness on it would pull every instance out of
+rotation at once and convert a documented degrade into a total outage. Redis failure is logged and
+captured instead. Making Redis fatal is a change to [Failure modes](11-failure-modes.md), not a
+change to a handler.
+
+**The response body never names the failing dependency.** An unauthenticated caller gets a status
+code and nothing else: no driver text, no connection string, no stack. The operator learns which
+dependency failed from the log and from Sentry, and the capture fires on *transition* rather than on
+every poll, because a check running every fifteen seconds that reports each failure would exhaust
+the Sentry quota during exactly the outage it exists to report.
+
+**The worker has no health gate at all**, and that is a property of having no ingress rather than an
+omission. A worker that boots, connects, and then silently stops draining looks identical to a
+healthy one from outside. The durable evidence that an effect never ran is a **parked outbox event**,
+which is why alerting on parked events is the only real signal this role has.
+
+**The gateway's own shutdown depends on this check.** The gateway now owns its HTTP server rather
+than letting `ws` create one, and `wss.close()` deliberately does not close a server it did not
+create - so `close()` calls `closeAllConnections()` before `server.close()`. The connection that
+makes that necessary is one with a request **in flight**, not an idle keep-alive socket: since Node
+19 `server.close()` closes idle connections itself, but it still waits for a request being served,
+and a readiness request is waiting on a database. Measured at 4.9 seconds without that call against
+5 milliseconds with it, on a probe whose dependency merely hangs. Without it `SIGTERM` outlives its
+grace period, never reaches the pool, and Fly kills the machine part-way through a deploy, which is
+rule 11's redelivery case made routine. The probe those destroyed requests were waiting on still
+settles afterwards, so the handler checks the response is alive before writing to it.
+
 ## What CI proves, and what it does not
 
 `.github/workflows/ci.yml` runs on every push and pull request, and two of its steps are deployment
@@ -160,9 +223,18 @@ something enforces it, that is a review obligation rather than a gate.
 
 Recorded so that silence is not read as a decision.
 
-- Whether the three roles deploy as three Fly apps or as one app with three process groups.
-- The rollback procedure, and whether a schema change is ever rolled back rather than followed
-  forward.
+- ~~Whether the three roles deploy as three Fly apps or as one app with three process groups.~~
+  **Decided 2026-08-21: three Fly apps from one image**, pushed once and deployed to all three by
+  digest. See [ADR-0043](../decisions/0043-the-three-roles-deploy-as-three-fly-apps.md), which also
+  records the argument that was *refuted* rather than accepted: the gateway does not need an L4 path
+  on Fly, because Fly's HTTP handler proxies a WebSocket upgrade.
+- The rollback procedure. **Half of it is now decided**: a schema change is never rolled back, only
+  followed forward, which is what rules 4 to 7 already make safe by keeping every migration
+  additive. Migrations run as the api app's `release_command`, on a temporary machine using the
+  newly built image, before any machine is updated, and a failure there stops the deploy. That
+  gives forward safety only: `fly deploy` rolls machines back and cannot un-apply a migration, and
+  it does not need to, because the previous image still runs against the new schema. What remains
+  open is the *machine* rollback drill, which has never been performed.
 - Backup restore, monitoring, and the mail domain. These are
   [milestone 5](20-road-to-the-first-club.md) exit criteria rather than open choices.
 - Kafka still has no hosted provider ([Stack and hosting](15-stack-and-hosting.md)). Managed Kafka

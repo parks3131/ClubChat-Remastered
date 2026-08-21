@@ -1,8 +1,20 @@
 /**
  * Gateway entrypoint.
  *
- * Deployed behind an L4 load balancer, not L7: balancers that terminate HTTP break the
- * WebSocket upgrade or add proxy hops. The REST API keeps an ordinary L7 balancer.
+ * > **This used to say the gateway must sit behind an L4 balancer rather than L7, because a
+ * > balancer that terminates HTTP breaks the WebSocket upgrade. That is true in general and
+ * > false on Fly, and the correction is worth keeping** because the old claim is the more
+ * > persuasive one and will be re-derived by anybody who reasons from first principles.
+ * >
+ * > A WebSocket upgrade is HTTP/1.1, and Fly's HTTP handler proxies it. What actually decided
+ * > this deployment is the other end of the problem: a raw TLS service on Fly can carry only a
+ * > TCP check, which proves a port is listening and cannot tell that apart from working. This
+ * > role runs as an `http_service` precisely so `/ready` is reachable and a gateway that cannot
+ * > reach Postgres never takes sockets. See ADR-0043.
+ *
+ * Still true, and not Fly-specific: a balancer that terminates HTTP is a real hazard for this
+ * role, so the deployment is pinned in `fly/gateway.toml` rather than left to a default, and
+ * `idle_timeout` is set explicitly there because the platform default is undocumented.
  */
 
 import { randomUUID } from 'node:crypto';

@@ -1,0 +1,73 @@
+# The gateway role. WebSockets over WSS, reached by the client at ws.<domain>.
+#
+# This is the only role whose restart is felt by every connected client at once, which is
+# why it is a separate deployable from the api and can hold connections while the api rolls.
+
+app = 'clubchat-gateway'
+primary_region = 'iad'
+
+[build]
+  dockerfile = '../Dockerfile'
+
+# No release_command here. Migrations run exactly once per release, from fly/api.toml.
+[deploy]
+  strategy = 'rolling'
+
+[processes]
+  app = 'node packages/server/src/gateway/main.ts'
+
+[env]
+  GATEWAY_PORT = '3001'
+  LOG_LEVEL = 'info'
+  SENTRY_ENVIRONMENT = 'production'
+
+  # TRUST_PROXY is deliberately NOT set here, and this is not an oversight to be tidied up.
+  # Nothing the gateway serves reads request.ip: no rate limiter, no auth by address, no
+  # per-IP anything on /health or /ready. So a forged X-Forwarded-For has nothing to
+  # influence, and the safe default costs nothing. Do not copy the api's value across.
+
+# An HTTP service, and this reverses what gateway/main.ts's opening comment implies.
+#
+# That comment says the gateway is deployed behind an L4 balancer rather than L7, because
+# balancers that terminate HTTP break the WebSocket upgrade. That is true of L7 balancers in
+# general and NOT true of Fly: a WebSocket upgrade is HTTP/1.1, and Fly's HTTP handler
+# proxies it.
+#
+# The reason to use http_service rather than a raw tls-only service is decisive: a raw TCP
+# service on Fly can only carry a tcp_check, which proves the port is listening and cannot
+# tell that apart from working. That blind spot is the entire thing this deploy exists to
+# close. http_service is what makes a real /ready check reachable.
+[http_service]
+  internal_port = 3001
+  force_https = true
+  processes = ['app']
+
+  # A gateway that stops is every client reconnecting at once, and the event that produces
+  # a great many reconnects simultaneously is a gateway restarting. Never auto-stop.
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+
+# Set explicitly rather than inherited, because the default is not documented and community
+# reports put it at 60 seconds, which is the kind of value that silently drops long-lived
+# sockets and gets diagnosed as a client bug.
+#
+# In practice the heartbeat already keeps this moot: the server pings every 30s and the
+# client pings on its own 30s cycle, so a healthy socket is never idle for 600s. This is
+# belt and braces for the case where both ends are quiet.
+[http_service.http_options]
+  idle_timeout = 600
+
+# Same reasoning as the api: /ready, never /health.
+#
+# Fly gates deploy success on this, so during a rolling deploy a gateway machine that cannot
+# reach Postgres never takes sockets. Note what the shutdown path depends on: the gateway
+# must call closeAllConnections() before server.close(), or this very check holds a
+# keep-alive socket open, close() never resolves, SIGTERM never reaches the pool, and Fly
+# SIGKILLs the machine mid-deploy.
+[[http_service.checks]]
+  method = 'GET'
+  path = '/ready'
+  interval = '15s'
+  timeout = '5s'
+  grace_period = '15s'
