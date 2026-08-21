@@ -18,6 +18,8 @@
     "db:generate": "npm run db:generate -w @clubchat/server --",
     "db:migrate": "npm run db:migrate -w @clubchat/server",
     "db:prove": "npm run db:prove -w @clubchat/server",
+    "db:stats": "npm run db:stats -w @clubchat/server",
+    "db:stats:reset": "npm run db:stats:reset -w @clubchat/server",
     "gate:surface": "bash scripts/surface-gate.sh",
     "load:test": "npm run load:test -w @clubchat/server",
     "dev:api": "npm run dev:api -w @clubchat/server",

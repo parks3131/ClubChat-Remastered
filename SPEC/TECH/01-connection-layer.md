@@ -139,6 +139,12 @@ the contract can produce (a `msg.send` at 56,075 bytes, measured), checked again
 and against the running total across a fragmented message. An oversized frame is refused rather
 than accumulated, and the socket closes with 1009.
 
+> **That "twice the largest frame" arithmetic did not hold on its own until 2026-08-21.** The
+> envelope's correlation id was an unbounded string, so the largest frame the contract admitted
+> was in fact the whole 128 KiB and the sentence above described a bound nothing enforced. The id
+> is now capped at 128 characters ([Protocol](10-protocol.md)). **The two numbers move together:**
+> raising either without re-reading the other puts this paragraph back into fiction.
+
 **What is deliberately not here: a limit across all connections at once.** At the design target of
 3,000 concurrent sockets ([Overview](00-overview.md)) the per-connection ceiling bounds the
 gateway at 3 GB, which needs every socket in the cluster stalled simultaneously. A global budget

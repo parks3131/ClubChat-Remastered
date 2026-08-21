@@ -34,6 +34,7 @@ import type { Redis } from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Auth } from '../auth.ts';
 import type { Db } from '../db/client.ts';
+import { MAX_CORRELATION_ID_CHARS } from '@clubchat/shared';
 import type { RateLimiter } from '../bus/redis.ts';
 import {
   createGateway,
@@ -308,6 +309,55 @@ describe('the inbound frame ceiling', () => {
     peer.socket.send(frame);
     await peer.settle(1_000);
 
+    expect(peer.frames.map((f) => f.t)).toEqual(['auth.err']);
+    expect(peer.frames[0]?.d).toEqual({ code: 'not_authenticated' });
+  });
+});
+
+describe('the correlation id', () => {
+  /**
+   * The envelope's `id` is what `MAX_FRAME_BYTES` quietly depended on and did not have.
+   *
+   * > Every frame declared `id: z.string().optional()` with no maximum, so the "largest frame the
+   * > contract can produce is 56,075 bytes" arithmetic that chooses the frame ceiling was
+   * > describing a bound nothing enforced: the real answer was the whole 128 KiB. The two belong
+   * > together and are now documented as a pair.
+   *
+   * A refused frame is answered `malformed` rather than closed, which is the ordinary handling
+   * for a frame that fails the schema - this is a bad frame, not a hostile connection.
+   */
+  it('refuses a frame whose correlation id is over the cap', async () => {
+    const harness = await standGateway();
+    const peer = await connect(harness.url);
+
+    peer.socket.send(
+      JSON.stringify({ t: 'ping', id: 'x'.repeat(MAX_CORRELATION_ID_CHARS + 1), d: {} }),
+    );
+    await peer.settle();
+
+    expect(peer.frames.map((f) => f.t)).toEqual(['auth.err']);
+    expect(peer.frames[0]?.d).toEqual({ code: 'malformed' });
+  });
+
+  /** And accepts one at the cap, so the number is a ceiling rather than an off-by-one. */
+  it('accepts a correlation id exactly at the cap', async () => {
+    const harness = await standGateway();
+    const peer = await connect(harness.url);
+
+    peer.socket.send(
+      JSON.stringify({ t: 'ping', id: 'x'.repeat(MAX_CORRELATION_ID_CHARS), d: {} }),
+    );
+    await peer.settle();
+
+    /*
+     * `ping` before `auth` is refused as EARLY rather than as malformed, and that distinction is
+     * the whole assertion: a frame that failed the schema never reaches the authentication gate,
+     * so `not_authenticated` can only be produced by an id that parsed.
+     *
+     * The refusal does not echo the correlation id, unlike the handshake's own refusals. That is
+     * pre-existing and is left alone: this gate closes the socket immediately, so there is no
+     * second frame for a client to correlate against.
+     */
     expect(peer.frames.map((f) => f.t)).toEqual(['auth.err']);
     expect(peer.frames[0]?.d).toEqual({ code: 'not_authenticated' });
   });

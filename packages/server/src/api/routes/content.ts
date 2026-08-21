@@ -25,6 +25,7 @@ import {
   MAX_NEWS_PHOTOS,
   NEWS_ASPECTS,
   readEvent,
+  readEvents,
   readMeeting,
   readNewsFeed,
   readNewsPost,
@@ -194,20 +195,25 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
    * The same read, for several events at once.
    *
    * The twin of `GET /polls`, for the same reason and with the same rules - one club chat drew
-   * ten event cards and paid ten requests for them. See that route for why authorization is
-   * `readEvent` once per id rather than a batched query with a predicate of its own, and why an
-   * event the caller may not read is absent rather than an error.
+   * ten event cards and paid ten requests for them. Authorization is still the same predicate
+   * applied once per id rather than a batched query with a predicate of its own; what changed on
+   * 2026-08-21 is that the LOOP moved into `readEvents`, so the predicate is applied per id
+   * against rows fetched in a single round trip. An event the caller may not read is absent
+   * rather than an error, exactly as before.
    */
   app.get('/events', async (request, reply) => {
     const parsed = parseIdList((request.query as { ids?: unknown }).ids);
     if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
 
-    const events = [];
-    for (const id of parsed.ids) {
-      const result = await readEvent(deps.db, request.access!, id);
-      if (result.ok) events.push(result.event);
-    }
-    return { events };
+    /*
+     * One round trip for the whole list, not one per id.
+     *
+     * This looped `readEvent` until 2026-08-21, which cost `3 + n` statements - 23 for twenty
+     * ids, measured against the club-sized fixture. `readEvents` authorizes each id with the
+     * same predicate the loop did and returns them in the order asked, so an id that is gone or
+     * unreadable is still simply absent from the answer.
+     */
+    return { events: await readEvents(deps.db, request.access!, parsed.ids) };
   });
 
   /**

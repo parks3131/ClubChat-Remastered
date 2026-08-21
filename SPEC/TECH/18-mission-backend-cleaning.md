@@ -913,30 +913,50 @@ sequentially whether or not a usable index exists, so the plan proves nothing in
 
 Statements per request, from the same traced number the dashboard shows.
 
-| Route | 1 id | many | Verdict |
-|---|---|---|---|
-| `GET /polls?ids=` | 7 | **7** at 20 ids | Flat. 2.16's fix holds at club size |
-| `GET /media/urls?ids=` | 5 | **5** at 50 ids | Flat. A fifty-photo gallery costs one read |
-| `GET /events?ids=` | 4 | **23** at 20 ids | **One round trip per event.** Still open |
-| `GET /sync`, one channel | 7 | 7 from seq 0 over 5,000 messages | Flat in backlog |
-| `GET /sync`, per channel | 7 | 9, 11, 15 at 2, 3 and 5 | **`5 + 2n`**, exactly linear |
+| Route | 1 id | many, before | many, after | Verdict |
+|---|---|---|---|---|
+| `GET /polls?ids=` | 7 | 7 at 20 ids | 7 | Flat already. 2.16's fix holds at club size |
+| `GET /media/urls?ids=` | 5 | 5 at 50 ids | 5 | Flat already. A fifty-photo gallery costs one read |
+| `GET /events?ids=` | 4 | **23** at 20 ids | **4** | Was `3 + n`. Fixed 2026-08-21 |
+| `GET /sync`, one channel | 7 | 7 from seq 0 over 5,000 messages | 7 | Flat in backlog, unchanged |
+| `GET /sync`, per channel | 7 | **11, 15, 23** at 2, 3, 5 | **8, 9, 11** | Was `3 + 4n`, now `6 + n` |
+| `subscribe` frame | 2 | **21** at 20 channels | **2** | Was `1 + n`, sequential. Fixed 2026-08-21 |
 
-Two of these were never measured before at all, and both are worth stating plainly.
+**Three of these were never measured before at all, and the second one was recorded wrong first.**
 
-**`GET /events?ids=` is `3 + n`.** It loops `readEvent` once per id, which is precisely the shape
-2.16 removed from `/polls`. Two review lanes found it independently and
-[the roadmap](20-road-to-the-first-club.md) carries the fix as a milestone 2 exit criterion. The
-guard for it is written and deliberately asserts the defect, so that the fix has to come and
-invert it rather than quietly passing either way.
+**`GET /events?ids=` was `3 + n`.** It looped `readEvent` once per id, precisely the shape 2.16
+removed from `/polls`. `readEvents` is now the primary and `readEvent` delegates to it, the way
+`readPolls`/`readPoll` already worked - so the single route and the batch cannot drift in cost or
+in answer. The guard for it was written the day before, deliberately asserting the defect, so that
+landing the fix had to come and invert it rather than leave a test that passed either way.
 
-**`/sync` costs two statements per channel, and the contract admits 200 of them.** So a member of
-several clubs, each with races and an eboard, plus their DM threads, can ask for a sync that costs
-around **405 statements**. That is linear rather than quadratic, and per-channel work is defensible
-in a way per-id work on a batch read is not - each channel is a different authorization subject and
-a different slice of the log. But it is the largest single number in this document, it is paid on
-the path every cold open takes, and 2.1 fixed only the client's half of it: the app now sends one
-request instead of one per chat, and the server still pays per channel underneath. Recorded here
-rather than acted on, because acting on it is a design change and not a measurement.
+**`/sync` was `3 + 4n`, not the `5 + 2n` recorded here on 2026-08-20.** The first measurement is a
+lesson in its own right: it synced one populated channel plus empty ones, and **an empty channel
+skips the reaction and mention side loads entirely**. So it measured two statements per channel
+where a channel a member actually reads costs four - the page, the authorization, and the two side
+loads. A cold open is exactly the case where every channel has messages. The number to quote is
+`3 + 4n`, and the fixture guard now seeds the extra channels rather than leaving them empty.
+
+Three of those four are now paid once for the whole request: `authorizeChannels` fetches every
+channel ref in one statement and applies `isChannelMember` per id in a loop, and `syncManySince`
+pays the two side loads once across every channel in the response. **The page query stays one per
+channel and that is deliberate.** Each channel has its own cursor, its own `LIMIT` and its own
+`visibleToViewer` floor from that member's clears; collapsing them into a `LATERAL` over `unnest`
+is possible and is a rewrite of the most correctness-critical read in the system, where being
+subtly wrong means somebody sees a message they cleared or misses one they did not.
+
+At the route's own 200-entry cap that is **803 statements down to 206**; at the 100 the real
+client actually sends (`chat-client.ts`, `const BATCH = 100`) it is 403 down to 106. Worth stating
+which limit is which, because the 2026-08-20 note conflated them: the 200 is hard-coded in the
+`/sync` handler, and the `max(200)` in `packages/shared` is the gateway's `SubscribeFrame`.
+
+**The gateway's `subscribe` frame was the same defect on a worse path**, and
+[the roadmap](20-road-to-the-first-club.md) milestone 2 named it: "the connect path's per-channel
+round trips". It awaited `getChannelRef` once per id **sequentially**, and the frame admits 200 -
+so a client resubscribing after a reconnect serialized up to two hundred round trips inside one
+frame, with that socket's queue holding everything behind it. The event that produces a great many
+reconnects at once is a gateway restarting, so it was worst exactly when the system was already
+unhappy. `getChannelRefs` serves both this and `/sync`; one function closed both.
 
 ### 7.3 The load test
 
@@ -996,7 +1016,9 @@ worse than no section.**
 - **Sentry performance tracing is still off** (`tracesSampleRate: 0` in `monitoring.ts`). It is
   configuration rather than a build, as 6.1 says, and it is blocked on something a configuration
   change cannot supply: there is nowhere to send traces from, because nothing has ever run outside
-  a development machine. That is milestone 5. Turning it on before then would mean a laptop
+  a development machine. That is milestone 5, and [Deployment](21-deployment.md) now records the
+  rules that deploy will have to follow - including that the Sentry DSN is the one value safe to
+  ship in a client. Turning tracing on before there is somewhere to send it would mean a laptop
   reporting on itself, which is the thing this section exists to stop pretending is a measurement.
 - **Source maps, and a symbolicated production error, wait on the same thing** for the same reason.
 - **The concurrent-connection half of ten-times-peak is not measured.** 30,000 sockets is a
@@ -1007,3 +1029,29 @@ worse than no section.**
 So milestone 3's four exit criteria stand at: the fixture and its guards **done**,
 `pg_stat_statements` **queryable**, the load test **run with both named hot spots measured**, and
 the two Sentry-shaped criteria **blocked on milestone 5** rather than outstanding through neglect.
+
+### 7.5 What measuring it found that counting it could not
+
+**The fixture paid for itself the week it existed, and not in the way it was built for.** It was
+built to catch a cost that scales with input, and it did - `/events` and `/sync` above. But two of
+the four things it turned up are not costs at all:
+
+- **A uuid has two spellings, and every batch read keyed a `Map` by one of them.** Postgres
+  compares `id = 'D7E3...'` as a uuid and matches, then returns the row lower cased, so an upper
+  case id was fetched, authorized and then silently dropped by a JS string comparison. Latent in
+  `/polls` and `/media/urls` since they were written. The serious half is not the missing row:
+  `AccessContext` keys `clearedFloors` the same way, so an upper case channel id read a cleared
+  channel's floor as zero and handed back messages the member had cleared. `AGENTS.md` failure
+  mode 36.
+- **The correlation id on every frame was unbounded**, which quietly falsified the arithmetic
+  choosing the gateway's 128 KiB frame ceiling: that constant's own comment says the largest frame
+  the contract can produce is 56,075 bytes, and with an unbounded `id` the true answer was the
+  whole 128 KiB. Capped at 128 characters, which is what makes the sentence true.
+
+Neither is visible to a statement counter, a plan assertion or a load test. Both were found by an
+adversarial review of the batching change - one agent proposing, another instructed to refuse it -
+and the second one was found in code the change did not touch. The general lesson is the one
+section 6 already states about instrumentation and is worth restating from the other end:
+**measurement tells you what a system DID, and a reviewer told to disagree tells you what it will
+do next.** The `/events` batching, written carefully and passing its own new guard, carried the
+uuid regression into the gateway where no HTTP hook could have caught it.

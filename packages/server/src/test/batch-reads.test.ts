@@ -504,3 +504,62 @@ describe('a batch read costs the same however many ids it is given', () => {
     expect(single.queries).toBe(batch);
   });
 });
+
+/**
+ * A uuid has more than one string spelling, and a batch read keys a `Map` by one of them.
+ *
+ * > **Found on 2026-08-21 by an adversarial review of the `readEvents` change, and it was already
+ * > true of `/polls` and `/media/urls`.** Every plural read fetches its rows in one statement,
+ * > builds a `Map` keyed by `row.id` - which Postgres renders **lower case**, whatever was sent -
+ * > and then walks the caller's own id list looking each one up. An upper case uuid therefore
+ * > matched in SQL and missed in the `Map`, so the row was fetched, authorized, and then silently
+ * > dropped from the answer.
+ *
+ * `isUuid` accepts either case (`UUID_PATTERN` carries `/i`), so nothing upstream refuses one.
+ * The failure is the worst shape available: a `200` listing fewer things than were asked for,
+ * which is indistinguishable from an id the caller may not read.
+ *
+ * The single routes are the same defect once each plural became the primary, because the single
+ * read now delegates: `GET /events/<UPPERCASE>` used to compare in SQL and work.
+ */
+describe('an id is a uuid, not a string, however it is spelled', () => {
+  const shout = (id: string): string => id.toUpperCase();
+
+  it('finds a poll asked for in upper case, through both routes', async () => {
+    const owner = await signUp('CasePoll');
+    const { clubId } = await createClubAs(owner);
+    const id = await makePoll(owner, clubId);
+
+    const batch = await as(owner, 'GET', `/polls?ids=${shout(id)}`);
+    expect(batch.status).toBe(200);
+    expect(batch.body.polls, 'an upper case uuid must not silently vanish from a batch').toHaveLength(1);
+
+    const single = await as(owner, 'GET', `/polls/${shout(id)}`);
+    expect(single.status).toBe(200);
+    expect(single.body.poll.id).toBe(id);
+  });
+
+  it('finds an event asked for in upper case, through both routes', async () => {
+    const owner = await signUp('CaseEvent');
+    const { clubId } = await createClubAs(owner);
+    const id = await makeEvent(owner, clubId, 'Cased');
+
+    const batch = await as(owner, 'GET', `/events?ids=${shout(id)}`);
+    expect(batch.status).toBe(200);
+    expect(batch.body.events).toHaveLength(1);
+
+    const single = await as(owner, 'GET', `/events/${shout(id)}`);
+    expect(single.status).toBe(200);
+    expect(single.body.event.id).toBe(id);
+  });
+
+  it('resolves a picture asked for in upper case', async () => {
+    const owner = await signUp('CaseMedia');
+    const { mainChannelId } = await createClubAs(owner);
+    const id = await makePhoto(owner, mainChannelId);
+
+    const batch = await as(owner, 'GET', `/media/urls?ids=${shout(id)}`);
+    expect(batch.status).toBe(200);
+    expect(batch.body.urls).toHaveLength(1);
+  });
+});

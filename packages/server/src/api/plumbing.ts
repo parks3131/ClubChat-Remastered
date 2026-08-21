@@ -18,7 +18,7 @@ import type { Auth } from '../auth.ts';
 import type { Tracer } from '../dev/trace.ts';
 import type { Config } from '../config.ts';
 import type { Db } from '../db/client.ts';
-import { getChannelRef } from '../domain/reads.ts';
+import { getChannelRefs } from '../domain/reads.ts';
 import type { MediaConfig } from '../media/pipeline.ts';
 import type { MediaStore } from '../media/store.ts';
 import type { Monitor } from '../monitoring.ts';
@@ -107,7 +107,12 @@ export function mediaConfigOf(config: Config): MediaConfig {
  */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export const isUuid = (value: unknown): boolean =>
+/*
+ * A type predicate rather than a plain boolean, so a caller that has checked can then USE the
+ * value as a string. The uuid hook in `app.ts` normalizes case after validating, and without the
+ * narrowing that is a cast.
+ */
+export const isUuid = (value: unknown): value is string =>
   typeof value === 'string' && UUID_PATTERN.test(value);
 
 /** How many ids one batch read may name. Well under any URL length anybody enforces. */
@@ -146,7 +151,19 @@ export function parseIdList(raw: unknown, max: number = MAX_BATCH_IDS): IdList {
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const part of raw.split(',')) {
-    const id = part.trim();
+    /*
+     * Lower cased as well as trimmed, and that is a correctness fix rather than tidiness.
+     *
+     * `isUuid` accepts either case and so does Postgres, which compares these as `uuid` values.
+     * But every batch read below keys a `Map` by `row.id`, which Postgres renders lower case
+     * whatever was sent, and then looks the caller's own spelling up in it - so an upper case id
+     * was fetched, authorized, and then silently dropped from the answer. See the matching note
+     * on the uuid hook in `app.ts`, which does the same for route params. Found 2026-08-21.
+     *
+     * Case-folding also has to happen BEFORE the duplicate check, or the same id in two spellings
+     * is charged twice and answered twice.
+     */
+    const id = part.trim().toLowerCase();
     if (!isUuid(id)) return { ok: false, error: 'bad_id' };
     if (seen.has(id)) continue;
     seen.add(id);
@@ -182,12 +199,39 @@ export async function authorizeChannel(
   request: FastifyRequest,
   channelId: string,
 ): Promise<ChannelGuard> {
-  const channel = await getChannelRef(deps.db, channelId);
+  const allowed = await authorizeChannels(deps, request, [channelId]);
+  const channel = allowed.get(channelId);
   if (!channel) return { ok: false, code: 404 };
-  if (!isChannelMember(request.access!, channel)) {
-    // 404 rather than 403: a member who types a URL for a channel they cannot access
-    // gets nothing back, and "nothing back" includes not confirming the channel exists.
-    return { ok: false, code: 404 };
-  }
   return { ok: true, channel };
+}
+
+/**
+ * The same check, for many channels, in one round trip.
+ *
+ * > **`GET /sync` admits up to 200 `channels[]` entries and called `authorizeChannel` per entry**,
+ * > so authorizing a sync cost one statement per channel before a single message was read.
+ * > Measured on 2026-08-21 as half of `/sync`'s `5 + 2n`.
+ *
+ * Returns only the channels this caller may read, keyed by id. **Absent covers both "no such
+ * channel" and "not yours", exactly as the single guard's 404 does**, and that conflation is the
+ * point rather than a shortcut: distinguishing them would confirm to a stranger that a channel
+ * exists.
+ *
+ * The predicate is applied per id in a loop, over refs fetched in one query - never folded into a
+ * `WHERE` clause. `isChannelMember` is defined once in `policy/predicates.ts` and a second copy of
+ * it expressed as SQL is failure mode 9, which is how the race scope once went missing from four
+ * separate reads at the same time without a single test failing.
+ */
+export async function authorizeChannels(
+  deps: AppDeps,
+  request: FastifyRequest,
+  channelIds: readonly string[],
+): Promise<Map<string, ChannelRef>> {
+  const refs = await getChannelRefs(deps.db, channelIds);
+  const allowed = new Map<string, ChannelRef>();
+  for (const [channelId, channel] of refs) {
+    if (!isChannelMember(request.access!, channel)) continue;
+    allowed.set(channelId, channel);
+  }
+  return allowed;
 }

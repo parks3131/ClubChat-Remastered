@@ -13,6 +13,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file=../../.env src/db/migrate.ts",
     "load:test": "node src/dev/load-test.ts",
+    "db:stats": "docker exec -i clubchat-postgres psql -q -v ON_ERROR_STOP=1 -U clubchat -d clubchat < src/db/stats.sql",
+    "db:stats:reset": "docker exec -i clubchat-postgres psql -q -v ON_ERROR_STOP=1 -U clubchat -d clubchat -c \"SELECT pg_stat_statements_reset()\"",
     "db:prove": "docker exec -i clubchat-postgres psql -q -v ON_ERROR_STOP=1 -U clubchat -d clubchat < src/db/constraint-proof.sql"
   },
   "dependencies": {

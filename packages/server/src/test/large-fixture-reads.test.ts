@@ -34,6 +34,7 @@ import { allowAll } from './fake-limiter.ts';
 import { startTestDb, type TestDb } from './harness.ts';
 import {
   seedLargeClub,
+  seedMessages,
   MEMBER_COUNT,
   MESSAGE_COUNT,
   PHOTO_COUNT,
@@ -48,6 +49,7 @@ let store: FakeMediaStore;
 let traced: TraceEvent[];
 let fixture: LargeFixture;
 let token = '';
+let ownerId = '';
 
 const config = {
   LOG_LEVEL: 'error',
@@ -116,6 +118,7 @@ beforeAll(async () => {
   const issued = (signedUp as { token?: string }).token;
   if (!issued) throw new Error('sign-up returned no session token');
   token = issued;
+  ownerId = signedUp.user.id;
 
   fixture = await seedLargeClub({
     db: h.db,
@@ -198,21 +201,21 @@ describe('the batch routes, at the size a club actually reaches', () => {
   });
 
   /**
-   * **`GET /events?ids=` is the one batch route with no flat guard, and this measures rather than
-   * asserts, because the fix is not this task.**
+   * **`GET /events?ids=` was the last batch route without a flat guard, and this is now that
+   * guard.**
    *
-   * The route loops `readEvent` once per id, exactly as `/polls` did before TECH/18 2.16. Two
-   * review lanes found it independently and
-   * [the roadmap](../../../../SPEC/TECH/20-road-to-the-first-club.md) carries it as a milestone 2
-   * exit criterion: "`GET /events?ids=` carries the same flat-statement guard as `/polls` and
-   * `/media/urls`".
+   * > It cost `3 + n`: the route looped `readEvent` once per id, exactly as `/polls` did before
+   * > TECH/18 2.16. Measured here on 2026-08-21 at 4 statements for one id and 23 for twenty, and
+   * > fixed the same day. Two review lanes found it independently and
+   * > [the roadmap](../../../../SPEC/TECH/20-road-to-the-first-club.md) carried it as a milestone
+   * > 2 exit criterion: "`GET /events?ids=` carries the same flat-statement guard as `/polls` and
+   * > `/media/urls`".
    *
-   * So this is a characterisation test, and it is deliberately written to FAIL when the defect is
-   * fixed. When it does: replace the body with the `toBe(forOne)` shape its two neighbours use,
-   * which is what the milestone is asking for. A test that quietly kept passing across the fix
-   * would be worth nothing either before or after it.
+   * This case was written the day before the fix and deliberately asserted the DEFECT, so that
+   * landing the fix had to come here and invert it rather than leaving a test that passed either
+   * side of the change. That inversion is this commit.
    */
-  it('still costs one round trip per event, which milestone 2 is to change', async () => {
+  it('reads twenty events in no more statements than one', async () => {
     traced.length = 0;
     expect((await as('GET', `/events?ids=${fixture.eventIds[0]}`)).status).toBe(200);
     const forOne = queriesFor('/events');
@@ -223,15 +226,24 @@ describe('the batch routes, at the size a club actually reaches', () => {
     expect(all.body.events).toHaveLength(20);
     const forTwenty = queriesFor('/events');
 
-    expect(
-      forTwenty,
-      'if this now equals the single-id cost, the milestone 2 fix has landed: make this toBe(forOne)',
-    ).toBeGreaterThan(forOne);
-
-    // Recorded rather than merely compared, so TECH/18 can carry the number the fix has to beat.
     console.log(
       `[measured] GET /events?ids=  1 id: ${forOne} statements, 20 ids: ${forTwenty} statements`,
     );
+    expect(forTwenty, 'drawing a chat full of event cards must not cost per card').toBe(forOne);
+  });
+
+  /**
+   * And the order, which is the one thing a batch can silently change without changing a count.
+   *
+   * `readEvents` iterates the caller's id list rather than the scan's output, the same way
+   * `readPolls` does. A batch that returned rows in whatever order Postgres produced would look
+   * correct in every count-based test here and quietly reshuffle a client's calendar.
+   */
+  it('returns events in the order they were asked for', async () => {
+    const asked = [...fixture.eventIds].reverse();
+    const response = await as('GET', `/events?ids=${asked.join(',')}`);
+    expect(response.status).toBe(200);
+    expect(response.body.events.map((e: { id: string }) => e.id)).toEqual(asked);
   });
 });
 
@@ -295,6 +307,15 @@ describe('/sync, against five thousand messages', () => {
     for (let i = 0; i < 4; i += 1) {
       const club = await as('POST', '/clubs', { name: `Sync Slope Club ${i}` });
       expect(club.status).toBe(201);
+      /*
+       * Populated, not empty, and that is the whole point of seeding them.
+       *
+       * An empty channel skips the reaction and mention side loads entirely, so a slope measured
+       * over empty channels measures the cheap half of the cost and reports it as the whole
+       * thing. That is exactly the mistake the first version of this test made on 2026-08-21: it
+       * recorded `5 + 2n` when a sync over channels a member actually reads was `5 + 4n`.
+       */
+      await seedMessages(h.db, club.body.mainChannelId, fixture.memberIds, ownerId, 25);
       extra.push(club.body.mainChannelId);
     }
     const all = [fixture.mainChannelId, ...extra];

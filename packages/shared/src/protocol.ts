@@ -78,13 +78,45 @@ export const MsgReadFrame = z.object({
 
 export const PingFrame = z.object({});
 
+/**
+ * The largest correlation id a frame may carry.
+ *
+ * > **There was no limit, and that quietly falsified a number the gateway already relies on.**
+ * > Every envelope declared `id: z.string().optional()` with no `.max()`, so the only bound was
+ * > the gateway's 128 KiB `MAX_FRAME_BYTES` - and that constant's own comment defends itself by
+ * > saying "the largest frame the wire contract can produce is a `msg.send` at 56,075 bytes".
+ * > With an unbounded id that sentence was simply untrue: the largest frame the contract admitted
+ * > was the whole 128 KiB. Capping the id here is what makes the sizing arithmetic there correct
+ * > rather than optimistic.
+ *
+ * 128 characters, and no client can notice, because **nothing in any client generates one at
+ * all** - `chat-client.ts` sends `{ t, d }` and never reads `id` back. So the number is measured
+ * against what a future client would plausibly use rather than against installed behaviour: a
+ * nanoid is 21, a ULID 26, a uuid 36, and two uuids joined 73. This sits clear of all of them.
+ *
+ * **Client frames only.** The server is what needs protecting from an arbitrary peer; a client
+ * receiving an over-long id from its own server is not a threat model, and tightening the server
+ * half would only add a decode-failure path on the one side that cannot be fixed retroactively
+ * once an app is on somebody's phone.
+ */
+export const MAX_CORRELATION_ID_CHARS = 128;
+
+/**
+ * The envelope's correlation id, defined once.
+ *
+ * One object shared by every variant rather than `.max()` written out six times. A constraint
+ * copied six ways is a constraint that will eventually be five ways, and the copy that gets
+ * missed is silent - it is the frame nobody wrote a test for.
+ */
+export const CorrelationId = z.string().max(MAX_CORRELATION_ID_CHARS);
+
 export const ClientFrame = z.discriminatedUnion('t', [
-  z.object({ t: z.literal('auth'), id: z.string().optional(), d: AuthFrame }),
-  z.object({ t: z.literal('subscribe'), id: z.string().optional(), d: SubscribeFrame }),
-  z.object({ t: z.literal('unsubscribe'), id: z.string().optional(), d: UnsubscribeFrame }),
-  z.object({ t: z.literal('msg.send'), id: z.string().optional(), d: MsgSendFrame }),
-  z.object({ t: z.literal('msg.read'), id: z.string().optional(), d: MsgReadFrame }),
-  z.object({ t: z.literal('ping'), id: z.string().optional(), d: PingFrame }),
+  z.object({ t: z.literal('auth'), id: CorrelationId.optional(), d: AuthFrame }),
+  z.object({ t: z.literal('subscribe'), id: CorrelationId.optional(), d: SubscribeFrame }),
+  z.object({ t: z.literal('unsubscribe'), id: CorrelationId.optional(), d: UnsubscribeFrame }),
+  z.object({ t: z.literal('msg.send'), id: CorrelationId.optional(), d: MsgSendFrame }),
+  z.object({ t: z.literal('msg.read'), id: CorrelationId.optional(), d: MsgReadFrame }),
+  z.object({ t: z.literal('ping'), id: CorrelationId.optional(), d: PingFrame }),
 ]);
 export type ClientFrame = z.infer<typeof ClientFrame>;
 

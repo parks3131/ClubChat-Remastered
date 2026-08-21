@@ -10,9 +10,9 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { Platform } from '@clubchat/shared';
 import { badgeCount, markInboxRead, readInbox } from '../../domain/inbox.ts';
-import { syncSince } from '../../domain/reads.ts';
+import { syncManySince, type SyncRequest } from '../../domain/reads.ts';
 import { registerDevice, unregisterDevice } from '../../push/dispatch.ts';
-import { authorizeChannel, type AppDeps } from '../plumbing.ts';
+import { authorizeChannels, type AppDeps } from '../plumbing.ts';
 
 export function registerInboxRoutes(app: FastifyInstance, deps: AppDeps): void {
   const InboxQuery = z.object({
@@ -89,12 +89,21 @@ export function registerInboxRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (entries.length === 0) return reply.code(400).send({ error: 'no_channels' });
     if (entries.length > 200) return reply.code(400).send({ error: 'too_many_channels' });
 
-    const results: Array<{
-      channelId: string;
-      messages: unknown[];
-      hasMore: boolean;
-      maxRev: number;
-    }> = [];
+    /*
+     * Three passes, and the split is what removed the per-channel cost.
+     *
+     * This was one loop doing all three per entry until 2026-08-21: parse, authorize with its own
+     * round trip, then page with another. That cost `5 + 2n` statements for empty channels and
+     * `5 + 4n` for populated ones, against a contract that admits 200 entries. `TECH/18` 2.1 had
+     * already removed the CLIENT's request-per-chat and left the server paying per chat inside
+     * one request.
+     *
+     * Parsing first also makes the refusal below cheaper and more honest: a malformed entry now
+     * refuses before ANY database work happens, rather than after however many channels preceded
+     * it in the list have already been read.
+     */
+    const wanted: SyncRequest[] = [];
+    const seen = new Set<string>();
 
     for (const entry of entries) {
       /*
@@ -117,8 +126,18 @@ export function registerInboxRoutes(app: FastifyInstance, deps: AppDeps): void {
       const malformed = () =>
         reply.code(400).send({ error: 'bad_channel_entry', entry: entry.slice(0, 120) });
       if (parts.length < 2 || parts.length > 3) return malformed();
-      const [channelId, sinceRaw, revRaw] = parts;
-      if (!channelId) return malformed();
+      const [rawChannelId, sinceRaw, revRaw] = parts;
+      if (!rawChannelId) return malformed();
+      /*
+       * Canonicalized here, at the parse boundary, the way `parseIdList` does for a batch read.
+       *
+       * A uuid has two spellings and Postgres accepts both, but every per-channel `Map` below is
+       * keyed by the lower case one the database returns - including `clearedFloors` in the
+       * access context, which means an upper case entry would read a cleared channel's floor as
+       * zero and hand back messages the member had cleared. Cost was the reason for touching this
+       * loop; that was the more serious thing sitting in it.
+       */
+      const channelId = rawChannelId.toLowerCase();
 
       const since = Number(sinceRaw);
       if (!Number.isInteger(since) || since < 0) return malformed();
@@ -130,26 +149,40 @@ export function registerInboxRoutes(app: FastifyInstance, deps: AppDeps): void {
         sinceRev = parsed;
       }
 
-      // Omitted rather than refused, and this one IS deliberate: a client holding a stale channel
-      // list - it was removed from a club while offline - must still sync everything else.
-      const guard = await authorizeChannel(deps, request, channelId);
-      if (!guard.ok) continue;
+      /*
+       * Duplicates collapse, keeping the first, which is `parseIdList` rule 3 applied to the
+       * other list-taking surface in this API. The old loop synced a repeated channel twice and
+       * answered for it twice; no client sends one, and answering the same channel two different
+       * ways in one response was never a defensible thing to do.
+       */
+      if (seen.has(channelId)) continue;
+      seen.add(channelId);
+      wanted.push({ channelId, sinceSeq: since, sinceRev });
+    }
 
-      const page = await syncSince(
-        deps.db,
-        request.access!,
-        channelId,
-        since,
-        undefined,
-        sinceRev,
-      );
-      results.push({
-        channelId,
+    /*
+     * One round trip for every channel's authorization.
+     *
+     * Omitted rather than refused, and this one IS deliberate: a client holding a stale channel
+     * list - it was removed from a club while offline - must still sync everything else. Absent
+     * from `allowed` covers both "no such channel" and "not yours", exactly as the single guard's
+     * 404 conflated them, and for the same reason.
+     */
+    const allowed = await authorizeChannels(deps, request, wanted.map((w) => w.channelId));
+    const readable = wanted.filter((w) => allowed.has(w.channelId));
+
+    // And one set of side loads for every message in the whole response.
+    const pages = await syncManySince(deps.db, request.access!, readable);
+
+    const results = readable.map((w) => {
+      const page = pages.get(w.channelId) ?? { messages: [], hasMore: false, maxRev: 0 };
+      return {
+        channelId: w.channelId,
         messages: page.messages,
         hasMore: page.hasMore,
         maxRev: page.maxRev,
-      });
-    }
+      };
+    });
 
     return { channels: results, serverTime: new Date().toISOString() };
   });

@@ -1487,28 +1487,57 @@ export type EventDetail = {
  * to the whole club, so a notification that could not be opened by the people it was sent to
  * would be the more surprising rule. Managing it is the narrower gate, returned beside the row.
  */
-export async function readEvent(
+/**
+ * One row of the event read, before authorization.
+ *
+ * Named rather than inlined because two functions now share it, and because of failure mode 7:
+ * `db.execute` applies none of Drizzle's column coercion, so every timestamp here is a **string**
+ * and saying `Date` would be a lie the compiler happily believes until it reaches a call site.
+ */
+type EventRow = {
+  id: string;
+  club_id: string;
+  type: string;
+  title: string;
+  starts_at: string;
+  ends_at: string | null;
+  location: string | null;
+  map_url: string | null;
+  description: string | null;
+  created_by: string | null;
+  full_name: string | null;
+  creator_image: string | null;
+  updated_by: string | null;
+  editor_name: string | null;
+  editor_image: string | null;
+};
+
+/**
+ * Several events, in one round trip, in the order they were asked for.
+ *
+ * > **`GET /events?ids=` was `3 + n` statements: the route looped `readEvent` once per id.**
+ * > Measured on 2026-08-21 against a club-sized fixture at 4 statements for one id and 23 for
+ * > twenty - exactly the shape `SPEC/TECH/18` 2.16 removed from `GET /polls?ids=`, and the last
+ * > batch route still carrying it. Two review lanes found it independently.
+ *
+ * Mirrors `readPolls` deliberately, including the part that looks like it could be simpler:
+ * **the refusal is a loop over the same predicate the single read calls, never a `WHERE` clause
+ * expressing the same idea.** A second copy of an authorization rule is failure mode 9, and the
+ * saving being bought here is network round trips rather than database work.
+ *
+ * Ordered by the caller's own id list rather than by whatever the scan returns, so batching
+ * changes the cost and nothing else. An id that is gone, or that this caller may not read, is
+ * simply absent - the two are indistinguishable to a caller by design, exactly as the single
+ * read's `not_found` covers both.
+ */
+export async function readEvents(
   db: Db,
   ctx: AccessContext,
-  eventId: string,
-): Promise<Result<{ event: EventDetail }>> {
-  const rows = await db.execute<{
-    id: string;
-    club_id: string;
-    type: string;
-    title: string;
-    starts_at: string;
-    ends_at: string | null;
-    location: string | null;
-    map_url: string | null;
-    description: string | null;
-    created_by: string | null;
-    full_name: string | null;
-    creator_image: string | null;
-    updated_by: string | null;
-    editor_name: string | null;
-    editor_image: string | null;
-  }>(sql`
+  eventIds: readonly string[],
+): Promise<EventDetail[]> {
+  if (eventIds.length === 0) return [];
+
+  const rows = await db.execute<EventRow>(sql`
     SELECT e.id::text AS id,
            e.club_id::text AS club_id,
            e.type,
@@ -1531,16 +1560,29 @@ export async function readEvent(
       -- And again for the editor, for the same reason and one more: updated_by is null on
       -- everything that has never been edited, which is most rows.
       LEFT JOIN users editor ON editor.id = e.updated_by
-     WHERE e.id = ${eventId}
+     WHERE e.id = ANY(${sql.param([...eventIds])}::uuid[])
   `);
 
-  const row = rows.rows[0];
-  if (!row) return { ok: false, code: 'not_found' };
-  if (!canReadClubContent(ctx, row.club_id)) return { ok: false, code: 'not_found' };
+  /*
+   * The refusal, once per id, using the same predicate the single read used.
+   *
+   * Deliberately a loop rather than a `WHERE` clause saying the same thing. This is the rule
+   * `batch-reads.test.ts` exists to protect and the one AGENTS.md failure mode 9 describes: a
+   * hand-copied predicate does not diverge loudly, it diverges silently, and every copy stays
+   * individually correct while one of them quietly stops covering a scope somebody added.
+   */
+  const visible = new Map<string, EventRow>();
+  for (const row of rows.rows) {
+    if (!canReadClubContent(ctx, row.club_id)) continue;
+    visible.set(row.id, row);
+  }
 
-  return {
-    ok: true,
-    event: {
+  // The caller's order, not the scan's. Batching must change the cost and nothing else.
+  const events: EventDetail[] = [];
+  for (const eventId of eventIds) {
+    const row = visible.get(eventId);
+    if (!row) continue;
+    events.push({
       id: row.id,
       clubId: row.club_id,
       type: row.type as EventType,
@@ -1557,8 +1599,28 @@ export async function readEvent(
       // than the names, because two members can share a name and one person can change theirs.
       ...editorFields(row.created_by, row.updated_by, row.editor_name, row.editor_image),
       canManage: canManageClubContent(ctx, row.club_id),
-    },
-  };
+    });
+  }
+  return events;
+}
+
+/**
+ * One event.
+ *
+ * Delegates to `readEvents` rather than having a body of its own, so the single route and the
+ * batch route can never answer differently - the failure `batch-reads.test.ts` exists to catch,
+ * removed by construction instead of asserted. An absent result still means gone OR not ours,
+ * which is the same `not_found` this returned before and is deliberate: telling a stranger which
+ * of the two it was would confirm the event exists.
+ */
+export async function readEvent(
+  db: Db,
+  ctx: AccessContext,
+  eventId: string,
+): Promise<Result<{ event: EventDetail }>> {
+  const [event] = await readEvents(db, ctx, [eventId]);
+  if (!event) return { ok: false, code: 'not_found' };
+  return { ok: true, event };
 }
 
 export const NEWS_PAGE_SIZE = 20;

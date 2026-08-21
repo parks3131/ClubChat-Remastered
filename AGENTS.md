@@ -420,6 +420,15 @@ npm test                     # every workspace. Handler tests start throwaway co
 npm run lint:emdash          # standing instruction 1, with a detector self-test
 npm run check:runtime        # imports every module the way Node runs it. See failure mode 5
 
+# What the DATABASE thinks it spent its time on, across the api, the worker and the gateway at
+# once, with no application instrumentation. The per-request counter on /dev/trace answers "what
+# did THIS request cost"; this answers "what is this database spending its life on". Needs the
+# extension preloaded, which is a server flag - so a container started before 2026-08-21 records
+# nothing, and `npm run db:down && npm run db:up` fixes it WITHOUT losing data (the volume
+# survives; only db:nuke destroys it).
+npm run db:stats                 # top 20 by total time, and top 20 by call count
+npm run db:stats:reset           # start a clean recording before driving the app
+
 # The load test, at ten times projected peak. Starts its own Postgres and takes nothing
 # shared, so it never competes with the dev database or the phone. Minutes, and its output
 # is numbers rather than a verdict - which is why it is not a test. See SPEC/TECH/18 section 7
@@ -1065,3 +1074,29 @@ that records how to recognise the class._
     reject and reaches an emitter instead. Found on 2026-08-20 in the same change as entry 34, and
     the general form belongs with it: adding a timeout is adding a new failure, and the new failure
     needs its own path traced before the timeout can be called a fix.
+
+36. **A uuid has two spellings, so a `Map` keyed by one of them silently drops the other - and
+    Postgres hides it, because SQL matched.** Symptom: none, for the life of `/polls` and
+    `/media/urls`. Every batch read fetches its rows in one statement, builds a `Map` keyed by
+    `row.id`, then walks the caller's own id list looking each one up. Postgres compares
+    `id = 'D7E3...'` as a **uuid** and matches happily, then returns the row with its id rendered
+    **lower case** - so the row was fetched, authorized, and then dropped on the floor by a JS
+    string comparison. `isUuid` carries `/i` and `z.string().uuid()` accepts either case, so
+    nothing upstream refuses one. **Rule: canonicalize a uuid at the boundary it enters, not at
+    the place it is compared** - `parseIdList` lower cases every batch id, and the uuid hook in
+    `app.ts` lower cases every route param after validating it.
+
+    **The cost was never only the missing row.** `AccessContext` keys `clearedFloors`,
+    `channelRoles` and the rest the same way, so an upper case channel id read a cleared channel's
+    floor as **zero** and handed back messages the member had cleared. That is a privacy answer
+    decided by the case of a string.
+
+    How to recognise the class: **a value with more than one valid representation used as a hash
+    key.** SQL comparison and JS comparison disagree about equality, and the layer that disagrees
+    is invisible from either side - the query is right, the predicate is right, the answer is
+    short. The tell is `new Map()` built from database rows and probed with something a caller
+    supplied. Note the shape it shares with entry 1 and entry 12: a comparison that silently never
+    matches, producing a `200` with less in it rather than an error. Found on 2026-08-21 by an
+    adversarial review of a batching change that would have extended the same bug to `/events` and
+    to the gateway's `subscribe` frame - where no HTTP hook could have caught it, and the symptom
+    would have been a member's chat quietly ceasing to be live.

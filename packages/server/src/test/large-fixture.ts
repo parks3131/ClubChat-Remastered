@@ -148,7 +148,7 @@ export async function seedLargeClub(deps: {
   const eventIds = await addEvents(request, clubId);
   await castVotes(db, pollIds, memberIds);
   const mediaIds = await addPhotos(db, request, store, mainChannelId);
-  const lastSeq = await addMessages(db, mainChannelId, memberIds, ownerId);
+  const lastSeq = await seedMessages(db, mainChannelId, memberIds, ownerId);
 
   return {
     clubId,
@@ -327,11 +327,12 @@ async function addPhotos(
  * Every message is attributed to a real member, because a channel where one person said five
  * thousand things exercises none of the sender joins that a read does per row.
  */
-async function addMessages(
+export async function seedMessages(
   db: Db,
   channelId: string,
   memberIds: string[],
   ownerId: string,
+  count: number = MESSAGE_COUNT,
 ): Promise<number> {
   const existing = await db
     .select({ lastSeq: channels.lastSeq })
@@ -350,7 +351,7 @@ async function addMessages(
     clientMsgId: string;
   }> = [];
 
-  for (let i = 0; i < MESSAGE_COUNT; i += 1) {
+  for (let i = 0; i < count; i += 1) {
     seq += 1;
     rows.push({
       channelId,

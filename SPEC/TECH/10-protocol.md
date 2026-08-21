@@ -11,6 +11,16 @@ Envelope: `{ "t": <type>, "id": <correlation id>, "d": <payload> }`
 > this table and watching it fail to connect. The schemas are the contract; this table describes
 > them.
 
+**A correlation id may not exceed 128 characters, on a client frame.** Nothing in any client
+generates one today - `@clubchat/client-core` sends `{ t, d }` and never reads `id` back - so the
+cap is sized against what a client plausibly would use: a nanoid is 21, a ULID 26, a uuid 36. It
+is enforced on the six CLIENT frames only, because the server is what needs protecting from an
+arbitrary peer, and a schema tightened on the server half would only add a decode-failure path to
+the end that cannot be fixed once an app is on somebody's phone. An over-long id is answered
+`malformed` like any other schema failure. Added 2026-08-21, and it is what makes the frame ceiling
+below arithmetically true rather than optimistic: `id` was unbounded, so "the largest frame the
+contract can produce" was the whole 128 KiB.
+
 **A frame may not exceed 128 KiB, and a connection may not buffer more than 1 MiB of unread
 replies.** The first is refused at the transport with close code 1009, before the payload is read
 - a different layer from every refusal in this document, since it applies whether or not the

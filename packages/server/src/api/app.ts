@@ -453,10 +453,28 @@ export function buildApp(deps: AppDeps): FastifyInstance {
      */
     protectedRoutes.addHook('preHandler', async (request, reply) => {
       const params = request.params as { id?: unknown; uid?: unknown } | undefined;
-      for (const value of [params?.id, params?.uid]) {
-        if (value !== undefined && !isUuid(value)) {
-          return reply.code(404).send({ error: 'not_found' });
-        }
+      for (const key of ['id', 'uid'] as const) {
+        const value = params?.[key];
+        if (value === undefined) continue;
+        if (!isUuid(value)) return reply.code(404).send({ error: 'not_found' });
+        /*
+         * **Normalized as well as validated, because a uuid has more than one spelling and the
+         * code below keys `Map`s by it.**
+         *
+         * `UUID_PATTERN` carries `/i`, so `ABCDEF01-...` is accepted - and Postgres accepts it
+         * too, comparing it as a `uuid` rather than as text. But a batch read fetches its rows in
+         * one statement, builds a `Map` keyed by `row.id` - which Postgres renders **lower case**
+         * whatever was sent - and then looks each caller id up in it. The row was therefore
+         * fetched, authorized, and silently dropped from the answer, which is the worst available
+         * shape: a `200` listing fewer things than were asked for, indistinguishable from an id
+         * the caller may not read.
+         *
+         * Fixed here rather than at each read for the reason this hook exists at all: there are
+         * more than sixty of these routes and the ones that forgot would be indistinguishable
+         * from the ones that cannot happen. Found on 2026-08-21, latent in `/polls` and
+         * `/media/urls` since they were written.
+         */
+        (params as Record<string, unknown>)[key] = value.toLowerCase();
       }
     });
 

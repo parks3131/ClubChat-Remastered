@@ -15,6 +15,7 @@ import {
   getTableColumns,
   gt,
   gte,
+  inArray,
   isNull,
   lt,
   lte,
@@ -188,16 +189,69 @@ function toEnvelope(row: MessageRow): MessageEnvelope {
   };
 }
 
+/**
+ * Several channels' refs, in one round trip, keyed by id.
+ *
+ * > **Two hot paths asked for these one at a time, and both are paths that ask about MANY.**
+ * > `GET /sync` accepts up to 200 `channels[]` entries and called `authorizeChannel` per entry;
+ * > the gateway's `subscribe` frame accepts up to 200 `channelIds` and awaited a ref per id
+ * > **sequentially**, on the path a client takes on every single reconnect. Measured on
+ * > 2026-08-21: `/sync` cost `5 + 2n` statements for empty channels, so a member with many clubs
+ * > could ask for a sync costing several hundred round trips.
+ *
+ * A `Map` rather than an array, because both callers want to look a ref up by id while walking
+ * their own input, and because an id that does not exist must be **absent** rather than a hole
+ * at some index. Ids that name no channel are simply not in the map, which is what both callers
+ * already do with `null`.
+ *
+ * > **Keyed by the CANONICAL id, which is lower case, and a caller must look up that way.** A
+ * > uuid has more than one spelling: Postgres compares `id = 'D7E3...'` as a `uuid` and matches,
+ * > then renders the row's own id lower case. So a `Map` built from rows and probed with the
+ * > caller's spelling silently misses - the row is fetched and then dropped. That is not
+ * > hypothetical here: `clearedFloor` and every other per-channel lookup in `AccessContext` is
+ * > keyed the same way, so an upper case channel id also reads a cleared channel's floor as zero
+ * > and un-clears it. Found on 2026-08-21 while batching these two paths.
+ *
+ * Note what this deliberately does NOT do: it applies no access predicate. Authorization stays
+ * where it was, at each caller, applied per id with the predicate that caller already used.
+ * Folding `isChannelMember` into a `WHERE` clause here would be a second copy of the rule that
+ * `channel-access.ts` exists to hold exactly once - failure mode 9, and the mistake that once
+ * made race channels invisible to four different reads at the same time.
+ */
+export async function getChannelRefs(
+  db: Db,
+  channelIds: readonly string[],
+): Promise<Map<string, ChannelRef>> {
+  const found = new Map<string, ChannelRef>();
+  if (channelIds.length === 0) return found;
+
+  const rows = await db
+    .select()
+    .from(channels)
+    .where(inArray(channels.id, [...new Set(channelIds)]));
+
+  for (const row of rows) {
+    found.set(row.id, {
+      id: row.id,
+      scope: row.scope as ChannelRef['scope'],
+      clubId: row.clubId,
+      scopeId: row.scopeId,
+    });
+  }
+  return found;
+}
+
+/**
+ * One channel's ref.
+ *
+ * Delegates to `getChannelRefs`, so the batch and the single read cannot drift in what they
+ * return. Thirty-odd call sites use this shape and none of them wants a map.
+ */
 export async function getChannelRef(db: Db, channelId: string): Promise<ChannelRef | null> {
-  const rows = await db.select().from(channels).where(eq(channels.id, channelId)).limit(1);
-  const row = rows[0];
-  if (!row) return null;
-  return {
-    id: row.id,
-    scope: row.scope as ChannelRef['scope'],
-    clubId: row.clubId,
-    scopeId: row.scopeId,
-  };
+  const refs = await getChannelRefs(db, [channelId]);
+  // Lower cased for the reason above: this used to compare in SQL, where either spelling matched,
+  // and would otherwise start answering null for an id that has always worked.
+  return refs.get(channelId.toLowerCase()) ?? null;
 }
 
 /**
@@ -491,6 +545,129 @@ async function withReactions(db: Db, envelopes: MessageEnvelope[]): Promise<Mess
  * caught up - which is the exact state the sequence design exists to make
  * unrepresentable.
  */
+/** What one channel wants out of a sync: where it is, and optionally what revision it saw. */
+export type SyncRequest = {
+  channelId: string;
+  sinceSeq: number;
+  sinceRev?: number | undefined;
+};
+
+export type SyncPage = { messages: MessageEnvelope[]; hasMore: boolean; maxRev: number };
+
+/**
+ * Several channels' pages, with the side loads paid once for the whole response.
+ *
+ * > **`GET /sync` accepts up to 200 channels and paid `withReactions` per channel**, which is two
+ * > statements each - reactions and mentions - on top of the page query itself. So a populated
+ * > channel cost four round trips and an empty one cost two, measured on 2026-08-21 at `5 + 2n`
+ * > for empty channels. `TECH/18` 2.1 removed the CLIENT's per-chat request and left the server
+ * > paying per chat underneath it.
+ *
+ * The page query stays one per channel and that is deliberate rather than unfinished. Each
+ * channel has its own cursor, its own `LIMIT`, and its own `visibleToViewer` floor from that
+ * member's channel clears; collapsing them into a single `LATERAL` over `unnest` is possible and
+ * is a rewrite of the most correctness-critical read in the system, where being subtly wrong
+ * means somebody sees a message they cleared or misses one they did not. The side loads carry no
+ * such risk - they key on message ids and nothing else - so those are what gets batched.
+ *
+ * Result is `5 + n` rather than `5 + 4n`: at the 200 channels the contract admits, a little over
+ * two hundred statements instead of eight hundred.
+ */
+export async function syncManySince(
+  db: Db,
+  ctx: AccessContext,
+  requests: readonly SyncRequest[],
+  limit = SYNC_PAGE_SIZE,
+): Promise<Map<string, SyncPage>> {
+  const pages = new Map<string, SyncPage>();
+  if (requests.length === 0) return pages;
+
+  /*
+   * Envelopes are collected flat and the boundaries remembered, so the two side loads below see
+   * every message in the response at once. `withReactions` preserves order, which is what makes
+   * slicing them back apart safe.
+   */
+  const flat: MessageEnvelope[] = [];
+  const spans: Array<{ channelId: string; start: number; end: number; hasMore: boolean; maxRev: number }> = [];
+
+  for (const request of requests) {
+    /*
+     * Two shapes, and which one runs is decided by whether the client sent a revision.
+     *
+     * > **`seq > mine` cannot see a change to a row the client already has**, and a pin, a
+     * > tombstone and a reaction all mutate rows below that mark. A client offline when a message
+     * > was deleted kept showing it, with its text, indefinitely - `PRD/17` item 14, and a
+     * > moderation hole rather than staleness.
+     *
+     * `rev > mine` answers both halves at once: an append allocates a revision too, so a new
+     * message and a changed message are the same question. Ordering follows the same column, which
+     * is what lets the client page by the last `rev` it saw rather than needing two cursors.
+     *
+     * The seq form is kept for a client that has not been updated. It is the old behaviour exactly,
+     * including the old gap - a mixed fleet gets correct-but-incomplete reconciliation rather than
+     * a broken one, and upgrading is what closes it.
+     */
+    const reconciling = request.sinceRev !== undefined;
+    const rows = await selectMessages(db)
+      .where(
+        and(
+          eq(messages.channelId, request.channelId),
+          reconciling ? gt(messages.rev, request.sinceRev!) : gt(messages.seq, request.sinceSeq),
+          // Without this a clear would undo itself on the next reconnect: sync pulls everything
+          // above the client's local max, and a cleared client's local max is now below the
+          // messages it just hid. Per channel, because a clear is per channel - which is also
+          // the reason these page queries are not collapsed into one statement above.
+          visibleToViewer(ctx, request.channelId),
+        ),
+      )
+      .orderBy(reconciling ? asc(messages.rev) : asc(messages.seq))
+      .limit(limit + 1);
+
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const start = flat.length;
+    for (const row of page) flat.push(toEnvelope(row));
+    spans.push({
+      channelId: request.channelId,
+      start,
+      end: flat.length,
+      hasMore,
+      /*
+       * The mark to resume from, computed here rather than by the client.
+       *
+       * A client cannot derive it: the envelope carries `seq`, not `rev`, and putting `rev` on the
+       * wire would make an internal counter part of the message shape for no gain. Zero for an
+       * empty page, which the client reads as "nothing moved, keep the mark you had".
+       */
+      maxRev: page.reduce((highest, row) => (row.rev > highest ? row.rev : highest), 0),
+    });
+  }
+
+  /*
+   * Reactions and mentions for every channel in the response, together.
+   *
+   * They travel with the backlog because a client that has been offline for a week must come back
+   * to the conversation as it stands, not to messages with their reactions stripped off and no way
+   * to notice. What changed on 2026-08-21 is only that the two statements this issues are paid
+   * once for the whole sync rather than once per channel in it.
+   */
+  const resolved = await withReactions(db, flat);
+  for (const span of spans) {
+    pages.set(span.channelId, {
+      messages: resolved.slice(span.start, span.end),
+      hasMore: span.hasMore,
+      maxRev: span.maxRev,
+    });
+  }
+  return pages;
+}
+
+/**
+ * One channel's page.
+ *
+ * Delegates to `syncManySince`, so the single-channel path and the batch cannot answer
+ * differently. Every existing caller and five test files use this shape.
+ */
 export async function syncSince(
   db: Db,
   ctx: AccessContext,
@@ -515,38 +692,10 @@ export async function syncSince(
    * including the old gap - a mixed fleet gets correct-but-incomplete reconciliation rather than
    * a broken one, and upgrading is what closes it.
    */
-  const reconciling = sinceRev !== undefined;
-  const rows = await selectMessages(db)
-    .where(
-      and(
-        eq(messages.channelId, channelId),
-        reconciling ? gt(messages.rev, sinceRev) : gt(messages.seq, sinceSeq),
-        // Without this a clear would undo itself on the next reconnect: sync pulls everything
-        // above the client's local max, and a cleared client's local max is now below the
-        // messages it just hid.
-        visibleToViewer(ctx, channelId),
-      ),
-    )
-    .orderBy(reconciling ? asc(messages.rev) : asc(messages.seq))
-    .limit(limit + 1);
-
-  const hasMore = rows.length > limit;
-  const page = rows.slice(0, limit);
-  return {
-    // Reactions travel with the backlog too. A client that has been offline for a week must
-    // come back to the conversation as it stands, not to messages with their reactions
-    // stripped off and no way to notice.
-    messages: await withReactions(db, page.map(toEnvelope)),
-    hasMore,
-    /*
-     * The mark to resume from, computed here rather than by the client.
-     *
-     * A client cannot derive it: the envelope carries `seq`, not `rev`, and putting `rev` on the
-     * wire would make an internal counter part of the message shape for no gain. Zero for an
-     * empty page, which the client reads as "nothing moved, keep the mark you had".
-     */
-    maxRev: page.reduce((highest, row) => (row.rev > highest ? row.rev : highest), 0),
-  };
+  const pages = await syncManySince(db, ctx, [{ channelId, sinceSeq, sinceRev }], limit);
+  // An empty page rather than an absent one: a channel with nothing new is a normal answer, and
+  // every caller reads `messages: []` as "nothing moved" already.
+  return pages.get(channelId) ?? { messages: [], hasMore: false, maxRev: 0 };
 }
 
 /**

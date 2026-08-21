@@ -84,11 +84,15 @@ artefact any lane produced), and whichever entries milestone 1's branches alread
 the list at merge time. The ones worth naming, because each either continues an existing mission
 or blocks the pilot's daily surfaces:
 
-- **The connect path's per-channel round trips**, the same shape
-  [`TECH/18`](18-mission-backend-cleaning.md) already removed from `/sync`, still standing on the
-  path every connection takes.
-- **`GET /events?ids=` is still one round trip per id**, and it is the one batch route without a
-  statement-count guard - two lanes found it independently.
+- ~~**The connect path's per-channel round trips**~~ **Done 2026-08-21.** It was the gateway's
+  `subscribe` handler awaiting `getChannelRef` once per id, sequentially, over a frame that admits
+  200 - so every reconnect serialized up to two hundred round trips inside one frame. Measured at
+  21 statements for 20 channels, now 2. The same `getChannelRefs` closed `/sync`'s half.
+  `gateway-subscribe-cost.test.ts` guards it.
+- ~~**`GET /events?ids=` is still one round trip per id**~~ **Done 2026-08-21.** It was 23
+  statements for 20 ids and is now 4. `readEvents` is the primary and `readEvent` delegates,
+  matching `readPolls`/`readPoll`, and the characterisation test written the day before was
+  inverted into the flat guard milestone 3 asked for.
 - **A bulk roster add still loops the pending-request resolution once per added member.**
   Milestone 1's index made each call cheap; it did not make there be one call instead of up to a
   hundred.
@@ -116,6 +120,7 @@ missing index (merged in milestone 1) and the caller loop (above).
   either fixed, or in `TODO.md` with a reason, or written off with the reason stated. None is
   simply unmentioned.*
 - *`GET /events?ids=` carries the same flat-statement guard as `/polls` and `/media/urls`.*
+  **Met 2026-08-21.**
 - *A roster add of N ids resolves pending requests in a bounded number of statements, not N.*
 - *The 409 conflict refusal renders as its own message on the client, and the forced-interleaving
   tests from `club-owner-race` are the evidence the state it describes is reachable.*
@@ -171,11 +176,13 @@ after milestone 5's deployment exists**, even though everything else in it is in
 now done. The work is one configuration change plus a source-map upload, and it belongs in the
 same change that first deploys the three roles.
 
-**One thing the fixture found on the day it existed, carried to milestone 2 rather than fixed
-here:** `/sync` costs two statements per channel, so a member with many clubs, races, eboards and
-DM threads can ask for a sync costing around 405 statements. It is linear rather than quadratic
-and per-channel work is defensible, but it is the largest number in `TECH/18` and it is paid on
-the path every cold open takes. `TECH/18` 7.2 has the measurement.
+**What the fixture found on the day it existed, and what happened next.** It reported `/sync`
+costing two statements per channel. That was itself understated - it had measured empty channels,
+which skip the reaction and mention side loads, and a channel a member actually reads cost four.
+The real figure was `3 + 4n`, or 803 statements at the route's 200-entry cap. Fixed on 2026-08-21
+along with the two milestone 2 items above, all three by the same batching: `6 + n` now, 206 at
+the cap. `TECH/18` 7.2 carries the measurements and 7.5 carries the two defects the work turned up
+that no measurement could have seen.
 
 ## Milestone 4 - Trusted on the devices the club will hold
 

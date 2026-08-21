@@ -33,7 +33,7 @@ import type { Auth } from '../auth.ts';
 import { resolveSessionFromToken } from '../auth.ts';
 import { ChannelGoneError } from '../domain/append-message.ts';
 import { sendMessage } from '../domain/send-message.ts';
-import { getChannelRef, listAccessibleChannels } from '../domain/reads.ts';
+import { getChannelRef, getChannelRefs, listAccessibleChannels } from '../domain/reads.ts';
 import { openChat } from '../domain/inbox.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { isChannelMember, isSessionUsable } from '../policy/predicates.ts';
@@ -86,6 +86,13 @@ const HANDSHAKE_TIMEOUT_MS = 10_000;
  * carrying its 200 channel ids, at 7,882. This sits a little over twice above the worst
  * legitimate frame, which is the headroom that keeps a real message from ever being refused,
  * and roughly eight hundred times below the default it replaces.
+ *
+ * > **That sentence was false when it was first written, and `MAX_CORRELATION_ID_CHARS` is what
+ * > made it true.** The envelope's `id` was `z.string().optional()` with no maximum, so "the
+ * > largest frame the contract can produce" was actually this whole 128 KiB - the arithmetic
+ * > above described a bound the schema did not enforce. Capping the correlation id at 128
+ * > characters on 2026-08-21 closed the gap, and the pair should move together: raising one
+ * > without re-reading the other puts this comment back into fiction.
  *
  * `ws` checks it against the frame header before reading the payload, and against the running
  * total across a fragmented message, so an oversized frame is refused rather than accumulated
@@ -565,8 +572,27 @@ export function createGateway(
     // session would hand it a live feed of every channel it used to be able to read.
     if (!isSessionUsable(access)) return dropRevoked(state, correlationId);
 
+    /*
+     * Every channel's ref in ONE round trip, before the loop rather than inside it.
+     *
+     * > **This awaited `getChannelRef` per id, sequentially, and `SubscribeFrame` admits 200 of
+     * > them.** So a client resubscribing after a reconnect - which is every client, on every
+     * > reconnect, and a gateway restart means all of them at once - serialized up to two hundred
+     * > database round trips inside a single frame, while that socket's frame queue held
+     * > everything behind it. `SPEC/TECH/20` milestone 2 names this as "the connect path's
+     * > per-channel round trips, the same shape TECH/18 already removed from /sync".
+     *
+     * The refusal stays exactly where it was: `isChannelMember` applied per id, in the loop,
+     * against refs fetched together. An id naming no channel is simply absent from the map, which
+     * is the same answer `getChannelRef` gave by returning null.
+     */
+    const refs = await getChannelRefs(deps.db, channelIds);
+
     for (const channelId of channelIds) {
-      const channel = await getChannelRef(deps.db, channelId);
+      // Lower cased because the map is keyed by the canonical id. `Uuid` is `z.string().uuid()`,
+      // which accepts either spelling, so a client sending an upper case channel id was granted
+      // before this batching and must still be.
+      const channel = refs.get(channelId.toLowerCase());
       if (!channel || !isChannelMember(access, channel)) {
         rejected.push(channelId);
         continue;
