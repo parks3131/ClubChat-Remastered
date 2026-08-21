@@ -420,6 +420,12 @@ npm test                     # every workspace. Handler tests start throwaway co
 npm run lint:emdash          # standing instruction 1, with a detector self-test
 npm run check:runtime        # imports every module the way Node runs it. See failure mode 5
 
+# The load test, at ten times projected peak. Starts its own Postgres and takes nothing
+# shared, so it never competes with the dev database or the phone. Minutes, and its output
+# is numbers rather than a verdict - which is why it is not a test. See SPEC/TECH/18 section 7
+# for what it has measured and what is still a laptop.
+npm run load:test
+
 # The Phase 3.75a exit gate: every route against a RUNNING server, in both directions.
 # Needs dev:api up. Deliberately not a test - see the header of the script for why.
 npm run gate:surface

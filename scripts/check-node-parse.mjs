@@ -46,6 +46,11 @@ async function walk(dir) {
     if (entry.name === 'main.ts') continue;
     // The migration runner executes on import.
     if (entry.name === 'migrate.ts') continue;
+    // So does the load test, and it would start a Postgres container to do it. Same class as
+    // the two above: a module whose whole purpose is to execute cannot be import-probed, and
+    // the cost of excluding it is that a syntax Node cannot strip would surface when somebody
+    // runs `npm run load:test` rather than here.
+    if (entry.name === 'load-test.ts') continue;
     found.push(full);
   }
   return found;

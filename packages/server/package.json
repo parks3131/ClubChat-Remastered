@@ -12,6 +12,7 @@
     "dev:worker": "node --env-file=../../.env --watch src/worker/main.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file=../../.env src/db/migrate.ts",
+    "load:test": "node src/dev/load-test.ts",
     "db:prove": "docker exec -i clubchat-postgres psql -q -v ON_ERROR_STOP=1 -U clubchat -d clubchat < src/db/constraint-proof.sql"
   },
   "dependencies": {

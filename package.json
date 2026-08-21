@@ -19,6 +19,7 @@
     "db:migrate": "npm run db:migrate -w @clubchat/server",
     "db:prove": "npm run db:prove -w @clubchat/server",
     "gate:surface": "bash scripts/surface-gate.sh",
+    "load:test": "npm run load:test -w @clubchat/server",
     "dev:api": "npm run dev:api -w @clubchat/server",
     "dev:gateway": "npm run dev:gateway -w @clubchat/server",
     "dev:worker": "npm run dev:worker -w @clubchat/server",

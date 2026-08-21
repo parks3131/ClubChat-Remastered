@@ -38,6 +38,27 @@ const migrationsFolder = path.join(
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
   const container: StartedPostgreSqlContainer = await new PostgreSqlContainer('postgres:17-alpine')
     .withStartupTimeout(CONTAINER_STARTUP_TIMEOUT_MS)
+    /*
+     * `pg_stat_statements`, preloaded, matching `docker-compose.yml`.
+     *
+     * The suite itself has no use for it - a test file gets a fresh database and asks a handful
+     * of questions of it, which is what the per-request query counter already measures better.
+     * It is here so the LOAD TEST can ask the database what it spent its time on rather than
+     * only timing it from outside, and because a facility that exists in development and not in
+     * the container the tests run against is a facility nobody can write a test for.
+     *
+     * Preloading is free when nothing queries the view; the counters are a fixed-size shared
+     * memory block written on a path that is already taken.
+     */
+    .withCommand([
+      'postgres',
+      '-c',
+      'shared_preload_libraries=pg_stat_statements',
+      '-c',
+      'pg_stat_statements.track=all',
+      '-c',
+      'pg_stat_statements.track_utility=off',
+    ])
     .start();
 
   const adminUri = container.getConnectionUri();

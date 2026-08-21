@@ -150,6 +150,33 @@ production trace is minified noise.
   headroom, and the numbers are recorded in `TECH/18` next to the laptop numbers they replace.*
 - *A production error arrives symbolicated.*
 
+**Status, 2026-08-21: three of the four laptop-side criteria are met and the two Sentry-shaped
+ones are blocked on milestone 5, which is a dependency this file did not notice when it ordered
+the milestones.** [`TECH/18`](18-mission-backend-cleaning.md) section 7 records everything
+measured.
+
+| Criterion | Standing |
+|---|---|
+| The fixture, and guards on the batch routes and `/sync` | **Done.** 300 members, 20 polls with 3,600 votes, 50 photos, 5,070 messages |
+| `pg_stat_statements` queryable | **Done.** Preloaded in development and in the test container |
+| The load test at ten times peak, both hot spots | **Done.** Row lock 2.3x headroom and gapless under contention; access context 26x |
+| Sentry tracing live, and an error arriving symbolicated | **Blocked on milestone 5** |
+
+**Why the last row is blocked rather than outstanding.** Its obstacle is not configuration. There
+is nowhere to send a trace or a symbolicated error FROM, because nothing has ever run outside a
+development machine - which is milestone 5's opening sentence. Turning tracing on today produces a
+laptop reporting on itself, which is the thing this milestone exists to stop counting as a
+measurement. **The sequencing note above therefore has an exception: milestone 3 completes only
+after milestone 5's deployment exists**, even though everything else in it is independent and is
+now done. The work is one configuration change plus a source-map upload, and it belongs in the
+same change that first deploys the three roles.
+
+**One thing the fixture found on the day it existed, carried to milestone 2 rather than fixed
+here:** `/sync` costs two statements per channel, so a member with many clubs, races, eboards and
+DM threads can ask for a sync costing around 405 statements. It is linear rather than quadratic
+and per-channel work is defensible, but it is the largest number in `TECH/18` and it is paid on
+the path every cold open takes. `TECH/18` 7.2 has the measurement.
+
 ## Milestone 4 - Trusted on the devices the club will hold
 
 The full [Acceptance checklist](../PRD/18-acceptance-checklist.md) run end to end on iOS, Android

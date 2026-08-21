@@ -781,6 +781,12 @@ only entry that changes that without new infrastructure.
 Costs: sampling rate has to be chosen (1-10% of traces is normal), and spans carrying query text
 need the same redaction rule the dev tracer already applies.
 
+> **Still off as of 2026-08-21, and now blocked rather than merely undone.** The obstacle is not
+> the configuration, which is a line; it is that there is nowhere to send a trace FROM. Nothing
+> has ever run outside a development machine, so switching this on today buys a laptop reporting
+> on itself, which is the exact thing section 7 exists to stop counting as a measurement. It
+> belongs with milestone 5, and so do source maps and the first symbolicated production error.
+
 ### 6.2 `pg_stat_statements` - what the database thinks is expensive
 
 A Postgres extension that aggregates every statement it has ever run, normalised, with call
@@ -792,6 +798,13 @@ including the worker and the gateway, with **no application instrumentation at a
 you find the query nobody suspected, rather than confirming the one you did.
 
 It would have shown the poll N+1 as one statement with an absurd call count.
+
+> **Done on 2026-08-21.** Preloaded in `docker-compose.yml` and in the test container, with
+> `track=all` and `track_utility=off`. `CREATE EXTENSION` stays out of the migrations on purpose:
+> it wants rights the application role should not be assumed to have, and a migration that can
+> fail on a managed provider is a worse trade than a command run once. Section 7.3 is the first
+> thing it answered - it put the whole cost of a concurrent send on the row lock, at two orders of
+> magnitude clear of the next statement.
 
 ### 6.3 `EXPLAIN (ANALYZE, BUFFERS)` and `auto_explain` - why one query is slow
 
@@ -824,6 +837,10 @@ gallery with fifty photos - run under `k6` or plain scripted load, would have ma
 obvious without anybody watching. It is more work than everything above and it is the one that
 finds this class *before* a person does.
 
+> **Done on 2026-08-21**, and it found one on the day it existed: `/sync` costs two statements per
+> channel, which is around 405 at the 200 the contract admits. `src/test/large-fixture.ts` builds
+> it and `npm run load:test` drives the scripted load. Section 7 records what both measured.
+
 ### 6.6 RED metrics and histograms - Prometheus, or Fly's own
 
 Rate, Errors, Duration per route, as **histograms rather than averages**. An average hides the
@@ -853,3 +870,140 @@ all three processes. What it cannot do is watch somebody else's phone in another
 3. **A large seeded fixture** - the thing that would have caught both N+1s automatically.
 
 Everything after that waits for real load.
+
+**Two and three are done, and one is blocked on something that does not exist yet.** See section
+7, which records what they measured.
+
+---
+
+## 7. Measured for real, 2026-08-21
+
+**Everything above this line is a round-trip COUNT read from code, taken against a club of two
+people, on a laptop with the database beside it.** This section is the first time any of it was
+measured rather than counted, and it exists because a pilot club must not be the first real load
+this system sees as well as the first measured one.
+[The roadmap](20-road-to-the-first-club.md) milestone 3 is the spec; section 6's own recommended
+order is what was executed.
+
+### 7.1 What can now be measured, and with what
+
+| Tool | Where | Answers |
+|---|---|---|
+| The per-request query counter | `dev/trace.ts`, since 2.15 | What did THIS request cost |
+| A club-sized fixture | `src/test/large-fixture.ts` | The above, at a size a club reaches |
+| Statement-count guards | `src/test/large-fixture-reads.test.ts` | Whether a cost scales with input |
+| Plan assertions | `src/test/hot-path-plans.test.ts` | Whether one statement uses its index |
+| `pg_stat_statements` | preloaded in `docker-compose.yml` and the test container | What the database spends its life on |
+| The load test | `npm run load:test` | How fast, and how it behaves under contention |
+
+**The fixture is 300 members, 20 polls with 3,600 votes, 20 events, 50 photos and 5,070 messages
+in one channel.** Every one of those numbers is defended where it is declared: 300 is the largest
+channel [Overview](00-overview.md) designs for, and 20 cards is just past the 26-poll conversation
+the 2026-08-18 trace found on a real account. It is built through the real routes wherever the row
+shape is subtle, so what it measures is a shape the application actually produces.
+
+**What the fixture is not for.** A statement count answers "how many round trips"; it says nothing
+about whether one of them uses the right index, and 5,000 rows is not enough for a planner to have
+an opinion worth reading. That question belongs to `hot-path-plans.test.ts` at 20,000 rows per
+table. Conflating the two is how `EXPLAIN` output from a 75-row table came to be presented as
+evidence of a missing index during the 2026-08-19 review: below a few thousand rows Postgres scans
+sequentially whether or not a usable index exists, so the plan proves nothing in either direction.
+
+### 7.2 The counts, at club size
+
+Statements per request, from the same traced number the dashboard shows.
+
+| Route | 1 id | many | Verdict |
+|---|---|---|---|
+| `GET /polls?ids=` | 7 | **7** at 20 ids | Flat. 2.16's fix holds at club size |
+| `GET /media/urls?ids=` | 5 | **5** at 50 ids | Flat. A fifty-photo gallery costs one read |
+| `GET /events?ids=` | 4 | **23** at 20 ids | **One round trip per event.** Still open |
+| `GET /sync`, one channel | 7 | 7 from seq 0 over 5,000 messages | Flat in backlog |
+| `GET /sync`, per channel | 7 | 9, 11, 15 at 2, 3 and 5 | **`5 + 2n`**, exactly linear |
+
+Two of these were never measured before at all, and both are worth stating plainly.
+
+**`GET /events?ids=` is `3 + n`.** It loops `readEvent` once per id, which is precisely the shape
+2.16 removed from `/polls`. Two review lanes found it independently and
+[the roadmap](20-road-to-the-first-club.md) carries the fix as a milestone 2 exit criterion. The
+guard for it is written and deliberately asserts the defect, so that the fix has to come and
+invert it rather than quietly passing either way.
+
+**`/sync` costs two statements per channel, and the contract admits 200 of them.** So a member of
+several clubs, each with races and an eboard, plus their DM threads, can ask for a sync that costs
+around **405 statements**. That is linear rather than quadratic, and per-channel work is defensible
+in a way per-id work on a batch read is not - each channel is a different authorization subject and
+a different slice of the log. But it is the largest single number in this document, it is paid on
+the path every cold open takes, and 2.1 fixed only the client's half of it: the app now sends one
+request instead of one per chat, and the server still pays per channel underneath. Recorded here
+rather than acted on, because acting on it is a design change and not a measurement.
+
+### 7.3 The load test
+
+`npm run load:test`. It starts its own Postgres, seeds, measures, and takes nothing shared - a load
+test pointed at the development database would compete with the founder's phone for the same rows.
+The two numbers are the ones [Build phases](16-build-phases.md) has named since the phase plan was
+written, not two chosen here.
+
+Ten times projected peak is **500 sends per second**, from
+[Overview](00-overview.md)'s ~50 writes/sec. Two runs, on one laptop:
+
+| | run 1 | run 2 |
+|---|---|---|
+| **`appendMessage` into ONE channel**, 2,000 sends, 20 concurrent | | |
+| sustained throughput | 1,188 / sec | 1,143 / sec |
+| p50 | 11.25 ms | 11.57 ms |
+| p95 | 52.97 ms | 53.46 ms |
+| p99 | 79.93 ms | 87.09 ms |
+| gapless afterwards | yes | yes |
+| **`loadAccessContext`**, busy account, 3,000 loads | | |
+| sustained throughput | 12,105 / sec | 12,993 / sec |
+| p50 | 1.40 ms | 1.30 ms |
+| p99 | 5.27 ms | 5.42 ms |
+
+**The row lock has 2.3x headroom, and the comparison is deliberately unfair to itself.** 1,143 per
+second is what a SINGLE channel absorbs; 500 per second is the whole system's ten-times-peak write
+rate. So the measured case is every send in the product landing in one conversation at once, which
+is not a thing that happens - and it still clears the target twice over. `pg_stat_statements` puts
+the cost where the design said it would be: `UPDATE channels SET last_seq = last_seq + 1` was the
+top statement by total execution time at **30,170 ms across 2,000 calls, 15.085 ms mean**, against
+239 ms for the next-largest statement in the same run - two orders of magnitude clear of
+everything else. The wall clock for those 2,000 sends was 1.68 seconds, so that 15 ms mean is
+almost entirely twenty senders waiting for each other rather than work being done. Which is what a
+row lock is, and why it is the number to watch rather than a number to be alarmed by.
+
+**Gaplessness held under 20-way contention**, which is the half a throughput figure cannot report.
+2,000 sends produced 2,000 rows with 2,000 distinct seqs and a maximum of exactly 2,000. This is
+the property that makes the lock worth its cost: a Postgres `SEQUENCE` would be faster and would
+leak a gap on every rollback, and a phantom gap sends every client syncing forever after a hole
+that does not exist.
+
+**The access-context query is not a problem and now has a number saying so.** 26x headroom, p99
+under 6 ms, for an account in 20 clubs, 5 eboards, 10 race rosters, 40 DM threads and 20 blocks -
+a founder-shaped account rather than a typical one. Its nine-branch UNION was worth measuring
+precisely because it is asked on every HTTP request and every socket handshake; the answer is that
+it costs 0.08 ms mean and is nowhere near the top of anything.
+
+### 7.4 What is still a laptop, and what is still not measured
+
+**Said plainly, because a section headed "measured for real" that quietly leaves things out is
+worse than no section.**
+
+- **There is still no network boundary in any number above.** Postgres ran in a container beside
+  the process. Production is Fly.io against Neon, where every round trip in section 7.2's counts
+  gains real latency - which is exactly why those counts matter as much as these rates, and why
+  `/sync` at 405 statements reads differently there than it does here.
+- **Sentry performance tracing is still off** (`tracesSampleRate: 0` in `monitoring.ts`). It is
+  configuration rather than a build, as 6.1 says, and it is blocked on something a configuration
+  change cannot supply: there is nowhere to send traces from, because nothing has ever run outside
+  a development machine. That is milestone 5. Turning it on before then would mean a laptop
+  reporting on itself, which is the thing this section exists to stop pretending is a measurement.
+- **Source maps, and a symbolicated production error, wait on the same thing** for the same reason.
+- **The concurrent-connection half of ten-times-peak is not measured.** 30,000 sockets is a
+  property of the gateway process and the host's file descriptors, not of these two queries, and a
+  laptop reporting a number for it would be an invention wearing a number.
+- **The iPhone is still barely measured** (3.6), unchanged.
+
+So milestone 3's four exit criteria stand at: the fixture and its guards **done**,
+`pg_stat_statements` **queryable**, the load test **run with both named hot spots measured**, and
+the two Sentry-shaped criteria **blocked on milestone 5** rather than outstanding through neglect.

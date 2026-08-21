@@ -18,6 +18,28 @@ services:
       # Deterministic collation so ORDER BY and unique comparisons do not shift
       # between a developer machine and CI.
       POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    # pg_stat_statements, which answers the question the per-request query counter
+    # cannot: not "what did THIS request cost" but "what is this database spending
+    # its life on", across the api, the worker and the gateway at once, with no
+    # application instrumentation at all. It has to be preloaded at startup, so it
+    # is a server flag rather than anything a migration could do.
+    #
+    # `track=all` counts statements inside functions too, and `track_utility=off`
+    # keeps the DDL the migrations run out of the top of the report - they run once
+    # and are never the thing being looked for.
+    #
+    # `CREATE EXTENSION` is still needed per database and is deliberately NOT a
+    # migration: it wants rights the application role should not be assumed to have,
+    # and a migration that can fail on a managed provider is a worse trade than a
+    # command somebody runs once. `npm run db:stats` does it, idempotently.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=all"
+      - "-c"
+      - "pg_stat_statements.track_utility=off"
     ports:
       - "5432:5432"
     volumes:
