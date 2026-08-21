@@ -236,6 +236,27 @@ Policy must state that message content is readable by the service.
 - *The Privacy Policy and Terms are reviewed, state the ADR-0005 obligation, and are reachable
   from where sign-up says they are.*
 
+### Standing, 2026-08-21
+
+Work is on branch `deploy`. **Nothing is deployed yet**, so every exit criterion above is still
+open. What has changed is that the two things blocking any deploy at all no longer are.
+
+| Piece | Standing |
+|---|---|
+| Deployable artifacts | **Done.** `Dockerfile`, `.dockerignore`, `fly/{api,gateway,worker}.toml`. Image built for `linux/amd64` and all three roles booted; `sharp` proved to load libvips and encode inside the container, which matters because it is imported at module top and a wrong binary is a boot crash rather than a first-upload one |
+| Health checks | **Done.** `/health` (liveness, cannot fail) and `/ready` (readiness, reaches Postgres) on both ingress roles, built failing-test-first. Fly gates traffic and deploy success on `/ready`. Grading is asymmetric per [Failure modes](11-failure-modes.md): Postgres down is a 503, Redis down stays 200 and is reported |
+| Deployable shape | **Decided.** Three Fly apps from one image, [ADR-0043](../decisions/0043-the-three-roles-deploy-as-three-fly-apps.md) |
+| Accounts | **Done.** Cloudflare (domain on Cloudflare DNS, R2 with both buckets and a scoped Account token), Fly (`clubchat` org, three apps created, Upstash Redis provisioned), Neon (Launch, `us-east-1`, Postgres 17, always-on), Sentry (`clubchat-ef`, `clubchat-server`), Resend (`clubchatapp.com` verified, DKIM/SPF/DMARC live) |
+| Secrets on the platform | **Not yet.** Collected but not yet set with `fly secrets set` |
+| The five paths proved by hand | **Not started.** Requires the deploy |
+| Backup restore, forced alert, symbolicated trace | **Not started.** All require the deploy |
+| TestFlight, legal texts, mail domain move | **Not started** |
+
+Two defects were found by connecting to real infrastructure rather than by reading code, and both
+are fixed on the branch: Neon silently discards the pool's timeout ceilings when sent as individual
+startup parameters, and the test that should have caught the related migration escape hatch could
+never fail. See [Deployment](21-deployment.md) and `AGENTS.md` failure mode 37.
+
 ## Milestone 6 - The first club
 
 Onboard one real club, realistically one the founder can sit inside. Everything before this
