@@ -17,6 +17,7 @@
  * uses.
  */
 
+import { createServer, type Server, type ServerResponse } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Redis } from 'ioredis';
 import {
@@ -28,6 +29,7 @@ import {
 } from '@clubchat/shared';
 import type { Db } from '../db/client.ts';
 import type { Monitor } from '../monitoring.ts';
+import { createReadinessCheck } from '../health.ts';
 import { redact, type Tracer } from '../dev/trace.ts';
 import type { Auth } from '../auth.ts';
 import { resolveSessionFromToken } from '../auth.ts';
@@ -199,6 +201,15 @@ export type GatewayDeps = {
 
 export type Gateway = {
   wss: WebSocketServer;
+  /**
+   * The HTTP server underneath the WebSocket server, which is ours rather than `ws`'s.
+   *
+   * `ws` stands up its own when it is given a `port`, and that one answers `426 Upgrade Required`
+   * to every ordinary request - so there was nothing a platform health check could point at.
+   * Given a `server` instead, `ws` attaches its `upgrade` listener to ours and leaves ordinary
+   * requests to us. Exposed because closing it is `close()`'s job, not `ws`'s: see there.
+   */
+  server: Server;
   close: () => Promise<void>;
   /**
    * Drop a user's subscriptions to specific channels, immediately.
@@ -231,7 +242,86 @@ export function createGateway(
     heartbeatIntervalMs?: number;
   },
 ): Gateway {
-  const wss = new WebSocketServer({ port: opts.port, maxPayload: MAX_FRAME_BYTES });
+  /**
+   * The gateway's HTTP surface: liveness, readiness, and 404 for everything else.
+   *
+   * > **There was none, so Fly had nothing to check.** `ws` creates its own HTTP server when it is
+   * > handed a `port`, and that server answers `426 Upgrade Required` to any request that is not an
+   * > upgrade. Handed a `server` we made instead, `ws` attaches its own `upgrade` listener to it
+   * > and re-emits `listening` and `error`, so `wss.address()`, `wss.clients` and
+   * > `wss.once('listening')` all keep working and every existing test is untouched.
+   *
+   * Deliberately NOT `noServer`: that mode makes `address()` throw and would mean writing the
+   * upgrade handler by hand, for no gain. And deliberately no `path` option, because today any
+   * path upgrades and the mobile client connects at `/` - narrowing that here would be a silent
+   * protocol change wearing a health check's clothes.
+   *
+   * No CORS and no cookies. Nothing here is read by a browser, and neither endpoint reads anything
+   * about the caller - which is also why `trustProxy` has no equivalent here. The gateway sits
+   * behind an L4 handler by design (see `main.ts`), and no code on these two paths asks who is
+   * calling.
+   */
+  const readiness = createReadinessCheck({
+    db: deps.db,
+    redis: deps.redis,
+    monitor: deps.monitor,
+    where: 'gateway.ready',
+    log: (level, message, detail) => deps.log(level, message, detail),
+  });
+
+  const respond = (response: ServerResponse, status: number, body: unknown): void => {
+    /*
+     * The peer may be gone, and on shutdown it usually is.
+     *
+     * `close()` destroys in-flight connections rather than waiting for them, so a readiness probe
+     * that was still running when SIGTERM arrived finishes seconds later against a socket that no
+     * longer exists. Writing to it would reject a promise nobody is holding, which in Node is a
+     * process-ending unhandled rejection - during shutdown, from the health endpoint.
+     */
+    if (response.destroyed || response.writableEnded) return;
+    const payload = JSON.stringify(body);
+    response.writeHead(status, {
+      'content-type': 'application/json; charset=utf-8',
+      'content-length': Buffer.byteLength(payload),
+    });
+    response.end(payload);
+  };
+
+  const server = createServer((request, response) => {
+    const path = (request.url ?? '/').split('?')[0];
+
+    // Liveness. Process memory only, so a database blip cannot restart every gateway at once.
+    if (path === '/health') {
+      respond(response, 200, { ok: true });
+      return;
+    }
+
+    /*
+     * Readiness, and the body is `{ok:true}` or `{error:'not_ready'}` and nothing else - no
+     * dependency name, no driver text, no host. Which one failed goes to the log and the monitor.
+     *
+     * The rejection branch cannot be reached today (`createReadinessCheck` swallows everything a
+     * probe throws), and it is here because the alternative to answering is an HTTP request that
+     * is never ended - a prober held open until its own timeout, which reads as a hang rather
+     * than as a refusal.
+     */
+    if (path === '/ready') {
+      void readiness()
+        .then(
+          (ready) =>
+            respond(response, ready ? 200 : 503, ready ? { ok: true } : { error: 'not_ready' }),
+          () => respond(response, 503, { error: 'not_ready' }),
+        )
+        // Belt and braces beside the guard in `respond`: nothing on this path may become an
+        // unhandled rejection, because an unhandled rejection ends the process.
+        .catch(() => undefined);
+      return;
+    }
+
+    response.writeHead(404, { 'content-length': 0 }).end();
+  });
+
+  const wss = new WebSocketServer({ server, maxPayload: MAX_FRAME_BYTES });
   const authTimeoutMs = opts.authTimeoutMs ?? AUTH_TIMEOUT_MS;
   const handshakeTimeoutMs = opts.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
   const heartbeatIntervalMs = opts.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
@@ -1110,12 +1200,55 @@ export function createGateway(
     }
   }, heartbeatIntervalMs);
 
+  /**
+   * Listening starts HERE, after the `WebSocketServer` has been constructed.
+   *
+   * `ws` attaches its `listening` re-emitter inside its own constructor, so a server that was
+   * already listening would have fired the event before anything was there to forward it - and
+   * every test that waits on `wss.once('listening')` would wait forever.
+   */
+  server.listen(opts.port, '0.0.0.0');
+
   return {
     wss,
+    server,
+    /**
+     * Shut down inside a SIGTERM's budget, which is the part the external server changed.
+     *
+     * > **`wss.close()` deliberately does NOT close a server it did not create.** It detaches its
+     * > listeners and returns, and the HTTP server carries on listening. Closing it is now this
+     * > function's job, and doing that safely is not `server.close()` on its own.
+     *
+     * The order is the whole of it:
+     *
+     *  1. `clearInterval` - the reaper must not ping sockets that are being taken down.
+     *  2. Terminate the WebSocket connections. `terminate()` rather than `close()` because a
+     *     socket that is not draining would queue the close frame behind whatever is already
+     *     stuck there, and this path has a deadline. Nothing is lost: every client reconnects,
+     *     resubscribes and syncs, which is the property the top of this file is built on.
+     *  3. `wss.close()` - stops new upgrades, synchronously.
+     *  4. `closeAllConnections()` - the HTTP connections, and the one that earns its place.
+     *  5. `server.close()` - now it can actually finish.
+     *
+     * **Step 4 is about a request in flight, not about an idle keep-alive socket**, and the
+     * difference is worth writing down because the shape of the bug is not the obvious one.
+     * `server.close()` has closed IDLE connections by itself since Node 19, so the state a health
+     * prober is in between polls costs nothing. What it still waits for is a connection currently
+     * being served - which is exactly what SIGTERM lands on during a rolling deploy, and what a
+     * readiness probe makes slow, because a readiness probe waits on a database. Measured at
+     * 4.9 seconds without this line against 5 milliseconds with it. Multiply that by a machine
+     * whose database is the thing that is broken and shutdown outlives the grace period: SIGTERM
+     * never reaches `pool.end()` in `main.ts` and Fly SIGKILLs the machine mid-deploy.
+     *
+     * The probe those destroyed requests were waiting on still settles afterwards and still tries
+     * to answer, which is why `respond` checks the response is alive before writing to it.
+     */
     async close() {
       clearInterval(reaper);
       for (const socket of states.keys()) socket.terminate();
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      wss.close();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     },
     revokeSubscriptions: revoke,
   };

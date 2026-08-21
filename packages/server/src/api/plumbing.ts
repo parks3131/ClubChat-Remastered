@@ -76,6 +76,27 @@ export type AppDeps = {
    * presence is what mounts `/dev/trace`.
    */
   devSubscriber?: Redis | undefined;
+  /**
+   * The Redis this process uses, so `/ready` can say whether it is reachable.
+   *
+   * Optional in the same sense as `tracer` and `devSubscriber`: absent is a state that exists,
+   * and every route test builds without one. What absent means here is that readiness FAILS
+   * CLOSED - nothing can be said about a dependency that was not supplied, and "ready" is the
+   * wrong answer to a question that was not asked. The entrypoint always passes it.
+   *
+   * The same connection the limiter uses, not one of readiness's own. A separate client would
+   * report "Redis is up" while the one the application actually holds was broken, which is the
+   * class of lie this whole check exists to remove.
+   */
+  redis?: Redis | undefined;
+  /**
+   * How long one readiness probe may take, when the default is not wanted.
+   *
+   * Overridable for the same reason the gateway's `authTimeoutMs` is: a test asserting that a
+   * hung dependency is answered rather than waited on should not have to wait the real budget to
+   * find out. Production takes `READINESS_TIMEOUT_MS`.
+   */
+  readinessTimeoutMs?: number | undefined;
 };
 
 /**

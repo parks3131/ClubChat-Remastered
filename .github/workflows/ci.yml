@@ -93,13 +93,18 @@ jobs:
           node --env-file=../../.env src/api/main.ts > /tmp/api.log 2>&1 &
           # Poll rather than sleep. A fixed sleep is either flaky or slow, and the gate's own
           # header warns that testing whatever process owns the port is how 46 checks "failed".
+          #
+          # `/ready`, not `/health`, and that is the whole reason `/ready` exists. `/health` is
+          # liveness: it answers from process memory and is true of a process that cannot reach
+          # Postgres, so polling it here would declare the API up and hand the surface gate 46
+          # failures with no clue which dependency was missing.
           for i in $(seq 1 60); do
-            if curl -fsS -o /dev/null http://127.0.0.1:3000/health; then
-              echo "API up after ${i}s"; exit 0
+            if curl -fsS -o /dev/null http://127.0.0.1:3000/ready; then
+              echo "API ready after ${i}s"; exit 0
             fi
             sleep 1
           done
-          echo "API never became healthy"; cat /tmp/api.log; exit 1
+          echo "API never became ready"; cat /tmp/api.log; exit 1
 
       - name: Surface gate
         run: npm run gate:surface

@@ -165,6 +165,9 @@ const app = buildApp({
   logger,
   tracer,
   devSubscriber,
+  // The limiter's own connection, handed on so `/ready` reports on the client this process
+  // actually holds rather than one of the check's making.
+  redis,
 });
 
 const shutdown = async (signal: string) => {

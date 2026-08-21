@@ -26,6 +26,7 @@ import fastifyCors from '@fastify/cors';
 import fastifyHelmet from '@fastify/helmet';
 import { fromNodeHeaders } from 'better-auth/node';
 import { trustProxyOption } from '../config.ts';
+import { createReadinessCheck } from '../health.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { isSessionUsable } from '../policy/predicates.ts';
 import { isUuid, type AppDeps } from './plumbing.ts';
@@ -340,6 +341,70 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   app.get('/health', async () => ({ ok: true }));
+
+  /**
+   * Readiness: should this instance be routed to, and should this deploy be allowed to go green?
+   *
+   * `/health` above is liveness and stays exactly as it was - it answers from process memory,
+   * touches nothing, and cannot fail. Fly restarts a machine that fails liveness, so a liveness
+   * check that consulted the database would restart every machine at once during a database blip.
+   * THIS is the endpoint Fly's health check points at.
+   *
+   * Three placement decisions, each load-bearing:
+   *
+   *  1. **On the root instance, outside `protectedRoutes`.** A platform prober holds no session,
+   *     and a readiness check behind authentication reports every healthy instance as down.
+   *  2. **Outside the rate limiter**, for the reason `rate-limit-routes.test.ts` already records
+   *     about `/health`: a throttled health check reports the service as down for the one reason
+   *     that is not down.
+   *  3. **It answers with its own status code and does not throw**, so `setErrorHandler` is never
+   *     involved. The body is `{ok:true}` or `{error:'not_ready'}` and never anything else - no
+   *     dependency name, no driver text, no host, no connection string. This is the most-read
+   *     unauthenticated surface a deployment has, and it is read by anyone who can reach the port.
+   *     Which dependency failed goes to the log and the monitor, where the audience is us.
+   */
+  const readiness =
+    deps.redis === undefined
+      ? undefined
+      : createReadinessCheck({
+          db: deps.db,
+          redis: deps.redis,
+          monitor: deps.monitor,
+          where: 'api.ready',
+          log: (level, message, detail) => app.log[level](detail, message),
+          timeoutMs: deps.readinessTimeoutMs,
+        });
+
+  /**
+   * A process built without a Redis is a wiring fault, not an outage, so it is reported ONCE.
+   *
+   * It cannot recover on its own - nothing will hand this instance a connection later - so the
+   * transition rule the readiness check applies to a real dependency would report it on every
+   * poll forever.
+   */
+  let notWiredReported = false;
+
+  app.get('/ready', async (_request, reply) => {
+    if (readiness === undefined) {
+      app.log.error(
+        { dependency: 'not_wired' },
+        'readiness cannot be judged: this app was built without a Redis connection',
+      );
+      if (!notWiredReported) {
+        notWiredReported = true;
+        deps.monitor.capture(
+          new Error('the API was built without a Redis connection, so readiness cannot be judged'),
+          'api.ready',
+          { dependency: 'not_wired' },
+        );
+      }
+      return reply.code(503).send({ error: 'not_ready' });
+    }
+
+    return (await readiness())
+      ? reply.code(200).send({ ok: true })
+      : reply.code(503).send({ error: 'not_ready' });
+  });
 
   /**
    * Every unhandled failure in a route, in one place.
