@@ -16,7 +16,13 @@
  * to - so a private Eboard photo is never reachable by a guessable URL.
  */
 
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import {
+  hourAlignedExpiry,
+  hourAlignedSigningWindow,
+  signedMediaUrl as signedMediaUrlShared,
+  verifyMediaSignature as verifyMediaSignatureShared,
+} from '@clubchat/shared/media-signing';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.ts';
 import { channels, mediaObjects, outbox } from '../db/schema.ts';
@@ -348,63 +354,35 @@ export async function completeUpload(
 // ---------------------------------------------------------------------------
 
 /**
- * Round a timestamp up to the top of the next hour, then add an hour.
+ * The hour-aligned expiry, the signature, and the URL they build.
  *
- * > **This is the entire fix for debt item 7.**
- * >
- * > `now + 1 hour` produces a different `exp` on every single request, so the query string
- * > differs per viewer, so the CDN cache key differs per viewer, so nothing is ever a hit. A
- * > 300-member club looking at one photo becomes 300 origin fetches.
- * >
- * > Aligning to the hour makes every viewer inside the same window receive the *byte-identical*
- * > URL. One cache entry serves all of them. The extra hour is headroom so a URL issued at
- * > 10:59 does not expire sixty seconds later.
- */
-export function hourAlignedExpiry(nowMs: number): number {
-  const HOUR = 3_600_000;
-  const ceilToHour = Math.ceil(nowMs / HOUR) * HOUR;
-  return Math.floor((ceilToHour + HOUR) / 1000);
-}
-
-/**
- * The same hour-aligned window, expressed for a store-signed URL.
+ * All three moved to `@clubchat/shared/media-signing` when a Cloudflare Worker became a second
+ * implementation of the same check. Two implementations of one HMAC is the shape of a bug that
+ * presents as "every photo is broken" with both sides looking correct in isolation.
  *
- * `signingDate` is the **floor** of the current hour rather than the expiry, for two reasons: a
- * signature dated in the future is not yet valid, and the floor is the value every caller inside
- * the window agrees on. `expiresIn` then carries the distance from that floor to the aligned
- * expiry, so the resulting URL is byte-identical for everyone in the window - the same property
- * the CDN scheme gets from `exp` alone.
+ * Re-exported and wrapped here so every existing caller keeps the shape it had: these wrappers
+ * take `MediaConfig` and default the clock, where the shared functions take the secret alone and
+ * require an explicit `nowMs` because an edge has no business defaulting a clock.
+ *
+ * **Signing is async now**, because `crypto.subtle` is and it is the only hash `workerd` has.
+ * That is the entire ripple of the move.
  */
-export function hourAlignedSigningWindow(nowMs: number): {
-  signingDateMs: number;
-  expiresInSeconds: number;
-} {
-  const HOUR = 3_600_000;
-  const floor = Math.floor(nowMs / HOUR) * HOUR;
-  const expiryMs = hourAlignedExpiry(nowMs) * 1000;
-  return { signingDateMs: floor, expiresInSeconds: Math.round((expiryMs - floor) / 1000) };
-}
-
-function sign(secret: string, objectKey: string, exp: number): string {
-  return createHmac('sha256', secret).update(`${objectKey}:${exp}`).digest('base64url');
-}
+export { hourAlignedExpiry, hourAlignedSigningWindow };
 
 /** Build the signed CDN URL for an object. Deterministic within the hour window. */
 export function signedMediaUrl(
   config: MediaConfig,
   objectKey: string,
   nowMs = Date.now(),
-): string {
-  const exp = hourAlignedExpiry(nowMs);
-  const sig = sign(config.signingSecret, objectKey, exp);
-  return `${config.cdnBaseUrl}/${objectKey}?exp=${exp}&sig=${sig}`;
+): Promise<string> {
+  return signedMediaUrlShared(config, objectKey, nowMs);
 }
 
 /**
- * Verify a signature. For the CDN edge, or for a test standing in for it.
+ * Verify a signature, for a test standing in for the edge.
  *
- * Compared with `timingSafeEqual`, because a byte-by-byte comparison that returns early leaks
- * how much of a guessed signature was correct.
+ * Nothing in this process validates a signature it minted; the Worker imports the shared function
+ * directly. This exists so the server suite can pin the contract the Worker depends on.
  */
 export function verifyMediaSignature(
   config: MediaConfig,
@@ -412,13 +390,8 @@ export function verifyMediaSignature(
   exp: number,
   sig: string,
   nowMs = Date.now(),
-): boolean {
-  if (!Number.isFinite(exp) || exp * 1000 < nowMs) return false;
-  const expected = sign(config.signingSecret, objectKey, exp);
-  const a = Buffer.from(expected);
-  const b = Buffer.from(sig);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+): Promise<boolean> {
+  return verifyMediaSignatureShared(config.signingSecret, objectKey, exp, sig, nowMs);
 }
 
 export type MediaRedirect = {
@@ -550,7 +523,7 @@ export async function resolveMediaRedirects(
               expiresInSeconds: window.expiresInSeconds,
             });
           })()
-        : signedMediaUrl(config, objectKey, nowMs);
+        : await signedMediaUrl(config, objectKey, nowMs);
 
     resolved.set(media.id, {
       url,

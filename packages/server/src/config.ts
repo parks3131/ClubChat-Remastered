@@ -95,7 +95,23 @@ const Env = z.object({
   // Distinct from BETTER_AUTH_SECRET on purpose: a leak of one must not become a leak of
   // the other.
   MEDIA_SIGNING_SECRET: z.string().min(16),
-  MEDIA_CDN_BASE_URL: z.string().url(),
+  /**
+   * Where signed media URLs point, in `cdn` mode.
+   *
+   * **The trailing slash is stripped, and that is load-bearing.** `signedMediaUrl` joins this to
+   * the object key with a `/`, and the signature covers the object key alone. A value ending in
+   * `/` therefore yields `https://cdn.example.com//photo/...`: the HMAC still validates, because
+   * the edge recomputes it from the key it parsed, and then the R2 read misses by one leading
+   * slash. A config typo that presents as a storage bug, on a path where every photo is broken
+   * and the signature check looks innocent.
+   *
+   * Required in BOTH modes, because one flat schema serves all three roles, and read only in
+   * `cdn` mode. In `presign` mode any URL-shaped value is fine and none of it is used.
+   */
+  MEDIA_CDN_BASE_URL: z
+    .string()
+    .url()
+    .transform((u) => u.replace(/\/+$/, '')),
   /**
    * Who signs a download URL.
    *

@@ -353,20 +353,20 @@ describe('Phase 3 gate: a private Eboard photo is unreachable without membership
     const key = row[0]!.objectKey;
 
     const exp = hourAlignedExpiry(Date.now());
-    const good = signedMediaUrl(config, key);
+    const good = await signedMediaUrl(config, key);
     const sig = new URL(good).searchParams.get('sig')!;
 
-    expect(verifyMediaSignature(config, key, exp, sig)).toBe(true);
+    expect(await verifyMediaSignature(config, key, exp, sig)).toBe(true);
     // Wrong signature.
-    expect(verifyMediaSignature(config, key, exp, 'not-the-signature')).toBe(false);
+    expect(await verifyMediaSignature(config, key, exp, 'not-the-signature')).toBe(false);
     // Right signature, wrong object - so a signature for a photo you CAN see does not unlock
     // one you cannot.
-    expect(verifyMediaSignature(config, 'photo/2026-01/other', exp, sig)).toBe(false);
+    expect(await verifyMediaSignature(config, 'photo/2026-01/other', exp, sig)).toBe(false);
     // Expired.
-    expect(verifyMediaSignature(config, key, exp, sig, (exp + 60) * 1000)).toBe(false);
+    expect(await verifyMediaSignature(config, key, exp, sig, (exp + 60) * 1000)).toBe(false);
     // Signed with a different secret.
     expect(
-      verifyMediaSignature({ ...config, signingSecret: 'wrong' }, key, exp, sig),
+      await verifyMediaSignature({ ...config, signingSecret: 'wrong' }, key, exp, sig),
     ).toBe(false);
   });
 });
@@ -382,18 +382,18 @@ describe('hour-aligned signed URLs', () => {
     const key = 'photo/2026-04/abc';
     const base = Date.parse('2026-04-12T10:17:33.000Z');
 
-    const first = signedMediaUrl(config, key, base);
-    const secondsLater = signedMediaUrl(config, key, base + 12_000);
-    const minutesLater = signedMediaUrl(config, key, base + 25 * 60_000);
+    const first = await signedMediaUrl(config, key, base);
+    const secondsLater = await signedMediaUrl(config, key, base + 12_000);
+    const minutesLater = await signedMediaUrl(config, key, base + 25 * 60_000);
 
     expect(secondsLater).toBe(first);
     expect(minutesLater).toBe(first);
   });
 
-  it('changes across the hour boundary, so a URL cannot live forever', () => {
+  it('changes across the hour boundary, so a URL cannot live forever', async () => {
     const key = 'photo/2026-04/abc';
-    const inThisHour = signedMediaUrl(config, key, Date.parse('2026-04-12T10:59:00.000Z'));
-    const inNextHour = signedMediaUrl(config, key, Date.parse('2026-04-12T11:01:00.000Z'));
+    const inThisHour = await signedMediaUrl(config, key, Date.parse('2026-04-12T10:59:00.000Z'));
+    const inNextHour = await signedMediaUrl(config, key, Date.parse('2026-04-12T11:01:00.000Z'));
     expect(inNextHour).not.toBe(inThisHour);
   });
 
@@ -403,9 +403,13 @@ describe('hour-aligned signed URLs', () => {
     expect(exp - issuedAt).toBeGreaterThan(60 * 60 * 1000);
   });
 
-  it('differs per object, so one signature does not unlock the bucket', () => {
+  it('differs per object, so one signature does not unlock the bucket', async () => {
     const at = Date.parse('2026-04-12T10:00:00.000Z');
-    expect(signedMediaUrl(config, 'a', at)).not.toBe(signedMediaUrl(config, 'b', at));
+    // Awaited on BOTH sides deliberately. Comparing two unawaited promises with `not.toBe`
+    // passes for any two promises whatsoever, which is an assertion that cannot fail.
+    expect(await signedMediaUrl(config, 'a', at)).not.toBe(
+      await signedMediaUrl(config, 'b', at),
+    );
   });
 });
 

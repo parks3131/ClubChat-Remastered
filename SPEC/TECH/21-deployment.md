@@ -156,10 +156,23 @@ the install.
 |---|---|
 | `api.<domain>` | Fly, the api role |
 | `ws.<domain>` | Fly, the gateway role |
-| `cdn.<domain>` | The R2 content bucket, per [Media pipeline](07-media-pipeline.md) |
+| `cdn.<domain>` | A Cloudflare Worker that validates `exp`/`sig`, per [Media pipeline](07-media-pipeline.md) |
 
 This is what keeps the hosting row in [Stack and hosting](15-stack-and-hosting.md) reversible. A
 move to another provider becomes a DNS change that no installed app notices.
+
+**The first two rows are permanent. The third is not, and the reason above does not apply to it.**
+Only `EXPO_PUBLIC_API_URL` and `EXPO_PUBLIC_WS_URL` are inlined into a build. There is no
+`EXPO_PUBLIC_CDN_URL` and no client ever constructs a media URL: it learns one from `GET
+/media/:id` on every render. `cdn.<domain>` is therefore server-side configuration
+(`MEDIA_CDN_BASE_URL`), changeable with a deploy, and the only cost of changing it is that URLs
+already memoized on devices stop resolving within at most two hours. Recorded because a document
+that overstates permanence makes people slow on a decision that is cheap to reverse.
+
+**Never point `cdn.<domain>` at a bucket.** Cloudflare offers an R2 custom domain in two clicks and
+it would serve on this hostname without ever reading `exp` or `sig`, publishing every private chat
+photo, document and Eboard image to anyone holding a URL, permanently. The signature is validated
+at the edge and nowhere else; a bucket has never heard of it.
 
 ### Everything else
 

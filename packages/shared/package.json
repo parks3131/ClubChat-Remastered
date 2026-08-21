@@ -7,7 +7,9 @@
     ".": "./src/index.ts",
     "./protocol": "./src/protocol.ts",
     "./domain": "./src/domain.ts",
-    "./notifications": "./src/notifications.ts"
+    "./notifications": "./src/notifications.ts",
+    "./media-signing": "./src/media-signing.ts",
+    "./media-signing-vectors.json": "./src/media-signing-vectors.json"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",

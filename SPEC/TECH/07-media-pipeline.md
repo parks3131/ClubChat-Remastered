@@ -4,7 +4,7 @@
 
 | Class | Examples | Bucket | Serving |
 |---|---|---|---|
-| **Identity** | user/club/race/eboard avatars | public | CDN, stable path, `?v=` cache-bust on replace |
+| **Identity** | user/club/race/eboard avatars | public | The same authorized, signed hop as content |
 | **Content** | chat photos, documents, news photos | **private** | authorized redirect → CDN (below) |
 
 ### Cropping: fixed-frame media on the client, a chat photo on the server
@@ -133,7 +133,7 @@ so every layer misses, and N viewers means N origin downloads.
 ```
 GET /media/:id                     ← authenticated, authorized (same membership predicate)
   → 302 to
-    https://cdn.clubchat.app/o/{object_key}?exp={hour_aligned}&sig={hmac}
+    https://cdn.clubchatapp.com/{object_key}?exp={hour_aligned}&sig={hmac}
 ```
 
 - The signature expiry is **aligned to the top of the hour** (`exp = ceil(now, 1h) + 1h`), so
