@@ -40,7 +40,14 @@ by every connected client at once. It should be able to hold connections while t
 pushed once, then deployed to all three by digest, because the Fly registry is scoped per
 organization. Each app's config lives in `fly/<role>.toml`.
 
-**`DATABASE_URL` is Neon's DIRECT endpoint, never the pooled one, and this is not a preference.**
+****Both timeout ceilings travel as `-c` flags inside the `options` startup parameter, not as `pg`'s
+own fields.** Measured against the real project on 2026-08-21: Neon's direct endpoint **silently
+discards** `statement_timeout` and `idle_in_transaction_session_timeout` when sent individually, so
+a session that asked for `30s` and `2min` came back reporting `0` and `5min`. Not an error, which
+would have failed the deploy loudly. `options` is passed through intact. See `AGENTS.md` failure
+mode 37, and ask the server with `SHOW` rather than trusting that a setting arrived.
+
+`DATABASE_URL` is Neon's DIRECT endpoint, never the pooled one, and this is not a preference.**
 `db/client.ts` sends `statement_timeout` and `idle_in_transaction_session_timeout` as startup
 parameters. Neon's pooled endpoint accepts five startup parameters and no others, and fails the
 connection outright with `unsupported startup parameter` on anything else; PgBouncer's
@@ -49,12 +56,23 @@ back, and neither timeout is one. So the pooled endpoint was never available whi
 ceilings exist, and the ceilings are the thing stopping a runaway query from holding a connection
 forever. The restriction applies only to the pooled endpoint.
 
-That makes connection count a real budget rather than an afterthought. Each role opens one pool at
-`max: 20`, so one machine per role is 60 connections, and 80 while a migration runs, against the 97
-usable on Neon's smallest compute. **Two machines per role does not fit**, and the choice at that
-point is a larger compute or a lower `max`, made deliberately. Related, and worth knowing before the
-first invoice: the worker polls the outbox four times a second forever, so the compute never idles
-long enough to scale to zero.
+That makes connection count a budget rather than an afterthought. Each role opens one pool at
+`max: 20`, so one machine per role is 60 connections, and 80 while a migration runs, because
+`db/migrate.ts` opens its own pool.
+
+**Neon derives the connection limit from the compute's MAXIMUM autoscale size, not its minimum.**
+The provisioned compute autoscales `0.25 - 1 CU`, which allows **443 direct connections**, so the
+80-connection deploy window has wide headroom and several machines per role would still fit. Had
+the ceiling been left at a fixed 0.25 CU the limit would have been 97, which is why the maximum is
+worth checking before assuming a number.
+
+**Scale to zero is disabled deliberately, and the plan pays for that.** The worker polls the outbox
+four times a second forever, so the compute never sees the five idle minutes that would suspend it.
+On Neon's Free plan that is fatal rather than merely costly: Free caps compute at roughly 400 hours
+a month against the 730 a month contains, and on exhaustion Neon suspends the compute until the
+next billing period. The database would stop, mid-month, every month. The project therefore runs on
+**Launch with scale-to-zero off**, which is a straightforward consequence of the effects engine
+polling and not a tuning choice.
 
 ---
 

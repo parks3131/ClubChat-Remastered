@@ -1100,3 +1100,29 @@ that records how to recognise the class._
     adversarial review of a batching change that would have extended the same bug to `/events` and
     to the gateway's `subscribe` frame - where no HTTP hook could have caught it, and the symptom
     would have been a member's chat quietly ceasing to be live.
+
+37. **A managed platform can DISCARD a connection parameter rather than reject it, and a test that
+    asks for a value the server also defaults to will pass without ever sending anything.**
+    Symptom: none, anywhere, for the life of the project. `createPool` set `statement_timeout` and
+    `idle_in_transaction_session_timeout`, `pool-timeouts.test.ts` asserted the session reported
+    `30s` and `2min`, and it did - against the development container. Root cause: on Neon's
+    **direct** endpoint (not the pooled one, which at least errors) `pg`'s individual startup
+    parameters are silently dropped, and the first real connection reported `0` and `5min`,
+    Postgres's default and Neon's compute default. Every ceiling the module exists to impose was
+    going to be absent in production, and `statement_timeout = 0` means a runaway query holds a
+    connection until the process restarts. **Rule: ask the SERVER what it is running with, over
+    the real connection string, before trusting that a connection-level setting arrived.** `SHOW
+    <setting>` against production infrastructure is a different question from any test against a
+    local container, and it is the only one that counts.
+
+    **The second half is the more general lesson, and it is about the test rather than the
+    platform.** The same file's opt-out test passed `0` and asserted `0`, with a comment claiming
+    to prove "the escape hatch actually disables them". Postgres defaults both settings to `0`, so
+    asking for zero and sending nothing are indistinguishable there - and `pg` was in fact sending
+    nothing, because it writes the parameter behind `if (params.statement_timeout)` and `0` is
+    falsy. That assertion could never fail. **Rule: an assertion whose expected value equals the
+    system's default proves nothing, and instruction 11's "watch it fail" is what catches it.**
+    How to recognise the class: the test asserts an absence, a zero, an empty list or a default,
+    and the code path that would produce it anyway has never been disabled to check. Found on
+    2026-08-21 on the first ever connection to production infrastructure, which is exactly the
+    event `SPEC/TECH/21` exists to make routine.
