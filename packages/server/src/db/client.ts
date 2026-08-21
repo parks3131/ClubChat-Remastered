@@ -82,6 +82,10 @@ export type PoolTimeouts = {
 };
 
 export function createPool(connectionString: string, timeouts: PoolTimeouts = {}): pg.Pool {
+  const statementTimeoutMs = timeouts.statementTimeoutMs ?? STATEMENT_TIMEOUT_MS;
+  const idleInTransactionTimeoutMs =
+    timeouts.idleInTransactionTimeoutMs ?? IDLE_IN_TRANSACTION_TIMEOUT_MS;
+
   const pool = new pg.Pool({
     connectionString,
     // The sequence-allocating transaction holds a row lock until commit, so a
@@ -89,9 +93,33 @@ export function createPool(connectionString: string, timeouts: PoolTimeouts = {}
     max: 20,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
-    statement_timeout: timeouts.statementTimeoutMs ?? STATEMENT_TIMEOUT_MS,
-    idle_in_transaction_session_timeout:
-      timeouts.idleInTransactionTimeoutMs ?? IDLE_IN_TRANSACTION_TIMEOUT_MS,
+    /*
+     * **Both ceilings ride the `options` startup parameter rather than `pg`'s own
+     * `statement_timeout` and `idle_in_transaction_session_timeout` fields, and they have to.**
+     *
+     * Measured against the real Neon project on 2026-08-21, on the DIRECT endpoint, not the
+     * pooled one: `pg`'s individual parameters are **silently discarded**. Not rejected, which
+     * would have failed the deploy loudly - discarded. The session came back reporting `0` and
+     * `5min`, which are Postgres's own default and Neon's compute-level default. The identical
+     * code against the development container returns `30s` and `2min`. So every ceiling this
+     * module exists to impose was absent in production while every test stayed green.
+     *
+     * `options` carries `-c key=value` pairs into the startup packet as one opaque string, and
+     * Neon passes that through. Verified on both Neon and the container, for the real values and
+     * for the zeroes.
+     *
+     * It also repairs the escape hatch. `pg` writes its individual parameters behind
+     * `if (params.statement_timeout)`, so the `0` that `db/migrate.ts` passes to opt a migration
+     * OUT of the ceilings was never sent at all. That looked correct for as long as the only
+     * server anyone checked defaulted to `0` too. Here the zero is part of a string, so it
+     * survives being falsy and actually disables the ceiling.
+     *
+     * Milliseconds are what Postgres expects for a bare integer on both settings, so the
+     * constants above go through unconverted.
+     */
+    options:
+      `-c statement_timeout=${statementTimeoutMs} ` +
+      `-c idle_in_transaction_session_timeout=${idleInTransactionTimeoutMs}`,
   });
 
   const report =

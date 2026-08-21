@@ -63,6 +63,44 @@ describe('what a pooled connection is configured with', () => {
     expect(await setting(pool, 'statement_timeout')).toBe('0');
     expect(await setting(pool, 'idle_in_transaction_session_timeout')).toBe('0');
   });
+
+  /*
+   * **The two assertions above pass against this container whether or not the pool sends
+   * anything at all**, which is why these three exist underneath them.
+   *
+   * Postgres defaults `statement_timeout` and `idle_in_transaction_session_timeout` to `0`, so an
+   * opt-out test that asks for zero and reads zero cannot distinguish "we disabled it" from "we
+   * sent nothing and inherited the default". It had never been seen to fail. Neon is where that
+   * stopped being academic: measured on 2026-08-21 against the real project, `pg`'s individual
+   * `statement_timeout` startup parameter is **silently discarded** - not rejected, discarded -
+   * and the session came back `0 / 5min`, which is Postgres's default and Neon's compute-level
+   * default respectively. The same code against this container returns `30s / 2min`.
+   *
+   * So the ceilings are asserted at the wire level too: what the pool will actually send.
+   */
+  it('sends the ceilings as `-c` options rather than as individual startup parameters', () => {
+    const pool = poolFor();
+
+    expect(pool.options.options).toContain(`statement_timeout=${STATEMENT_TIMEOUT_MS}`);
+    expect(pool.options.options).toContain(
+      `idle_in_transaction_session_timeout=${IDLE_IN_TRANSACTION_TIMEOUT_MS}`,
+    );
+  });
+
+  it('sends an explicit zero for the opt-out instead of omitting the parameter', () => {
+    /*
+     * `pg` writes the individual parameters into the startup packet behind
+     * `if (params.statement_timeout)`, and `0` is falsy, so the escape hatch that
+     * `db/migrate.ts` depends on used to send nothing whatsoever. It only ever appeared to work
+     * because Postgres's own default is also `0`. On any server with a non-zero default - Neon
+     * ships `idle_in_transaction_session_timeout` at five minutes - migrations silently inherited
+     * a ceiling instead of disabling one.
+     */
+    const pool = poolFor({ statementTimeoutMs: 0, idleInTransactionTimeoutMs: 0 });
+
+    expect(pool.options.options).toContain('statement_timeout=0');
+    expect(pool.options.options).toContain('idle_in_transaction_session_timeout=0');
+  });
 });
 
 describe('a transaction that stalls on something outside the database', () => {
