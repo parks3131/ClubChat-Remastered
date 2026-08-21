@@ -72,6 +72,64 @@ const AUTH_TIMEOUT_MS = 5_000;
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 
 /**
+ * The largest frame this gateway will read from a client.
+ *
+ * > **There was no limit, so `ws` 8's default of 100 MiB applied - to every socket, including
+ * > one that had not authenticated.** The 8,000 character body cap lives in `MsgSendFrame`,
+ * > which is a Zod schema: it runs after the whole frame has been buffered and `JSON.parse`d, so
+ * > it bounds what is STORED and says nothing about what is READ. The 5s auth window is no help
+ * > either, because five seconds is a long time in which to be handed a hundred megabytes.
+ *
+ * 128 KiB, measured rather than picked. The largest frame the wire contract can produce is a
+ * `msg.send` at 56,075 bytes: 8,000 body characters in their most expensive JSON encoding, a
+ * `mediaId`, a `replyToSeq` and the full 200 mentions. The next largest is a `subscribe`
+ * carrying its 200 channel ids, at 7,882. This sits a little over twice above the worst
+ * legitimate frame, which is the headroom that keeps a real message from ever being refused,
+ * and roughly eight hundred times below the default it replaces.
+ *
+ * `ws` checks it against the frame header before reading the payload, and against the running
+ * total across a fragmented message, so an oversized frame is refused rather than accumulated
+ * and fragmentation cannot walk past it. The socket is closed with 1009, Message Too Big.
+ */
+export const MAX_FRAME_BYTES = 131_072;
+
+/**
+ * The most one connection's unwritten backlog may reach before the connection is dropped.
+ *
+ * > **Nothing bounded the outbound side, and what looked like a bound was an accident.** `send`
+ * > wrote on the sole condition that the socket was OPEN and the Redis fan-out did the same for
+ * > every subscriber, so once the kernel socket filled, `ws` queued the rest in process memory
+ * > with no limit. The only thing that ever collected such a socket was the reaper, which fires
+ * > on silence - and silence is a fact about the UPLINK. A phone on one bar has a link that
+ * > works and a link that does not, and it answers its keepalives on the one that works.
+ *
+ * The 2026-08-19 review predicted the heartbeat fix would make this worse and was right, though
+ * for a slightly different reason than it gave. It named the server's ping and the `pong` that
+ * answers it; but a `pong` cannot come back down a pipe that is not draining, because the ping
+ * never went out. What actually keeps a drowning socket unreaped is the client's own 30s `ping`
+ * frame arriving on the uplink that still works, refreshing `lastSeenAt` as it is received. That
+ * frame also makes the leak feed itself: each one is answered with a `pong` that joins the
+ * backlog it can never leave.
+ *
+ * **1 MiB, and the three numbers that choose it.** The largest single frame this gateway can
+ * send is 135,014 bytes - a maximum length body, 200 mentions and a 300 member channel's
+ * reactions - so the ceiling is 7.7 times the worst case and no legitimate message, or short
+ * burst of them, can reach it. A typical envelope measures 1,047 bytes, so it is around a
+ * thousand messages of backlog, far more than a club chat produces inside the ninety seconds of
+ * silence the reaper already tolerates. And at the design peak of 3,000 concurrent connections
+ * ([`SPEC/TECH/00`](../../../../SPEC/TECH/00-overview.md)) the worst case is 3 GB, which needs
+ * every socket in the cluster stalled at once; the number worth comparing it against is the one
+ * it replaces, which was no number at all.
+ *
+ * **Nothing is lost by dropping the socket, which is what makes the trade cheap.** Everything
+ * buffered here is a duplicate of what is already durable in the channel log, and the client
+ * reconnects with backoff, re-authenticates, resubscribes and runs `/sync`. Buffering is an
+ * optimisation to save a member a sync, never a delivery guarantee, so the only question a
+ * ceiling asks is how much memory that optimisation may cost.
+ */
+export const WRITE_BUFFER_CEILING_BYTES = 1_048_576;
+
+/**
  * The two frames that can end a handshake. Exactly one of them leaves every socket.
  *
  * Named as a type so `answerHandshake` cannot be handed an `msg.ack` and so the switch that
@@ -162,11 +220,14 @@ export function createGateway(
     /** Overridable so a test does not have to wait five seconds to watch a socket be closed. */
     authTimeoutMs?: number;
     handshakeTimeoutMs?: number;
+    /** Same reason: the ping and the buffer sweep both ride this tick, thirty seconds apart. */
+    heartbeatIntervalMs?: number;
   },
 ): Gateway {
-  const wss = new WebSocketServer({ port: opts.port });
+  const wss = new WebSocketServer({ port: opts.port, maxPayload: MAX_FRAME_BYTES });
   const authTimeoutMs = opts.authTimeoutMs ?? AUTH_TIMEOUT_MS;
   const handshakeTimeoutMs = opts.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
+  const heartbeatIntervalMs = opts.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
   const registry = createConnectionRegistry(deps.redis, deps.gatewayId);
 
   const states = new Map<WebSocket, SocketState>();
@@ -185,10 +246,59 @@ export function createGateway(
       }),
   });
 
+  /**
+   * Drop a connection whose backlog has passed the ceiling. Answers whether it did.
+   *
+   * > **`terminate()`, not `close()`, and the reason is the whole shape of the problem.**
+   * > `close()` is the graceful path: it queues a close frame, which on a socket that is not
+   * > draining means queueing it BEHIND the megabyte that is the reason we are here. The frame
+   * > does not go out, the memory the ceiling exists to release stays held for `ws`'s own 30s
+   * > close timer, and the client is told nothing anyway. `terminate()` destroys the socket now.
+   *
+   * So the client sees an abnormal closure, 1006, rather than a code that says why - and it does
+   * not need one. `chat-client.ts` reads no close code at all: any close it did not ask for
+   * schedules a reconnect with backoff, and the reconnect re-authenticates, resubscribes and
+   * runs `/sync`. A code would be nice to have and cannot be delivered, because a code that
+   * cannot be delivered is precisely the condition being reported.
+   *
+   * Logged rather than captured to the monitor on purpose. A client that stops reading is a bad
+   * network, which is an expected event on phones and not a fault in this system; routing it to
+   * the error monitor would teach whoever reads that monitor to ignore it. The log line carries
+   * both numbers, so how close production runs to this ceiling is a question the logs answer.
+   */
+  const dropIfDrowning = (socket: WebSocket): boolean => {
+    if (socket.bufferedAmount <= WRITE_BUFFER_CEILING_BYTES) return false;
+    deps.log('warn', 'write buffer past the ceiling, dropping the socket', {
+      userId: states.get(socket)?.userId ?? null,
+      bufferedAmount: socket.bufferedAmount,
+      ceiling: WRITE_BUFFER_CEILING_BYTES,
+    });
+    socket.terminate();
+    return true;
+  };
+
+  /**
+   * Write one already encoded frame to one socket. The only path bytes take to a client.
+   *
+   * Both write sites go through here rather than each testing the socket themselves, for the
+   * reason AGENTS.md failure mode 31 records: an effect that must always accompany another
+   * belongs in one function, because a convention is a thing a later call site forgets. There
+   * were two sites and both checked only `readyState`; the third one somebody adds should not
+   * have to know that a ceiling exists.
+   *
+   * Answers whether the frame was written, so a caller that counts recipients counts the ones
+   * that actually received it.
+   */
+  const deliver = (socket: WebSocket, encoded: string): boolean => {
+    if (socket.readyState !== socket.OPEN) return false;
+    if (dropIfDrowning(socket)) return false;
+    socket.send(encoded);
+    return true;
+  };
+
   const send = (socket: WebSocket, frame: ServerFrame, correlationId?: string) => {
-    if (socket.readyState !== socket.OPEN) return;
     const withId = correlationId === undefined ? frame : { ...frame, id: correlationId };
-    socket.send(JSON.stringify(withId));
+    if (!deliver(socket, JSON.stringify(withId))) return;
 
     /*
      * Traced AFTER the write, so the page never shows a frame the socket refused.
@@ -303,11 +413,16 @@ export function createGateway(
         : { t: 'msg.new', d: relayed.data as MessageEnvelope };
     const encoded = JSON.stringify(frame);
     let delivered = 0;
+    /*
+     * Iterated over the live Set while `deliver` may drop a socket out of it, which is safe in
+     * both directions: `terminate()` destroys the socket and Node emits its `close` on a later
+     * tick, so the detach that empties this Set happens after the loop - and a `Set` iterator
+     * tolerates deletion mid-iteration regardless. What must not happen is one drowning
+     * subscriber costing its neighbours their message, and it does not: each is written
+     * independently and only the one over the ceiling is dropped.
+     */
     for (const socket of sockets) {
-      if (socket.readyState === socket.OPEN) {
-        socket.send(encoded);
-        delivered += 1;
-      }
+      if (deliver(socket, encoded)) delivered += 1;
     }
 
     /*
@@ -942,6 +1057,21 @@ export function createGateway(
         continue;
       }
       if (socket.readyState !== socket.OPEN) continue;
+      /*
+       * The write buffer sweep, which is what makes that ceiling independent of the client
+       * still talking.
+       *
+       * Every write goes through `deliver`, so a socket that crosses the ceiling is normally
+       * collected by the next thing sent to it - and for a client that pings, that is inside
+       * thirty seconds, because each `ping` is answered with a `pong` through the same gate.
+       * This covers the case where nothing is sent at all: a socket that fell behind and whose
+       * channels then went quiet would otherwise hold its backlog until the reaper's ninety
+       * second silence window, or forever if the client keeps pinging into it.
+       *
+       * Before the ping rather than after, so a drowning socket is not handed one more frame to
+       * queue on the way out.
+       */
+      if (dropIfDrowning(socket)) continue;
       try {
         socket.ping();
       } catch (error) {
@@ -952,7 +1082,7 @@ export function createGateway(
         });
       }
     }
-  }, HEARTBEAT_INTERVAL_MS);
+  }, heartbeatIntervalMs);
 
   return {
     wss,

@@ -383,6 +383,16 @@ export class ChatClient {
        *
        * Not attempted when the app closed the socket itself, and not while a connect is already
        * in flight - that attempt owns its own outcome.
+       *
+       * > **No close code is read here, and that is load-bearing rather than an omission.** The
+       * > gateway drops a connection whose write buffer has passed its ceiling, which is what a
+       * > phone with a working uplink and a stalled downlink eventually earns; it does that by
+       * > terminating the socket rather than closing it, because a close frame would queue behind
+       * > the very backlog that is the reason for closing. So the client is told nothing, sees an
+       * > abnormal closure, and recovers by the path below - which re-authenticates, resubscribes
+       * > and syncs, so nothing dropped from that buffer is lost. A future reader tempted to
+       * > reconnect only on particular codes would silently remove that recovery.
+       * > See `SPEC/TECH/01-connection-layer.md`.
        */
       if (!this.closedByUs && !this.connecting && !this.reconnecting) this.scheduleReconnect();
     };

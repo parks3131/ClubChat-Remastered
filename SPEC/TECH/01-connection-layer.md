@@ -92,6 +92,60 @@ channel log and the client will sync on reconnect.
    `signin_blocked` - ends the loop rather than retrying it; every other failure is a moment
    rather than a verdict.
 
+### What a connection may buffer, in each direction
+
+**A socket that has stopped reading is dropped, not held.** The gateway closes any connection
+whose unwritten backlog passes **1 MiB**, and refuses any frame larger than **128 KiB** before
+reading its payload. Both numbers live in `packages/server/src/gateway/server.ts`.
+
+> **Neither limit existed until 2026-08-21, and the reaper's cover for the first was an
+> accident.** `send` wrote on the sole condition that the socket was OPEN, the per-channel
+> fan-out did the same for every subscriber, and `ws` queues in process memory once the kernel
+> socket is full. The only thing that ever collected such a socket was the reaper - which fires
+> on silence, and silence is a fact about the **uplink**. A phone on one bar has a link that
+> works and a link that does not, and it answers its keepalives on the one that works.
+>
+> The 2026-08-19 review predicted the heartbeat above would make this worse, and it was right for
+> a slightly different reason than it gave. It named the server's ping and the `pong` answering
+> it; but a `pong` cannot come back down a pipe that is not draining, because the ping never went
+> out. What actually keeps a drowning socket unreaped is **the client's own 30s `ping`**, arriving
+> on the uplink that still works. That frame also makes the leak feed itself: each one is answered
+> with a `pong` that joins the backlog it can never leave.
+
+**Why dropping the connection is the cheap side of the trade.** Everything buffered here is a
+duplicate of what is already durable in the channel log, and the recovery path is the one the
+reconnect above already describes: backoff, re-authenticate, resubscribe, `/sync`. Buffering is an
+optimisation that saves a member a sync; it is never a delivery guarantee. So the only question a
+ceiling has to answer is how much memory that optimisation may cost.
+
+**The checks, and where they sit.** Every write goes through one gate, because two sites checked
+only `readyState` and the third one somebody adds should not have to know a ceiling exists. The
+same gate also runs as a sweep on the heartbeat tick, which is what makes the bound independent of
+the client still talking: a socket that fell behind and whose channels then went quiet would
+otherwise hold its backlog until the 90s silence window, or forever if the client keeps pinging.
+
+**The socket is terminated rather than closed, so the client is told nothing and needs nothing.**
+A graceful close queues a close frame *behind* the megabyte that is the reason for closing, so it
+does not go out, the memory stays held for the library's own 30s close timer, and the client
+learns no more than it would have. The client reads no close code at all - any close it did not
+ask for schedules a reconnect - so a code that cannot be delivered costs nothing. A code that
+cannot be delivered is precisely the condition being reported.
+
+**The inbound limit is separate and was the wider hole.** With none set, the library's 100 MiB
+default applied to every socket including one that had not authenticated: the 8,000 character body
+cap is a schema check that runs *after* the whole frame is buffered and parsed, so it bounds what
+is stored and says nothing about what is read. 128 KiB is a little over twice the largest frame
+the contract can produce (a `msg.send` at 56,075 bytes, measured), checked against the frame header
+and against the running total across a fragmented message. An oversized frame is refused rather
+than accumulated, and the socket closes with 1009.
+
+**What is deliberately not here: a limit across all connections at once.** At the design target of
+3,000 concurrent sockets ([Overview](00-overview.md)) the per-connection ceiling bounds the
+gateway at 3 GB, which needs every socket in the cluster stalled simultaneously. A global budget
+would bound the realistic case more tightly and costs shared state on every write; it is worth
+having once there is a production measurement saying how close to the ceiling real connections
+run, which is [Road to the first club](20-road-to-the-first-club.md) milestone 3.
+
 ### The handshake, and the frames that arrive during it
 
 A socket sends `auth` first and is closed if it has not within 5s. `auth` is answered after two

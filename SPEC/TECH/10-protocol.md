@@ -11,6 +11,14 @@ Envelope: `{ "t": <type>, "id": <correlation id>, "d": <payload> }`
 > this table and watching it fail to connect. The schemas are the contract; this table describes
 > them.
 
+**A frame may not exceed 128 KiB, and a connection may not buffer more than 1 MiB of unread
+replies.** The first is refused at the transport with close code 1009, before the payload is read
+- a different layer from every refusal in this document, since it applies whether or not the
+socket has authenticated and produces no `auth.err`. The second closes the connection with no code
+at all, because a code cannot be delivered down the pipe whose failure to drain is the thing being
+reported; the client reconnects and syncs, which is what the channel log makes safe. Both numbers,
+and the reasoning that chose them, are in [Connection layer](01-connection-layer.md).
+
 **Client → server**
 
 | Type | Payload | Notes |
