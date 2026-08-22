@@ -274,6 +274,79 @@ something enforces it, that is a review obligation rather than a gate.
 
 ---
 
+## The first cutover
+
+The order below exists because the first production state should be one that has already run
+somewhere. It is three deploys rather than one, and the extra deploy buys two independently green
+production states and a one-token rollback to a state that has been watched working.
+
+**1. The three Fly apps, on `MEDIA_URL_MODE=presign`.** The only media mode that has ever run
+anywhere. Build the image ONCE (`fly deploy --build-only --push`) and deploy that digest to all
+three, api first because its `release_command` runs the migration (rule 1). Prove signup, chat,
+push, upload and mail by hand on a real device, and report each pass or fail individually rather
+than as one verdict.
+
+**2. `api.<domain>` and `ws.<domain>`, DNS only, grey cloud, never proxied.** Fly terminates its own
+TLS, and proxying it through Cloudflare puts two proxies in series and breaks the WebSocket
+gateway. Then `fly certs add`.
+
+**3. The Worker, on its real hostname, while nothing depends on it.** Deploy it, attach
+`cdn.<domain>` as a Workers Custom Domain, and compare `/__parity` on both sides **before trusting
+anything**:
+
+```
+diff <(curl -sf https://api.<domain>/__parity | jq -r .parity) \
+     <(curl -sf https://cdn.<domain>/__parity | jq -r .parity) && echo 'secrets match'
+```
+
+A mismatch means the two hold different `MEDIA_SIGNING_SECRET` values and nothing else is worth
+investigating until they do not. It is the likeliest failure in this deployment and it presents as
+every photo 403ing, which reads as a broken Worker rather than a wrong key.
+
+**4. Flip `MEDIA_URL_MODE=cdn` and redeploy the api.** Re-prove media from the phone, and **watch a
+URL survive an hour boundary** before calling it done, because the expiry is hour aligned and a URL
+that works for fifty minutes proves nothing about the fifty-first.
+
+### What to measure once, on the way through
+
+**`cf-cache-status` on a real signed URL.** This settles whether Cloudflare holds anything at the
+edge, which is the open half of roadmap debt 7:
+
+```
+curl -sI '<a signed media url>' | grep -i cf-cache-status
+```
+
+`DYNAMIC`, or an absent header, confirms that nothing is cached and that N members opening one
+photo is N R2 reads. Turning it on is then one key,
+`"cache": { "enabled": true }` in `wrangler.jsonc`, decided against that evidence rather than
+against a vendor document. `HIT` or `MISS` would mean the analysis in
+[ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) is wrong and
+that ADR needs correcting.
+
+### Obligations that survive the cutover
+
+These are not optional tidying. Each one is a live credential or a live gap.
+
+1. **Rotate the R2 key and revoke the Cloudflare API token.** Both were pasted into a chat
+   transcript rather than into the secrets file, so both must be treated as disclosed. The R2
+   credential is also read AND write where the Worker only ever reads, so the rotation is the
+   moment to narrow it to read-only. Do this once the Worker is live, not before, or the Worker
+   loses its bucket access mid-cutover.
+2. **Delete the local secrets file** once every value has reached Fly and Cloudflare. It exists
+   outside the repo precisely so that it can be deleted rather than managed.
+3. **Delete the older, Full-access Resend key**, leaving only the sending-only one restricted to
+   the sending domain.
+4. **The Resend domain badge.** Its DNS is correct and its status may still be `Pending`, and
+   Resend refuses to send from an unverified domain, so **password-reset mail is unprovable until
+   it flips**. The api boots regardless, because it only requires the key to be present, which
+   means this failure is invisible from the outside.
+5. **Nothing reports a Worker error.** Accepted for the first deployment and recorded in ADR-0044.
+   Workers Logs in the Cloudflare dashboard is the only place an exception at the edge is visible,
+   and nothing pages on it. The thing that actually tells you the Worker is broken is a member
+   saying no photos are loading, and `/__parity` is the first command to run when that happens.
+
+---
+
 ## Open
 
 Recorded so that silence is not read as a decision.

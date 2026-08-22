@@ -235,6 +235,17 @@ Policy must state that message content is readable by the service.
 - *Mail arrives from the product's own domain, the old key is dead, and DMARC verifies.*
 - *The Privacy Policy and Terms are reviewed, state the ADR-0005 obligation, and are reachable
   from where sign-up says they are.*
+- *Media is served in `cdn` mode from the Worker, `/__parity` matches on both sides, and a signed
+  URL has been watched surviving an hour boundary.* Fifty minutes of working proves nothing about
+  the fifty-first, because the expiry is hour aligned.
+- *`cf-cache-status` has been read off a real signed URL*, settling the open half of roadmap debt 7
+  rather than leaving it as an inference. See
+  [Deployment](21-deployment.md) and
+  [ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md).
+- *The R2 key is rotated, the Cloudflare API token is revoked, the older Full-access Resend key is
+  deleted, and the local secrets file is gone.* The first two are not hygiene: both were pasted
+  into a chat transcript rather than into the secrets file, so both are disclosed until rotated,
+  and the R2 credential is read AND write where the Worker only reads.
 
 ### Standing, 2026-08-21
 
