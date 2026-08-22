@@ -25,6 +25,7 @@ import Fastify, {
 import fastifyCors from '@fastify/cors';
 import fastifyHelmet from '@fastify/helmet';
 import { fromNodeHeaders } from 'better-auth/node';
+import { parityFingerprint } from '@clubchat/shared/media-signing';
 import { trustProxyOption } from '../config.ts';
 import { createReadinessCheck } from '../health.ts';
 import { loadAccessContext } from '../policy/context.ts';
@@ -405,6 +406,61 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       ? reply.code(200).send({ ok: true })
       : reply.code(503).send({ error: 'not_ready' });
   });
+
+  /**
+   * The parity canary: does this api hold the same `MEDIA_SIGNING_SECRET` as the CDN Worker?
+   *
+   * The single likeliest failure in this deployment is those two values differing. It presents as
+   * every photo 403ing, with the api healthy, the Worker healthy, and both sets of logs saying
+   * exactly what they should, so it looks like a broken Worker or a bad R2 binding rather than a
+   * wrong password. A trailing newline picked up by `wrangler secret put` is enough to cause it.
+   * Both sides publish the same eight characters here, so the whole class is eliminated by one
+   * `diff` of two `curl`s rather than by an evening.
+   *
+   * **What is exposed, and why it is acceptable.** Eight characters of base64url is 48 bits of an
+   * HMAC-SHA256 over `PARITY_MESSAGE`, a constant printed in this repository. There is no shortcut
+   * from those bits back to the key: recovering it means guessing candidate secrets and hashing
+   * each one, exactly as if nothing had been published. What it does reveal is WHEN the secret
+   * changes, which is the thing you want to see. It cannot sign anything, and it says nothing
+   * about the secret's length or its content.
+   *
+   * **`previousParity` is always `null` here, and that is a decision rather than a stub.** The api
+   * signs and never verifies, so it holds no previous key: `MEDIA_SIGNING_SECRET_PREVIOUS` is
+   * deliberately absent from `config.ts`, and `verifyMediaSignature` records at length why an
+   * unread secret on a Fly app is worse than no secret at all. The field is answered anyway so
+   * that both sides return one shape and a `diff` of the two bodies has nothing spurious in it. On
+   * the Worker it is the value that tells you, mid-rotation, that the edge still accepts what this
+   * api was signing with an hour ago.
+   *
+   * Three placement decisions, the same three `/ready` above records and for the same reasons:
+   *
+   *  1. **On the root instance, outside `protectedRoutes`, and therefore unauthenticated.**
+   *     Decided by the founder on 2026-08-21, against the alternative of putting it behind a
+   *     session. The Worker's half cannot be authenticated at all - there is no session at the
+   *     edge - so an authenticated api side would mean obtaining a token against a brand-new
+   *     production database at exactly the moment every photo is 403ing, and an operator comparing
+   *     two hosts mid-cutover holds nothing.
+   *  2. **Outside the rate limiter**, for the reason `rate-limit-routes.test.ts` records about
+   *     `/health`: this is polled while something is already wrong, from both sides at once, and a
+   *     throttled diagnostic answers the one question it exists to answer with a 429.
+   *  3. **It answers with its own status code and does not throw**, so `setErrorHandler` is never
+   *     involved. There is no failure path to route into it: the one awaited call is an HMAC over
+   *     a constant, keyed by a value the config schema has already required to be present and at
+   *     least 16 characters, so a process that can answer this route at all has a secret to
+   *     fingerprint.
+   *
+   * `test/parity-route.test.ts` asserts all of it, the placement included.
+   */
+  app.get('/__parity', async (_request, reply) =>
+    reply
+      .code(200)
+      .header('cache-control', 'no-store')
+      .send({
+        parity: await parityFingerprint(deps.config.MEDIA_SIGNING_SECRET),
+        previousParity: null,
+        version: deps.config.SENTRY_RELEASE ?? 'unknown',
+      }),
+  );
 
   /**
    * Every unhandled failure in a route, in one place.

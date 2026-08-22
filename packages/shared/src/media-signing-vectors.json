@@ -12,7 +12,28 @@
     "    | openssl base64 -A | tr '+/' '-_' | tr -d '='",
     "",
     "IMMUTABLE. A change to the signing scheme is a NEW vector set with a new version, never an",
-    "edit to this one, for the same reason an applied migration is never edited."
+    "edit to this one, for the same reason an applied migration is never edited.",
+    "",
+    "APPENDED 2026-08-21: the `rotation` and `parity` sections at the foot of this file. Both",
+    "are appends and not edits, and the paragraph above is exactly what draws the line. Neither",
+    "changes the SCHEME. Rotation is the same HMAC-SHA256 over the same `${objectKey}:${exp}`",
+    "message with a different key; parity is the same HMAC over a constant. Nothing above them",
+    "moved, no existing value was recomputed, and the version stays 1 because a verifier reading",
+    "version 1 still reads the same scheme it always did. A change to the scheme itself would",
+    "still be a new file at version 2 rather than anything in here.",
+    "",
+    "Every appended value came from the same openssl pipeline recorded above, run over the",
+    "message its own section names. None of it came from the module the tests point at, which",
+    "is the entire reason this file exists.",
+    "",
+    "APPENDED 2026-08-21, later the same day: the `routing` section. Also an append and not an",
+    "edit, and it touches the signature not at all: bucket routing reads the first path segment",
+    "of an object key and never hashes anything. So there is no openssl command behind these",
+    "values and there should not be one. They are expectations about which bucket a key may be",
+    "read from, and the correct expectation for almost all of them is `null`, meaning refuse",
+    "before touching R2. They were written from the rule stated in `bucketRoleForObjectKey`,",
+    "not from what the function returned, which matters because the function disagreed with its",
+    "own documented rule when they were written."
   ],
   "secret": "vectors-only-never-a-real-secret",
   "cdnBaseUrl": "https://cdn.clubchatapp.com",
@@ -155,5 +176,284 @@
       "nowMs": 1776074400000,
       "accept": false
     }
-  ]
+  ],
+  "rotation": {
+    "why": [
+      "Key rotation, from the verifier's side. `verifyMediaSignature` takes either one secret or",
+      "an ORDERED list, current key first, and accepts when any of them matches.",
+      "",
+      "`secrets` below is the literal argument, in order. `signedWith` names which key minted",
+      "`sig`, so the server-side test can re-derive it with node:crypto without interpreting",
+      "anything. The three secrets are `secret` above, `previousSecret` and `strangerSecret`",
+      "here. All three are vectors-only strings that have never signed anything real.",
+      "",
+      "The rotation these describe: set the Worker's previous key to the old secret and its",
+      "current key to the new one, then flip the api's single key. URLs minted in the hour before",
+      "the flip keep resolving until they expire. The api never verifies, so it never holds two."
+    ],
+    "previousSecret": "vectors-only-never-a-real-previous-secret",
+    "strangerSecret": "vectors-only-a-secret-neither-side-holds",
+    "cases": [
+      {
+        "name": "mid-rotation: a URL minted by the previous key, with both keys offered",
+        "signedWith": "previous",
+        "secrets": ["vectors-only-never-a-real-secret", "vectors-only-never-a-real-previous-secret"],
+        "objectKey": "photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "exp": 1776078000,
+        "sig": "90khVNswQ8T-iN_ZjS0W9b3i0QWQZZY58dq3CyqOFfU",
+        "nowMs": 1776074400000,
+        "accept": true
+      },
+      {
+        "name": "rotation finished: the same URL once the previous key has been dropped",
+        "signedWith": "previous",
+        "secrets": ["vectors-only-never-a-real-secret"],
+        "objectKey": "photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "exp": 1776078000,
+        "sig": "90khVNswQ8T-iN_ZjS0W9b3i0QWQZZY58dq3CyqOFfU",
+        "nowMs": 1776074400000,
+        "accept": false
+      },
+      {
+        "name": "the ordinary case during a rotation: minted by the current key, both offered",
+        "signedWith": "current",
+        "secrets": ["vectors-only-never-a-real-secret", "vectors-only-never-a-real-previous-secret"],
+        "objectKey": "photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "exp": 1776078000,
+        "sig": "BBiufAhNllrPBYzbR4upxcCZweLOvLMgA-0IlBGkH1E",
+        "nowMs": 1776074400000,
+        "accept": true
+      },
+      {
+        "name": "order independence: the previous key's URL against a reversed list",
+        "signedWith": "previous",
+        "secrets": ["vectors-only-never-a-real-previous-secret", "vectors-only-never-a-real-secret"],
+        "objectKey": "photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "exp": 1776078000,
+        "sig": "90khVNswQ8T-iN_ZjS0W9b3i0QWQZZY58dq3CyqOFfU",
+        "nowMs": 1776074400000,
+        "accept": true
+      },
+      {
+        "name": "order independence: the current key's URL against a reversed list",
+        "signedWith": "current",
+        "secrets": ["vectors-only-never-a-real-previous-secret", "vectors-only-never-a-real-secret"],
+        "objectKey": "photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "exp": 1776078000,
+        "sig": "BBiufAhNllrPBYzbR4upxcCZweLOvLMgA-0IlBGkH1E",
+        "nowMs": 1776074400000,
+        "accept": true
+      },
+      {
+        "name": "a one-element list is the plain string, and accepts what the string accepts",
+        "signedWith": "current",
+        "secrets": ["vectors-only-never-a-real-secret"],
+        "objectKey": "photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "exp": 1776078000,
+        "sig": "BBiufAhNllrPBYzbR4upxcCZweLOvLMgA-0IlBGkH1E",
+        "nowMs": 1776074400000,
+        "accept": true
+      },
+      {
+        "name": "an EMPTY list refuses a perfectly good signature: a keyless rotation fails closed",
+        "signedWith": "current",
+        "secrets": [],
+        "objectKey": "photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "exp": 1776078000,
+        "sig": "BBiufAhNllrPBYzbR4upxcCZweLOvLMgA-0IlBGkH1E",
+        "nowMs": 1776074400000,
+        "accept": false
+      },
+      {
+        "name": "a key neither side holds, refused with both real keys offered",
+        "signedWith": "stranger",
+        "secrets": ["vectors-only-never-a-real-secret", "vectors-only-never-a-real-previous-secret"],
+        "objectKey": "photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "exp": 1776078000,
+        "sig": "rPabJ42xR8IdYHKzYg3w6Vs9nl4oTUlZMorjTEAbGeM",
+        "nowMs": 1776074400000,
+        "accept": false
+      },
+      {
+        "name": "still valid at the exact millisecond of expiry, list or no list",
+        "signedWith": "previous",
+        "secrets": ["vectors-only-never-a-real-secret", "vectors-only-never-a-real-previous-secret"],
+        "objectKey": "photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "exp": 1776078000,
+        "sig": "90khVNswQ8T-iN_ZjS0W9b3i0QWQZZY58dq3CyqOFfU",
+        "nowMs": 1776078000000,
+        "accept": true
+      },
+      {
+        "name": "expired one millisecond later, so no key in the list can rescue it",
+        "signedWith": "current",
+        "secrets": ["vectors-only-never-a-real-secret", "vectors-only-never-a-real-previous-secret"],
+        "objectKey": "photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "exp": 1776078000,
+        "sig": "BBiufAhNllrPBYzbR4upxcCZweLOvLMgA-0IlBGkH1E",
+        "nowMs": 1776078000001,
+        "accept": false
+      }
+    ]
+  },
+  "parity": {
+    "why": [
+      "The parity canary. Both the api and the Worker sign one constant with their own copy of",
+      "MEDIA_SIGNING_SECRET and publish the first 8 characters, so `curl` against each side and",
+      "one `diff` answers 'do these two hold the same secret'. A mismatch presents as every photo",
+      "403ing, which looks exactly like a broken Worker rather than a wrong password.",
+      "",
+      "`message` is PARITY_MESSAGE, asserted equal to the exported constant so the two cannot",
+      "drift. `signature` is the full 43 characters and `fingerprint` is the published prefix,",
+      "recorded separately so that taking the wrong number of characters cannot pass.",
+      "",
+      "Generated with the same openssl pipeline as everything above, over the constant:",
+      "  printf '%s' 'clubchat-media-signing-parity-v1' \\",
+      "    | openssl dgst -sha256 -hmac \"$SECRET\" -binary \\",
+      "    | openssl base64 -A | tr '+/' '-_' | tr -d '=' | cut -c1-8"
+    ],
+    "message": "clubchat-media-signing-parity-v1",
+    "fingerprintLength": 8,
+    "cases": [
+      {
+        "name": "the current vectors secret",
+        "secret": "vectors-only-never-a-real-secret",
+        "signature": "JObr1MmTeNHmkrxrDD9bppiq5Xr5QwrFuB_8RJAUjqk",
+        "fingerprint": "JObr1MmT"
+      },
+      {
+        "name": "the previous vectors secret, which is what a Worker mid-rotation reports",
+        "secret": "vectors-only-never-a-real-previous-secret",
+        "signature": "kkZR77a51NhWUdj2sRMr-vq3BmGvpWXbiq9IU6knezY",
+        "fingerprint": "kkZR77a5"
+      }
+    ]
+  },
+  "routing": {
+    "why": [
+      "Which bucket a key may be read from, decided by its FIRST PATH SEGMENT and nothing else.",
+      "No HMAC is involved, so unlike every other section here these values came from the rule",
+      "rather than from openssl. The rule, stated in full so a reader never has to infer it:",
+      "",
+      "  a key routes only when it has a slash, the text before that slash is non-empty, and",
+      "  that text is exactly one of the kinds in MEDIA_KINDS. Anything else is null.",
+      "",
+      "Null is a refusal and the edge answers 404 on it WITHOUT reading a bucket. That is the",
+      "security property the whole section exists to hold: routing an unrecognised prefix to the",
+      "private bucket would turn a typo into a probe of private content.",
+      "",
+      "Why this table is shaped the way it is. On 2026-08-21 a red-team pass found that",
+      "`bucketRoleForObjectKey` computed its prefix as `slice(0, indexOf('/'))`, and indexOf",
+      "answers -1 when there is no slash, which slice reads as `drop the last character` rather",
+      "than as `nothing`. So a SLASHLESS key whose final character removal lands on a real kind",
+      "routed to a real bucket: `photos` was read as `photo`, `avatars` as `avatar`, `documents`",
+      "as `document`. Driven end to end in workerd it returned 200 with bytes out of the private",
+      "bucket. The existing tests missed exactly this shape, and it is worth understanding why:",
+      "they covered `photos/2026-04/x`, which HAS a slash and so has a genuinely unknown prefix,",
+      "and `photo`, which loses a real character and becomes `phot`. Neither is the broken case.",
+      "The table below therefore pairs each slashless near-miss with the slashed spelling of the",
+      "same string, because only the pair distinguishes the two.",
+      "",
+      "It was never reachable from the internet: the api signs only `${kind}/${YYYY-MM}/${uuid}`,",
+      "so no signature for a slashless key can be obtained. It is recorded here anyway because a",
+      "documented security property that is false is worse than one that was never claimed."
+    ],
+    "cases": [
+      {
+        "name": "the ordinary photo key",
+        "objectKey": "photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "bucketRole": "content"
+      },
+      {
+        "name": "the ordinary avatar key, which is the other bucket",
+        "objectKey": "avatar/2026-04/aaaaaaaa-0000-4000-8000-000000000002",
+        "bucketRole": "identity"
+      },
+      {
+        "name": "the ordinary document key",
+        "objectKey": "document/2026-04/bbbbbbbb-0000-4000-8000-000000000003",
+        "bucketRole": "content"
+      },
+      {
+        "name": "a derived variant still routes on its first segment",
+        "objectKey": "photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001.thumb.webp",
+        "bucketRole": "content"
+      },
+      {
+        "name": "slashless `photos`: the red-team case. Dropping its last character IS a kind",
+        "objectKey": "photos",
+        "bucketRole": null
+      },
+      {
+        "name": "slashless `avatars`: the same class, pointed at the identity bucket",
+        "objectKey": "avatars",
+        "bucketRole": null
+      },
+      {
+        "name": "slashless `documents`: the same class again",
+        "objectKey": "documents",
+        "bucketRole": null
+      },
+      {
+        "name": "slashless `avatarZ`: the class is not about plurals, it is about the last character",
+        "objectKey": "avatarZ",
+        "bucketRole": null
+      },
+      {
+        "name": "slashed `photos/`, an unknown prefix that really is unknown",
+        "objectKey": "photos/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "bucketRole": null
+      },
+      {
+        "name": "slashless `photo`: a real kind, but with no path it addresses no object",
+        "objectKey": "photo",
+        "bucketRole": null
+      },
+      {
+        "name": "slashless `nope`, which resembles nothing",
+        "objectKey": "nope",
+        "bucketRole": null
+      },
+      {
+        "name": "slashless `xphoto`: a kind is a whole segment, never a substring of one",
+        "objectKey": "xphoto",
+        "bucketRole": null
+      },
+      {
+        "name": "slashed `xphoto/`, the same string with a path",
+        "objectKey": "xphoto/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "bucketRole": null
+      },
+      {
+        "name": "the empty key",
+        "objectKey": "",
+        "bucketRole": null
+      },
+      {
+        "name": "a leading slash, so the first segment is empty. Refused deliberately, not by luck",
+        "objectKey": "/photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "bucketRole": null
+      },
+      {
+        "name": "a bare slash, which is a leading slash and nothing else",
+        "objectKey": "/",
+        "bucketRole": null
+      },
+      {
+        "name": "a trailing slash and no path: the segment is real, so the bucket is real",
+        "objectKey": "photo/",
+        "bucketRole": "content"
+      },
+      {
+        "name": "kinds are case sensitive, because R2 keys are",
+        "objectKey": "Photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "bucketRole": null
+      },
+      {
+        "name": "a traversal attempt routes on `..`, which is not a kind",
+        "objectKey": "../photo/2026-04/9f1c8b2e-0000-4000-8000-000000000001",
+        "bucketRole": null
+      }
+    ]
+  }
 }

@@ -58,8 +58,11 @@ export interface MediaStore {
    *
    * > **This exists because the custom `exp`/`sig` scheme is validated by the CDN edge, not by
    * > the object store.** Production puts a signature-checking CDN in front of the bucket, and
-   * > the hour-aligned HMAC is what gives every viewer a byte-identical URL and therefore one
-   * > shared cache entry. Point that same URL straight at the bucket and it is just an
+   * > the hour-aligned HMAC is what gives every viewer a byte-identical URL. (That collapses the
+   * > cache KEY; it is NOT one shared edge entry, which needs Workers Caching and is off. See
+   * > ADR-0044. The byte-identical URL is what matters here either way, because it is what makes
+   * > a per-browser cache hit possible at all.) Point that same URL straight at the bucket and it
+   * > is just an
    * > unauthenticated GET on private content, which is correctly refused with 403 - so
    * > development, which has no CDN, needs the store to do the signing instead.
    *

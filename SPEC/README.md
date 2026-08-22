@@ -179,6 +179,7 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0041](decisions/0041-a-document-opens-in-the-platforms-own-viewer.md) | A document opens in the platform's own viewer, through a local native module |
 | [0042](decisions/0042-a-membership-write-carries-the-role-it-was-authorized-against.md) | A membership write carries the role it was authorized against, and a lost race is a refusal |
 | [0043](decisions/0043-the-three-roles-deploy-as-three-fly-apps.md) | The three roles deploy as three Fly apps from one image, and the gateway is an HTTP service so its readiness can be checked |
+| [0044](decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) | The CDN is a Cloudflare Worker that verifies the signature before it reads a bucket, and the signing secret rotates on the edge alone |
 
 ## Templates
 

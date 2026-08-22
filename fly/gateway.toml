@@ -26,6 +26,47 @@ primary_region = 'iad'
   # per-IP anything on /health or /ready. So a forged X-Forwarded-For has nothing to
   # influence, and the safe default costs nothing. Do not copy the api's value across.
 
+  # --- Identity and object storage ---
+  #
+  # Required by the schema and unread by this role, exactly like the media pair below. One flat
+  # config serves all three roles, so the gateway refuses to boot without them even though it
+  # serves no auth and never touches a bucket. `fly/api.toml` carries the full reasoning for
+  # each value and this file deliberately does not restate it.
+  #
+  # Held byte-identical to the api's on purpose. The temptation on a role that reads none of
+  # them is to leave a placeholder here, and the argument against it is the same one that makes
+  # `TRUST_PROXY`'s absence above deliberate: a value that differs per app is how two halves of
+  # one system come to disagree, and a placeholder is a value that differs.
+  BETTER_AUTH_URL = 'https://api.clubchatapp.com'
+  CLIENT_ORIGIN = 'https://clubchatapp.com'
+  S3_ENDPOINT = 'https://47a52f98315af67a4231d979935ab1f2.r2.cloudflarestorage.com'
+  S3_BUCKET_PUBLIC = 'clubchat-identity'
+  S3_BUCKET_PRIVATE = 'clubchat-content'
+
+  # --- Media ---
+  #
+  # The gateway serves no media at all. It never mints a download URL, never reads a bucket,
+  # and `urlMode` is read in exactly one place in the codebase: the api's own media deps in
+  # api/plumbing.ts. Both values below are unread by this process from the moment it boots.
+  #
+  # **They are here anyway because one flat config schema serves all three roles, and every
+  # role parses the whole of it at startup.** config.ts validates eagerly on purpose, so a
+  # missing required value is a startup failure with a readable message rather than an
+  # undefined that surfaces on the first request that needs it. That is the right trade
+  # everywhere else and it has this consequence here: delete either line and the gateway does
+  # not boot, which during a rolling deploy means machines that never take a socket.
+  #
+  # So this is the opposite case to TRUST_PROXY above. There, a value the api needs is left off
+  # because this role does not read it. Here, values this role does not read are present
+  # because the schema requires them. Both are deliberate, and neither is a copy to tidy away.
+  #
+  # See fly/api.toml for what the two actually mean, why the first deploy ships 'presign', and
+  # why MEDIA_SIGNING_SECRET is a `fly secrets set` rather than a line in one of these files.
+  # It is required here too, for the same reason as these two, and is read by this role just as
+  # little.
+  MEDIA_URL_MODE = 'presign'
+  MEDIA_CDN_BASE_URL = 'https://cdn.clubchatapp.com'
+
 # An HTTP service, and this reverses what gateway/main.ts's opening comment implies.
 #
 # That comment says the gateway is deployed behind an L4 balancer rather than L7, because

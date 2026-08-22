@@ -24,8 +24,23 @@ compatibility mistake cannot be un-shipped, only followed by another release.
 | Postgres 17 | Neon | api, gateway, worker |
 | Redis | Upstash | api, gateway, worker |
 | Identity and content buckets | Cloudflare R2 | The client for presigned `PUT`, the CDN for reads |
+| `cdn-worker` (`packages/cdn-worker`) | Cloudflare Workers, paid plan | The client, over HTTPS, for media bytes |
 | Web client | Vercel | Browsers |
 | JavaScript bundles | EAS Update | Phones |
+
+**The CDN row is the one piece here that is not built from the server image**, and it is the only
+part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because
+`cdn.<domain>` has to validate the `exp`/`sig` pair that [Media pipeline](07-media-pipeline.md)
+specifies, which a bucket cannot do. See
+[ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md), and rule 8
+below for why that hostname must never be pointed at a bucket instead.
+
+**It is also outside the error reporting this document otherwise assumes.** [Stack and
+hosting](15-stack-and-hosting.md) puts every server failure through Sentry, on the `clubchat-server`
+project; a Worker exception reaches neither, and is visible only in Cloudflare's own observability.
+Nothing pages on it. This
+is an accepted gap recorded in ADR-0044 rather than an oversight, and the Worker is written to turn
+its known failure modes into status codes rather than throws because of it.
 
 **One image, three roles.** `packages/server` has three entrypoints over one dependency graph, so a
 single image is built and the role is chosen by the start command. This is
@@ -179,9 +194,18 @@ at the edge and nowhere else; a bucket has never heard of it.
 **9. Every deploy is of a commit that passed CI on `main`.** Not a local build, not a branch.
 
 **10. Secrets are set on the platform, never in the repo** (`AGENTS.md` non-negotiable 5).
-`fly secrets set` for the server roles, the EAS dashboard for anything a build needs. The only class
-safe to inline is an `EXPO_PUBLIC_` value that is write-only in the client's hands, which is why the
-Sentry DSN qualifies and nothing else in `.env.example` does.
+`flyctl` for the server roles, `wrangler secret put` for the CDN Worker, the EAS dashboard for
+anything a build needs. The only class safe to inline is an `EXPO_PUBLIC_` value that is write-only
+in the client's hands, which is why the Sentry DSN qualifies and nothing else in `.env.example`
+does.
+
+**Prefer `fly secrets import` over `fly secrets set`.** `set` takes the value as a command
+argument, which puts it in shell history and in the process table; `import` reads `NAME=VALUE`
+pairs from stdin. The two tools also disagree about newlines, and it matters because
+`MEDIA_SIGNING_SECRET` has to be byte-identical on the api and the Worker: `secrets import` is line
+oriented, so a trailing `\n` terminates the pair, while `wrangler secret put` takes raw stdin and
+would make that `\n` part of the key. `packages/cdn-worker/README.md` carries the exact pair of
+commands, and `/__parity` is how you find out you got it right rather than assuming.
 
 **11. A rolling deploy redelivers.** `SIGTERM` part-way through a drain is the commonest cause of an
 outbox event being handled twice, which is why [Effects engine](04-effects-engine.md) requires every

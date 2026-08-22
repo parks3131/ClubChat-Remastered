@@ -20,6 +20,17 @@ import path from 'node:path';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+// packages/cdn-worker/src is deliberately NOT here, and the omission is the point of this
+// list being explicit rather than a glob over packages/*.
+//
+// This check exists because Node runs `.ts` by STRIPPING types and therefore supports
+// strictly less grammar than esbuild does. The Worker never runs under Node: wrangler
+// bundles it with esbuild for workerd, which accepts the full grammar, exactly as vitest
+// does. So the gap this script closes does not exist there, and probing it would instead
+// import Workers-only globals into a plain Node process to prove nothing.
+//
+// What covers the Worker instead is `wrangler deploy --dry-run` in CI, which is the real
+// bundler answering the real question.
 const ROOTS = [
   'packages/server/src',
   'packages/shared/src',

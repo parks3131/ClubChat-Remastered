@@ -17,6 +17,12 @@
  * **Imported by subpath only** (`@clubchat/shared/media-signing`), never re-exported from
  * `index.ts`. `index.ts` pulls in `emoji-catalog.generated.ts`, which is a quarter of a megabyte
  * and has no business inside a Worker bundle.
+ *
+ * Two things in here are about operating the deployment rather than about the signature itself,
+ * and both are documented at their definitions below because that is where somebody will be
+ * standing when they need them: `verifyMediaSignature` explains key rotation and why the previous
+ * key exists only on the Worker, and `parityFingerprint` explains how to tell in one command
+ * whether the two sides actually hold the same secret.
  */
 
 /**
@@ -59,10 +65,43 @@ export const kindToBucketRole: Record<MediaKind, 'identity' | 'content'> = {
  * bucket would turn a typo into a probe of private content.
  */
 export function bucketRoleForObjectKey(objectKey: string): 'identity' | 'content' | null {
-  const kind = objectKey.slice(0, objectKey.indexOf('/'));
-  return Object.hasOwn(kindToBucketRole, kind)
-    ? kindToBucketRole[kind as MediaKind]
-    : null;
+  /*
+   * The slash is found and CHECKED, rather than fed straight to `slice`.
+   *
+   * > This read `objectKey.slice(0, objectKey.indexOf('/'))` until 2026-08-21, and a red-team
+   * > pass drove ten bytes out of the PRIVATE bucket through it. `indexOf` answers `-1` when
+   * > there is no slash, and `slice(0, -1)` drops the last character instead of returning the
+   * > empty string. So `photos` became `photo`, `avatars` became `avatar`, `documents` became
+   * > `document`, and each one routed and then read. Requested through the Worker with a valid
+   * > signature over the key `photos`, it answered 200 with the object.
+   *
+   * Nothing could reach it: the api only ever mints `${kind}/${YYYY-MM}/${uuid}`, so no
+   * signature for a slashless key has ever existed. What was actually broken is the sentence
+   * above this function, which promises the opposite of what it did, and five other places in
+   * the Worker and its README that restate it. A documented security property that is false is
+   * worse than one that was never claimed, because the next person builds on it.
+   *
+   * It also explains why the tests missed it, which is the part worth keeping. The routing
+   * suite covered `photos/2026-04/x`, which HAS a slash and so genuinely has the prefix
+   * `photos`, and `photo`, which loses a real character and becomes `phot`. Neither is the
+   * broken shape. The gap was exactly "a slashless key whose last character removal lands on a
+   * real kind", and it is now a vector.
+   */
+  const slash = objectKey.indexOf('/');
+  if (slash < 0) return null;
+
+  /*
+   * An empty first segment is refused explicitly rather than left to `Object.hasOwn`.
+   *
+   * A leading slash (`//photo/...` in a URL) yields the key `/photo/...`, whose first segment is
+   * `''`. That already refuses, because the empty string is not a kind, but it refuses by
+   * accident of the lookup rather than by intent. Stated here so that adding a kind can never
+   * make the empty string meaningful.
+   */
+  const kind = objectKey.slice(0, slash);
+  if (kind === '') return null;
+
+  return Object.hasOwn(kindToBucketRole, kind) ? kindToBucketRole[kind as MediaKind] : null;
 }
 
 const HOUR_MS = 3_600_000;
@@ -168,15 +207,51 @@ export async function signedMediaUrl(
  *
  * `crypto.subtle.verify` rather than a comparison written here: it is constant time by contract on
  * both runtimes, where a byte-by-byte compare that returns early leaks how much of a guessed
- * signature was correct. A signature that is not base64url at all is refused before that, since it
- * cannot be decoded into bytes to compare.
+ * signature was correct. That reasoning is unchanged by there being more than one key: each
+ * candidate gets its own `crypto.subtle.verify`, and what leaks from trying two keys instead of
+ * one is which key matched, which is not a secret. A signature that is not base64url at all is
+ * refused before any of that, since it cannot be decoded into bytes to compare.
  *
  * **The expiry comparison is `<`, not `<=`**, so a URL is still valid at the exact millisecond it
  * expires. Preserved deliberately from the `node:crypto` original: the boundary is pinned by the
  * shared vectors, and moving it would be invisible for all but one millisecond an hour.
+ *
+ * **The expiry is checked once, before any HMAC.** Not once per key. An expired URL is the most
+ * common refusal this function will ever issue, and it is also the cheapest, so multiplying it by
+ * the number of configured keys would be paying for nothing.
+ *
+ * ## Rotating the signing secret
+ *
+ * `secret` takes either one string or an ORDERED list, current key first, and the signature is
+ * accepted when any of them matches. An empty list is `false`, never `true`: a rotation that
+ * accidentally supplies no keys has to fail closed, because the alternative is a deploy that
+ * silently opens every object in both buckets to anybody who can type a URL.
+ *
+ * **The previous key exists on the Worker and nowhere else, and that is a decision rather than an
+ * omission.** There is deliberately no `MEDIA_SIGNING_SECRET_PREVIOUS` in
+ * `packages/server/src/config.ts`, so anybody who came looking for that knob and could not find it
+ * is in the right place. The api signs and never verifies, so a previous key on the Fly app would
+ * be an environment variable nothing reads, and an unread secret is worse than absent: it shows up
+ * in `fly secrets list` looking like configuration, so the next person to audit the app finds
+ * drift they cannot explain and either trusts a value nothing consumes or removes one they are not
+ * sure is dead. Signing always uses the current key. There is no such thing as signing with the
+ * previous one.
+ *
+ * The rotation that follows from that is three steps and takes no coordination:
+ *
+ *  1. Set the Worker's PREVIOUS key to the secret currently in use, and its CURRENT key to the new
+ *     one. The Worker now accepts both. Nothing has changed for anybody.
+ *  2. Flip the api's single key to the new one. From here on every URL it mints is signed with the
+ *     new key, which the Worker already accepts.
+ *  3. Once the old URLs have aged out, clear the Worker's previous key.
+ *
+ * The window in step 3 is exactly one hour, and it is one hour because of `hourAlignedExpiry`: the
+ * longest-lived URL signed with the old key expires two hours after the top of the hour it was
+ * minted in. URLs already in flight keep resolving for the rest of their hour, so no photo goes
+ * dark during the change and there is no moment when the two sides have to be updated together.
  */
 export async function verifyMediaSignature(
-  secret: string,
+  secret: string | readonly string[],
   objectKey: string,
   exp: number,
   sig: string,
@@ -185,11 +260,75 @@ export async function verifyMediaSignature(
   if (!Number.isFinite(exp) || exp * 1000 < nowMs) return false;
   const signature = fromBase64url(sig);
   if (signature === null) return false;
-  const key = await hmacKey(secret, 'verify');
-  return crypto.subtle.verify(
-    'HMAC',
-    key,
-    signature as unknown as BufferSource,
-    encoder.encode(message(objectKey, exp)),
-  );
+  const candidates = typeof secret === 'string' ? [secret] : secret;
+  const signed = encoder.encode(message(objectKey, exp));
+  for (const candidate of candidates) {
+    const key = await hmacKey(candidate, 'verify');
+    const matched = await crypto.subtle.verify(
+      'HMAC',
+      key,
+      signature as unknown as BufferSource,
+      signed,
+    );
+    if (matched) return true;
+  }
+  return false;
+}
+
+/**
+ * The constant both sides sign to prove they hold the same secret. Printed here on purpose.
+ *
+ * It carries a version suffix because the fingerprint is only comparable between two sides that
+ * signed the same thing: changing this string changes every fingerprint, so it changes with a new
+ * name rather than in place.
+ */
+export const PARITY_MESSAGE = 'clubchat-media-signing-parity-v1';
+
+/**
+ * How many characters of the signature get published. See `parityFingerprint`.
+ *
+ * Eight, and the number is load-bearing rather than a formatting choice, so the two sides publish
+ * comparable values. It lives in the shared vectors as well, which is what stops it drifting.
+ */
+const PARITY_FINGERPRINT_LENGTH = 8;
+
+/**
+ * The first 8 characters of the signature over `PARITY_MESSAGE`. Not a secret.
+ *
+ * ## What it is for
+ *
+ * The single likeliest failure in this deployment is the api and the Worker holding different
+ * values of `MEDIA_SIGNING_SECRET`. A trailing newline picked up by `wrangler secret put` is
+ * enough to cause it, and so is pasting the wrong one of two similar-looking strings at midnight.
+ *
+ * The reason it deserves its own diagnostic is how it presents: every photo 403s. Every single
+ * one, immediately, with the api healthy and the Worker healthy and both sets of logs saying
+ * exactly what they should. That looks like a broken Worker, or a broken R2 binding, or a bad
+ * route, and those are the three things somebody will spend an evening on. It does not look like a
+ * wrong password, because a wrong password usually announces itself at the moment it is used.
+ *
+ * So both sides expose this over `GET /__parity`, and comparing them is one line of shell rather
+ * than an evening. Two matching fingerprints eliminate the whole class in one command, which is
+ * worth far more than it costs, and the Worker additionally reports the fingerprint of its
+ * previous key so that mid-rotation you can see it still accepts what the api was signing with an
+ * hour ago.
+ *
+ * ## Why publishing it unauthenticated is safe
+ *
+ * It is 8 characters of base64url, so 48 bits, of an HMAC-SHA256 over a constant that is printed
+ * in this file and in this repository. There is no shortcut from those 48 bits back to the key:
+ * recovering it means a full key search, guessing candidate secrets and hashing each one, exactly
+ * as if the fingerprint had not been published at all. What it does reveal is precisely the fact
+ * you want revealed, and nothing else: WHETHER the secret changed. It cannot be used to sign
+ * anything, and it says nothing about the secret's length or content.
+ *
+ * That property is what allows the api's route to sit unauthenticated beside `/health`, which it
+ * has to: the Worker's copy cannot be authenticated at all, so an authenticated api side would
+ * mean obtaining a session token against a brand-new production database at exactly the moment you
+ * are debugging a 403 on every photo.
+ */
+export async function parityFingerprint(secret: string): Promise<string> {
+  const key = await hmacKey(secret, 'sign');
+  const mac = await crypto.subtle.sign('HMAC', key, encoder.encode(PARITY_MESSAGE));
+  return base64url(mac).slice(0, PARITY_FINGERPRINT_LENGTH);
 }

@@ -41,9 +41,19 @@ WORKDIR /app
 # Manifests only, before any source, so `npm ci` re-runs on a dependency change and is a
 # cache hit on every commit that only touches code.
 #
-# All three packages/* manifests are copied, including client-core's, because npm ci
-# reconciles the declared workspace set against package-lock.json before installing
+# Three of the four packages/* manifests are copied, including client-core's, because npm
+# ci reconciles the declared workspace set against package-lock.json before installing
 # anything. Only two of the three are then installed, and only two reach the runtime stage.
+#
+# The fourth, packages/cdn-worker, is deliberately absent, and it is absent the same way
+# apps/mobile is: the `packages/*` glob is evaluated against this filesystem, so a manifest
+# that was never copied is a workspace npm never sees, even though package-lock.json holds
+# an entry for it. Proved by building this stage rather than reasoned about, on 2026-08-21,
+# when the Worker became the fourth workspace. The image carries no cdn-worker manifest, no
+# source, and no node_modules symlink.
+#
+# It stays absent on purpose. The Worker is deployed by wrangler to Cloudflare's edge and
+# has nothing to do with this image, and wrangler alone is roughly 80MB of devDependency.
 COPY package.json package-lock.json ./
 COPY packages/server/package.json      packages/server/
 COPY packages/shared/package.json      packages/shared/

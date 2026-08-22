@@ -137,8 +137,10 @@ GET /media/:id                     ← authenticated, authorized (same membershi
 ```
 
 - The signature expiry is **aligned to the top of the hour** (`exp = ceil(now, 1h) + 1h`), so
-  every viewer in that window is issued the *byte-identical* URL. One CDN cache entry serves all
-  300 members instead of 300 origin fetches.
+  every viewer in that window is issued the *byte-identical* URL. That is what makes the URL
+  cacheable at all. It is **not** served from one shared edge entry: that needs Workers Caching,
+  which is opt in and deliberately off. See the caching note in
+  [ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md).
 - Authorization happens at the `/media/:id` hop, on every request, using the same predicate that
   protects the message - so a private Eboard photo is never reachable by a guessable URL
   ([Media and galleries](../PRD/13-media-and-galleries.md) rule 1).
@@ -204,8 +206,22 @@ changing under people. Re-deriving is a decision with a cost, not a migration.
 **Added while completing Phase 3, on discovering that the client could not render a photo at all.**
 
 The hour-aligned `exp`/`sig` pair is validated by **the CDN edge**, not by the object store. That
-is the production shape and it is what buys the debt-7 fix: one byte-identical URL per window,
-therefore one shared cache entry for all 300 members instead of 300 origin fetches.
+is the production shape, and it produces one byte-identical URL per window for all 300 members
+rather than 300 different ones.
+
+**Debt 7 is only partly paid off, and this was asserted in five files before anybody checked.**
+A byte-identical URL is a prerequisite for caching; it is not by itself a shared edge entry.
+Caching a Worker's response requires **Workers Caching**, which is opt in through a top-level
+`"cache": {"enabled": true}` in `wrangler.jsonc` and is deliberately not set. So the position
+today is one cache entry per browser rather than one for everybody, and every viewer's first fetch
+of a photo is a live R2 read.
+
+What the alignment does buy is still real: the cache **key** collapses to one URL per window
+instead of fanning out per fetch, a deleted photo goes dark within the hour, and expiries stagger.
+Found by a red-team pass on 2026-08-21 and confirmed against Cloudflare's documentation and the
+pinned wrangler's config schema.
+[ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) carries the
+citations and the one command that re-confirms it after the cutover.
 
 Point that same URL straight at a bucket with no CDN in front of it and the store has never heard
 of `exp` or `sig`, so it is simply an unauthenticated GET on private content - correctly refused
@@ -228,6 +244,40 @@ comparing the strings.
 
 `cdn` is the default so that a missing value in production cannot silently start handing out
 store-signed URLs.
+
+### What "the CDN edge" actually is
+
+A **Cloudflare Worker**, at `packages/cdn-worker`, decided in
+[ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md). Not a CDN
+configuration and never a bucket: see [Deployment](21-deployment.md) rule 8 for why pointing this
+hostname at R2 directly publishes every private object.
+
+It does four things in a fixed order, and the order is the design:
+
+1. **Verify** the `exp`/`sig` pair. Anything wrong is 403.
+2. **Route** by the key's first path segment. `avatar/` is identity, `photo/` and `document/` are
+   content, and anything else is 404 **before R2 is touched at all**.
+3. **Read** the object.
+4. **Answer**, with `public, max-age=3600` on a hit and `no-store` on every refusal.
+
+Refusing before reading is what stops an unauthenticated caller doing work in the private bucket,
+and it is what stops the response distinguishing "this object does not exist" from "your signature
+is wrong".
+
+**One implementation of the signature, not two.** The api mints on Node and the Worker verifies on
+`workerd`, so `signMediaUrl` and `verifyMediaSignature` live in `@clubchat/shared/media-signing`,
+written on WebCrypto because `crypto.subtle` is the only hash `workerd` has. Both runtimes import
+it. That is the whole reason signing is asynchronous here.
+
+**The secret can rotate without a media outage.** The Worker accepts a signature from either the
+current key or a previous one, current first, while the api always signs with the current key. The
+previous key is configured on the Worker alone. Without that, changing the secret darkens every
+outstanding URL for the remainder of its hour window.
+
+**Both sides answer `GET /__parity`** with the first 8 characters of an HMAC over one public
+constant, so "do these two hold the same secret" is a `diff` of two `curl`s. A mismatch presents as
+every photo 403ing and looks exactly like a broken Worker rather than a wrong key, which is why the
+diagnostic exists at all rather than being reasoned out each time.
 
 ## Reaching media from a client
 

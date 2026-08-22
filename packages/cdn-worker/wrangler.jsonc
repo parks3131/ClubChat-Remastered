@@ -1,0 +1,81 @@
+// The CDN Worker. Serves cdn.<domain>, validates the media URL signature, reads R2.
+//
+// Read this file beside src/env.ts. Nothing checks the binding names in the two against each
+// other, so a rename in one and not the other typechecks, deploys, and is undefined at the edge.
+//
+// Deployed with `npx wrangler deploy` from packages/cdn-worker. Secrets are NOT here; see
+// README.md for `wrangler secret put` and for why a trailing newline on the signing secret is a
+// different HMAC key and therefore a total media outage.
+{
+  "name": "clubchat-cdn",
+  "main": "src/index.ts",
+
+  // Pinned rather than tracking, because a compatibility date is the one thing in this file that
+  // changes runtime behaviour without any code changing. Move it deliberately, with the changelog
+  // open, and never as a side effect of touching something else.
+  "compatibility_date": "2026-08-21",
+
+  // No nodejs_compat, and that absence is load-bearing. @clubchat/shared is written on WebCrypto
+  // with no `node:` imports at all, which is the only reason one signing implementation can serve
+  // both a Fly machine and workerd. Enabling the shim here would let a `Buffer` creep into shared
+  // code and break the api's half without any signal from this package.
+
+  // Both buckets, by role. `bucketRoleForObjectKey` in @clubchat/shared decides which one a key
+  // belongs to, exhaustively: avatars to identity, photos and documents to content, anything else
+  // a 404 before either bucket is touched. There is deliberately no default, because routing an
+  // unrecognised prefix to the content bucket would turn a typo into a probe of private media.
+  "r2_buckets": [
+    { "binding": "IDENTITY", "bucket_name": "clubchat-identity" },
+    { "binding": "CONTENT", "bucket_name": "clubchat-content" }
+  ],
+
+  // NO SECOND HOSTNAME. Both of these default to ON and both had to be turned off by hand.
+  //
+  // `wrangler deploy` publishes to <name>.<subdomain>.workers.dev unless told not to: the shipped
+  // source computes `defaultWorkersDev = routes.length === 0` and then
+  // `workers_dev = config_workers_dev ?? defaultWorkersDev`, and this config declares no routes on
+  // purpose (see the note at the bottom). `preview_urls` follows it and adds a per-version URL too.
+  //
+  // Why that is not cosmetic: the signed message is `${objectKey}:${exp}` and covers NO HOST, so
+  // every URL the api mints validates byte for byte on any hostname this Worker answers on. A
+  // second hostname is therefore a complete second front door to both buckets, outside the
+  // clubchatapp.com zone - so every WAF rule, rate limit, bot rule or Access policy ever attached
+  // to that zone is bypassed by swapping the host, and /__parity is reachable there as well.
+  //
+  // The collected values note that workers.dev was wanted as "a place to test before attaching the
+  // custom hostname". It is not needed for that, and the deploy order is why: the three Fly apps
+  // ship on MEDIA_URL_MODE=presign, so the Worker is deployed and verified on cdn.clubchatapp.com
+  // while nothing depends on it yet. Testing on the real hostname before anything uses it is
+  // strictly better than testing on a second hostname that then stays open forever.
+  "workers_dev": false,
+  "preview_urls": false,
+
+  // Which build is answering, for GET /__parity. Cloudflare fills this in; there is nothing to
+  // set. It is the Worker's counterpart to SENTRY_RELEASE on the api, so that comparing the two
+  // /__parity responses answers "same secret?" and "same deploy?" in one request each.
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+
+  // Workers Logs, on. Nothing REPORTS an error from this Worker - there is no Sentry at the edge
+  // and no alert on a 5xx rate, which is an accepted gap recorded in the ADR - so this dashboard
+  // is the only place an exception here is visible at all. Off by default on new Workers, which
+  // is exactly the state that makes a silent gap silent twice over.
+  "observability": { "enabled": true }
+
+  // MEDIA_SIGNING_SECRET and MEDIA_SIGNING_SECRET_PREVIOUS are secrets and are deliberately absent
+  // from this file. Anything under "vars" here is plaintext in the repo and readable in the
+  // dashboard by anyone with access to the account; the signing key mints a valid URL for every
+  // object in both buckets, so a "vars" entry would be a repo-committed skeleton key. Put them
+  // with `wrangler secret put` and keep local values in .dev.vars, which .gitignore already covers.
+
+  // Cloudflare's own edge cache is NOT caching anything this Worker serves, and that is the
+  // default rather than a decision. Workers Caching is opt in, with `"cache": { "enabled": true }`
+  // right here, and it is deliberately absent: whether to turn it on is the founder's call, being
+  // put to him separately. Until it is on, `public, max-age=3600` reaches browsers and no
+  // Cloudflare cache, so N members opening one photo is N reads of R2. The docblock on
+  // HIT_CACHE_CONTROL in src/index.ts carries the evidence and the one command that settles it
+  // against the real deployment.
+
+  // No "routes" here yet, on purpose. cdn.<domain> is attached as a Workers Custom Domain, and a
+  // route naming a zone the account does not hold fails `wrangler deploy` outright rather than at
+  // request time. Add it in the same change that attaches the domain, not before.
+}

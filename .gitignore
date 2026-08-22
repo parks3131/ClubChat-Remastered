@@ -36,3 +36,14 @@ coverage/
 # Local agent settings. Untracked because it accumulates one-off dev commands,
 # including bearer tokens from smoke tests against the local database.
 .claude/settings.local.json
+
+# Wrangler's local state, and the Worker's local secrets.
+#
+# `.dev.vars` is the Worker's equivalent of `.env` and holds a real MEDIA_SIGNING_SECRET,
+# but it does NOT start with `.env`, so the deny-everything rule above does not cover it.
+# Same shape as the `.env.bak` leak that rule was written for: a secret file whose spelling
+# nobody had thought of. The template is allowed back, as `.env.example` is.
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example

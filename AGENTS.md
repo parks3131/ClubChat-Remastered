@@ -503,6 +503,7 @@ into `SPEC/PRD/17` and `SPEC/TECH/14` - this file is meant to shrink |
 | `packages/shared/` | Wire contract and domain vocabulary. Imported by client AND server, so neither can drift from the other |
 | `packages/client-core/` | Local store, send outbox, sync engine. Shared by the Expo app and the exit drill, so the drill tests what ships |
 | `packages/server/` | Three roles, one codebase: `src/api`, `src/gateway`, `src/worker` |
+| `packages/cdn-worker/` | The Cloudflare Worker behind `cdn.<domain>`. Verifies the media signature, then routes to a bucket, then reads. Deployed by `wrangler`, NOT by the server image, and it is the only thing here that does not run on Node - so it imports `@clubchat/shared/media-signing` by subpath and nothing with a `node:` import. See [ADR-0044](SPEC/decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) |
 | `packages/server/src/api/app.ts` | Composition only. Registers route groups inside the authenticated scope, so an unauthenticated route cannot be added by forgetting a hook |
 | `packages/server/src/api/routes/` | One file per **path** group, not per domain module. `/channels/:id/reports` sits with the moderation queue |
 | `packages/server/src/api/plumbing.ts` | What every route group shares: `AppDeps`, `authorizeChannel`, `refusalStatus`, `isUuid` |
@@ -1126,3 +1127,65 @@ that records how to recognise the class._
     and the code path that would produce it anyway has never been disabled to check. Found on
     2026-08-21 on the first ever connection to production infrastructure, which is exactly the
     event `SPEC/TECH/21` exists to make routine.
+
+38. **A type-level augmentation can compile cleanly and change nothing, so `tsc` passing is not
+    evidence the augmentation was wired to anything.** Symptom: `packages/cdn-worker` declared
+    `declare module 'cloudflare:test' { interface ProvidedEnv extends Env {} }`, exactly as every
+    piece of remembered guidance says to, and `npx tsc` reported clean while `env.CONTENT` stayed
+    an error whose only apparent fix was a cast. Root cause: `ProvidedEnv` does not exist in
+    `@cloudflare/vitest-pool-workers@0.22`, which types `env` as `Cloudflare.Env` instead. A
+    declaration merge into an interface nobody reads is not an error in TypeScript - it is a new
+    interface, and it is silent. **Rule: a declaration that only widens a type is proved by code
+    that USES the widened type, and by watching that code fail when the declaration is wrong.**
+    Here that meant a throwaway module that actually read `env.CONTENT`, typechecked, then had the
+    binding name typo'd to watch the error appear. `grep` for the symbol you are augmenting before
+    you augment it: if it appears nowhere in the dependency's own types, you are inventing it.
+
+    This is failure mode 37's second half wearing a different hat, and worth keeping separate
+    because the tell is different. There the expected value equalled the system's default; here
+    the expected outcome of the check (a clean typecheck) is also what you get when the check does
+    nothing at all. It is also non-negotiable 1 again: the API had moved a major version, and the
+    same package had already deleted `defineWorkersConfig` from a `./config` entry point that no
+    longer exists. Found 2026-08-21 while building the CDN Worker.
+
+39. **A repo-wide checker that enumerates `git ls-files` is blind to a package that has not been
+    staged yet, and reports the tree clean.** Symptom: `npm run verify` reported "no stray em
+    dashes" across a working tree containing an entire new workspace it had never opened.
+    Root cause: `scripts/check-emdash.mjs` scans tracked files, which is correct and deliberate,
+    and every file in `packages/cdn-worker` was untracked. **Rule: when a change ADDS files, the
+    repo-wide gates do not cover them until they are staged, so scan the new paths directly before
+    trusting a green run, or stage them first and re-run.** The same applies to any gate built on
+    `git ls-files`.
+
+    The script's own header already records this happening to it once: while it was untracked it
+    never scanned itself and reported a clean tree, and only flagged itself once committed. That
+    it recurred on the next new package is the point - it is a property of the tool, not a bug that
+    was fixed, and the cost lands on whoever adds a directory rather than on whoever wrote the
+    checker. Found 2026-08-21 while adding the fourth workspace.
+
+40. **A discriminated union narrowed with the `in` operator is defeated by a runtime object that
+    carries every key, with the absent ones set to `undefined` - and `JSON.stringify` hides
+    exactly that.** Symptom: the CDN Worker answered `content-range: bytes NaN-NaN/<size>` on
+    every read, HEAD sent `content-length: "NaN"`, and every plain avatar and photo came back
+    `206 Partial Content` instead of `200`. Typecheck was clean and `wrangler --dry-run` bundled
+    it; both were silent because the code agrees perfectly with the declared type. Root cause:
+    `R2Range` is declared as three **disjoint** shapes (`{offset, length?}`, `{offset?, length}`,
+    `{suffix}`), and the value handed back by R2 is one object with all three as own keys and
+    `suffix` holding `undefined`. `'suffix' in range` is therefore true on every read, so the
+    suffix branch always ran and `Math.min(undefined, size)` produced `NaN`. The sibling half of
+    the same mistake: `object.range` is declared optional and is never actually absent, so
+    "was this a range request" answered yes to everything.
+
+    **Rule: narrow a union by VALUE, not by key presence, whenever the object crossed a runtime
+    boundary you do not own.** `typeof x.suffix === 'number'` survives a present-undefined key;
+    `'suffix' in x` does not. Where the shape matters, describe the value as it really is rather
+    than trusting the published union, and guard the arithmetic (`Number.isFinite`) so a `NaN`
+    cannot reach a header.
+
+    **How to recognise the class, and why a debugger will not help:** `JSON.stringify` drops keys
+    whose value is `undefined`, so the object prints as `{"offset":0,"length":10}` and looks
+    exactly like the union member you expected. Only `Object.keys` or a `k in o` check reveals the
+    third key. Found 2026-08-21 by running the Worker for the first time: 27 of 101 tests failed
+    at once, and the diagnosis came from printing `Object.keys` against real emulated R2 rather
+    than from reading the type. Nothing short of executing it could have caught this, which is the
+    argument for the harness rather than for more review.

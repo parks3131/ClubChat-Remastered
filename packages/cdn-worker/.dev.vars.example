@@ -1,0 +1,14 @@
+# Local values for `wrangler dev` and for the test runner. Copy to .dev.vars, which .gitignore
+# already covers, and never commit the copy.
+#
+# In production these are `wrangler secret put`, not vars: see wrangler.jsonc and README.md.
+
+# The key the api is signing with. Whatever is here must be byte-identical to MEDIA_SIGNING_SECRET
+# on the api, including the absence of a trailing newline, or every signed URL 403s. GET /__parity
+# on both sides is how you check that without ever printing either value.
+MEDIA_SIGNING_SECRET=replace-me-with-a-local-only-value
+
+# The key the api WAS signing with. Set ONLY while a rotation is in flight, and unset again once
+# every URL minted under the old key has aged out, which takes at most two hours. Commented out
+# here because absent is the normal steady state, and an empty value is treated as absent too.
+# MEDIA_SIGNING_SECRET_PREVIOUS=

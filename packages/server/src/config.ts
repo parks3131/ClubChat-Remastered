@@ -115,9 +115,14 @@ const Env = z.object({
   /**
    * Who signs a download URL.
    *
-   * `cdn` - the production shape. A signature-validating CDN fronts the bucket and checks the
-   * hour-aligned `exp`/`sig` pair at the edge, which is what makes one cache entry serve every
-   * viewer (roadmap debt 7).
+   * `cdn` - the production shape. A signature-validating Cloudflare Worker fronts the bucket
+   * and checks the hour-aligned `exp`/`sig` pair at the edge before it reads (roadmap debt 7).
+   *
+   * The alignment gives every viewer inside the window a byte-identical URL, which collapses the
+   * cache KEY. **It does not produce one shared Cloudflare edge entry, and for a long time five
+   * files said it did.** Caching a Worker's response needs Workers Caching, which is opt in via
+   * `"cache": {"enabled": true}` in `wrangler.jsonc` and is deliberately off. So the header
+   * reaches browsers and downstream caches only. See ADR-0044.
    *
    * `presign` - no CDN in front of the bucket, so the object store signs instead. Development
    * runs this way against MinIO: the custom HMAC means nothing to the store, so pointing that

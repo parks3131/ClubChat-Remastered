@@ -54,6 +54,26 @@ jobs:
       - name: Tests
         run: npm test
 
+      # The CDN Worker, bundled by the real bundler and never deployed from here.
+      #
+      # `--dry-run` needs no Cloudflare credentials, so this runs on a fork's pull request
+      # like every other step. The real `wrangler deploy` is by hand for the first cutover
+      # and stays that way until it is boring, because a deploy that publishes the edge in
+      # front of every private photo is not a thing to automate before it has been watched
+      # working once.
+      #
+      # It is the only check that covers packages/cdn-worker's grammar. `check:runtime`
+      # deliberately skips it: the Worker never runs under Node, and that script's own
+      # comment says why. This is the real answer to the same question.
+      #
+      # It also bounds the bundle. The Worker imports @clubchat/shared/media-signing by
+      # SUBPATH, and the barrel it is avoiding re-exports a 250KB emoji catalogue, so a
+      # bundle that suddenly grows by two orders of magnitude means somebody imported
+      # `@clubchat/shared` instead. The size is printed rather than asserted, because a
+      # threshold here would be a number nobody can justify at the moment it fails.
+      - name: The Worker bundles
+        run: npm run deploy:dry-run -w @clubchat/cdn-worker
+
   gate:
     name: Migrations, constraints, surface gate
     runs-on: ubuntu-latest

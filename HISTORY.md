@@ -13,6 +13,313 @@ Newest first.
 
 ---
 
+## 2026-08-21 - The CDN Worker, and three APIs that compiled cleanly and did nothing
+
+Milestone 5's remaining half: `cdn.clubchatapp.com` became a real program, `MEDIA_URL_MODE=presign`
+got the tests a rollback lever deserves, and the deployment's likeliest failure got a diagnostic.
+[ADR-0044](SPEC/decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) records the
+decision; this is what it cost.
+
+**None of the seven commits already on `deploy` had touched this file**, so the milestone's earlier
+half is written up below as well. That is worth naming as its own failure: a branch can pass
+`npm run verify`, typecheck, the em-dash gate and a full 1617-test suite, and still leave the
+project's memory empty, because nothing in the pipeline asks. `AGENTS.md` 2.4.2 asks; only a person
+enforces it.
+
+### The Worker did not work, and only running it said so
+
+The Worker was written against a contract, typechecked clean, and bundled to 6.37 KiB with the
+right three bindings. It was then executed for the first time in `workerd` against emulated R2, and
+**27 of 101 tests failed immediately.**
+
+Every plain read was being answered `206 Partial Content`. Every `Content-Range` read
+`bytes NaN-NaN/<size>`, and HEAD sent `content-length: "NaN"`. For a browser loading an `<img>`
+that is not a cosmetic header bug.
+
+One mistake, made twice: reading a runtime value through a type that lies about it. `R2Range` is
+declared as three **disjoint** shapes, and the object R2 actually returns is a single shape with
+`offset`, `length` and `suffix` all present as own keys, `suffix` holding `undefined`. So
+`'suffix' in range` was a presence test against a key that is never absent, true on every read, and
+`Math.min(undefined, size)` did the rest. Its sibling: `object.range` is declared optional and is
+never absent, so "was this a range request" answered yes to everything.
+
+**`JSON.stringify` drops a key whose value is `undefined`,** so the object prints as
+`{"offset":0,"length":10}` and looks exactly like the union member you expected. The diagnosis came
+from printing `Object.keys` against real emulated R2. It is now `AGENTS.md` failure mode 40.
+
+The fix reads every field by value through a `finiteNumber` guard rather than by key presence, and
+decides 200-versus-206 from the **served extents** rather than from the request. A probe settled
+that second point: `bytes=900-1000`, `bytes=0-1,5-6` and `kilobytes=1-2` all carry a `Range` header
+and all come back as the whole object, because R2 ignores what it cannot satisfy, and RFC 9110
+requires a server that ignores a `Range` to answer 200. Deciding from the header would have sent a
+`Content-Range` for a request the server had declined.
+
+A third finding stayed a finding: the 416 branch cannot be reached from a `Range` header at all,
+because R2 only throws `INVALID_RANGE` for an explicit `{offset, length}`. The `catch` was kept, as
+the only thing between a thrown `R2Error` and an unreported 500 on a component nothing monitors,
+and the README stopped publishing a status nothing can produce.
+
+### Three APIs that compiled and did nothing
+
+Every one of these is `AGENTS.md` non-negotiable 1, and every one failed silently rather than
+loudly, which is what makes them worth listing together.
+
+- **`@cloudflare/vitest-pool-workers/config` no longer exists in 0.22.** `defineWorkersConfig` and
+  `defineWorkersProject` are gone; the pool is a Vite plugin now. This one at least fails loudly,
+  with `Missing "./config" specifier`.
+- **`ProvidedEnv` does not exist either.** The remembered incantation,
+  `declare module 'cloudflare:test' { interface ProvidedEnv extends Env {} }`, **typechecks clean
+  and does nothing**: it merges into an interface nobody reads, and `env.CONTENT` stays an error
+  whose only apparent fix is a cast. Caught only by writing a throwaway module that actually read
+  `env.CONTENT` and watching it fail. Failure mode 38.
+- **`isolatedStorage` is not in the 0.22 pool schema, and the options object is parsed with zod's
+  `$strip`,** so passing it is dropped rather than rejected. Storage is consequently not isolated
+  between tests, which surfaced the worst way round: an object seeded by one test survived into the
+  next, so "a missing object is a 404" passed back the previous test's bytes. A test leaking state
+  into the test that asserts absence is the one direction that turns green into a lie.
+
+### The red team could not get bytes out, and found three things anyway
+
+An adversarial pass ran against the finished Worker: 400 hostile requests over paths, expiries,
+signatures, methods and conditional headers, against buckets seeded with real objects at every key
+the grid could name. **399 answered 403 and the one 200 was `/__parity`.** Refusal before read was
+proved directly with R2 bindings rigged to throw rather than inferred from a status code. Message
+collision is impossible for anything the api mints, because `${objectKey}:${exp}` has exactly one
+colon when `exp` is a number's string form and no key this project issues contains one. The
+signature check is not truncation-tolerant. Nothing pathological made it throw: a 4 MB path, 20,000
+query parameters, 10,000 `..` segments, all refused in under 50 ms.
+
+**One real defect, in the routing.** `bucketRoleForObjectKey` read
+`objectKey.slice(0, objectKey.indexOf('/'))`, and `indexOf` answers `-1` with no slash, so
+`slice(0, -1)` drops the last character. `photos` became `photo`, `avatars` became `avatar`. The
+red team seeded ten bytes at key `photos` in the **private** bucket, signed it, requested it, and
+got 200 with the object; with both bindings rigged to throw, `photos` tripped the wire while
+`photo` and `nope` still answered 404, so R2 really was being read.
+
+Unreachable from the internet, because the api only ever mints `${kind}/${YYYY-MM}/${uuid}` and no
+signature for a slashless key can exist. What was actually broken is that this function's own doc
+comment promises the opposite, in these words: *"routing an unknown prefix to the private bucket
+would turn a typo into a probe of private content"*. Five other places restate it. **A documented
+security property that is false is worse than one that was never claimed**, because the next person
+builds on it.
+
+The tests missed it precisely: they covered `photos/2026-04/x`, which HAS a slash and so genuinely
+has the prefix `photos`, and `photo`, which loses a real character and becomes `phot`. Neither is
+the broken shape.
+
+**`workers.dev` was on, by a default nobody had read.** Wrangler's own source:
+`defaultWorkersDev = routes.length === 0`, and this config declares no routes deliberately. So a
+plain `wrangler deploy` would have published `clubchat-cdn.<subdomain>.workers.dev` plus a
+per-version preview URL - and since **the signed message covers the object key and the expiry but
+not the host**, every URL the api mints would work verbatim there. A complete second front door to
+both buckets, outside every WAF rule, rate limit and Access policy ever attached to the zone, with
+`/__parity` reachable too. Both settings are now explicitly `false`.
+
+**And a comment that was right for the wrong reason.** The Worker's header said `%2e%2e%2f` is safe
+because it is "four extra characters that were not in the signed message". Reproduced: `new URL()`
+resolves `%2e` as a dot segment per the WHATWG spec, so `/x/%2e%2e/photo/...` normalises to
+`/photo/...` and serves the object. The conclusion holds - the HMAC and the R2 key are the same
+string, so they cannot diverge - but the stated mechanism was false, and the existing test passed
+because it used `%2F`, which genuinely is not decoded. Traversal is disposed of by normalisation
+happening BEFORE the HMAC, not by the escape failing to match.
+
+### The shared cache entry that never existed
+
+The most-repeated claim about this Worker was false, and it had been asserted in five files.
+
+`packages/server/src/config.ts`, `media/store.ts`, `TECH/07` twice, `TECH/16` and the Worker's own
+comments all said the hour-aligned URL produces **one shared CDN cache entry serving all 300
+members instead of 300 origin fetches**. That is the whole of roadmap debt 7.
+
+Cloudflare does not cache a Worker-constructed response by default. Its Cache API page redirects
+that job to **Workers Caching**, which is opt in through a top-level `"cache": {"enabled": true}`
+in `wrangler.jsonc` - a key the pinned wrangler 4.125.0 accepts and this config does not set. The
+feature would cover a response built from R2 bytes; it is simply off. The belief most likely came
+from R2's own documentation, which says a custom domain **on the bucket** gets Cloudflare Cache -
+a different arrangement, and one rule 8 forbids outright.
+
+So `public, max-age=3600` reaches browsers and downstream caches only, and N members opening one
+photo is N R2 Class B reads. What the alignment does buy is real and unchanged: the cache **key**
+collapses to one URL per window instead of fanning out per fetch, a deleted photo goes dark within
+the hour, and expiries stagger. Every one of those five files now says so, debt 7 is recorded as
+only partly paid off, and the switch stays off until `cf-cache-status` on a real signed URL says
+what it actually does.
+
+### Headers the CDN was borrowing from somebody else's allowlist
+
+The red team stored an object with `content-type: text/html` and a `<script>` body and watched the
+Worker serve it as HTML with no `nosniff` and no CSP. It sized the finding down honestly: nothing
+dangerous is reachable, because the api's `IMAGE_MIME_ALLOWLIST` and `DOCUMENT_MIME_ALLOWLIST`
+exclude `text/html` and `image/svg+xml`, and better-auth's session cookie is host-only so it never
+reaches the CDN hostname.
+
+Fixed anyway, and the reason is the interesting part: **the CDN's safety lived entirely in another
+package.** `store.ts` explicitly frames widening that allowlist as "a product decision", and
+whoever makes it will be editing `packages/server` with no reason to think about the edge. Every
+response built from an object now carries `X-Content-Type-Options: nosniff` and
+`Content-Security-Policy: default-src 'none'; sandbox`, and `Content-Disposition` is stripped:
+uploader-controlled, never written by this project, and the client builds filenames device-side.
+
+### Key ordering had exactly one line of defence
+
+`verifyMediaSignature` widened to take an ordered key list so the signing secret can rotate without
+darkening every outstanding URL for the rest of its hour. The previous key is configured on the
+**Worker alone**, deliberately: the api signs and never verifies, so a `MEDIA_SIGNING_SECRET_PREVIOUS`
+on a Fly app would be a variable nothing reads.
+
+Trying the previous key before the current one returns an identical boolean for every input in the
+vector table. It is invisible to the openssl vectors, to the server's independent `node:crypto`
+re-derivation, and to any assertion on the result. Proved rather than argued: with the order
+reversed, **all 10 server vector tests pass**, and only three `crypto.subtle.importKey` spy tests
+catch it. Those three are the entire coverage of that property, and a future change that caches or
+pre-hashes the keys must rewrite them rather than delete them.
+
+### The first deploy would have failed at boot
+
+`BETTER_AUTH_URL`, `S3_ENDPOINT`, `S3_BUCKET_PUBLIC` and `S3_BUCKET_PRIVATE` are required by the
+flat config schema, are not secrets, and were in none of the three `fly/*.toml` files. The api
+would have crashed on startup; the worker would have failed **silently**, because `worker.toml`
+declares no service and therefore has no health gate, surfacing later as an outbox that stopped
+draining.
+
+Found by feeding each `[env]` block through the real `loadConfig` rather than by reading it, which
+is the only way this class shows up: a config file is not wrong in a way a reviewer sees, it is
+wrong in a way the schema sees. The same check confirmed that the six platform secrets are each
+genuinely required and that no toml key is unknown to the schema.
+
+`CLIENT_ORIGIN` was a quieter version of the same thing. It defaults to `http://localhost:8081`, so
+a production api left unset would have shipped a credentialed CORS allowance for a developer
+laptop.
+
+### Two documents that were describing a world that had moved
+
+`TECH/20`'s standing table said Resend was "`clubchatapp.com` verified, DKIM/SPF/DMARC live". The
+DNS is genuinely correct and there is exactly one `v=spf1` on the apex, but Resend's own status is
+still `Pending`, and it refuses to send from an unverified domain. The DNS being right had been
+read as the provider being ready, and password-reset mail is unprovable until the badge flips.
+
+`TECH/21` gained a link to `15-observability.md`, which does not exist; error reporting lives in
+`15-stack-and-hosting.md`. Caught by a link checker run over every relative link in `SPEC/` and
+`AGENTS.md`. This is the same class the 2026-07-28 spec split produced a dozen of: links whose
+target existed and whose content was wrong.
+
+### Two process notes worth keeping
+
+**Mutation testing is a write.** A shared file was mutated to prove a test could fail while a
+parallel agent was reading it, and that agent reported the mutation as a defect in somebody else's
+work. Harmless here, but in a shared tree a mutation belongs between waves, not during one.
+
+**The em-dash gate could not see the new package.** `scripts/check-emdash.mjs` enumerates
+`git ls-files`, so `npm run verify` reported "no stray em dashes" across a working tree containing
+an entire untracked workspace it had never opened. The script's own header records this happening
+to it once already, which is the point: it is a property of the tool, not a bug that was fixed.
+Failure mode 39.
+
+---
+
+## 2026-08-21 - Milestone 5, the earlier half: artifacts, health checks, and Neon's silent discard
+
+Written after the fact, from the seven commit messages on branch `deploy`, because none of those
+commits touched this file. The entry above explains why that matters.
+
+### There was nothing to deploy with
+
+No Dockerfile, no `fly.toml`, no `.dockerignore`. Milestone 5 was blocked on artifacts rather than
+on any decision. The image ships source and runs it, because `tsconfig.base.json` already said
+there is no build step for the server and that three settings hold that up together: explicit `.ts`
+import extensions, `allowImportingTsExtensions`, and the `noEmit` it forces.
+
+Two decisions came out of writing them, both in
+[ADR-0043](SPEC/decisions/0043-the-three-roles-deploy-as-three-fly-apps.md). The second reversed a
+claim this repo had been carrying: `gateway/main.ts` said the gateway must sit behind an L4
+balancer because balancers that terminate HTTP break the WebSocket upgrade. True of L7 balancers in
+general, and **not true of Fly**, whose HTTP handler proxies an upgrade because an upgrade is
+HTTP/1.1. It matters because a raw TCP service on Fly can only carry a `tcp_check`, which proves a
+port is listening and cannot tell that apart from working - and closing exactly that blind spot is
+what this deploy exists to do.
+
+### A health check that cannot fail cannot gate a deploy
+
+Fly gates both traffic routing and deploy success on the health check, so a check answering from
+process memory would let a deploy against an unreachable Neon go green and then take live traffic.
+`/health` stays liveness and cannot fail, deliberately: Fly restarts a machine that fails liveness,
+so a liveness check that consulted the database would restart every machine at once during a blip.
+`/ready` is the new one and actually reaches Postgres. It fails on Postgres and **not** on Redis,
+because every instance shares one Redis and failing readiness on it would pull every instance out
+of rotation at once, turning a documented degrade into a total outage.
+
+### An ORM error's message names the query, not the reason
+
+Failure mode 1 at a new call site. Drizzle rethrows `DrizzleQueryError`, whose message is always
+`Failed query: <sql>` and is byte-identical whether Postgres refused the connection, rejected the
+password, ran out of connections, or was missing a grant. The readiness line logged
+`error.message`, so every failure during an outage read the same, while the comment above it
+promised these logs answer "how long was it down". It graded correctly throughout, which is what
+made it invisible: the endpoint did its job and the operator got nothing.
+
+The same commit corrected a comment that claimed a crash that does not happen. The gateway's
+`respond()` guard was justified as preventing a process-ending unhandled rejection when writing to
+a destroyed response during shutdown. The scenario is real; the consequence was asserted rather
+than measured, and it is wrong. Measured inside the deployment image on the pinned runtime,
+`node:24-trixie-slim` v24.19.0: `writeHead` plus `end` against a destroyed response returns
+normally and produces no `uncaughtException`. Node discards the write. The guard stays as cheap
+insurance and the comment now says so on accurate grounds, because a guard whose removal breaks no
+test is a guard somebody deletes while tidying.
+
+### Neon discards the timeout ceilings, and the test could never have caught it
+
+Found by connecting to the real Neon project for the first time and asking the database what it was
+running with, rather than asking the code what it had asked for. On the direct endpoint:
+
+```
+statement_timeout                   = 0      wanted 30s
+idle_in_transaction_session_timeout = 5min   wanted 2min
+```
+
+Both are defaults, so what arrived was nothing. `pg` sends them as individual startup parameters
+and Neon **silently discards** them. Not rejects, discards - a rejection would have failed the
+first deploy loudly, which is the outcome anyone would want. The identical pool against the
+development container returns 30s and 2min, which is why every test was green. `statement_timeout
+= 0` means a runaway query holds a connection until the process restarts. Both now ride the
+`options` startup parameter as `-c key=value`, which Neon passes through untouched.
+
+Underneath it was a second defect. `pg` writes its individual parameters behind
+`if (params.statement_timeout)`, and `0` is falsy, so the escape hatch `db/migrate.ts` uses to opt
+migrations out of both ceilings was never sent at all. Building an index over a table with real
+rows is a statement that is supposed to run for minutes. That opt-out had never worked, and it
+appeared to because Postgres also defaults to 0: asking for zero and inheriting zero are
+indistinguishable until a server with a non-zero default turns up.
+
+The more useful half is the test. It asked for zero, read zero, and passed on the default rather
+than on the parameter, while its own comment claimed to be "the assertion that the escape hatch
+actually disables them". **An assertion whose expected value equals the system's own default proves
+nothing.** That became failure mode 37.
+
+### One signature, two runtimes, and four mutations the tests slept through
+
+Shipping `MEDIA_URL_MODE=cdn` means the signature is minted on Node and checked on `workerd`. Two
+implementations of one HMAC is the shape of a bug that presents as "every photo is broken" with
+both sides looking correct in isolation, so there is now one implementation on WebCrypto and both
+runtimes import it, proved byte-identical to the `node:crypto` original on 120 cases.
+
+The tests that were supposed to protect it could never have failed. Changing the signed separator
+from `:` to `|`, and the expiry compare from `<` to `<=`, left **all 52 media tests green**, because
+every assertion signed and verified with the same implementation. `media-signing-vectors.json` now
+carries literal expected values generated by `openssl` and re-derived a third way by `node:crypto`
+in the server suite.
+
+Two documents instructed things that would have broken production. `TECH/21` rule 8 said
+`cdn.<domain>` points at "The R2 content bucket" - Cloudflare offers exactly that in two clicks,
+with no signature check, which publishes every private chat photo, document and Eboard image to
+anyone holding a URL. `TECH/07` documented a URL at a domain this project does not own, with an
+`/o/` prefix the code has never emitted.
+
+And `.env.example` shipped `MEDIA_URL_MODE=cdn`. CI copies it to `.env` and boots a live api from
+it, so CI and every fresh clone ran cdn mode against MinIO, which has never heard of `exp` or `sig`.
+It survived only because nothing in CI fetches media bytes.
+
+---
+
 ## 2026-08-19 - The calendar tab kept reading for a screen nobody was on
 
 Reported from the phone as a question rather than a fault: walking from the hub into a club and

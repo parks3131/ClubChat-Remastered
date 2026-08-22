@@ -53,6 +53,117 @@ primary_region = 'iad'
   # header and get a fresh bucket, which removes the limit rather than loosening it.
   TRUST_PROXY = '1'
 
+  # --- Identity and object storage ---
+  #
+  # Every value below is REQUIRED by the schema in `config.ts` and is not a secret. They were
+  # missing from all three of these files until 2026-08-21, which meant the first deploy would
+  # have failed at boot on the api rather than at `fly secrets set`, and on the worker it would
+  # have failed on the one role that has no health gate to notice.
+  #
+  # Found by feeding these `[env]` blocks through the real `loadConfig` instead of reading them,
+  # which is the only way this class shows up: a config file is not wrong in a way that a
+  # reviewer sees, it is wrong in a way that the schema sees.
+
+  # Where better-auth believes it is reachable. It signs and validates callback URLs against
+  # this, so a value that is not the api's real public origin breaks sign-in in a way that looks
+  # like a client bug. The same value goes on all three apps even though only this one serves
+  # auth, for the reason MEDIA_CDN_BASE_URL does: one flat schema, and a per-app value that
+  # drifts is how two halves of one system come to disagree.
+  BETTER_AUTH_URL = 'https://api.clubchatapp.com'
+
+  # The CORS origin, and it is set explicitly because the SCHEMA DEFAULT IS WRONG IN PRODUCTION.
+  #
+  # `config.ts` defaults this to `http://localhost:8081`, which is right for development and
+  # means a production api left unset would ship a credentialed CORS allowance for a developer
+  # laptop. Nothing needs that: web is out of scope for the first club, and native clients never
+  # issue a preflight, so this costs nothing and closes an allowance that was never intended.
+  #
+  # `clubchatapp.com` rather than something that matches nothing, because it is the origin a web
+  # client would eventually be served from, and a value that is honest about intent survives
+  # better than a placeholder somebody has to decode.
+  CLIENT_ORIGIN = 'https://clubchatapp.com'
+
+  # R2, reached over its S3-compatible endpoint. The account id in this hostname is not a
+  # secret: it appears in the `X-Amz-Credential` of every presigned URL this api hands out.
+  S3_ENDPOINT = 'https://47a52f98315af67a4231d979935ab1f2.r2.cloudflarestorage.com'
+
+  # Two buckets, by ROLE rather than by name, which is why the names are configuration at all.
+  # `identity` holds avatars and is served to any signed-in member; `content` holds chat photos,
+  # documents and Eboard images and is private. The kind-to-bucket map in
+  # @clubchat/shared/media-signing is what routes a key, and the edge 404s an unrecognised prefix
+  # rather than falling back to either, because a fallback turns a typo into a probe of private
+  # content.
+  S3_BUCKET_PUBLIC = 'clubchat-identity'
+  S3_BUCKET_PRIVATE = 'clubchat-content'
+
+  # S3_REGION is deliberately absent: it defaults to 'auto' in config.ts, which is what R2 wants.
+  #
+  # S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY are both on the platform, not here, and the id is
+  # kept with the secret even though an access key id is not itself secret (it is published in
+  # every presigned URL). They are one credential and they rotate together, and splitting a pair
+  # across two mechanisms means a rotation that is half a deploy and half a `fly secrets set`.
+  # The R2 key is due for rotation after launch anyway, so the cheap path matters:
+  #
+  #   printf 'S3_ACCESS_KEY_ID=%s\nS3_SECRET_ACCESS_KEY=%s\n' "$ID" "$KEY" \
+  #     | fly secrets import --app clubchat-api
+
+  # --- Media ---
+  #
+  # `presign` deliberately, and it is the rollback plan for the media half of this deploy
+  # rather than a leftover from development.
+  #
+  # The mode decides WHO signs a download URL, and nothing else. In `cdn` this api mints the
+  # hour-aligned exp/sig pair and the Cloudflare Worker on cdn.clubchatapp.com validates it at
+  # the edge before it reads R2, which is what lets one cache entry serve every member looking
+  # at the same photo. In `presign` there is no edge in the path at all: the object store signs
+  # a URL of its own and the client fetches R2 directly. Both modes are hour aligned, so both
+  # hand every viewer inside the window a byte-identical URL. Authorization is unaffected by
+  # either: it happens at the /media/:id hop, on every request, on the same membership
+  # predicate that protects the message the object hangs off.
+  #
+  # So the first deploy ships the mode that depends on nothing new being correct, and flipping
+  # to `cdn` is a SEPARATE deploy once the Worker has been proved against the real bucket and
+  # both sides have been shown to hold the same MEDIA_SIGNING_SECRET. That ordering is what
+  # makes a wrong Worker survivable: set this back to 'presign', deploy, and every photo
+  # resolves again with no code change and no migration to undo.
+  MEDIA_URL_MODE = 'presign'
+
+  # No path, and no trailing slash. config.ts documents at length why the slash is
+  # load-bearing; the short of it is that the signature covers the object key alone, so a value
+  # ending in `/` still validates at the edge and then misses the R2 read by one leading slash.
+  # A config typo that presents as a storage bug, with every photo broken and the signature
+  # check looking innocent.
+  #
+  # Required by the schema in BOTH modes and read only in `cdn` mode, because one flat config
+  # serves all three roles. It is therefore present while `presign` is what runs, and deleting
+  # it because nothing reads it today stops the process booting.
+  #
+  # TECH/21 rule 8: this hostname is a Worker and must never be pointed at a bucket. Cloudflare
+  # offers an R2 custom domain in two clicks and it would serve on this name without ever
+  # reading exp or sig, publishing every private photo, document and Eboard image to anybody
+  # holding a URL.
+  MEDIA_CDN_BASE_URL = 'https://cdn.clubchatapp.com'
+
+  # MEDIA_SIGNING_SECRET is NOT in this file, and this note is here because a reader looking
+  # for it will look here first. It is the key that mints those signatures, so it belongs to
+  # the platform and never to the repo (AGENTS.md non-negotiable 5, TECH/21 rule 10):
+  #
+  #   printf 'MEDIA_SIGNING_SECRET=%s\n' "$V" | fly secrets import --app clubchat-api
+  #
+  # `secrets import` and not `secrets set`, deliberately: `set` takes the value as an argument,
+  # which writes the key that signs every media URL into shell history and into the process
+  # table. `import` reads NAME=VALUE from stdin. Same reasoning applies to the R2 pair above.
+  #
+  # Two things about that command are worth more than the command itself. **The identical value
+  # has to reach the Worker** through `wrangler secret put`, or the api signs with one key and
+  # the edge verifies with another. And **a trailing newline is a different key**: a value
+  # pasted with one is the single likeliest way this deployment breaks, because it presents as
+  # every photo 403ing, which looks exactly like a broken Worker rather than a wrong password.
+  # Both sides answer GET /__parity with a fingerprint of the key they are holding, so
+  # comparing them is one line of shell rather than an afternoon.
+  #
+  # It is also required in `presign` mode, where nothing signs with it. Same flat schema.
+
 [http_service]
   internal_port = 3000
   force_https = true

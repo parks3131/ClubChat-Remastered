@@ -12,7 +12,7 @@ Mapping [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) "a
 | 4 | Client-generated idempotency keys | [Channel log](02-channel-log.md) `client_msg_id` unique index |
 | 5 | Denormalized/capped unread counts; collapsed calendar feed | [Channel log](02-channel-log.md) O(1) cursor arithmetic; a single merged calendar endpoint replaces per-club-per-feature reads |
 | 6 | Highlights losing pins past the loaded window | [Data model](09-data-model.md) partial indexes; server-side query over the whole channel |
-| 7 | Media cost - N viewers = N origin downloads | [Media pipeline](07-media-pipeline.md) hour-aligned signed URLs → one shared CDN cache entry |
+| 7 | Media cost - N viewers = N origin downloads | [Media pipeline](07-media-pipeline.md) hour-aligned signed URLs → one byte-identical URL per window. **Only partly paid off: that collapses the cache KEY but is not a shared edge entry, which needs Workers Caching and is off. See [ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md)** |
 | 8 | Storage cleanup | [Effects engine](04-effects-engine.md) nightly GC job driven by `media_objects` ownership |
 | 9 | File size and MIME limits | [Media pipeline](07-media-pipeline.md) enforced at intent and re-verified at complete |
 | 10 | Notification retention | [Effects engine](04-effects-engine.md) nightly archival job |
