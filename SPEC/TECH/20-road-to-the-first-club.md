@@ -27,6 +27,11 @@ against a moving `main`, so every week of delay makes the ordered merge harder. 
 and 4 are largely independent and can interleave. Milestone 5 must follow 3 and 4, or the pilot
 becomes the load test and the device pass at once. Milestone 6 is the destination.
 
+**That ordering took one deliberate exception on 2026-08-23** and it is recorded in milestone 3
+rather than argued again here: the deploy went first because milestone 3's last criterion had
+nowhere to report FROM without it. What follows 3 and 4 is the *pilot*, not the deployment, and
+nothing about the exception moves that.
+
 ---
 
 ## Milestone 1 - The review lands
@@ -155,26 +160,43 @@ production trace is minified noise.
   headroom, and the numbers are recorded in `TECH/18` next to the laptop numbers they replace.*
 - *A production error arrives symbolicated.*
 
-**Status, 2026-08-21: three of the four laptop-side criteria are met and the two Sentry-shaped
-ones are blocked on milestone 5, which is a dependency this file did not notice when it ordered
-the milestones.** [`TECH/18`](18-mission-backend-cleaning.md) section 7 records everything
-measured.
+**Status, 2026-08-23: three of the four criteria are met, and the fourth stopped being blocked
+today without becoming met.** It had been blocked on milestone 5, which is a dependency this file
+did not notice when it ordered the milestones.
+[`TECH/18`](18-mission-backend-cleaning.md) section 7 records everything measured.
 
 | Criterion | Standing |
 |---|---|
 | The fixture, and guards on the batch routes and `/sync` | **Done.** 300 members, 20 polls with 3,600 votes, 50 photos, 5,070 messages |
 | `pg_stat_statements` queryable | **Done.** Preloaded in development and in the test container |
 | The load test at ten times peak, both hot spots | **Done.** Row lock 2.3x headroom and gapless under contention; access context 26x |
-| Sentry tracing live, and an error arriving symbolicated | **Blocked on milestone 5** |
+| Sentry tracing live, and an error arriving symbolicated | **Unblocked 2026-08-23. Neither half done.** Errors have somewhere to go and none has arrived; tracing is still switched off by a constant |
 
-**Why the last row is blocked rather than outstanding.** Its obstacle is not configuration. There
-is nowhere to send a trace or a symbolicated error FROM, because nothing has ever run outside a
-development machine - which is milestone 5's opening sentence. Turning tracing on today produces a
-laptop reporting on itself, which is the thing this milestone exists to stop counting as a
-measurement. **The sequencing note above therefore has an exception: milestone 3 completes only
-after milestone 5's deployment exists**, even though everything else in it is independent and is
-now done. The work is one configuration change plus a source-map upload, and it belongs in the
-same change that first deploys the three roles.
+**What the deployment changed about that last row, and what it did not.** The obstacle was never
+configuration: there was nowhere to send a trace or a symbolicated error FROM, and turning tracing
+on would have produced a laptop reporting on itself. That obstacle is gone. `SENTRY_DSN` reaches all
+three roles through their `[env]` blocks and all three are deployed with it, so a 5xx on the api or
+a parked event on the worker now has a project to arrive at. **Nothing has arrived.** Until
+something does, this is a configuration file that mentions Sentry, which
+[Deployment](21-deployment.md) records as reading identically to a working one from every angle
+except the Sentry project itself.
+
+Three things are now separable that used to be one blocked row, and only the first is close to
+done:
+
+- **Error reporting** is wired and unproved. One deliberately raised 5xx settles it, and that is
+  also a milestone 5 exit criterion, so it gets proved once and counted twice.
+- **Performance tracing is not merely unproved, it is off.** `monitoring.ts` sets
+  `tracesSampleRate: 0` on both the server and the client, deliberately and with its reason in a
+  comment: tracing carries its own quota cost and was left to this audit rather than smuggled in
+  with error reporting. Turning it on is a constant, and it has not been turned on, so no
+  per-route latency is being reported from production by anything.
+- **Symbolication was only ever a client problem.** The server image ships source and Node runs it,
+  so a server stack trace already names the `.ts` file it came from and needs no source map. The
+  client's half is now configured rather than proved: `@sentry/react-native` carries the org and
+  project in `app.json`, and `SENTRY_AUTH_TOKEN` is a secret EAS environment variable on the
+  `production` and `preview` environments, so the upload happens on the next production build. No
+  such build has finished.
 
 **What the fixture found on the day it existed, and what happened next.** It reported `/sync`
 costing two statements per channel. That was itself understated - it had measured empty channels,
@@ -208,16 +230,18 @@ milestone 6.
 
 ## Milestone 5 - A production that could take them
 
-Nothing has ever run anywhere but development machines. This milestone is the
+**The three roles have run in production since 2026-08-23.** This milestone is the
 [Stack and hosting](15-stack-and-hosting.md) design made real, plus the release-readiness items
 [Build phases](16-build-phases.md) lists beyond Phase 4 - and its exit criteria follow this
-repo's own rule that a guarantee is proved, not read.
+repo's own rule that a guarantee is proved, not read. Deploying satisfied several of them outright
+and moved none of the rest, which is what the criteria were shaped to distinguish.
 
 The work: the three roles deployed with managed Postgres, Redis and object storage; secrets held
 outside the repo; backups confirmed by **restoring one**, because a backup nobody has restored is
 a hope; monitoring wired so a parked outbox event - the one durable evidence an effect never
-ran - and a 5xx each reach a human; the mail domain finished (rotate the Resend key, complete
-DMARC, move off the borrowed domain - the
+ran - and a 5xx each reach a human; the mail domain finished (the move off the borrowed domain
+landed on 2026-08-23; what is left is rotating the older Resend key and tightening DMARC past
+`p=none` - the
 [sending-domain checklist](../templates/sending-domain-checklist.md) exists for this); over-the-air
 updates so a fix does not need a store release; TestFlight through the paid developer program so
 the roster installs without a cable; and the legal texts real, including the obligation
@@ -227,51 +251,75 @@ Policy must state that message content is readable by the service.
 *Done when:*
 
 - *The full stack serves the app from production infrastructure, and the founder's phone runs
-  against it through a normal day with no laptop involved.*
-- *A database restore from a real backup has been performed once.*
+  against it through a normal day with no laptop involved.* **Half met 2026-08-23.** The stack
+  serves, and the phone signed up, chatted, uploaded a photo and took a push against it with no
+  laptop involved. A normal *day* has not happened, and that is the half this criterion is about.
+- *A database restore from a real backup has been performed once.* **Open.** No backup has ever
+  been restored.
 - *A deliberately parked outbox event and a deliberately raised 5xx each reached a human through
-  the monitoring path - forced, not assumed.*
-- *A stranger can install through TestFlight and sign up unassisted.*
-- *Mail arrives from the product's own domain, the old key is dead, and DMARC verifies.*
+  the monitoring path - forced, not assumed.* **Open.** Neither has been forced, and Sentry has
+  received no production error of any kind. Milestone 3 above has the shape of what is wired.
+- *A stranger can install through TestFlight and sign up unassisted.* **Open.** A production EAS
+  build is being started; nothing is submitted and nobody has installed anything. External
+  TestFlight also needs Apple's Beta App Review, which is a queue rather than a step.
+- *Mail arrives from the product's own domain, the old key is dead, and DMARC verifies.* **One of
+  three met 2026-08-23.** Mail arrives from `noreply@clubchatapp.com`, which is also what verified
+  the Resend domain. The old Full-access key is not dead, and `_dmarc` publishes `p=none`, which is
+  the [sending-domain checklist](../templates/sending-domain-checklist.md)'s starting point rather
+  than its end.
 - *The Privacy Policy and Terms are reviewed, state the ADR-0005 obligation, and are reachable
-  from where sign-up says they are.*
+  from where sign-up says they are.* **Open.** The legal texts are not written.
 - *Media is served in `cdn` mode from the Worker, `/__parity` answers the same `parity` on both
-  sides, and a signed URL has been watched surviving an hour boundary.* Fifty minutes of working
-  proves nothing about the fifty-first, because the expiry is hour aligned. Only `parity` is
-  comparable: `version` and `previousParity` differ by design on the two sides.
+  sides, and a signed URL has been watched surviving an hour boundary.* **All three met
+  2026-08-23**: `cdn` mode serves, both sides answer `D6NXENh3`, and signed URLs minted before the
+  17:00Z alignment point were watched still answering in full after it, which is the part that
+  fifty minutes of working could never have proved. Only `parity` is comparable: `version` and
+  `previousParity` differ by design on the two sides. [Deployment](21-deployment.md) step 6 carries
+  what was fetched and when.
 - *`cf-cache-status` has been read off a real signed URL*, settling the open half of roadmap debt 7
-  rather than leaving it as an inference. See
-  [Deployment](21-deployment.md) and
-  [ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md).
+  rather than leaving it as an inference. **Met 2026-08-23: the header is absent**, so nothing is
+  held at the Cloudflare edge and N members opening one photo is N reads of R2. That confirms
+  [ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) rather than
+  contradicting it; [Deployment](21-deployment.md) carries the measurement and what is left to
+  decide from it.
 - *The R2 key is rotated, the Cloudflare API token is revoked, the older Full-access Resend key is
-  deleted, and the local secrets file is gone.* The first two are not hygiene: both were pasted
-  into a chat transcript rather than into the secrets file, so both are disclosed until rotated,
-  and the R2 credential is read AND write where the Worker only reads.
+  deleted, and the local secrets file is gone.* **Deferred by the founder on 2026-08-23, deliberately
+  and with a fourth credential added**: the Sentry organization auth token went through a transcript
+  too. None of the four is hygiene. Each was disclosed the moment it was pasted and stays disclosed
+  until it is replaced, and the R2 credential is read AND write where the Worker only reads.
+  [Deployment](21-deployment.md)'s obligation 1 is the standing record.
 
 ### Standing, 2026-08-23
 
-Work is on branch `deploy`. **Nothing is deployed yet**, so every exit criterion above is still
-open. What has changed is that the two things blocking any deploy at all no longer are.
+Work is on branch `deploy`. **The first deployment in the project's history ran on 2026-08-23**:
+three Fly apps in `iad`, one machine each, from one image built once and deployed to all three by
+digest, with the Neon migration run by the api's `release_command` before any machine took traffic.
+[Deployment](21-deployment.md) owns the procedure and which of its steps have been performed; this
+table owns where the milestone stands.
 
 | Piece | Standing |
 |---|---|
-| Deployable artifacts | **Done.** `Dockerfile`, `.dockerignore`, `fly/{api,gateway,worker}.toml`. Image built for `linux/amd64` and all three roles booted; `sharp` proved to load libvips and encode inside the container, which matters because it is imported at module top and a wrong binary is a boot crash rather than a first-upload one. The guest is now pinned on all three: `api.toml` and `gateway.toml` carried no `[[vm]]` block until 2026-08-23, so the two roles serving every request were the two taking Fly's 256 MB default while the worker was explicit. The api holds a top-level `import sharp` and decodes uploads of up to 25 MB in memory, so 256 MB there is an OOM kill - which presents as a machine restart rather than as an error, and would read as instability long before it read as a memory ceiling |
+| Deployable artifacts | **Done, and now the thing that is running.** `Dockerfile`, `.dockerignore`, `fly/{api,gateway,worker}.toml`. One image serves all three apps in production, built once and stamped `SENTRY_RELEASE=73a9ee3d6c7eb204dd0f550f0477f674ddffb67a`, which is what the api's `/__parity` answers as `version`. Image built for `linux/amd64` and all three roles booted; `sharp` proved to load libvips and encode inside the container, which matters because it is imported at module top and a wrong binary is a boot crash rather than a first-upload one. The guest is now pinned on all three: `api.toml` and `gateway.toml` carried no `[[vm]]` block until 2026-08-23, so the two roles serving every request were the two taking Fly's 256 MB default while the worker was explicit. The api holds a top-level `import sharp` and decodes uploads of up to 25 MB in memory, so 256 MB there is an OOM kill - which presents as a machine restart rather than as an error, and would read as instability long before it read as a memory ceiling |
 | Health checks | **Done.** `/health` (liveness, cannot fail) and `/ready` (readiness, reaches Postgres) on both ingress roles, built failing-test-first. Fly gates traffic and deploy success on `/ready`. Grading is asymmetric per [Failure modes](11-failure-modes.md): Postgres down is a 503, Redis down stays 200 and is reported |
-| Deployable shape | **Decided.** Three Fly apps from one image, [ADR-0043](../decisions/0043-the-three-roles-deploy-as-three-fly-apps.md) |
+| Deployable shape | **Decided, and built that way on 2026-08-23.** Three Fly apps from one image, one machine each because the cutover passed `--ha=false`, [ADR-0043](../decisions/0043-the-three-roles-deploy-as-three-fly-apps.md) |
 | Accounts | **Done.** Cloudflare (domain on Cloudflare DNS and the zone now `active`, R2 with both buckets and a scoped Account token, Workers on the paid plan), Fly (`clubchat` org, three apps created, Upstash Redis provisioned), Neon (Launch, `us-east-1`, Postgres 17, always-on), Sentry (`clubchat-ef`, `clubchat-server`) |
-| Resend | **DNS done, domain NOT verified.** All four records resolve and there is exactly one `v=spf1` on the apex, but Resend's own status is still `Pending`. It refuses to send from an unverified domain, so **password-reset mail cannot be proved until that badge flips**. An earlier version of this row said "verified", which was the DNS being right being read as the provider being ready |
-| The CDN Worker | **Built and adversarially tested, never run against Cloudflare.** `packages/cdn-worker`, the fourth workspace, exercised in real `workerd` against an emulated R2. It did not work first time: 27 of 101 tests failed on the first execution, from Range and partial-content defects that typecheck and a bundle could not see. A red-team pass then failed to get bytes out of either bucket in 400 hostile requests, and found one real routing defect (now fixed) plus a `workers.dev` hostname left open by default (now closed). [ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) |
-| Media mode | **Decided: ship `cdn`, deploy `presign` first.** The three Fly apps go out on `presign`, the Worker is proved against the real hostname while nothing depends on it, then `MEDIA_URL_MODE` flips. Two independently green production states, and a one-token rollback to one that has been watched working |
-| Config completeness | **Done, twice, and it was not.** `BETTER_AUTH_URL`, `S3_ENDPOINT`, `S3_BUCKET_PUBLIC` and `S3_BUCKET_PRIVATE` are required by the flat schema and were absent from all three tomls, so the first deploy would have failed at boot - silently on the worker, which has no health gate. Found by feeding each `[env]` block through the real `loadConfig` rather than by reading it. The same shape again on 2026-08-23: all three set `SENTRY_ENVIRONMENT` and none set `SENTRY_DSN`, and `monitoring.ts` reports nothing anywhere without the DSN - so the files read as though Sentry was wired while every 5xx, parked outbox event and failed drain tick would have reached a log inside a Fly machine and reached nobody. It is now in all three `[env]` blocks, which is where a write-only ingest address belongs under [Deployment](21-deployment.md) rule 10 |
-| Secrets on the platform | **Not yet.** Collected, none set. `fly secrets import` and never `fly secrets set`, per [Deployment](21-deployment.md) rule 10. Six on **each of the three apps**, because every role parses the whole flat schema and refuses to boot on a value it never reads: `DATABASE_URL`, `REDIS_URL`, `BETTER_AUTH_SECRET`, `MEDIA_SIGNING_SECRET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`. Only the api's `MEDIA_SIGNING_SECRET` is the real one - the other two take throwaways that clear the schema's 16 character floor, so three different digests is correct rather than drift, and `fly/api.toml` says so at length. Then on the api alone: `RESEND_API_KEY` and `MAIL_FROM`, which the schema marks optional and `assertProductionMailer` makes required in practice; and **`PLATFORM_MODERATORS`, which nothing fails without and which this row omitted until 2026-08-23.** It is a comma-separated list of **email addresses**, not account ids, and `reconcilePlatformModerators` matches them against `users.email` when the api boots and at no other time - so it may be set before the first deploy, but an address whose account does not exist yet is logged `unmatched`, grants nobody, and needs the api restarted once that account exists. Left unset, the api warns that nobody can read the direct-message report queue and boots normally: reports are filed and never seen, and that warning is the whole of the enforcement |
-| The five paths proved by hand | **Not started.** Requires the deploy, and specifically requires it to have reached step 3 of the six-step cutover in [Deployment](21-deployment.md): `api.<domain>` and `ws.<domain>` resolve and hold certificates first, or the build on the device has no name to call and a password-reset mail carries a real link to a host that does not exist |
-| Backup restore, forced alert, symbolicated trace | **Not started.** All require the deploy |
-| TestFlight, legal texts, mail domain move | **Not started** |
+| Resend, and the mail domain | **Verified 2026-08-23, by a mail rather than by a badge.** The password-reset mail arrived from `noreply@clubchatapp.com`, and Resend will not send from an unverified domain, so the arrival is the verification. Two earlier readings of this row are worth keeping visible: it once said "verified" from the DNS being right, and then "NOT verified" from the badge still saying `Pending`, and neither was evidence in either direction. **The domain move is not finished**: `_dmarc` is at `p=none` and the older Full-access key is still alive |
+| The CDN Worker | **Deployed 2026-08-23 on `cdn.clubchatapp.com`**, as a Workers Custom Domain declared in `wrangler.jsonc` as a `routes` entry with `custom_domain: true`, bundle 6.89 KiB. It serves real bytes off both buckets with the right content types and refuses correctly in both directions, including the routing case proved with **valid** signatures: an unknown first path segment answers 404 without touching R2 rather than falling back to the private bucket. Before that: **built and adversarially tested.** `packages/cdn-worker`, the fourth workspace, exercised in real `workerd` against an emulated R2. It did not work first time: 27 of 101 tests failed on the first execution, from Range and partial-content defects that typecheck and a bundle could not see. A red-team pass then failed to get bytes out of either bucket in 400 hostile requests, and found one real routing defect (now fixed) plus a `workers.dev` hostname left open by default (now closed). [ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) |
+| Media mode | **Done 2026-08-23, and it went in that order.** The three Fly apps went out on `presign`, the Worker was proved on the real hostname while nothing depended on it, then `MEDIA_URL_MODE` flipped to `cdn` on the api and it was redeployed on the same image digest, so the flip changed one environment value and nothing else. `fly/api.toml` carries `cdn`. Photos render on a physical iPhone through the Worker. Both production states were green independently, which was the whole argument for the extra deploy |
+| Config completeness | **Done, three times, and it was not.** `BETTER_AUTH_URL`, `S3_ENDPOINT`, `S3_BUCKET_PUBLIC` and `S3_BUCKET_PRIVATE` are required by the flat schema and were absent from all three tomls, so the first deploy would have failed at boot - silently on the worker, which has no health gate. Found by feeding each `[env]` block through the real `loadConfig` rather than by reading it. The same shape again on 2026-08-23: all three set `SENTRY_ENVIRONMENT` and none set `SENTRY_DSN`, and `monitoring.ts` reports nothing anywhere without the DSN - so the files read as though Sentry was wired while every 5xx, parked outbox event and failed drain tick would have reached a log inside a Fly machine and reached nobody. It is now in all three `[env]` blocks, which is where a write-only ingest address belongs under [Deployment](21-deployment.md) rule 10. And a third shape on the same day, underneath both: an optional value supplied as an empty string arrived as `''` rather than `undefined`, so every `??` fallback in the codebase was dead and `/__parity` answered `version: ""`. Three separate producers feed it, so it is normalised once in `config.ts` |
+| Secrets on the platform | **Done 2026-08-23, `PLATFORM_MODERATORS` included.** Set with `fly secrets import --stage` on all three apps, and checked by digest rather than by having typed them carefully: `BETTER_AUTH_SECRET` matches across all three, and `MEDIA_SIGNING_SECRET` deliberately does not. **`PLATFORM_MODERATORS` was the last of them, at 16:46Z and on the api alone**, once an account existed for it to match; the boot that followed reported it granted with nothing unmatched, so the direct-message report queue has a reader. Exactly **one**, the founder's own address, chosen for now rather than settled as a roster. [Deployment](21-deployment.md) step 4 carries the ordering and the log line that proves the address matched. The rest of this row is the reasoning that got it right and stays worth reading: `fly secrets import` and never `fly secrets set`, per [Deployment](21-deployment.md) rule 10. Six on **each of the three apps**, because every role parses the whole flat schema and refuses to boot on a value it never reads: `DATABASE_URL`, `REDIS_URL`, `BETTER_AUTH_SECRET`, `MEDIA_SIGNING_SECRET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`. Only the api's `MEDIA_SIGNING_SECRET` is the real one - the other two take throwaways that clear the schema's 16 character floor, so three different digests is correct rather than drift, and `fly/api.toml` says so at length. Then on the api alone: `RESEND_API_KEY` and `MAIL_FROM`, which the schema marks optional and `assertProductionMailer` makes required in practice; and **`PLATFORM_MODERATORS`, which nothing fails without and which this row omitted until 2026-08-23.** It is a comma-separated list of **email addresses**, not account ids, and `reconcilePlatformModerators` matches them against `users.email` when the api boots and at no other time - so it may be set before the first deploy, but an address whose account does not exist yet is logged `unmatched`, grants nobody, and needs the api restarted once that account exists. Left unset, the api warns that nobody can read the direct-message report queue and boots normally: reports are filed and never seen, and that warning is the whole of the enforcement, which is why it was carried as a cutover step rather than as a note |
+| The five paths proved by hand | **Done 2026-08-23.** Signup, chat, photo upload, push and password-reset mail, each reported individually. Push reached a real iOS device with the sender correctly excluded from the recipient list, and exactly one `push_deliveries` row was written because exactly one device is registered. The reset link resolved and completed, which it could only do because DNS moved ahead of this step; [Deployment](21-deployment.md) step 3 carries that ordering and why it is load-bearing |
+| The outbox, in production | **Drained clean.** Everything processed, zero unprocessed and zero errors, across `message.created`, `media.uploaded`, `message.reacted`, `push.deferred`, `club.created`, `poll.created` and `message.pinned`. The worker logged `worker started, draining outbox and running the scheduler` exactly once, which is the only boot signal this role has |
+| Backup restore, forced alert, symbolicated trace | **Not started, and no longer blocked.** The deploy was the dependency and it exists. No backup has been restored, no alert has been forced to reach a human, and Sentry has received no production error. Milestone 3 above separates the three things "symbolicated trace" was hiding |
+| TestFlight, over-the-air updates, legal texts | **Not started.** A production EAS build is being started now; nothing is submitted and no stranger has installed anything, and external TestFlight additionally needs Apple's Beta App Review. `apps/mobile/app.json` declares no `updates` block and no `runtimeVersion`, so there is no EAS Update channel and a fix still needs a build. The legal texts are not written |
+| Credential rotations | **Deferred by the founder on 2026-08-23**, deliberately and with a date, which is the only form this should ever take. Four credentials passed through a chat transcript and are disclosed until replaced: the R2 secret access key, the Cloudflare API token, the Sentry organization auth token, and the older Full-access Resend key. [Deployment](21-deployment.md)'s obligation 1 is the standing record and carries the two details that survive the deferral |
 
 Two defects were found by connecting to real infrastructure rather than by reading code, and both
 are fixed on the branch: Neon silently discards the pool's timeout ceilings when sent as individual
 startup parameters, and the test that should have caught the related migration escape hatch could
-never fail. See [Deployment](21-deployment.md) and `AGENTS.md` failure mode 37.
+never fail. See [Deployment](21-deployment.md) and `AGENTS.md` failure mode 37. **Nine more were
+found on 2026-08-23 by auditing the configuration, the image and the mobile build against what the
+code actually does**, four of which would have deployed green; `HISTORY.md` carries them.
 
 ## Milestone 6 - The first club
 

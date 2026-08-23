@@ -13,6 +13,252 @@ Newest first.
 
 ---
 
+## 2026-08-23 - The first deployment, and the nine defects the audit found first
+
+ClubChat runs in production. Three Fly apps in `iad`, one machine each from one image; Neon migrated
+by the api's `release_command` before any machine took traffic; `api.clubchatapp.com`,
+`ws.clubchatapp.com` and `cdn.clubchatapp.com` all answering; media served in `cdn` mode; and
+signup, chat, photo upload, push and password-reset mail each proved by hand. It is the first time
+anything in this project has run anywhere but a development machine.
+
+[`TECH/21`](SPEC/TECH/21-deployment.md) carries the procedure and which of its steps have been
+performed, and [`TECH/20`](SPEC/TECH/20-road-to-the-first-club.md) carries milestone 5's standing.
+This is what it cost.
+
+Nothing was deployed until the three Fly configs, the image and the mobile build had been audited
+against what the code actually does rather than against what they claimed, which turned up **nine
+defects. Four of them would have deployed green**, and that is the number worth holding onto: a
+deploy that reports success while being wrong is the failure this whole arrangement is built
+against, from `/ready` being made able to fail to the worker having no health gate to hide behind.
+
+### The four that reported success
+
+**Sentry was wired nowhere, and every file said it was.** All three `fly/*.toml` set
+`SENTRY_ENVIRONMENT = 'production'` and none set `SENTRY_DSN`. `monitoring.ts` gates every capture
+on the DSN being present and non-empty and falls back to the process logger without it, which is
+deliberate: it is what makes the capture paths run in development and CI rather than executing for
+the first time in production. The price of that design is exactly this failure. A role with no DSN
+boots, logs, and is indistinguishable from a role with one, so every 5xx, every parked outbox event
+and every failed drain tick would have reached a log inside a Fly machine and reached nobody, while
+three configuration files named Sentry twice each. `fly/worker.toml` went further and described a
+parked event as "already captured to Sentry", which was true only where a DSN existed. It was off
+in CI too, because `.env.example` ships the key bare and CI copies that file.
+
+**The two roles that serve every request were the two taking Fly's 256 MB default.**
+`fly/worker.toml` pinned its guest; `api.toml` and `gateway.toml` did not, which is precisely the
+wrong way round. The api is the one role that maps libvips at boot, through the static
+`import sharp` in `media/pipeline.ts`, and `completeUpload` then reads an object of up to
+`MAX_IMAGE_BYTES` into memory and walks every pixel of it. A default machine meets that as an
+out-of-memory kill on somebody's photo, and an OOM kill presents as a machine restart rather than as
+an error: it would have read as instability for a long time before it read as a memory ceiling. The
+api is now 1 GB and the gateway 512 MB, pinned in `[[vm]]`.
+
+**The secrets sections documented one app, and all three roles parse the same flat schema.**
+Following the files literally gives a working api, a gateway that fails readiness part-way through
+its own deploy, and a worker that never boots and says nothing, because it declares no service and
+so has no health gate to fail. That three-way asymmetry is documented and was still not applied to
+the list it governs.
+
+**An optional value supplied as an empty string is not an absent one.** `''` arrived where the code
+expected `undefined`, so every `??` fallback downstream of config was dead: `/__parity` answered
+`version: ""` and Sentry would have initialised with `release: ''`. Three separate producers make
+that shape and no single call site covers them, which is the whole reason it needed finding rather
+than patching: the image cannot conditionally omit an `ENV`, `.env.example` ships bare keys, and
+`fly secrets set NAME=` stores an empty value rather than removing one. It is normalised once in
+`config.ts`, the only place all three pass through. The worst instance was `MAIL_FROM`: an empty
+string is truthy, so the cross-field check written to refuse a half-configured mailer passed, and
+would have built a transport with no From address.
+
+### Two claims about image decoding, both written down, both false
+
+**A byte cap is not a pixel cap.** `MAX_IMAGE_BYTES` bounds the compressed file; libvips allocates
+the decompressed surface, which follows from the declared dimensions and has nothing to do with the
+file size. Nothing bounded it. `DECODE_OPTIONS` set only `failOn`, leaving sharp's default
+`limitInputPixels` of 268402689 pixels, which at four bytes a pixel is 1.00 GiB of raw bitmap for
+one image, requested by a **94 byte PNG** declaring 16000x16000 and landing inside a machine that
+has one gigabyte in total.
+
+What makes it an entry rather than a bug is why nobody had looked. `probe.ts` carried a comment
+saying the default already refused this, and
+[ADR-0018](SPEC/decisions/0018-decode-uploads-at-the-boundary.md) repeats the claim. A false
+statement in a comment is expensive; the same false statement in a comment **and** an accepted
+decision record is close to unfindable, because the second one is what you check the first against.
+The bound is now `MAX_IMAGE_PIXELS`, 64 Mi, folded into the shared `DECODE_OPTIONS` so both call
+sites carry it, chosen so a 50 megapixel Android photograph is still accepted while the 108 and 200
+megapixel full-resolution modes are refused.
+
+**And there was a third call site.** The crop handed bytes to libvips with no options at all, so it
+took sharp's default `failOn: 'warning'` and was therefore **stricter than the gate that admits work
+to it**. A photograph with a stray marker inside its scan passed the probe, threw out of
+`completeUpload`, and the route turned that into a 500. A stricter check downstream of a looser one
+is worse than either alone, because whatever it rejects has already been told it was accepted.
+
+### The cutover proved mail before the hostname in its link existed
+
+The procedure written on 2026-08-21 put the five by-hand proofs before the DNS step. That is fine
+for four of them and wrong for the fifth, for a reason invisible from the step list. All three
+configs set `BETTER_AUTH_URL = 'https://api.clubchatapp.com'`, `api/main.ts` hands it to better-auth
+as `baseURL`, and better-auth builds the password-reset link from it. A reset requested before that
+name resolved would have sent a real mail, to the right person, correct in every visible respect,
+carrying a link to a host that did not exist.
+
+Reordered to deploy, then DNS and certificates, then prove. The payoff was immediate, which is why
+this is written down rather than quietly fixed: when the mail was actually sent, its link resolved
+and completed, in the sequence `POST /api/auth/request-password-reset`, then
+`GET /api/auth/reset-password/<token>`, then `POST /api/auth/reset-password`, then
+`POST /api/auth/sign-in/email`. Under the original order that is four steps of which the second
+answers nothing, discovered by a person who has already used their reset link.
+
+Worth keeping apart from the neighbouring mail failure, because the two present as opposites: an
+unverified Resend domain sends nothing at all, and this one sends a mail that looks correct.
+
+### A TestFlight binary would have pointed at a laptop, and reported no crashes
+
+`eas.json` declared no `env` on any build profile. `EXPO_PUBLIC_API_URL` and `EXPO_PUBLIC_WS_URL`
+are inlined into the bundle at build time, so a production build would have baked
+`http://localhost:3000` into every install, permanently, with no server-side correction possible.
+That is the exact thing [`TECH/21`](SPEC/TECH/21-deployment.md) rule 8 exists to prevent: the rule
+had been written and agreed and never applied to the one file that decides it, which is the shape
+failure mode 19 names, a rule asserted in prose and implemented nowhere.
+
+The same absence covered the client's error reporting. With no `EXPO_PUBLIC_SENTRY_DSN` in the build
+environment, the binary handed to testers would have reported no crashes at all, in the way this
+project has learned to distrust most: looking exactly like an app that never crashed. Both profiles
+now carry the production hostnames and the mobile DSN, and `usesNonExemptEncryption` is set so an
+upload does not park waiting on an export compliance answer.
+
+### The deploy, in the order it was designed to run in
+
+One image, built once with `--build-arg SENTRY_RELEASE`, pushed once, deployed to all three apps by
+digest, api first so its `release_command` ran the Neon migration on a temporary machine before
+anything took traffic. `--ha=false` on each of the three, so one machine per role is the shape that
+is running rather than the shape that was reasoned about while Fly quietly created five. The api
+answers `73a9ee3d6c7eb204dd0f550f0477f674ddffb67a` as its release.
+
+`api.clubchatapp.com` and `ws.clubchatapp.com` went on next as A and AAAA records with the proxy
+off, then a Fly certificate for each. Grey cloud rather than orange is not a preference: Fly
+terminates its own TLS, and proxying through Cloudflare puts two proxies in series and breaks the
+WebSocket upgrade. That the proxy really was off was checked from outside rather than read off the
+dashboard, by the absence of any `cf-ray` header beside a `server: Fly/...` one.
+
+Then the five paths by hand, reported individually. Push is the one worth recording in detail,
+because the interesting part is what it did **not** do: the `push.deferred` payload's recipient list
+excluded the sender, and exactly one `push_deliveries` row was written, because exactly one device
+is registered. A fan-out that includes the person who just typed is a defect nobody notices in a
+club of two, and the ledger is the only place it would have shown.
+
+The outbox has since drained everything with zero unprocessed and zero errors, across
+`message.created`, `media.uploaded`, `message.reacted`, `push.deferred`, `club.created`,
+`poll.created` and `message.pinned`. The worker logged `worker started, draining outbox and running
+the scheduler` once, which is the only boot signal that role has and therefore the only evidence its
+deploy meant anything at all.
+
+### The Worker, on its real hostname, while nothing depended on it
+
+`/__parity` answers `D6NXENh3` on both the api and the Worker, compared on the `parity` field alone.
+The two `version` fields differ by design and always will, a git sha against a Cloudflare version
+id, so a whole-body diff would have reported a difference at exactly the moment somebody is trying
+to establish whether two secrets match.
+
+Then the refusals, which is where an emulated R2 could only ever have been evidence about the
+pieces. With **valid** signatures: an unknown first path segment answers 404 without touching R2
+rather than falling back to the private bucket, a key with no prefix answers 404, a path traversal
+answers 403 because normalisation breaks the signature, and a valid signature for an absent object
+answers 404. With invalid signatures: no signature, a tampered one, one minted for another object,
+and an expired one all answer 403. Proving the routing with valid signatures is the whole point of
+that first half. A broken signature refuses before the router is reached, so it says nothing about
+where an unknown prefix would have gone, which is the mistake the emulated tests made about this
+same function on 2026-08-21.
+
+### An ADR that survived being checked
+
+`cf-cache-status` is **absent** on a real signed URL. Nothing is held at the Cloudflare edge, so
+`public, max-age=3600` reaches browsers and downstream caches only, and N members opening one photo
+is N reads of R2. That is the open half of roadmap debt 7, settled by a response header.
+
+It **confirms** [ADR-0044](SPEC/decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md)
+rather than contradicting it, and that is worth saying next to the entry below, which records the
+opposite kind of afternoon: the same claim asserted in five files before anybody checked, and false
+in all five. The difference is not care, it is form. This one was reasoned out from the vendor's own
+documentation, written down as a prediction, and shipped with the one command that would falsify it.
+`HIT` or `MISS` would have meant the ADR needed superseding. The switch stays off, and turning it on
+is now a decision rather than a question.
+
+### The verification scripts were wrong in the flattering direction
+
+Several small scripts were written during the deploy to check the things a deploy has to check:
+that a secret matches on two sides, that a hostname is not proxied, that a refusal is a refusal.
+More than one of them **reported a better answer than the truth**, and each had to be rewritten to
+prove it could fail before its pass was worth anything.
+
+This is failure mode 37 arriving from a new direction. There it was a test whose expected value
+equalled the system's own default, so it passed on the default rather than on the parameter. Here it
+was checks written quickly against a system nobody could see into, where the cheap implementation of
+"does this refuse" is one that also answers yes when the request never arrived, and the cheap
+implementation of "do these match" is one that also answers yes when both sides are empty. A check
+with no negative case is not a check, and it fails in a consistent direction: it says the thing you
+want to hear, on the day you most want to hear it.
+
+The cost either way is worth stating, because it decided nothing at the time and should. Watching a
+check fail once is a minute. Every one of the nine defects above was found by asking a system what
+it was doing rather than reading what it claimed, and the tools doing the asking were the last
+things left that nobody was asking about.
+
+### The last two open things, closed later the same day
+
+The list below was written while two of its items were still open. Both closed before the day ended,
+and each is worth a line for what closing it took.
+
+**`PLATFORM_MODERATORS` was set at 16:46Z**, on `clubchat-api` alone, through `fly secrets import`.
+The runbook puts that step before the five by-hand proofs and it ran after them, which is the step
+behaving exactly as its own prose says it must rather than the step slipping. The value is a list of
+email **addresses**, matched against `users.email` at boot and at no other time, so it can only
+grant anything once the account exists - and the only real account this deployment had was the one
+the signup proof created at 15:05Z. Setting it before the first deploy was allowed, would have
+restarted a machine, and would have granted nobody.
+
+The import rolled the single api machine, it came back with `/ready` answering 200, and the boot
+logged `platform moderators reconciled` with `configured:1`, `granted:1`, `revoked:0` and an **empty
+`unmatched`**. That empty array is the entire result. A mistyped address produces the same
+successful import, the same healthy machine and the same reassuring line, with `granted:0` and the
+address sitting in `unmatched` - a report queue that still has no reader, and nothing anywhere
+complaining about it. Which is why the proof of this step is a log line and not an exit status. One
+moderator exists now, the founder's own address, chosen for now rather than as a roster.
+
+**A signed media URL was watched crossing an hour boundary at 17:01Z.** Three minted at 16:05Z, a
+photo original, its thumb variant and an avatar display variant, all answered 200 with their full
+byte counts after the 17:00Z crossing. Fifty minutes of working proves nothing about the fifty-first
+when the expiry is hour aligned, so this is the one part of `cdn` mode that could not be argued into
+being true and simply had to be waited out.
+
+### What is still not true
+
+Written out, because a first deploy is the moment a project is most likely to describe itself
+generously.
+
+- **No backup has been restored. No alert has been forced to reach a human.** Sentry has received no
+  production error, so error reporting is wired and unproved; performance tracing is not merely
+  unproved but switched off by a constant, `tracesSampleRate: 0`, deliberately and with its reason
+  in a comment.
+- **Nothing is on TestFlight.** A production build is being started; nothing is submitted, nobody
+  outside has installed anything, and external TestFlight additionally needs Apple's Beta App
+  Review. There is also no EAS Update channel: `app.json` declares no `updates` block and no
+  `runtimeVersion`, so a fix still needs a build.
+- **The legal texts are not written.**
+- **Four credentials that passed through a chat transcript are not rotated**: the R2 secret access
+  key, the Cloudflare API token, the Sentry organization auth token, and the older Full-access
+  Resend key. The founder deferred all four today, deliberately, and it is recorded with its date
+  because a dated deferral is a decision somebody can revisit while an undated one becomes an
+  oversight nobody owns. The R2 credential is read **and** write where the Worker only ever reads.
+
+One thing closed by evidence rather than by decision. The password-reset mail arrived from
+`noreply@clubchatapp.com`, and Resend will not send from an unverified domain, so the badge that had
+been `Pending` since 2026-08-21 had flipped. That row has now been read wrongly in both directions,
+once as verified because the DNS was right and once as unverified because the badge said so, and the
+only reading that was ever worth anything is the one that came from a mail arriving.
+
+---
+
 ## 2026-08-21 - The CDN Worker, and three APIs that compiled cleanly and did nothing
 
 Milestone 5's remaining half: `cdn.clubchatapp.com` became a real program, `MEDIA_URL_MODE=presign`

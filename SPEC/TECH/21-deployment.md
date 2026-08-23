@@ -1,13 +1,18 @@
 # Deployment
 
-**Nothing is deployed yet.** As of 2026-08-23 the three roles have never run anywhere but
-development machines, and [Road to the first club](20-road-to-the-first-club.md) milestone 5 is the
-work that changes that. This document is the deployment as designed, plus the rules that bind every
-change once it exists.
+**Deployed for the first time on 2026-08-23.** Three Fly apps in the `clubchat` organization, one
+machine each in `iad`, from a single image built once and deployed to all three by digest; the
+migration run by the api's `release_command` before any machine took traffic;
+`api.clubchatapp.com` and `ws.clubchatapp.com` holding Fly certificates;
+`cdn.clubchatapp.com` answering from the Worker; and the api serving media in `cdn` mode.
+[Road to the first club](20-road-to-the-first-club.md) milestone 5 holds the standing of what that
+did and did not settle, and this document does not restate it. What this document is remains what
+it was: the deployment as designed, plus the rules that bind every change.
 
-It is written *before* the first deploy on purpose. Every rule below is free to follow from the
-first deploy and expensive to retrofit: once a few hundred people hold a build of the app, a
-compatibility mistake cannot be un-shipped, only followed by another release.
+**The rules below were written *before* that first deploy on purpose, and not one of them changed
+when it happened**, which was the point of writing them early. Every one is free to follow from the
+first deploy and expensive to retrofit: once a few hundred people hold a build of the app, a compatibility mistake
+cannot be un-shipped, only followed by another release.
 
 [Stack and hosting](15-stack-and-hosting.md) owns **which** technology and why. This document owns
 **how a change reaches a person**, and does not restate it.
@@ -27,6 +32,12 @@ compatibility mistake cannot be un-shipped, only followed by another release.
 | `cdn-worker` (`packages/cdn-worker`) | Cloudflare Workers, paid plan | The client, over HTTPS, for media bytes |
 | Web client | Vercel | Browsers |
 | JavaScript bundles | EAS Update | Phones |
+
+**Seven of those nine rows are live as of 2026-08-23; the last two have never run.** The three Fly
+apps, Neon, Upstash, both R2 buckets and the Worker all serve today. The web client has never been
+deployed to Vercel, and `apps/mobile/app.json` declares no `updates` block and no
+`runtimeVersion`, so there is no EAS Update channel for a bundle to reach a phone through. Both are
+milestone 5 work rather than rows this table got wrong.
 
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because
@@ -50,7 +61,9 @@ production. It has one consequence worth stating where an operator will meet it.
 DSN boots, logs, and looks exactly like a role with one**, and `SENTRY_ENVIRONMENT = 'production'`
 sitting beside an empty DSN reads as wired from every angle except the Sentry project itself. That
 is why milestone 5's exit criterion is a deliberately raised 5xx *arriving*, rather than a config
-file that mentions Sentry.
+file that mentions Sentry. **All three roles now carry the DSN and all three are deployed with it,
+and no error has yet been seen to arrive**, which is exactly the state that criterion exists to
+distinguish from a working one.
 
 **One image, three roles.** `packages/server` has three entrypoints over one dependency graph, so a
 single image is built and the role is chosen by the start command. This is
@@ -97,9 +110,10 @@ app that has no machines yet the api and the gateway each come up as two, and th
 declares no service, comes up as one. That is 100 pool connections rather than the 60 above, and 120
 while the migration runs. Both fit inside 443, so this is a headroom question rather than a safety
 one, but the budget above, `fly/worker.toml`'s own "exactly one machine", and every number in this
-document describe one machine per role. **The first cutover therefore passes `--ha=false`**, so the
-shape that gets deployed is the shape that was reasoned about, and a request that fails by hand can
-only have come from the one machine you are looking at. A second api or gateway machine afterwards
+document describe one machine per role. **The first cutover therefore passed `--ha=false`**, and
+each of the three apps runs exactly one machine today, so the shape that is deployed is the shape
+that was reasoned about and a request that fails by hand can only have come from the one machine
+you are looking at. A second api or gateway machine afterwards
 is `fly scale count`, chosen against socket count or outbox depth rather than inherited from a flag
 default. The flag only bites on an app with no machines: a later deploy updates the machines that
 already exist.
@@ -340,15 +354,23 @@ The order below exists because the first production state should be one that has
 somewhere. It is three deploys rather than one, and the extra deploy buys two independently green
 production states and a one-token rollback to a state that has been watched working.
 
+**It ran on 2026-08-23, in this order, and it stays here as the procedure rather than becoming a
+record of one afternoon.** Each step carries what it actually did, because a runbook that cannot
+say which of its steps has been performed is a runbook somebody performs twice. **All six are
+done.** Step 4 ran late rather than in the position it sits in here, at 16:46Z and after the five
+by-hand proofs, for the reason the step's own prose gives: it needs an account to match, and the
+account it matched was the one step 3 created.
+
 Two orderings inside it are load-bearing and neither is visible from the steps themselves.
 Migrations run before the code that selects from them, which is rule 1 and is enforced by the api's
 `release_command` rather than by memory. And **every hostname resolves, and holds a certificate,
 before anything is proved against it**, which is the same reasoning one layer out: the name exists
 before a device is asked to call it, and before mail is asked to carry a link to it.
 
-**1. The three Fly apps, on `MEDIA_URL_MODE=presign`.** The only media mode that has ever run
-anywhere. Build the image ONCE and deploy that digest to all three, api first because its
-`release_command` runs the migration (rule 1).
+**1. The three Fly apps, on `MEDIA_URL_MODE=presign`.** The only media mode that had ever run
+anywhere at the time, which is the whole of the argument for starting there. Build the image ONCE
+and deploy that digest to all three, api first because its `release_command` runs the migration
+(rule 1).
 
 **Before any of it, the secrets exist on all three apps.** Every role parses the whole flat schema
 at startup, so a role missing one does not boot, and the three fail differently: the api's
@@ -418,7 +440,8 @@ fly logs --app clubchat-worker
 
 A worker that parsed its configuration writes `worker started, draining outbox and running the
 scheduler`, at `info`, once, after the pool, the Redis connection and the S3 client have all been
-built. **Its absence is the failure.** `loadConfig` runs before that line, so a secret missing or
+built. It arrived once on 2026-08-23, which is the only boot signal this role has and therefore the
+only evidence its deploy meant anything. **Its absence is the failure.** `loadConfig` runs before that line, so a secret missing or
 mistyped on this role prints a validation error naming the key it could not read and never reaches
 it, on a deploy that reported success because this role has no health gate to fail. The same line
 arriving repeatedly, seconds apart, is the other fault: a worker that boots and then dies.
@@ -428,6 +451,11 @@ TLS, and proxying it through Cloudflare puts two proxies in series and breaks th
 gateway. Then `fly certs add` for each, and wait for both to be issued: Fly cannot issue a
 certificate for a name that does not already point at it, which is why the record and the
 certificate are one step and not two.
+
+**Done 2026-08-23.** Both names carry A and AAAA records with `proxied: false`, and Fly has issued a
+certificate for each. That the proxy really is off was checked from outside rather than read off the
+dashboard's cloud colour: a response from either name carries `server: Fly/...` and **no `cf-ray`
+header at all**, which a proxied record could not produce.
 
 **3. Prove signup, chat, push, upload and mail by hand on a real device**, and report each pass or
 fail individually rather than as one verdict.
@@ -442,6 +470,15 @@ holds a certificate therefore sends a real mail, to the right person, carrying a
 does not exist. **That is a different cause from the Resend badge in obligation 4 below**, and the
 two are worth keeping apart because they present as opposites: one sends no mail, the other sends
 mail that looks correct.
+
+**All five passed on 2026-08-23, individually, and the fifth is where the ordering paid for
+itself.** The reset mail arrived from `noreply@clubchatapp.com`, and its link resolved and completed:
+`POST /api/auth/request-password-reset`, then `GET /api/auth/reset-password/<token>`, then
+`POST /api/auth/reset-password`, then `POST /api/auth/sign-in/email`. Under the original step order
+that same mail would have been correct in every other respect and would have carried a link to a
+host that did not resolve, which is a failure nobody sending it could see. It also closed obligation
+3 below by evidence rather than by looking at a badge: Resend will not send from an unverified
+domain, so a mail that arrived from this project's own domain **is** the verification.
 
 **4. `PLATFORM_MODERATORS`, once the first account exists.** It is documented in two places and set
 in none: [Road to the first club](20-road-to-the-first-club.md)'s milestone 5 secrets row names it
@@ -467,6 +504,24 @@ the log says whether it did: `platform moderators reconciled` with an empty `unm
 the warning above. Here rather than among the obligations below, because the window in which a DM
 report can be filed and never read opens the moment somebody other than the operator signs up.
 
+**Done 2026-08-23 at 16:46Z, later in the day than the order above suggests, and that is this step
+working rather than slipping.** It ran after the five by-hand proofs instead of before them, because
+the address it names has to match an account that already exists, and the only real account this
+deployment had was the one step 3's signup created at 15:05Z. The value reached `clubchat-api`
+alone, through `fly secrets import`, which rolled the single machine and brought it back answering
+`/ready` with a 200. The boot that followed logged
+`{"configured":1,"granted":1,"revoked":0,"unmatched":[],"msg":"platform moderators reconciled"}`.
+
+**The empty `unmatched` is the load-bearing part of that line**, and it is the whole reason to read
+the log rather than the exit status of the import. It separates an address that matched an account
+from one that named nobody: the second grants zero people, changes nothing, and comes back up
+looking exactly as healthy as this did.
+
+**One moderator exists, which is a starting position the founder chose for now and not a finished
+roster.** The queue has a reader, which is the window this step exists to close. Adding a second
+name is another `fly secrets import` and another restart, because the reconcile runs at boot and
+nowhere else.
+
 **5. The Worker, on its real hostname, while nothing depends on it.** Deploy it, attach
 `cdn.<domain>` as a Workers Custom Domain, and compare `/__parity` on both sides **before trusting
 anything**:
@@ -479,6 +534,16 @@ diff <(curl -sf https://api.<domain>/__parity | jq -r .parity) \
 A mismatch means the two hold different `MEDIA_SIGNING_SECRET` values and nothing else is worth
 investigating until they do not. It is the likeliest failure in this deployment and it presents as
 every photo 403ing, which reads as a broken Worker rather than a wrong key.
+
+**Done 2026-08-23, and it matched: both sides answer `D6NXENh3`.** The Worker was then exercised on
+its real hostname while nothing depended on it. It served real bytes off both buckets with the right
+content types, and it refused for the right reasons in each direction. **With valid signatures**: an
+unknown first path segment answers 404 without touching R2 rather than falling back to the private
+bucket, a key with no prefix answers 404, a path traversal answers 403 because normalisation breaks
+the signature, and a valid signature for an object that is not there answers 404. **With invalid
+signatures**: no signature, a tampered signature, a signature minted for another object, and an
+expired one all answer 403. Proving the routing with *valid* signatures is what makes those 404s
+mean anything, since a broken signature refuses before the router is reached at all.
 
 **Only `parity` is comparable, and diffing the two whole bodies is a trap.** Both sides answer the
 same three fields so that one shape serves both, and two of the three differ by design. `version`
@@ -493,44 +558,73 @@ through `jq -r .parity` for that reason rather than for brevity.
 URL survive an hour boundary** before calling it done, because the expiry is hour aligned and a URL
 that works for fifty minutes proves nothing about the fifty-first.
 
-### What to measure once, on the way through
+**Done 2026-08-23, the hour boundary included.** `fly/api.toml` carries `cdn`, the api was
+redeployed on the same image digest so that the flip changed one environment value and nothing else,
+and photos render on a physical iPhone through the Worker. **The boundary was then watched being
+crossed.** Three URLs minted at 16:05Z - a photo original, its thumb variant, and an avatar display
+variant - were fetched again at 17:01Z, after the 17:00Z alignment point they were signed against,
+and all three answered 200 with their full byte counts. That was the last piece of `cdn` mode
+resting on reasoning rather than on having been seen, and it is now the second kind.
 
-**`cf-cache-status` on a real signed URL.** This settles whether Cloudflare holds anything at the
-edge, which is the open half of roadmap debt 7:
+### What was measured once, on the way through
+
+**`cf-cache-status` on a real signed URL**, which is the one thing about this deployment that no
+amount of further reading could settle:
 
 ```
 curl -sI '<a signed media url>' | grep -i cf-cache-status
 ```
 
-`DYNAMIC`, or an absent header, confirms that nothing is cached and that N members opening one
-photo is N R2 reads. Turning it on is then one key,
-`"cache": { "enabled": true }` in `wrangler.jsonc`, decided against that evidence rather than
-against a vendor document. `HIT` or `MISS` would mean the analysis in
-[ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) is wrong and
-that ADR needs correcting.
+**Measured 2026-08-23 against the live Worker: the header is ABSENT.** Nothing is held at the
+Cloudflare edge, so `public, max-age=3600` reaches browsers and downstream caches only, and **N
+members opening one photo is N reads of R2**. That closes the open half of roadmap debt 7 by
+measurement, and it **confirms** the analysis in
+[ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) rather than
+contradicting it: `HIT` or `MISS` would have meant that ADR was wrong and needed superseding, and
+it is worth saying plainly that this was the outcome that left it standing. The claim had been
+asserted in five files before anybody checked, so it is now the one thing here backed by a
+response header rather than by a vendor document.
+
+Turning caching on is one key, `"cache": { "enabled": true }` in `wrangler.jsonc`. It stays off, and
+the decision is now the founder's rather than the measurement's: ADR-0044 records that a shared cache
+would promote the red team's URL-spelling finding from origin load into cache pollution, since one
+signed URL has unlimited accepted spellings. It is carried in **Open** below for that reason.
 
 ### Obligations that survive the cutover
 
-These are not optional tidying. Each one is a live credential or a live gap.
+These are not optional tidying. Each one is a live credential or a live gap. **The standing below
+is as of 2026-08-23, the day the cutover ran.**
 
-1. **Rotate the R2 key and revoke the Cloudflare API token.** Both were pasted into a chat
-   transcript rather than into the secrets file, so both must be treated as disclosed. The R2
-   credential is also read AND write where the Worker only ever reads, so the rotation is the
-   moment to narrow it to read-only. Do this once the Worker is live, not before, or the Worker
-   loses its bucket access mid-cutover.
-2. **Delete the local secrets file** once every value has reached Fly and Cloudflare. It exists
-   outside the repo precisely so that it can be deleted rather than managed.
-3. **Delete the older, Full-access Resend key**, leaving only the sending-only one restricted to
-   the sending domain.
-4. **The Resend domain badge.** Its DNS is correct and its status may still be `Pending`, and
-   Resend refuses to send from an unverified domain, so **password-reset mail is unprovable until
-   it flips**. The api boots regardless, because it only requires the key to be present, which
-   means this failure is invisible from the outside. Distinct from the ordering reason in step 3:
-   this one sends nothing at all, that one sends a mail whose link goes nowhere.
-5. **Nothing reports a Worker error.** Accepted for the first deployment and recorded in ADR-0044.
-   Workers Logs in the Cloudflare dashboard is the only place an exception at the edge is visible,
-   and nothing pages on it. The thing that actually tells you the Worker is broken is a member
-   saying no photos are loading, and `/__parity` is the first command to run when that happens.
+1. **Four credentials that passed through a chat transcript are still not rotated, and the founder
+   deferred all four on 2026-08-23.** Recorded here as a deliberate deferral carrying its date,
+   because a deferral with a date is a decision somebody can revisit and an undated one becomes an
+   oversight nobody owns. The four: the **R2 secret access key**, the **Cloudflare API token**, the
+   **Sentry organization auth token**, and the **older Full-access Resend key**. Each is disclosed
+   until it is replaced, not until enough time passes that it feels unlikely. Two details survive
+   the deferral. The R2 credential is read **and** write where the Worker only ever reads, so the
+   rotation is also the moment to narrow it to read-only. And the R2 key must be rotated with the
+   Worker already live rather than before it, or the Worker loses its bucket access part-way
+   through the change.
+2. **Delete the local secrets file** once every value has reached Fly, Cloudflare and EAS. It exists
+   outside the repo precisely so that it can be deleted rather than managed. It cannot go while
+   obligation 1 is outstanding, which is the second cost of deferring those rotations.
+3. ~~**The Resend domain badge.**~~ **Closed 2026-08-23, by evidence rather than by looking.** The
+   password-reset mail in step 3 above arrived from `noreply@clubchatapp.com`, and Resend will not
+   send from an unverified domain, so the mail arriving is the badge having flipped. The obligation
+   this row leaves behind is not the badge: `_dmarc` publishes `v=DMARC1; p=none`, which is the
+   [sending-domain checklist](../templates/sending-domain-checklist.md)'s **starting** point,
+   and tightening it to `p=quarantine` and then `p=reject` has not happened.
+4. **Nothing reports a Worker error.** Accepted for the first deployment and recorded in ADR-0044,
+   and unchanged by having deployed. Workers Logs in the Cloudflare dashboard is the only place an
+   exception at the edge is visible, and nothing pages on it. The thing that actually tells you the
+   Worker is broken is a member saying no photos are loading, and `/__parity` is the first command
+   to run when that happens.
+5. ~~**`PLATFORM_MODERATORS` has no value, so the direct-message report queue has no readers.**~~
+   **Closed 2026-08-23 at 16:46Z.** Step 4 above carries what was done and the one log line that
+   proves the address matched an account rather than merely being spelled into configuration. What
+   is left is not a gap but a shape worth knowing: the queue has exactly **one** reader, the
+   founder's own address, chosen for now. A second name is a second `fly secrets import` and an api
+   restart, since the reconcile runs at boot and nowhere else.
 
 ---
 
@@ -549,9 +643,20 @@ Recorded so that silence is not read as a decision.
   newly built image, before any machine is updated, and a failure there stops the deploy. That
   gives forward safety only: `fly deploy` rolls machines back and cannot un-apply a migration, and
   it does not need to, because the previous image still runs against the new schema. What remains
-  open is the *machine* rollback drill, which has never been performed.
-- Backup restore, monitoring, and the mail domain. These are
-  [milestone 5](20-road-to-the-first-club.md) exit criteria rather than open choices.
+  open is the *machine* rollback drill, which has never been performed. **Still true after
+  2026-08-23**: the first cutover went forward three times and was never rolled back, so there is a
+  deployment to drill against now and the drill is exactly as unperformed as it was when there was
+  nothing to roll back.
+- **Whether Workers Caching is turned on.** Only the measurement was blocking this, and the
+  measurement has been taken: nothing is cached at the edge today. The remaining question is a
+  choice rather than a fact, it belongs to the founder, and ADR-0044 records what it costs to answer
+  yes. Recorded here because the switch being absent from `wrangler.jsonc` is indistinguishable
+  from nobody having considered it.
+- Backup restore and monitoring. These are [milestone 5](20-road-to-the-first-club.md) exit criteria
+  rather than open choices, and the deploy did not move either: no backup has been restored, and no
+  alert has been forced to reach a human. **The mail domain came off this line on 2026-08-23**, when
+  reset mail arrived from the product's own domain; what is left of it is the DMARC tightening in
+  obligation 3 above.
 - Kafka still has no hosted provider ([Stack and hosting](15-stack-and-hosting.md)). Managed Kafka
   is the largest single line item in any hosting estimate at this scale, so the provider choice is
   as much a cost decision as a technical one.

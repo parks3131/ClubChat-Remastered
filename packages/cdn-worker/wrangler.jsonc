@@ -67,13 +67,25 @@
   // object in both buckets, so a "vars" entry would be a repo-committed skeleton key. Put them
   // with `wrangler secret put` and keep local values in .dev.vars, which .gitignore already covers.
 
-  // Cloudflare's own edge cache is NOT caching anything this Worker serves, and that is the
-  // default rather than a decision. Workers Caching is opt in, with `"cache": { "enabled": true }`
-  // right here, and it is deliberately absent: whether to turn it on is the founder's call, being
-  // put to him separately. Until it is on, `public, max-age=3600` reaches browsers and no
-  // Cloudflare cache, so N members opening one photo is N reads of R2. The docblock on
-  // HIT_CACHE_CONTROL in src/index.ts carries the evidence and the one command that settles it
-  // against the real deployment.
+  // Cloudflare's own edge cache holds nothing this Worker serves. MEASURED on 2026-08-23, the day
+  // of the first deployment, rather than reasoned about: `cf-cache-status` is ABSENT from the
+  // response on a real signed media URL served here on cdn.clubchatapp.com. That response carries
+  // `cache-control: public, max-age=3600`, a content-type, a content-length and an etag, and no
+  // `cf-cache-status` at all - a header Cloudflare does not emit is a request no Cloudflare cache
+  // ever considered. So `public, max-age=3600` reaches browsers and downstream caches only, and N
+  // members opening one photo is N reads of R2.
+  //
+  // That CONFIRMS ADR-0044, which predicted it. A `HIT` or a `MISS` is what would have falsified
+  // it, and would have meant superseding the ADR rather than editing a comment.
+  //
+  // Workers Caching is the switch: opt in, `"cache": { "enabled": true }` right here, and it stays
+  // deliberately absent. It is no longer a question, though - what was blocking the call was the
+  // measurement, and the measurement exists, so turning it on is now one config key weighed
+  // against known evidence. The cost on the other side, recorded in the ADR: a shared cache
+  // promotes the red team's URL-spelling finding from harmless to relevant, because one signed URL
+  // has unlimited accepted spellings and each is its own cache key - origin load today, cache
+  // pollution the moment anything is actually held. The docblock on HIT_CACHE_CONTROL in
+  // src/index.ts carries the reasoning this measurement confirmed.
 
   // cdn.clubchatapp.com, attached 2026-08-23 as a Workers Custom Domain in the same change that
   // added this entry, which is what the note here used to ask for. A route naming a zone the

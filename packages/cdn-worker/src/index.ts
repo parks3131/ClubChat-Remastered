@@ -91,16 +91,28 @@ const PARITY_PATH = '/__parity';
  *    likeliest source of the original mistaken belief.
  *
  * So `public, max-age=3600` reaches the browser and any downstream cache, and Cloudflare stores
- * nothing. Expect `cf-cache-status: DYNAMIC`, documented as "Cloudflare determined at request time
- * that the asset is not eligible for cache".
+ * nothing.
  *
- * **Not reasoned about after deploy. Measured, with one command:**
+ * ## Measured on 2026-08-23, the day of the first deployment
  *
  *     curl -sI '<a signed url>' | grep -i cf-cache-status
  *
- * `DYNAMIC` confirms the above. `HIT` or `MISS` would mean something in this analysis is wrong and
- * this docblock is the thing to fix. Turning Workers Caching on is a real option and a real
- * trade-off, and it is the founder's call rather than this file's.
+ * **`cf-cache-status` is ABSENT.** Not `DYNAMIC`, which is what the paragraph above predicted: the
+ * response off cdn.clubchatapp.com carries `cache-control: public, max-age=3600`, a content-type, a
+ * content-length and an etag, and no `cf-cache-status` header at all. The prediction was wrong
+ * about the spelling and right about the fact, and the fact is the whole of it - a header
+ * Cloudflare does not emit is a request no Cloudflare cache ever considered, which is the same
+ * conclusion `DYNAMIC` would have carried. ADR-0044 anticipated both readings in as many words:
+ * "`DYNAMIC` or an absent header confirms the above."
+ *
+ * So the analysis above stands, measured rather than argued: **N members opening one photo is N
+ * reads of R2.** `HIT` or `MISS` is what would have falsified it, and that would have meant
+ * ADR-0044 needed superseding rather than this docblock needing an edit. Neither happened.
+ *
+ * Turning Workers Caching on is still a real option with a real trade-off, and it is now a decision
+ * rather than a question waiting on evidence: one config key in `wrangler.jsonc`, against the cost
+ * ADR-0044 records - a shared cache promotes the red team's URL-spelling finding from harmless to
+ * relevant, since one signed URL has unlimited accepted spellings and each is its own cache key.
  */
 const HIT_CACHE_CONTROL = 'public, max-age=3600';
 

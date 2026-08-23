@@ -82,23 +82,26 @@ Wrangler prints two numbers and they are easy to confuse. As of 2026-08-21 it re
 this number by a KiB and that is ordinary. That is the only thing the size is worth watching for,
 and it is worth watching.
 
-`cdn.clubchatapp.com` is attached as a **Workers Custom Domain** in the Cloudflare dashboard.
-`wrangler.jsonc` deliberately declares no `routes`: a route naming a zone the account does not hold
-fails `wrangler deploy` outright, so the route entry belongs in the same change that attaches the
-domain rather than ahead of it.
+`cdn.clubchatapp.com` was attached as a **Workers Custom Domain** on 2026-08-23, and
+`wrangler.jsonc` declares it in the same change as a `routes` entry carrying `custom_domain: true`.
+A route naming a zone the account does not hold fails `wrangler deploy` outright, so that entry
+could not be written ahead of the domain, and now that it is there the line doubles as the assertion
+that the zone is held.
 
 **That hostname is the only one this Worker answers on, and keeping it that way took two explicit
-settings.** `workers_dev` defaults to ON whenever a config declares no routes, and `preview_urls`
-follows it, so a plain `wrangler deploy` would also publish `clubchat-cdn.<subdomain>.workers.dev`
-plus a per-version preview URL. The signed message is `${objectKey}:${exp}` and covers no host, so
-every URL the api mints would work verbatim on those too: a second front door to both buckets,
-outside the `clubchatapp.com` zone and therefore outside every WAF rule, rate limit and Access
-policy ever attached to it, with `/__parity` reachable there as well. `wrangler.jsonc` sets both to
-`false`. If a deploy ever prints a `workers.dev` URL, that is a regression, not a convenience.
+settings.** `workers_dev` defaults to ON whenever a config declares no routes, which this one did
+until the domain was attached, and `preview_urls` follows it - so a plain `wrangler deploy` would
+also publish `clubchat-cdn.<subdomain>.workers.dev` plus a per-version preview URL. The signed
+message is `${objectKey}:${exp}` and covers no host, so every URL the api mints would work verbatim
+on those too: a second front door to both buckets, outside the `clubchatapp.com` zone and therefore
+outside every WAF rule, rate limit and Access policy ever attached to it, with `/__parity` reachable
+there as well. `wrangler.jsonc` sets both to `false` explicitly rather than leaving either to its
+default, which is why adding the route entry changed nothing about them. If a deploy ever prints a
+`workers.dev` URL, that is a regression, not a convenience.
 
 There is a note in the collected values wanting workers.dev as somewhere to test before attaching
-the custom hostname. It is not needed for that: the Fly apps ship on `MEDIA_URL_MODE=presign`, so
-the Worker can be deployed and exercised on `cdn.clubchatapp.com` while nothing depends on it yet.
+the custom hostname. It was not needed for that: the Fly apps went out on `MEDIA_URL_MODE=presign`,
+so the Worker was deployed and exercised on `cdn.clubchatapp.com` while nothing depended on it yet.
 Testing on the real hostname before anything uses it beats testing on a second hostname that then
 stays open forever.
 
@@ -106,8 +109,9 @@ stays open forever.
 
 `public, max-age=3600` goes to browsers and to any downstream cache. **Cloudflare's own edge cache
 holds nothing, so two members opening the same photo are two reads of R2**, not one read and one
-cache hit. Worth stating plainly because the opposite is the natural assumption and an earlier
-version of this file asserted it.
+cache hit. **Measured against the deployed Worker on 2026-08-23**, with the command and its result
+at the foot of this section. Worth stating plainly because the opposite is the natural assumption
+and an earlier version of this file asserted it.
 
 The reasons, from Cloudflare's documentation rather than from inference:
 
@@ -127,16 +131,29 @@ What the hour-aligned expiry still buys is real and unchanged: every viewer in a
 the byte-identical URL, so the cache key collapses instead of fanning out, a deleted photo stops
 being visible within about an hour, and expiries stagger rather than dropping at once.
 
-**Settle it against the real deployment rather than against this paragraph:**
+**Settled against the real deployment on 2026-08-23, the day of the first cutover:**
 
 ```bash
 curl -sI '<a signed url>' | grep -i cf-cache-status
 ```
 
-`DYNAMIC` means what is written above ("Cloudflare determined at request time that the asset is not
-eligible for cache"). `HIT` or `MISS` means this section is wrong and should be rewritten. Turning
-Workers Caching on is a live option with real trade-offs and is a decision for the founder, not a
-change to make from here.
+**The header is absent.** Not `DYNAMIC`, which is what this file used to predict, and not absent in
+the sense of a request that failed: the response off `cdn.clubchatapp.com` carries
+`cache-control: public, max-age=3600`, a content-type, a content-length and an etag, and no
+`cf-cache-status` at all. A header Cloudflare does not emit is a request no Cloudflare cache ever
+considered, so the consequence is the one written above, now observed rather than argued: **N
+members opening one photo is N reads of R2.**
+[ADR-0044](../../SPEC/decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) named
+both readings in advance, "`DYNAMIC` or an absent header confirms the above", so this **confirms**
+it. A `HIT` or a `MISS` would have falsified it, and would have meant superseding that ADR rather
+than editing a paragraph.
+
+Turning Workers Caching on is still a live option with a real trade-off: one key,
+`"cache": { "enabled": true }` in `wrangler.jsonc`, against the cache pollution ADR-0044 records,
+since one signed URL has unlimited accepted spellings and each is its own cache key. What changed is
+that it is no longer waiting on evidence, so it is a decision for the founder rather than a question.
+The argument behind all of this lives beside the code it governs: the docblock on
+`HIT_CACHE_CONTROL` in `src/index.ts`, and the comment on the absent key in `wrangler.jsonc`.
 
 ## Responses are hardened against the object itself
 
