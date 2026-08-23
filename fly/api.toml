@@ -43,6 +43,32 @@ primary_region = 'iad'
 [env]
   API_PORT = '3000'
   LOG_LEVEL = 'info'
+
+  # --- Error reporting ---
+  #
+  # The DSN is what switches reporting on. The environment name is only a tag on reports that
+  # are already being sent.
+  #
+  # `monitoring.ts` gates every capture on `config.SENTRY_DSN !== undefined &&
+  # config.SENTRY_DSN.length > 0`. With the DSN absent, `capture` writes to the process logger
+  # and returns - a deliberate supported state in development and CI, where somebody is watching
+  # a terminal, and in production the difference between an incident and silence. A 5xx, a
+  # parked outbox event, a failed drain tick, a dropped socket frame and the rate limiter
+  # failing open would all reach a log inside a Fly machine and reach nobody.
+  #
+  # All three of these files set SENTRY_ENVIRONMENT and none set the DSN until 2026-08-23, which
+  # is the worst version of this defect rather than a simple omission: the file reads as though
+  # Sentry is wired, so a reviewer looking for error reporting finds evidence of it and stops.
+  #
+  # In `[env]` and not `fly secrets`, deliberately. TECH/21 rule 10: the only class safe to
+  # inline is a value that is write-only in its holder's hands, and it names the Sentry DSN as
+  # the thing that qualifies. This one can post an event to this project and cannot read one,
+  # list one, or reach anything else. Making it a secret would buy no security and would move it
+  # somewhere the three roles' copies can silently drift apart.
+  #
+  # SENTRY_RELEASE is deliberately not here. It is a Docker build arg (see the Dockerfile), so
+  # it is baked per image rather than per app, which is the only way it can name the commit.
+  SENTRY_DSN = 'https://f4737021a3d55097c56ff4c479b9cdaa@o4511847446609920.ingest.us.sentry.io/4511847456964608'
   SENTRY_ENVIRONMENT = 'production'
 
   # `1`, not `true`, and the difference is the whole point. config.ts documents it: Fly's
@@ -53,12 +79,154 @@ primary_region = 'iad'
   # header and get a fresh bucket, which removes the limit rather than loosening it.
   TRUST_PROXY = '1'
 
+  # --- The six SHARED secrets, and ALL THREE APPS NEED ALL SIX ---
+  #
+  # Six here, and three more that belong to this app ALONE in the block immediately below. This
+  # is the shared set rather than the whole set, and saying so is not pedantry: read as a closed
+  # list it is how somebody sets six values, deploys, and finds the api will not boot.
+  #
+  # None of these is in this file and none of them ever will be (AGENTS.md non-negotiable 5,
+  # TECH/21 rule 10). They are the values `config.ts` requires and the repo must never carry:
+  #
+  #   DATABASE_URL          REDIS_URL             BETTER_AUTH_SECRET
+  #   S3_ACCESS_KEY_ID      S3_SECRET_ACCESS_KEY  MEDIA_SIGNING_SECRET
+  #
+  # **Each one goes on clubchat-api AND clubchat-gateway AND clubchat-worker.** That is not
+  # belt and braces, it follows directly from one flat config schema: `config.ts` declares a
+  # single `Env` object and every role calls `loadConfig` on the whole of it at startup. So the
+  # gateway refuses to boot without an S3 credential it never uses, and the worker refuses to
+  # boot without a signing secret it never reads. The property that makes a missing value a
+  # readable startup error instead of an `undefined` on the first request that needs it is the
+  # same property that makes this true. It is checkable rather than a claim: feed each of these
+  # `[env]` blocks to the real `loadConfig` and all three refuse on exactly these six names.
+  #
+  # Written out because the two commands further down this file used to name only
+  # `clubchat-api`, and an operator following the file literally would have got:
+  #
+  #   * a working api, which is what makes it convincing;
+  #   * a gateway whose machines fail `/ready`, never take a socket, and stall the rolling
+  #     deploy - loud, and recoverable in the minute it takes to read the message;
+  #   * and a worker that never boots and reports NOTHING, because `worker.toml` declares no
+  #     service and therefore has no health gate. No check fails. No deploy fails. The evidence
+  #     would be thumbnails that never appear and an outbox that grows.
+  #
+  # The third one is why this is spelled out rather than left to be inferred from the schema.
+  #
+  # Five of the six, on every app:
+  #
+  #   for APP in clubchat-api clubchat-gateway clubchat-worker; do
+  #     printf 'DATABASE_URL=%s\nREDIS_URL=%s\nBETTER_AUTH_SECRET=%s\n' \
+  #            "$DB_URL" "$REDIS_URL" "$AUTH_SECRET" \
+  #       | fly secrets import --app "$APP"
+  #     printf 'S3_ACCESS_KEY_ID=%s\nS3_SECRET_ACCESS_KEY=%s\n' "$S3_ID" "$S3_KEY" \
+  #       | fly secrets import --app "$APP"
+  #   done
+  #
+  # `fly secrets import`, never `fly secrets set`. `set` takes the value as a command argument,
+  # so it is written into shell history and is readable in the process table for as long as the
+  # command runs. `import` reads NAME=VALUE pairs from stdin, and neither happens.
+  #
+  # BETTER_AUTH_SECRET is in that loop and MEDIA_SIGNING_SECRET is deliberately not. The two
+  # have opposite sharing rules and both are easy to get wrong in a way that looks like
+  # something else:
+  #
+  #   * **BETTER_AUTH_SECRET must be byte-identical on the api and the gateway.** Both read it:
+  #     `api/main.ts` and `gateway/main.ts` each pass it to `createAuth`. Hold two different
+  #     values and sign-in SUCCEEDS against the api while the socket then rejects the very
+  #     session the api just issued - so chat never connects, on an account that just logged in
+  #     fine, which reads as a client bug and not as a mismatched key. The worker never calls
+  #     `createAuth` and its copy is unread; it takes the same value anyway because there is no
+  #     second system holding this key and therefore nothing a third distinct value would buy.
+  #
+  #   * **MEDIA_SIGNING_SECRET is the opposite: identical on the api and the CDN WORKER, and
+  #     deliberately different on the other two Fly apps.** It is read in exactly two places,
+  #     `api/plumbing.ts` and the `/__parity` route, both on this app. The gateway and the worker
+  #     never read it and only have to clear the schema's 16 character floor in order to boot, so
+  #     each takes its own throwaway. A key that signs nothing has no business being copied onto
+  #     two more machines.
+  #
+  #   printf 'MEDIA_SIGNING_SECRET=%s\n' "$REAL" | fly secrets import --app clubchat-api
+  #   printf '%s' "$REAL" | npx wrangler secret put MEDIA_SIGNING_SECRET   # no trailing newline
+  #   printf 'MEDIA_SIGNING_SECRET=%s\n' "$(openssl rand -hex 24)" \
+  #     | fly secrets import --app clubchat-gateway
+  #   printf 'MEDIA_SIGNING_SECRET=%s\n' "$(openssl rand -hex 24)" \
+  #     | fly secrets import --app clubchat-worker
+  #
+  # **So `fly secrets list` shows THREE DIFFERENT DIGESTS for MEDIA_SIGNING_SECRET across the
+  # three apps, and that is correct rather than drift.** Stated because it looks exactly like a
+  # mistake, and because the obvious "fix" for it - copying the api's value onto the other two -
+  # spreads the key that mints every media URL onto two machines that cannot use it. The digest
+  # that has to match is this app's against the CLOUDFLARE WORKER's, which `fly secrets list`
+  # cannot see at all. `GET /__parity` on both sides answers with a fingerprint of the key each
+  # is holding; that is the comparison that means something.
+  #
+  # --- Three more, on THIS APP ALONE, and none of them is in the six above ---
+  #
+  # The six are shared because one flat schema makes every role demand them. These three are the
+  # reverse case: `config.ts` marks all three `optionalEnv()`, only `api/main.ts` reads them, and
+  # they appear in no fly toml at all. So the schema does not ask for them and the block above
+  # does not list them, which between the two of them is how they get missed.
+  #
+  # Two of the three are required in practice even so, and the third is the one nothing catches.
+  #
+  #   printf 'RESEND_API_KEY=%s\nMAIL_FROM=%s\n' "$KEY" "$FROM" \
+  #     | fly secrets import --app clubchat-api
+  #
+  # **RESEND_API_KEY and MAIL_FROM: optional in the schema, mandatory on this app, through two
+  # separate mechanisms that both have to be understood because they fail at different moments.**
+  #
+  #   * `assertProductionMailer` in `mail.ts` throws when `NODE_ENV` is `production` and the
+  #     mailer is `LoggingMailer`. `api/main.ts` picks `LoggingMailer` whenever the key is absent
+  #     and calls the assert on the next line, and the Dockerfile sets `ENV NODE_ENV=production`.
+  #     So **an api deployed without RESEND_API_KEY does not start**: it fails readiness, and the
+  #     deploy stops, which is the loud direction. ADR-0019 argues that is the honest failure -
+  #     booting on the logging mailer would tell a member to check an inbox that never receives
+  #     anything while the working reset link sat in a log stream.
+  #   * `MAIL_FROM` is enforced one step earlier, by a cross-field `.refine` on the `Env` schema
+  #     rather than by the assert: a key with no From address fails `loadConfig` outright, because
+  #     Resend rejects such a send and better-auth discards the throw in a background task. Set
+  #     both or neither; the half-configuration is the one that would otherwise be silent.
+  #
+  # `assertProductionMailer` has exactly one caller and it is `api/main.ts`. The gateway and the
+  # worker never build a mailer, so unlike the six above these genuinely do not belong on them.
+  # ADR-0020 for the provider, and TECH/21's cutover obligation 4 for why a key that is present
+  # still does not prove mail works: Resend refuses to send from a domain whose badge has not
+  # flipped to verified, and the api boots regardless.
+  #
+  #   printf 'PLATFORM_MODERATORS=%s\n' "$EMAILS" | fly secrets import --app clubchat-api
+  #
+  # **PLATFORM_MODERATORS is the opposite shape of failure: NOTHING fails without it.** The api
+  # warns and boots - `PLATFORM_MODERATORS is not set, so nobody can read the direct-message
+  # report queue. Reports will be filed and never seen.` - and that one warning is the whole of
+  # the enforcement. No check fails, no deploy fails, and the cost lands on somebody who files a
+  # DM report nobody can open. ADR-0022 for why the appointment is configuration at all.
+  #
+  # Two properties of it decide WHEN it can usefully be set, and neither is guessable:
+  #
+  #   * **It is a comma-separated list of EMAIL ADDRESSES, not account ids**, and
+  #     `reconcilePlatformModerators` in `domain/platform-moderators.ts` matches them against
+  #     `users.email`. So it can be set before the first deploy - but an address whose account
+  #     does not exist yet matches no row, is reported in the `platform moderators reconciled`
+  #     log line under `unmatched`, and grants nobody anything. A typo does exactly the same
+  #     thing and is otherwise indistinguishable from success, which is why the log names them
+  #     rather than counting them.
+  #   * **The reconcile runs at api boot and at no other time.** There is no command and no
+  #     endpoint, so a value that matched nothing is not retried: it was reconciled once, found
+  #     nothing, and is not looked at again until this app restarts. What makes the ordinary case
+  #     work anyway is that `fly secrets import` deploys by default and therefore restarts the
+  #     machines - `--stage` is the flag that would set the value and skip exactly the restart
+  #     that applies it, so do not reach for it here.
+  #
+  # On this app alone, because the api is the single writer: the gateway and the worker never
+  # call the reconcile, so a copy there would configure nothing. TECH/21's cutover step 4 owns
+  # the ordering, and TECH/20's milestone 5 table lists all three of these beside the six.
+  #
   # --- Identity and object storage ---
   #
   # Every value below is REQUIRED by the schema in `config.ts` and is not a secret. They were
   # missing from all three of these files until 2026-08-21, which meant the first deploy would
-  # have failed at boot on the api rather than at `fly secrets set`, and on the worker it would
-  # have failed on the one role that has no health gate to notice.
+  # have failed at boot on the api rather than at `fly secrets import`, and on the worker it
+  # would have failed on the one role that has no health gate to notice.
   #
   # Found by feeding these `[env]` blocks through the real `loadConfig` instead of reading them,
   # which is the only way this class shows up: a config file is not wrong in a way that a
@@ -101,11 +269,18 @@ primary_region = 'iad'
   # S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY are both on the platform, not here, and the id is
   # kept with the secret even though an access key id is not itself secret (it is published in
   # every presigned URL). They are one credential and they rotate together, and splitting a pair
-  # across two mechanisms means a rotation that is half a deploy and half a `fly secrets set`.
-  # The R2 key is due for rotation after launch anyway, so the cheap path matters:
+  # across two mechanisms means a rotation that is half a deploy and half a `fly secrets import`.
+  # The R2 key is due for rotation after launch anyway, so the cheap path matters - and it is a
+  # path through all three apps, not this one, for the reason the secrets section above gives:
   #
-  #   printf 'S3_ACCESS_KEY_ID=%s\nS3_SECRET_ACCESS_KEY=%s\n' "$ID" "$KEY" \
-  #     | fly secrets import --app clubchat-api
+  #   for APP in clubchat-api clubchat-gateway clubchat-worker; do
+  #     printf 'S3_ACCESS_KEY_ID=%s\nS3_SECRET_ACCESS_KEY=%s\n' "$ID" "$KEY" \
+  #       | fly secrets import --app "$APP"
+  #   done
+  #
+  # A rotation that reaches only this app leaves the worker's media GC authenticating with a
+  # revoked key, on the role with no health gate. Same shape as the note above: it is the app
+  # nothing checks that fails quietly.
 
   # --- Media ---
   #
@@ -150,6 +325,11 @@ primary_region = 'iad'
   #
   #   printf 'MEDIA_SIGNING_SECRET=%s\n' "$V" | fly secrets import --app clubchat-api
   #
+  # **`--app clubchat-api` alone is right HERE and nowhere else in this file.** This is the one
+  # secret the other two apps must NOT be given a copy of: they are required by the schema to
+  # hold something, they never read it, and each takes its own throwaway. The secrets section
+  # above has both commands and explains why `fly secrets list` then disagrees with itself.
+  #
   # `secrets import` and not `secrets set`, deliberately: `set` takes the value as an argument,
   # which writes the key that signs every media URL into shell history and into the process
   # table. `import` reads NAME=VALUE from stdin. Same reasoning applies to the R2 pair above.
@@ -175,6 +355,14 @@ primary_region = 'iad'
   auto_start_machines = true
   min_machines_running = 1
 
+  # `min_machines_running` is a FLOOR, not a count, and no key in this file sets a count at all.
+  # Machine count is an operator action: `fly deploy` creates two machines for an app with a
+  # service unless it is passed `--ha=false`, and `fly scale count N --app clubchat-api` changes
+  # it afterwards. So whatever this file says, the number of api machines is decided by the
+  # command somebody typed. Two is a reasonable default for the role serving every request;
+  # what matters is that it is chosen rather than discovered. SPEC/TECH/21-deployment.md owns
+  # the deploy invocation and the intended count per role.
+
 # The check that gates BOTH traffic routing and deploy success, which is why it points at
 # /ready and never at /health.
 #
@@ -198,3 +386,57 @@ primary_region = 'iad'
   # Config is parsed and validated at startup and the process fails fast on a bad value, so
   # a machine that is going to boot boots quickly. This covers the Postgres first-connect.
   grace_period = '15s'
+
+# The guest, pinned rather than defaulted, and the memory number is the whole point.
+#
+# A machine with no [[vm]] block takes Fly's default guest: shared-cpu-1x at 256 MB. This app
+# and the gateway both did until 2026-08-23, so the two roles serving every request were the two
+# left unpinned while the worker was explicit. On this role 256 MB is not a tight fit, it is a
+# live OOM - and an OOM kill presents as a machine RESTART rather than as an error, so it would
+# be read as instability long before it was read as a memory ceiling.
+#
+# Why the api specifically, stated so nobody later trims this back as an obvious saving:
+#
+#   * `packages/server/src/media/pipeline.ts` carries a STATIC top-level `import sharp from
+#     'sharp'`. It is reached from `api/routes/media.ts`, which `api/app.ts` registers, so this
+#     process maps libvips at boot whether or not anybody ever uploads a photo. Every other
+#     sharp use in the tree is lazy and says so in a comment - `media/probe.ts` and
+#     `media/derive.ts` both do `(await import('sharp')).default` precisely so the roles that do
+#     not need it do not pay. This one import is the exception, and it is on the role that
+#     serves all traffic.
+#   * `completeUpload` in that same file then reads the WHOLE object into memory through
+#     `store.get`, decodes all of it through `probeImage`, and where a crop was requested copies
+#     the buffer again and re-encodes it. `MAX_IMAGE_BYTES` in `media/store.ts` caps that
+#     buffer at `25 * 1024 * 1024`, and 25 MB of ENCODED image inside 256 MB already holding
+#     Node 24, the AWS S3 SDK, better-auth, pg, ioredis and libvips does not fit - on the
+#     request path of the only role a member talks to.
+#
+# **A byte cap is not a pixel cap, and until 2026-08-23 nothing in this system was a pixel cap.**
+# That distinction is worth the space because the byte cap is what everybody reaches for, and it
+# never bounded the decode at all. `MAX_IMAGE_BYTES` bounds the compressed file; libvips
+# allocates the DECOMPRESSED surface, which follows from the declared dimensions and has nothing
+# to do with the file size - a highly compressed format reaches enormous dimensions in very few
+# bytes, which is what a decompression bomb is. `DECODE_OPTIONS` in `media/probe.ts` set only
+# `failOn`, so sharp's default `limitInputPixels` of 268402689 pixels stood: at four bytes a
+# pixel that is 1.00 GiB of raw bitmap for one image, reachable by a file well inside 25 MB. On a
+# 1 GB guest that default is not a limit, it is the whole machine, and it fails as an OOM kill,
+# which on Fly presents as a machine restart rather than as an error.
+#
+# It is now bounded in the code where it belongs: `MAX_IMAGE_PIXELS = 64 * 1024 * 1024`, exported
+# from `media/probe.ts` and folded into the shared `DECODE_OPTIONS`, so both call sites that hand
+# bytes to libvips carry it - a limit applied at one of them is not a limit. That is 256 MiB of
+# bitmap for the largest single decode, a quarter of this guest, and it is checked from the
+# header before a scanline is allocated. The number is chosen from what this product actually
+# receives: a 50 megapixel Android photograph is accepted, while the 108 and 200 megapixel
+# full-resolution modes are refused. `probe.ts` carries the table and the reasoning.
+#
+# So 1 GB is now a reasoned ceiling rather than a guess against an unbounded decode. It is still
+# not a measurement: raise it from real memory on a real machine, not from this comment.
+#
+# 1 GB is a valid pairing with shared-cpu-1x. The memory column in `fly platform vm-sizes` is
+# the DEFAULT for each size, not a fixed pairing, which is what the worker has been proving
+# since it was written by running shared-cpu-1x at 512mb.
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '1gb'
+  processes = ['app']

@@ -98,3 +98,83 @@ describe('MEDIA_URL_MODE', () => {
     expect(() => loadConfig({ ...base, MEDIA_URL_MODE: 'CDN' })).toThrow(/MEDIA_URL_MODE/);
   });
 });
+
+/**
+ * An optional variable that is PRESENT AND EMPTY is a different thing from an absent one, and the
+ * schema used to keep the difference.
+ *
+ * `z.string().optional()` accepts `''` happily, so every one of these fields could arrive as the
+ * empty string and satisfy a `!== undefined` check. Three separate producers do exactly that, and
+ * none of them is a mistake anybody would notice:
+ *
+ *  - `Dockerfile` had `ARG SENTRY_RELEASE=""` followed by `ENV SENTRY_RELEASE=${SENTRY_RELEASE}`.
+ *    `ENV` cannot be conditionally omitted, so a build with no `--build-arg` SETS the variable to
+ *    the empty string.
+ *  - `.env.example` ships `SENTRY_DSN=`, `SENTRY_RELEASE=` and `PLATFORM_MODERATORS=` as bare
+ *    keys, and CI copies that file to `.env` and boots a live api from it.
+ *  - `fly secrets set NAME=` sets an empty secret rather than removing one.
+ *
+ * What it cost, before this was normalized here:
+ *
+ *  - `monitoring.ts` spread `release: ''` into `Sentry.init` instead of omitting the field, so
+ *    every production error was tagged with an empty release and release health said nothing.
+ *  - `/__parity` answered `version: ""`, because `SENTRY_RELEASE ?? 'unknown'` fires on null and
+ *    undefined and never on `''`. That route is how an operator tells two deploys apart while
+ *    every photo is 403ing, and an always-empty version field makes it useless for that.
+ *
+ * Whitespace counts as empty for the same reason it does in `trustProxyOption` and
+ * `parseModeratorList`, both of which already trim before deciding whether a value is there: a
+ * value pasted into a secret store carries a trailing newline more often than anybody admits.
+ */
+describe('optional variables that arrive empty', () => {
+  const optionalFields = [
+    'SENTRY_RELEASE',
+    'SENTRY_DSN',
+    'PLATFORM_MODERATORS',
+    'RESEND_API_KEY',
+  ] as const;
+
+  /*
+   * A Resend key with no From address is a startup failure by design, so the two tests that supply
+   * a real value start from an environment that already carries one. Supplying it for the other
+   * three costs nothing: the refine only looks at MAIL_FROM when a key is present.
+   */
+  const withFrom = { ...base, MAIL_FROM: 'ClubChat <noreply@clubchatapp.com>' };
+
+  for (const field of optionalFields) {
+    it(`reads ${field} as undefined when it is present and empty`, () => {
+      expect(loadConfig({ ...base, [field]: '' })[field]).toBeUndefined();
+    });
+
+    it(`reads ${field} as undefined when it is whitespace only`, () => {
+      expect(loadConfig({ ...base, [field]: '  \n' })[field]).toBeUndefined();
+    });
+
+    it(`leaves a real ${field} value alone`, () => {
+      expect(loadConfig({ ...withFrom, [field]: 'a-real-value' })[field]).toBe('a-real-value');
+    });
+
+    it(`trims a ${field} value that a secret store padded`, () => {
+      expect(loadConfig({ ...withFrom, [field]: ' a-real-value\n' })[field]).toBe('a-real-value');
+    });
+  }
+
+  /**
+   * MAIL_FROM is checked apart from the loop because the schema refuses a key with no From
+   * address, so the loop's own fixture cannot be reused for it.
+   */
+  it('reads an empty MAIL_FROM as undefined', () => {
+    expect(loadConfig({ ...base, MAIL_FROM: '   ' }).MAIL_FROM).toBeUndefined();
+  });
+
+  /**
+   * The half-configuration `config.ts` already refuses must stay refused when the missing half is
+   * empty rather than absent. An empty `MAIL_FROM` beside a real key would otherwise build a
+   * `ResendMailer` with no From address, which Resend rejects and better-auth discards in the
+   * background, telling the member to check an inbox that will never receive anything.
+   */
+  it('still refuses a Resend key whose MAIL_FROM is empty', () => {
+    expect(() => loadConfig({ ...base, RESEND_API_KEY: 're_key', MAIL_FROM: '   ' }))
+      .toThrow(/MAIL_FROM/);
+  });
+});

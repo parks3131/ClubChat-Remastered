@@ -139,9 +139,26 @@ COPY --chown=node:node packages/shared/src          ./packages/shared/src
 COPY --chown=node:node packages/server/package.json ./packages/server/
 COPY --chown=node:node packages/server/src          ./packages/server/src
 
-# The commit this build came from, so a production stack trace maps to a source. config.ts
-# reads SENTRY_RELEASE and records that it is set by the deploy rather than by hand.
-ARG SENTRY_RELEASE=""
+# The commit this build came from, so a production stack trace maps to a source, and so
+# /__parity can tell two deploys apart while somebody is staring at it mid-cutover.
+#
+#   fly deploy --config fly/api.toml --build-only --push \
+#     --build-arg SENTRY_RELEASE="$(git rev-parse HEAD)"
+#
+# The ARG carries NO default, and that is the whole of what this file can do about the empty
+# case. A Dockerfile cannot conditionally omit an ENV: `ENV NAME=${NAME}` with the arg unpassed
+# SETS the variable to the empty string rather than leaving it unset, and there is no form of
+# ENV that does otherwise. `ARG SENTRY_RELEASE=""` said the same thing while reading as though
+# the empty string were a deliberate value, which is why the default is gone.
+#
+# So the built image genuinely holds SENTRY_RELEASE="" on any build that did not pass the sha,
+# and what makes that harmless is `optionalEnv()` in packages/server/src/config.ts, which reads
+# present-and-empty as absent. Before it existed this shipped `release: ''` to Sentry, where it
+# made release health meaningless, and `version: ""` from /__parity, where it made the one
+# diagnostic that distinguishes two deploys distinguish nothing. Note this is not a Docker-only
+# hazard: `.env.example` ships `SENTRY_RELEASE=` and `fly secrets set SENTRY_RELEASE=` produce
+# the identical empty value, which is why the normalization belongs in config.ts and not here.
+ARG SENTRY_RELEASE
 ENV SENTRY_RELEASE=${SENTRY_RELEASE}
 
 # HEALTHCHECK is DELIBERATELY ABSENT, and belongs in fly.toml instead.

@@ -23,11 +23,23 @@
  *    degrees rather than by a little, which is the kind of wrong that looks like a different bug.
  *  - **A rectangle outside the picture is refused**, never clamped. Silently cropping a region
  *    nobody chose is worse than saying no.
+ *  - **The crop is exactly as strict as the gate in front of it.** It takes `probe.ts`'s
+ *    `DECODE_OPTIONS` rather than sharp's defaults, whose `failOn` is the *stricter* `'warning'` -
+ *    so a photograph the probe admits is one the crop cuts, rather than one it refuses.
+ *  - **It is bounded by construction, not by statement order.** The pixel ceiling is applied at
+ *    the crop's own decode, so it survives a reorder or a second caller; and a decode failure
+ *    comes back as a value, the way `probeImage` and `deriveVariants` both return theirs.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { completeUpload, createUploadIntent, type MediaConfig } from '../media/pipeline.ts';
+import {
+  completeUpload,
+  createUploadIntent,
+  cropImage,
+  type MediaConfig,
+} from '../media/pipeline.ts';
+import { probeImage } from '../media/probe.ts';
 import { FakeMediaStore } from '../media/store.ts';
 import { createClub } from '../domain/create-club.ts';
 import { loadAccessContext } from '../policy/context.ts';
@@ -74,6 +86,97 @@ async function image(opts: { width: number; height: number; orientation?: number
   const tagged =
     opts.orientation === undefined ? canvas : canvas.withMetadata({ orientation: opts.orientation });
   return tagged.jpeg().toBuffer();
+}
+
+/**
+ * Where the entropy-coded scan starts, by walking the marker segments rather than searching for
+ * two bytes. `FF DA` can occur inside a quantisation or Huffman table, so a search finds the
+ * wrong offset on some encoders and none of the tests using it would say why.
+ */
+function startOfScan(jpeg: Buffer): number {
+  let at = 2; // past SOI
+  while (at < jpeg.length - 3) {
+    if (jpeg[at] !== 0xff) throw new Error(`not at a marker at byte ${at}`);
+    const marker = jpeg[at + 1]!;
+    if (marker === 0xff) {
+      at += 1; // a fill byte, which is legal between segments
+      continue;
+    }
+    const length = jpeg.readUInt16BE(at + 2);
+    if (marker === 0xda) return at + 2 + length;
+    at += 2 + length;
+  }
+  throw new Error('no start-of-scan marker');
+}
+
+/**
+ * A photograph carrying a stray restart marker part-way through its scan: damaged enough for
+ * libjpeg to WARN, not damaged enough for it to error.
+ *
+ * That gap between the two is the whole point of this fixture. `probe.ts` chose `failOn: 'error'`
+ * deliberately, and says why: a picture with a slightly wrong marker is still viewable, and
+ * refusing somebody's photograph over a warning is a worse failure than showing it. So this file
+ * is a picture the gate ADMITS. Sharp's own default is `failOn: 'warning'`, which is the
+ * *stricter* setting - so any call site that hands sharp no options at all is stricter than the
+ * gate standing in front of it, and refuses exactly what the gate just accepted.
+ *
+ * Noise rather than a flat colour, and that is not decoration: a solid rectangle compresses to a
+ * few hundred bytes of scan, which leaves nowhere to put the damage and nothing that has to
+ * decode past it to reach the cropped region.
+ */
+async function photographWithAStrayMarker(width: number, height: number): Promise<Buffer> {
+  const sharp = (await import('sharp')).default;
+  const pixels = Buffer.alloc(width * height * 3);
+  for (let i = 0; i < pixels.length; i += 1) pixels[i] = (i * 2654435761) % 251;
+  const encoded = await sharp(pixels, { raw: { width, height, channels: 3 } })
+    .jpeg({ quality: 90 })
+    .toBuffer();
+
+  // A quarter of the way in, so the damage lands above the cropped region rather than after it:
+  // libvips reads a JPEG sequentially, so corruption below the rectangle is never reached.
+  const scan = startOfScan(encoded);
+  const at = scan + Math.floor((encoded.length - scan) / 4);
+  // RST0, where no restart marker belongs. The entropy decoder desynchronises and libjpeg warns.
+  return Buffer.concat([encoded.subarray(0, at), Buffer.from([0xff, 0xd0]), encoded.subarray(at)]);
+}
+
+/**
+ * A tiny JPEG whose header DECLARES a picture far larger than it carries.
+ *
+ * The declaration is the attack and the fixture both. Encoding a real 256-megapixel image to
+ * prove a ceiling refuses one would allocate the gigabyte of bitmap the ceiling exists to
+ * prevent - the test would BE the bug. It does not need to: `limitInputPixels` is a header
+ * check, so a few hundred bytes claiming 16000 by 16000 reach exactly the code path a real
+ * decompression bomb reaches, at exactly the moment a real one is stopped.
+ *
+ * JPEG rather than PNG because JPEG has no per-chunk checksum, so the two numbers in the
+ * start-of-frame segment can simply be overwritten.
+ */
+async function jpegDeclaring(width: number, height: number): Promise<Uint8Array> {
+  const sharp = (await import('sharp')).default;
+  const encoded = await sharp({
+    create: { width: 64, height: 64, channels: 3, background: '#3355aa' },
+  })
+    .jpeg()
+    .toBuffer();
+
+  let at = 2; // past SOI
+  while (at < encoded.length - 3) {
+    if (encoded[at] !== 0xff) throw new Error(`not at a marker at byte ${at}`);
+    const marker = encoded[at + 1]!;
+    if (marker === 0xff) {
+      at += 1;
+      continue;
+    }
+    // A start-of-frame segment: 0xC0 to 0xCF, less the three in that range that are not one.
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      encoded.writeUInt16BE(height, at + 5);
+      encoded.writeUInt16BE(width, at + 7);
+      return new Uint8Array(encoded);
+    }
+    at += 2 + encoded.readUInt16BE(at + 2);
+  }
+  throw new Error('no start-of-frame marker');
 }
 
 /** Intent, the client's direct PUT, then complete - with an optional crop on the last step. */
@@ -268,5 +371,79 @@ describe('a rectangle that does not fit is refused', () => {
     // completes against the same bytes rather than against a half-processed object.
     const stored = await storedSize(key);
     expect({ width: stored.width, height: stored.height }).toEqual({ width: 100, height: 100 });
+  });
+});
+
+describe('the crop is exactly as strict as the gate that admits work to it', () => {
+  it('cuts a photograph the probe accepted, instead of throwing out of completeUpload', async () => {
+    const f = await setup();
+    const original = await photographWithAStrayMarker(200, 120);
+
+    /*
+     * The gate says yes, and that is the fact the rest of this test is measured against. By the
+     * standard this server chose - `failOn: 'error'`, one constant, stated once - these bytes are
+     * a picture, and a member who sends them is entitled to see it in the conversation.
+     */
+    const admitted = await probeImage(new Uint8Array(original));
+    expect(admitted, 'the fixture must be a picture the probe ADMITS').toEqual({
+      ok: true,
+      width: 200,
+      height: 120,
+    });
+
+    const { completed, key } = await upload(f.ownerId, f.channelId, original, {
+      originX: 20,
+      originY: 10,
+      width: 100,
+      height: 60,
+    });
+
+    // Two call sites reasoned about carefully and a third that disagrees with both is the shape
+    // of this defect: the crop must be handed the same `DECODE_OPTIONS` the probe was.
+    expect(completed.ok, 'the crop refused a photograph the probe had just accepted').toBe(true);
+    const stored = await storedSize(key);
+    expect({ width: stored.width, height: stored.height }).toEqual({ width: 100, height: 60 });
+  });
+});
+
+describe('the crop is bounded by construction, not by the order of two statements', () => {
+  /*
+   * Today the crop is bounded only transitively: it runs after `probeImage` returned ok, so
+   * nothing oversized has ever reached it. That is a bound held up by the order of two
+   * statements. Move the crop above the probe, or add a second caller, and it disappears with no
+   * type error and nothing red - which is precisely why this asks the crop directly rather than
+   * through `completeUpload`.
+   */
+  it('refuses a decompression bomb on its own dimensions, with no probe in front of it', async () => {
+    const bomb = await jpegDeclaring(16000, 16000);
+
+    const cropped = await cropImage(bomb, {
+      originX: 0,
+      originY: 0,
+      width: 100,
+      height: 100,
+    });
+
+    expect(cropped.ok, 'a 256-megapixel header was handed to the decoder').toBe(false);
+    /*
+     * Refused ON ITS DECLARED SIZE, at the header, rather than incidentally further in on pixel
+     * data the file does not carry. Only the first of those bounds the allocation, and only the
+     * first still refuses a bomb that carries all the bytes it promises.
+     */
+    if (!cropped.ok) expect(cropped.reason).toMatch(/exceeds pixel limit/i);
+  });
+
+  it('hands a decode failure back as a value, the way the probe and the worker both do', async () => {
+    /*
+     * `deriveVariants` was deliberately built to return this class of failure rather than throw,
+     * so the worker records it on the row instead of parking an outbox row forever. The crop path
+     * sits inside `completeUpload`, which returns typed refusals and has no `try` anywhere in it -
+     * so a rejecting decode leaves by a door the caller does not watch.
+     */
+    const notAnImage = new Uint8Array([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+
+    await expect(
+      cropImage(notAnImage, { originX: 0, originY: 0, width: 10, height: 10 }),
+    ).resolves.toMatchObject({ ok: false });
   });
 });

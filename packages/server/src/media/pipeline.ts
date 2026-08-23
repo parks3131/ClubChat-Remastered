@@ -30,7 +30,7 @@ import { clearedFloor, type AccessContext } from '../policy/context.ts';
 import { canPostInChannel, isChannelMember, type ChannelRef } from '../policy/predicates.ts';
 import { getChannelRef } from '../domain/reads.ts';
 import sharp from 'sharp';
-import { probeImage } from './probe.ts';
+import { DECODE_OPTIONS, probeImage } from './probe.ts';
 import {
   DOCUMENT_MIME_ALLOWLIST,
   IMAGE_MIME_ALLOWLIST,
@@ -51,11 +51,16 @@ export type Refusal = {
     /** The bytes arrived intact by every declared measure and still are not an image. */
     | 'undecodable'
     /**
-     * The crop rectangle does not fit inside the picture it was measured against.
+     * The rectangle could not be cut out of the picture.
      *
-     * Its own code rather than folded into `mismatch`, which is about the bytes disagreeing with
-     * what was declared. This is a caller whose idea of the source's dimensions is wrong, and the
-     * only honest answer is to refuse rather than to cut a region nobody chose.
+     * Almost always because it does not fit inside the picture it was measured against: a caller
+     * whose idea of the source's dimensions is wrong, where the only honest answer is to refuse
+     * rather than to cut a region nobody chose. Its own code rather than folded into `mismatch`,
+     * which is about the bytes disagreeing with what was declared.
+     *
+     * Also the answer when the cut itself fails, which by then cannot be a verdict on the bytes:
+     * `probeImage` has already proved they decode. See `cropImage` for why that is `bad_crop`
+     * and not `undecodable`.
      */
     | 'bad_crop';
 };
@@ -200,6 +205,60 @@ export type CropRegion = {
   height: number;
 };
 
+/** What a crop produced, or why it produced nothing. Never a throw - see below. */
+export type CropOutcome = { ok: true; bytes: Uint8Array } | { ok: false; reason: string };
+
+/**
+ * Cut the chosen rectangle out of the picture.
+ *
+ * **A function rather than four lines inside `completeUpload`, for two reasons that are the same
+ * reason twice.**
+ *
+ * First, the decode is bounded HERE rather than by whatever ran before it. The crop hands bytes
+ * to libvips exactly as `probeImage` and `deriveVariants` do, so it takes the same
+ * `DECODE_OPTIONS` they do, and for the same argument stated at that constant: a limit applied
+ * at some of the places that hand bytes to libvips is not a limit. Until this existed the crop
+ * was bounded only transitively - it ran after the probe returned ok, so nothing oversized had
+ * ever reached it - and a bound held up by the order of two statements vanishes silently the
+ * first time somebody reorders them or adds a second caller. Nothing would have been red.
+ *
+ * The other half of `DECODE_OPTIONS` matters more, because it misbehaves on ordinary member
+ * input rather than on hostile input. Sharp's default `failOn` is `'warning'`, which is
+ * **stricter** than the `'error'` the probe uses - so a crop given no options at all is stricter
+ * than the gate that admits work to it, and a photograph with a slightly wrong marker is
+ * accepted by `probeImage` and then refused here. The whole point of one shared constant is that
+ * the two cannot disagree.
+ *
+ * Second, the failure leaves as a VALUE. `probeImage` returns `{ ok: false, reason }` and
+ * `deriveVariants` records the failure on the row instead of parking its outbox row, both
+ * deliberately, because a thrown error walks straight past a caller written to branch on typed
+ * refusals. `completeUpload` is exactly such a caller and has no `try` anywhere in it, so a
+ * rejecting decode used to propagate into the route handler, where the only `catch` is for
+ * `MediaStoreError` and everything else becomes a 500.
+ */
+export async function cropImage(bytes: Uint8Array, crop: CropRegion): Promise<CropOutcome> {
+  try {
+    const cropped = await sharp(Buffer.from(bytes), DECODE_OPTIONS)
+      /*
+       * Before `extract`, and this is the trap the derive path already records: a photo from a
+       * phone carries its rotation in EXIF, so the pixels are sideways until something applies
+       * it. Extracting first would cut a rectangle out of the UNROTATED pixels - the wrong
+       * region entirely, and wrong by ninety degrees rather than by a little.
+       */
+      .rotate()
+      .extract({
+        left: crop.originX,
+        top: crop.originY,
+        width: crop.width,
+        height: crop.height,
+      })
+      .toBuffer();
+    return { ok: true, bytes: new Uint8Array(cropped) };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export async function completeUpload(
   db: Db,
   store: MediaStore,
@@ -301,30 +360,27 @@ export async function completeUpload(
       // saying no, and the client can only have got here by disagreeing about the source.
       if (!fits) return { ok: false, code: 'bad_crop' };
 
-      const cropped = await sharp(Buffer.from(bytes))
-        /*
-         * Before `extract`, and this is the trap the derive path already records: a photo from a
-         * phone carries its rotation in EXIF, so the pixels are sideways until something applies
-         * it. Extracting first would cut a rectangle out of the UNROTATED pixels - the wrong
-         * region entirely, and wrong by ninety degrees rather than by a little.
-         */
-        .rotate()
-        .extract({
-          left: crop.originX,
-          top: crop.originY,
-          width: crop.width,
-          height: crop.height,
-        })
-        .toBuffer();
+      const cropped = await cropImage(bytes, crop);
+      /*
+       * `bad_crop` rather than `undecodable`, and the choice is the point rather than a detail.
+       *
+       * `probeImage` has already proved, two lines above, that these bytes ARE an image - so
+       * answering "that is not an image" here would be a refusal contradicting the check that
+       * let it through, which is the one-cause-wearing-another's-name shape AGENTS.md failure
+       * mode 21 is about. Everything that can still fail at this point is a failure to apply the
+       * rectangle, which is what `bad_crop` already means and what the route already answers 422
+       * for. No new wire code, and nothing for a client to learn.
+       */
+      if (!cropped.ok) return { ok: false, code: 'bad_crop' };
 
       await store.put({
         bucket: media.bucket,
         objectKey: media.objectKey,
-        body: new Uint8Array(cropped),
+        body: cropped.bytes,
         mime: media.mime,
       });
 
-      storedBytes = cropped.length;
+      storedBytes = cropped.bytes.byteLength;
       dimensions = { width: crop.width, height: crop.height };
     }
   }

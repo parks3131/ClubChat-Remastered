@@ -414,8 +414,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
    * every photo 403ing, with the api healthy, the Worker healthy, and both sets of logs saying
    * exactly what they should, so it looks like a broken Worker or a bad R2 binding rather than a
    * wrong password. A trailing newline picked up by `wrangler secret put` is enough to cause it.
-   * Both sides publish the same eight characters here, so the whole class is eliminated by one
-   * `diff` of two `curl`s rather than by an evening.
+   * Both sides publish the same eight characters in `parity`, so the whole class is eliminated by
+   * one `diff` of that one field rather than by an evening.
    *
    * **What is exposed, and why it is acceptable.** Eight characters of base64url is 48 bits of an
    * HMAC-SHA256 over `PARITY_MESSAGE`, a constant printed in this repository. There is no shortcut
@@ -424,13 +424,23 @@ export function buildApp(deps: AppDeps): FastifyInstance {
    * changes, which is the thing you want to see. It cannot sign anything, and it says nothing
    * about the secret's length or its content.
    *
-   * **`previousParity` is always `null` here, and that is a decision rather than a stub.** The api
-   * signs and never verifies, so it holds no previous key: `MEDIA_SIGNING_SECRET_PREVIOUS` is
-   * deliberately absent from `config.ts`, and `verifyMediaSignature` records at length why an
-   * unread secret on a Fly app is worse than no secret at all. The field is answered anyway so
-   * that both sides return one shape and a `diff` of the two bodies has nothing spurious in it. On
-   * the Worker it is the value that tells you, mid-rotation, that the edge still accepts what this
-   * api was signing with an hour ago.
+   * **Only `parity` is comparable, and diffing the two whole bodies is a trap.** Both sides answer
+   * the same three fields so that one shape serves both, and two of the three differ by design:
+   *
+   *  - **`version` can never match.** Here it is `SENTRY_RELEASE`, a git commit sha baked into the
+   *    image by `--build-arg` at build time; on the Worker it is `CF_VERSION_METADATA.id`, a
+   *    Cloudflare version uuid. Those are never equal, and neither one is wrong.
+   *  - **`previousParity` is always `null` here, and that is a decision rather than a stub.** The
+   *    api signs and never verifies, so it holds no previous key: `MEDIA_SIGNING_SECRET_PREVIOUS`
+   *    is deliberately absent from `config.ts`, and `verifyMediaSignature` records at length why
+   *    an unread secret on a Fly app is worse than no secret at all. On the Worker it is non-null
+   *    for as long as a rotation is in flight, and it is the value that tells you the edge still
+   *    accepts what this api was signing with an hour ago.
+   *
+   * So the check is a `diff` of `parity` alone. A whole-body `diff` reports a difference at exactly
+   * the moment somebody is trying to establish whether the two secrets match.
+   * `SPEC/TECH/21-deployment.md` step 5 and `packages/cdn-worker/README.md` both pipe through
+   * `jq -r .parity` for that reason rather than for brevity.
    *
    * Three placement decisions, the same three `/ready` above records and for the same reasons:
    *

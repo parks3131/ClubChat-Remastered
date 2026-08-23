@@ -38,7 +38,7 @@ hours behind; and the prebuilt framework targeted a newer `ExpoModulesCore` than
 which is a launch-time `Symbol not found` no JavaScript can catch. See
 [`AGENTS.md`](../../AGENTS.md) failure modes 8 and 32.
 
-Four things the server crop owes, each asserted in `media-crop.test.ts`:
+Five things the server crop owes, each asserted in `media-crop.test.ts`:
 
 - **Rotate before extracting.** A phone photo carries its rotation in EXIF, so cutting first takes
   the region out of sideways pixels - wrong by ninety degrees rather than by a little.
@@ -48,6 +48,12 @@ Four things the server crop owes, each asserted in `media-crop.test.ts`:
 - **Refuse a rectangle that does not fit** rather than clamping it. Cutting a region nobody chose
   is worse than saying no, and the upload is left untouched so a corrected retry completes against
   the same bytes.
+- **Decode under the same options the gate used, and refuse as a value.** The crop takes
+  `probe.ts`'s `DECODE_OPTIONS` rather than sharp's defaults, whose `failOn` is the *stricter*
+  `'warning'` - a crop given no options would refuse a photograph the probe had just admitted. The
+  same constant carries the pixel ceiling, so the crop is bounded by its own decode rather than by
+  running after the probe. A decode that does fail comes back as a value and becomes `bad_crop`,
+  never `undecodable`: the probe has already proved the bytes are a picture.
 
 An uncropped upload is not decoded-and-re-encoded at all: the member's own file is stored, rather
 than a recompressed copy of itself.

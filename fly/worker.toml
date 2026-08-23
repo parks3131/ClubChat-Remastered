@@ -21,8 +21,61 @@ primary_region = 'iad'
 
 [env]
   LOG_LEVEL = 'info'
+
+  # --- Error reporting ---
+  #
+  # Byte-identical to fly/api.toml and fly/gateway.toml, for the reason those files give: one
+  # Sentry project, three roles, each tagged by `initMonitoring`.
+  #
+  # On this role the DSN is not an improvement to reporting, it IS the reporting. The note under
+  # the process definition below says a parked outbox event is "already captured to Sentry" and
+  # is "the only signal there is" for a role with no health gate. That sentence is only true
+  # where a DSN is set, and until 2026-08-23 none of these three files set one - so the single
+  # named signal for the only role Fly cannot check did not exist.
+  #
+  # `monitoring.ts` gates every capture on SENTRY_DSN being defined and non-empty, and falls back
+  # to the process logger otherwise. Here that fallback is a log line inside a machine with no
+  # service, no health check and nothing tailing it. What a reader would see instead of an alert
+  # is thumbnails silently never appearing and the outbox growing.
+  SENTRY_DSN = 'https://f4737021a3d55097c56ff4c479b9cdaa@o4511847446609920.ingest.us.sentry.io/4511847456964608'
   SENTRY_ENVIRONMENT = 'production'
 
+  # --- The six secrets, and THIS is the app where forgetting them is silent ---
+  #
+  # DATABASE_URL, REDIS_URL, BETTER_AUTH_SECRET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY and
+  # MEDIA_SIGNING_SECRET are on the platform, not in this file, and **all six have to be set on
+  # `clubchat-worker` as well as on `clubchat-api`.** One flat config schema, and every role
+  # calls `loadConfig` on the whole of it at startup, so this process refuses to boot without a
+  # signing secret it never reads and an auth secret it never uses.
+  #
+  # **The refusal is invisible.** This app declares no service (see the note below the process
+  # definition), so there is no `/ready`, no health check and no deploy gate. A gateway missing a
+  # secret fails its check and stalls the rolling deploy with a message; this one just does not
+  # come up. Nothing fails, nothing pages, and what an operator would eventually notice is
+  # thumbnails that never appear and an outbox that grows. It is the reason this comment exists
+  # in all three files rather than only in fly/api.toml.
+  #
+  #   printf 'DATABASE_URL=%s\nREDIS_URL=%s\nBETTER_AUTH_SECRET=%s\n' \
+  #          "$DB_URL" "$REDIS_URL" "$AUTH_SECRET" \
+  #     | fly secrets import --app clubchat-worker
+  #   printf 'S3_ACCESS_KEY_ID=%s\nS3_SECRET_ACCESS_KEY=%s\n' "$S3_ID" "$S3_KEY" \
+  #     | fly secrets import --app clubchat-worker
+  #   printf 'MEDIA_SIGNING_SECRET=%s\n' "$(openssl rand -hex 24)" \
+  #     | fly secrets import --app clubchat-worker
+  #
+  # `fly secrets import` and never `fly secrets set`: `set` takes the value as a command argument,
+  # so it lands in shell history and in the process table. `import` reads NAME=VALUE from stdin.
+  #
+  # The S3 pair is the one this role reads for real, and a rotation that reaches only the api
+  # leaves the media GC here authenticating with a revoked key - again with nothing to notice it.
+  #
+  # **MEDIA_SIGNING_SECRET here is a distinct throwaway, deliberately, and not a copy of the
+  # api's.** Nothing in this role mints or verifies a media URL; the value exists only to clear
+  # the schema's 16 character floor. So `fly secrets list` shows a different digest for this name
+  # on each of the three apps, and that is correct rather than drift: the digest that has to
+  # match is the api's against the CLOUDFLARE WORKER's, which `fly secrets list` cannot see.
+  # fly/api.toml carries the whole argument and both halves of the command.
+  #
   # --- Identity and object storage ---
   #
   # Required by the schema. This role reads the ENDPOINT and the credentials for real, and the
@@ -86,6 +139,20 @@ primary_region = 'iad'
 # second machine is safe rather than harmful, but there is no reason to pay for one until
 # outbox depth says so, and one machine keeps "did the effect run" a question with a single
 # place to look.
+#
+# **Nothing in this file makes that true, and saying it here does not either.** Fly's config has
+# no machine-count key: a count is set by the command, and `fly deploy` creates two machines by
+# default. So "exactly one" is an operator step, and it is one of these:
+#
+#   fly deploy --ha=false --app clubchat-worker      # on the first deploy, before two exist
+#   fly scale count 1 --app clubchat-worker          # afterwards, to get back to one
+#   fly machines list --app clubchat-worker          # what is actually running, which is the
+#                                                    # only answer that counts
+#
+# Worth checking rather than assuming, because two workers is the one wrong state this role
+# cannot report: both drain correctly, the lease keeps them from doubling any effect, and the
+# only evidence is a second machine on the bill. SPEC/TECH/21-deployment.md owns the deploy
+# invocation and the intended count for each of the three roles.
 
 [[vm]]
   size = 'shared-cpu-1x'

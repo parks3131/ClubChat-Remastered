@@ -43,9 +43,13 @@ export type DeriveResult = {
  * Idempotent: an object that already has its variants is skipped, so redelivery costs a read
  * rather than re-encoding. Documents are skipped entirely - there is nothing to resize.
  *
- * `sharp` is imported lazily. It carries native binaries, and the api and gateway processes
- * never derive anything, so loading it at module scope would cost every process for the
- * benefit of one.
+ * `sharp` is imported lazily, and it is worth being accurate about what that buys. It carries
+ * native binaries and mapping libvips is not free - but `media/pipeline.ts` imports sharp at
+ * module scope and `api/routes/media.ts` imports pipeline, so **the api maps libvips at boot
+ * regardless of this line.** The role the laziness genuinely spares is the **gateway**, which
+ * reaches no media module and so never loads sharp at all. For this process, the worker, it only
+ * defers the cost to the first derivation rather than avoiding it, which for the process whose
+ * job is deriving is the first photo anybody uploads.
  */
 export async function deriveVariants(
   db: Db,

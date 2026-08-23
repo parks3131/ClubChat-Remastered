@@ -8,6 +8,39 @@
 
 import { z } from 'zod';
 
+/**
+ * An optional variable where PRESENT AND EMPTY means the same thing as absent.
+ *
+ * `z.string().optional()` accepts `''`, and nothing downstream can tell that apart from a value
+ * somebody meant to set. Three producers here supply exactly that, none of them by mistake:
+ *
+ *  - `Dockerfile` carries `ARG SENTRY_RELEASE` and `ENV SENTRY_RELEASE=${SENTRY_RELEASE}`. A
+ *    Dockerfile cannot conditionally omit an `ENV`, so a build with no `--build-arg` sets the
+ *    variable to the empty string. That is a property of `ENV`, not something to be fixed there.
+ *  - `.env.example` ships `SENTRY_DSN=`, `SENTRY_RELEASE=` and `PLATFORM_MODERATORS=` as bare
+ *    keys, and CI copies that file to `.env` and boots a live api from it.
+ *  - `fly secrets set NAME=` sets an empty secret rather than unsetting one.
+ *
+ * So the empty string arrives on every path into production, and the place to decide what it
+ * means is here, once, rather than at each reader. It was previously decided at one reader and
+ * not the others: `monitoring.ts` guards `SENTRY_DSN` with an explicit `.length > 0`, while
+ * `SENTRY_RELEASE` reached `Sentry.init` as `release: ''` and `/__parity` answered
+ * `version: ""`, because `?? 'unknown'` fires on null and undefined and never on `''`.
+ *
+ * Whitespace counts as empty, and the trimmed value is what callers get. Both halves match what
+ * `trustProxyOption` below and `parseModeratorList` already do: a value pasted into a secret store
+ * carries a trailing newline more often than anybody admits, and neither reader should have to
+ * know that.
+ */
+const optionalEnv = () =>
+  z
+    .string()
+    .optional()
+    .transform((value) => {
+      const trimmed = value?.trim();
+      return trimmed === undefined || trimmed === '' ? undefined : trimmed;
+    });
+
 const Env = z.object({
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
@@ -65,7 +98,7 @@ const Env = z.object({
    * because reconciling to zero moderators would unstaff the queue - and an absent secret after a
    * deploy looks exactly like a deliberate empty list while costing far more.
    */
-  PLATFORM_MODERATORS: z.string().optional(),
+  PLATFORM_MODERATORS: optionalEnv(),
 
   // --- Error monitoring ---
   /**
@@ -76,14 +109,14 @@ const Env = z.object({
    * required would mean the reporting code only ever ran in production, which is the one place
    * nobody is watching it work.
    */
-  SENTRY_DSN: z.string().optional(),
+  SENTRY_DSN: optionalEnv(),
   SENTRY_ENVIRONMENT: z.string().default('development'),
   /**
    * The commit this build came from, so a stack trace maps to a source.
    *
    * Set by the deploy, not by hand. Absent locally, where the source is on disk anyway.
    */
-  SENTRY_RELEASE: z.string().optional(),
+  SENTRY_RELEASE: optionalEnv(),
 
   // --- Object storage ---
   S3_ENDPOINT: z.string().url(),
@@ -142,7 +175,7 @@ const Env = z.object({
    * Absent here does not mean mail is broken; it means the laptop transport. What stops that
    * transport reaching production is `assertProductionMailer` at boot, not this field.
    */
-  RESEND_API_KEY: z.string().optional(),
+  RESEND_API_KEY: optionalEnv(),
   /**
    * Who the mail comes from - `Name <address@domain>`, or a bare address.
    *
@@ -151,7 +184,7 @@ const Env = z.object({
    * points at whichever domain is verified today and changes to `clubchatapp.com` later without
    * anybody touching a credential.
    */
-  MAIL_FROM: z.string().optional(),
+  MAIL_FROM: optionalEnv(),
 }).refine((env) => !env.RESEND_API_KEY || Boolean(env.MAIL_FROM), {
   /*
    * A key with no From address is the one half-configuration worth catching at boot. Resend

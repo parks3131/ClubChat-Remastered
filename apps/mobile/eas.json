@@ -12,10 +12,22 @@
       }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api.clubchatapp.com",
+        "EXPO_PUBLIC_WS_URL": "wss://ws.clubchatapp.com",
+        "EXPO_PUBLIC_SENTRY_DSN": "https://7584f1b4ca5e02e6c2baa6626f7fada7@o4511847446609920.ingest.us.sentry.io/4511900057272320",
+        "EXPO_PUBLIC_SENTRY_ENVIRONMENT": "preview"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api.clubchatapp.com",
+        "EXPO_PUBLIC_WS_URL": "wss://ws.clubchatapp.com",
+        "EXPO_PUBLIC_SENTRY_DSN": "https://7584f1b4ca5e02e6c2baa6626f7fada7@o4511847446609920.ingest.us.sentry.io/4511900057272320",
+        "EXPO_PUBLIC_SENTRY_ENVIRONMENT": "production"
+      }
     }
   },
   "submit": {

@@ -1,6 +1,6 @@
 # Deployment
 
-**Nothing is deployed yet.** As of 2026-08-21 the three roles have never run anywhere but
+**Nothing is deployed yet.** As of 2026-08-23 the three roles have never run anywhere but
 development machines, and [Road to the first club](20-road-to-the-first-club.md) milestone 5 is the
 work that changes that. This document is the deployment as designed, plus the rules that bind every
 change once it exists.
@@ -42,6 +42,16 @@ Nothing pages on it. This
 is an accepted gap recorded in ADR-0044 rather than an oversight, and the Worker is written to turn
 its known failure modes into status codes rather than throws because of it.
 
+**What actually puts a server failure through Sentry is `SENTRY_DSN`, which each `fly/<role>.toml`
+carries in its `[env]` block** for the reason rule 10 gives. `config.ts` marks it optional and
+`initMonitoring` captures to the process logger when it is absent, which is deliberate: it is what
+makes every capture path run in development and in CI rather than executing for the first time in
+production. It has one consequence worth stating where an operator will meet it. **A role with no
+DSN boots, logs, and looks exactly like a role with one**, and `SENTRY_ENVIRONMENT = 'production'`
+sitting beside an empty DSN reads as wired from every angle except the Sentry project itself. That
+is why milestone 5's exit criterion is a deliberately raised 5xx *arriving*, rather than a config
+file that mentions Sentry.
+
 **One image, three roles.** `packages/server` has three entrypoints over one dependency graph, so a
 single image is built and the role is chosen by the start command. This is
 [Overview](00-overview.md)'s deployment note made concrete: the boundary that matters is the *code*
@@ -80,6 +90,42 @@ The provisioned compute autoscales `0.25 - 1 CU`, which allows **443 direct conn
 80-connection deploy window has wide headroom and several machines per role would still fit. Had
 the ceiling been left at a fixed 0.25 CU the limit would have been 97, which is why the maximum is
 worth checking before assuming a number.
+
+**How many machines a role runs is a flag, and its default is not one.** `fly deploy` creates spare
+machines for every process group that declares a service (`--ha`, which defaults to true), so on an
+app that has no machines yet the api and the gateway each come up as two, and the worker, which
+declares no service, comes up as one. That is 100 pool connections rather than the 60 above, and 120
+while the migration runs. Both fit inside 443, so this is a headroom question rather than a safety
+one, but the budget above, `fly/worker.toml`'s own "exactly one machine", and every number in this
+document describe one machine per role. **The first cutover therefore passes `--ha=false`**, so the
+shape that gets deployed is the shape that was reasoned about, and a request that fails by hand can
+only have come from the one machine you are looking at. A second api or gateway machine afterwards
+is `fly scale count`, chosen against socket count or outbox depth rather than inherited from a flag
+default. The flag only bites on an app with no machines: a later deploy updates the machines that
+already exist.
+
+**Each role pins its machine size in `[[vm]]`, and the api is the role that decides the number.**
+Fly's default guest for a config that declares none is the smallest `shared-cpu-1x`, 256 MB.
+`media/pipeline.ts` imports `sharp` at module top and `api/routes/media.ts` imports that module, so
+the api loads libvips at boot rather than on the first upload; `completeUpload` then reads an object
+of up to `MAX_IMAGE_BYTES` (25 MB) into memory, walks every pixel of it to prove it really is an
+image, and re-encodes it whenever a crop was chosen. A default-sized machine meets that as an
+out-of-memory kill on somebody's photo, on a request that succeeded on every laptop it was ever
+tried on.
+
+**A byte cap is not a pixel cap, and reading the 25 MB as the ceiling on that decode is the
+misconception that let an unbounded one survive.** `MAX_IMAGE_BYTES` bounds the *compressed* file;
+libvips allocates the decompressed surface, which follows from the declared dimensions and has
+nothing to do with the file size, so a file well inside 25 MB can demand a far larger bitmap.
+Until 2026-08-23 nothing bounded it at all: `DECODE_OPTIONS` set only `failOn`, leaving sharp's
+default `limitInputPixels` of 268402689 pixels, which at four bytes a pixel is 1.00 GiB of raw
+bitmap for one image - the whole of the api's guest rather than a limit on it. The real bound is
+now `MAX_IMAGE_PIXELS` in `media/probe.ts`, `64 * 1024 * 1024`, folded into the shared
+`DECODE_OPTIONS` so that both call sites handing bytes to libvips carry it. That is 256 MiB per
+decode, chosen so a 50 megapixel Android photograph is still accepted while the 108 and 200
+megapixel full-resolution modes are refused.
+
+The values live in `fly/<role>.toml` and are deliberately not restated here.
 
 **Scale to zero is disabled deliberately, and the plan pays for that.** The worker polls the outbox
 four times a second forever, so the compute never sees the five idle minutes that would suspend it.
@@ -195,17 +241,24 @@ at the edge and nowhere else; a bucket has never heard of it.
 
 **10. Secrets are set on the platform, never in the repo** (`AGENTS.md` non-negotiable 5).
 `flyctl` for the server roles, `wrangler secret put` for the CDN Worker, the EAS dashboard for
-anything a build needs. The only class safe to inline is an `EXPO_PUBLIC_` value that is write-only
-in the client's hands, which is why the Sentry DSN qualifies and nothing else in `.env.example`
-does.
+anything a build needs. The one class safe to commit is a **write-only ingest address**: a Sentry
+DSN can send events to a project and can never read one, so it is configuration rather than a
+credential, and it is committed on both sides of the system for that reason alone.
+`EXPO_PUBLIC_SENTRY_DSN` is inlined into the client bundle, and `SENTRY_DSN` sits in the `[env]`
+block of each `fly/<role>.toml`. Neither is an exception to this rule: a value that grants no read
+is not a secret. Nothing else in `.env.example` qualifies, and the token that uploads source maps
+qualifies least of all.
 
 **Prefer `fly secrets import` over `fly secrets set`.** `set` takes the value as a command
 argument, which puts it in shell history and in the process table; `import` reads `NAME=VALUE`
 pairs from stdin. The two tools also disagree about newlines, and it matters because
 `MEDIA_SIGNING_SECRET` has to be byte-identical on the api and the Worker: `secrets import` is line
 oriented, so a trailing `\n` terminates the pair, while `wrangler secret put` takes raw stdin and
-would make that `\n` part of the key. `packages/cdn-worker/README.md` carries the exact pair of
-commands, and `/__parity` is how you find out you got it right rather than assuming.
+would make that `\n` part of the key. **Removing a value is `fly secrets unset NAME`.** Setting
+`NAME=` with nothing after it stores an empty secret rather than removing one, which `config.ts`
+now reads as absent for the optional values and which for a required one is a boot failure rather
+than a revert. `packages/cdn-worker/README.md` carries the exact pair of commands, and `/__parity`
+is how you find out you got it right rather than assuming.
 
 **11. A rolling deploy redelivers.** `SIGTERM` part-way through a drain is the commonest cause of an
 outbox event being handled twice, which is why [Effects engine](04-effects-engine.md) requires every
@@ -248,6 +301,13 @@ omission. A worker that boots, connects, and then silently stops draining looks 
 healthy one from outside. The durable evidence that an effect never ran is a **parked outbox event**,
 which is why alerting on parked events is the only real signal this role has.
 
+**The same absence means a worker deploy cannot fail.** `release_command` is declared on
+`fly/api.toml` alone and `fly/worker.toml` declares no service, so Fly has nothing to wait for and
+nothing to ask: a worker whose configuration will not parse crash-loops on the restart policy while
+`fly deploy` reports success. Nothing else in this system will report that, so the worker is
+verified by reading its own first log line. Step 1 of the cutover below carries the line to look
+for.
+
 **The gateway's own shutdown depends on this check.** The gateway now owns its HTTP server rather
 than letting `ws` create one, and `wss.close()` deliberately does not close a server it did not
 create - so `close()` calls `closeAllConnections()` before `server.close()`. The connection that
@@ -280,17 +340,134 @@ The order below exists because the first production state should be one that has
 somewhere. It is three deploys rather than one, and the extra deploy buys two independently green
 production states and a one-token rollback to a state that has been watched working.
 
+Two orderings inside it are load-bearing and neither is visible from the steps themselves.
+Migrations run before the code that selects from them, which is rule 1 and is enforced by the api's
+`release_command` rather than by memory. And **every hostname resolves, and holds a certificate,
+before anything is proved against it**, which is the same reasoning one layer out: the name exists
+before a device is asked to call it, and before mail is asked to carry a link to it.
+
 **1. The three Fly apps, on `MEDIA_URL_MODE=presign`.** The only media mode that has ever run
-anywhere. Build the image ONCE (`fly deploy --build-only --push`) and deploy that digest to all
-three, api first because its `release_command` runs the migration (rule 1). Prove signup, chat,
-push, upload and mail by hand on a real device, and report each pass or fail individually rather
-than as one verdict.
+anywhere. Build the image ONCE and deploy that digest to all three, api first because its
+`release_command` runs the migration (rule 1).
+
+**Before any of it, the secrets exist on all three apps.** Every role parses the whole flat schema
+at startup, so a role missing one does not boot, and the three fail differently: the api's
+`release_command` refuses a missing `DATABASE_URL` outright and stops the deploy, the api and the
+gateway fail their readiness check and therefore fail the deploy, and the worker fails nothing at
+all. `fly secrets import` per rule 10, once per app.
+
+**Six of them are shared and `RESEND_API_KEY` and `MAIL_FROM` go on the api as well, before this
+step rather than with the mail proof in step 3.** `config.ts` marks both optional, so the flat
+schema does not ask for them, but `assertProductionMailer` throws when `NODE_ENV=production` and no
+transport is configured and the image sets `NODE_ENV=production` - so an api without the key does
+not boot, fails readiness, and fails this deploy for a reason that never mentions a secret list.
+`fly/api.toml` documents both, and `PLATFORM_MODERATORS`, in the block of three values that belong
+to the api alone; that third one waits for step 4 because it needs an account to match.
+
+```
+# From the repo root, on a CLEAN tree at the commit CI passed.
+fly deploy --config fly/api.toml --build-only --push \
+  --build-arg SENTRY_RELEASE="$(git rev-parse HEAD)"
+
+# Then the digest that command printed, api FIRST. All three pull the same image
+# from the same path: the Fly registry is scoped per organization, which is
+# ADR-0043's reason for building once at all.
+fly deploy --config fly/api.toml     --image registry.fly.io/clubchat-api@sha256:<digest>
+fly deploy --config fly/gateway.toml --image registry.fly.io/clubchat-api@sha256:<digest>
+fly deploy --config fly/worker.toml  --image registry.fly.io/clubchat-api@sha256:<digest>
+```
+
+**The commit stamp is carried by the first command and inherited by the other three.**
+`--build-arg` on an `--image` deploy is accepted and does nothing, because no build happens. That
+is the correct outcome rather than a limitation: one build means one `SENTRY_RELEASE`, so all three
+roles report the same version and `/__parity` can tell two deploys apart. Confirm it landed with
+`curl -s https://clubchat-api.fly.dev/__parity | jq -r .version`, which works before step 2 because
+Fly issues a certificate for an app's own `.fly.dev` name; a sha is right, and `unknown` means the
+`--build-arg` was missed. Rule 8 is about hostnames inlined into a build, not about a `curl`.
+
+**The tree must be clean and at the commit CI passed** (rule 9), because nothing downstream can
+check it. The image ships source rather than a build artifact, and `.dockerignore` excludes `.git`,
+so the running process holds no way to compare the sha it reports against the code it is executing.
+An uncommitted edit at build time produces production stack traces mapped to the wrong source,
+permanently, with nothing anywhere saying so.
+
+Three more things about those commands, none of which announce themselves:
+
+- **All four run from the repo root**, which is what makes `--config fly/<role>.toml` the right
+  form. The Docker build context is flyctl's own working directory, and both halves of the image
+  definition are written against the repo root: `Dockerfile`'s `COPY` lines name
+  `packages/server/src` and `packages/shared/src`, and `.dockerignore` excludes `apps/`, `scripts/`
+  and `packages/*/vitest.config.ts` by exactly those paths. Each config's
+  `[build] dockerfile = '../Dockerfile'` is the other half of the same assumption, written relative
+  to `fly/`. Run from inside `fly/` and every `COPY` misses.
+- **Never pass `--local-only`** to the build. The default is `--remote-only` and it is the one that
+  works: sharp's binaries are its `optionalDependencies` and npm resolves them by platform during
+  `npm ci`, so a build on an Apple Silicon laptop installs `@img/sharp-linux-arm64` into a
+  `linux/arm64` image that Fly's x86_64 machines cannot run at all. `.dockerignore`'s first entry
+  guards the neighbouring version of this, a host `node_modules` dragging `@img/sharp-darwin-arm64`
+  into the image, and nothing guards this one.
+- **Pass `--ha=false` on each of the three `--image` deploys**, which are the commands that create
+  machines. One machine per role is the shape the connection budget above assumes, and this flag is
+  what produces it.
+
+Then read the worker's log, because nothing else will:
+
+```
+fly logs --app clubchat-worker
+```
+
+A worker that parsed its configuration writes `worker started, draining outbox and running the
+scheduler`, at `info`, once, after the pool, the Redis connection and the S3 client have all been
+built. **Its absence is the failure.** `loadConfig` runs before that line, so a secret missing or
+mistyped on this role prints a validation error naming the key it could not read and never reaches
+it, on a deploy that reported success because this role has no health gate to fail. The same line
+arriving repeatedly, seconds apart, is the other fault: a worker that boots and then dies.
 
 **2. `api.<domain>` and `ws.<domain>`, DNS only, grey cloud, never proxied.** Fly terminates its own
 TLS, and proxying it through Cloudflare puts two proxies in series and breaks the WebSocket
-gateway. Then `fly certs add`.
+gateway. Then `fly certs add` for each, and wait for both to be issued: Fly cannot issue a
+certificate for a name that does not already point at it, which is why the record and the
+certificate are one step and not two.
 
-**3. The Worker, on its real hostname, while nothing depends on it.** Deploy it, attach
+**3. Prove signup, chat, push, upload and mail by hand on a real device**, and report each pass or
+fail individually rather than as one verdict.
+
+**This is third rather than first, and the reason is rule 8 plus the way better-auth builds a
+link.** The build on the device has `EXPO_PUBLIC_API_URL` and `EXPO_PUBLIC_WS_URL` inlined at
+`api.<domain>` and `ws.<domain>`, so before step 2 there is no name for it to call. Mail fails the
+same way one layer down and far less visibly: all three configs set `BETTER_AUTH_URL =
+'https://api.clubchatapp.com'`, `api/main.ts` hands that to better-auth as `baseURL`, and
+better-auth builds the password-reset link from it. A reset requested before the name resolves and
+holds a certificate therefore sends a real mail, to the right person, carrying a link to a host that
+does not exist. **That is a different cause from the Resend badge in obligation 4 below**, and the
+two are worth keeping apart because they present as opposites: one sends no mail, the other sends
+mail that looks correct.
+
+**4. `PLATFORM_MODERATORS`, once the first account exists.** It is documented in two places and set
+in none: [Road to the first club](20-road-to-the-first-club.md)'s milestone 5 secrets row names it
+beside the six shared secrets, and `fly/api.toml` carries it in the block of three values this app
+alone needs. What it does not have anywhere is a **value**, which is what this step is for. Setting
+it before step 1 is allowed and buys nothing: it is a comma-separated list of **email addresses**,
+not account ids, and `reconcilePlatformModerators` matches them against `users.email` at API boot,
+so an address named before its account exists is reported in the log as `unmatched`, grants nobody
+anything, and is not looked at again until the api restarts.
+
+Nothing about the deploy fails without it. `config.ts` marks it optional and the api warns and
+boots: `PLATFORM_MODERATORS is not set, so nobody can read the direct-message report queue. Reports
+will be filed and never seen.` That warning is the whole of the enforcement, which is why this is a
+step rather than a note. On the api alone, because the api is the one process that reconciles:
+
+```
+printf 'PLATFORM_MODERATORS=%s\n' "$EMAILS" | fly secrets import --app clubchat-api
+```
+
+Rule 10's preference for `import` over `set` applies here as it does everywhere else. The reconcile
+runs at boot and nowhere else, so the machine has to come up with the value already in place, and
+the log says whether it did: `platform moderators reconciled` with an empty `unmatched`, rather than
+the warning above. Here rather than among the obligations below, because the window in which a DM
+report can be filed and never read opens the moment somebody other than the operator signs up.
+
+**5. The Worker, on its real hostname, while nothing depends on it.** Deploy it, attach
 `cdn.<domain>` as a Workers Custom Domain, and compare `/__parity` on both sides **before trusting
 anything**:
 
@@ -303,7 +480,16 @@ A mismatch means the two hold different `MEDIA_SIGNING_SECRET` values and nothin
 investigating until they do not. It is the likeliest failure in this deployment and it presents as
 every photo 403ing, which reads as a broken Worker rather than a wrong key.
 
-**4. Flip `MEDIA_URL_MODE=cdn` and redeploy the api.** Re-prove media from the phone, and **watch a
+**Only `parity` is comparable, and diffing the two whole bodies is a trap.** Both sides answer the
+same three fields so that one shape serves both, and two of the three differ by design. `version`
+is `SENTRY_RELEASE` on the api, a git commit sha, against `CF_VERSION_METADATA.id` on the Worker, a
+Cloudflare version uuid: those can never be equal. `previousParity` is always `null` on the api,
+which signs and never verifies and therefore holds no previous key, while on the Worker it is the
+key the edge still accepts mid-rotation. So a whole-body `diff` reports a difference at exactly the
+moment somebody is trying to establish whether the two secrets match. The command above pipes
+through `jq -r .parity` for that reason rather than for brevity.
+
+**6. Flip `MEDIA_URL_MODE=cdn` and redeploy the api.** Re-prove media from the phone, and **watch a
 URL survive an hour boundary** before calling it done, because the expiry is hour aligned and a URL
 that works for fifty minutes proves nothing about the fifty-first.
 
@@ -339,7 +525,8 @@ These are not optional tidying. Each one is a live credential or a live gap.
 4. **The Resend domain badge.** Its DNS is correct and its status may still be `Pending`, and
    Resend refuses to send from an unverified domain, so **password-reset mail is unprovable until
    it flips**. The api boots regardless, because it only requires the key to be present, which
-   means this failure is invisible from the outside.
+   means this failure is invisible from the outside. Distinct from the ordering reason in step 3:
+   this one sends nothing at all, that one sends a mail whose link goes nowhere.
 5. **Nothing reports a Worker error.** Accepted for the first deployment and recorded in ADR-0044.
    Workers Logs in the Cloudflare dashboard is the only place an exception at the edge is visible,
    and nothing pages on it. The thing that actually tells you the Worker is broken is a member

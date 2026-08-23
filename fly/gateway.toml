@@ -19,6 +19,22 @@ primary_region = 'iad'
 [env]
   GATEWAY_PORT = '3001'
   LOG_LEVEL = 'info'
+
+  # --- Error reporting ---
+  #
+  # Byte-identical to fly/api.toml, on purpose. `initMonitoring` tags every report with the role
+  # that sent it, so ONE Sentry project separates the three rather than needing three DSNs - and
+  # a per-app value that drifts is exactly how one role goes quiet without anybody noticing.
+  # Same argument as the identity block below.
+  #
+  # `monitoring.ts` reports nothing anywhere unless SENTRY_DSN is set and non-empty;
+  # SENTRY_ENVIRONMENT alone is a tag on reports that were never sent. fly/api.toml carries the
+  # full reasoning, including why this is `[env]` rather than a `fly secrets` value.
+  #
+  # What is lost without it on THIS role: a socket frame that throws, a rejected session, and a
+  # publish that fails become log lines inside a machine nobody is tailing - on the one process
+  # whose failures are felt by every connected client at once.
+  SENTRY_DSN = 'https://f4737021a3d55097c56ff4c479b9cdaa@o4511847446609920.ingest.us.sentry.io/4511847456964608'
   SENTRY_ENVIRONMENT = 'production'
 
   # TRUST_PROXY is deliberately NOT set here, and this is not an oversight to be tidied up.
@@ -26,6 +42,43 @@ primary_region = 'iad'
   # per-IP anything on /health or /ready. So a forged X-Forwarded-For has nothing to
   # influence, and the safe default costs nothing. Do not copy the api's value across.
 
+  # --- The six secrets, and this app needs all six ---
+  #
+  # DATABASE_URL, REDIS_URL, BETTER_AUTH_SECRET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY and
+  # MEDIA_SIGNING_SECRET are on the platform, not in this file, and **every one of them has to be
+  # set on `clubchat-gateway` as well as on `clubchat-api`.** Same reason as the values below it:
+  # one flat config schema, and every role calls `loadConfig` on the whole of it at startup. This
+  # process refuses to boot without an S3 credential it never uses and a signing secret it never
+  # reads.
+  #
+  # What that failure looks like here, which is the good case of the three: the machines fail
+  # `/ready`, never take a socket, and stall the rolling deploy with a message. Compare
+  # fly/worker.toml, where the same omission is silent.
+  #
+  #   printf 'DATABASE_URL=%s\nREDIS_URL=%s\nBETTER_AUTH_SECRET=%s\n' \
+  #          "$DB_URL" "$REDIS_URL" "$AUTH_SECRET" \
+  #     | fly secrets import --app clubchat-gateway
+  #   printf 'S3_ACCESS_KEY_ID=%s\nS3_SECRET_ACCESS_KEY=%s\n' "$S3_ID" "$S3_KEY" \
+  #     | fly secrets import --app clubchat-gateway
+  #   printf 'MEDIA_SIGNING_SECRET=%s\n' "$(openssl rand -hex 24)" \
+  #     | fly secrets import --app clubchat-gateway
+  #
+  # `fly secrets import` and never `fly secrets set`: `set` takes the value as a command argument,
+  # so it lands in shell history and in the process table. `import` reads NAME=VALUE from stdin.
+  #
+  # Two of them have rules, and they are opposite rules:
+  #
+  #   * **BETTER_AUTH_SECRET must be byte-identical to the api's.** This role reads it for real -
+  #     `gateway/main.ts` passes it to `createAuth`, exactly as `api/main.ts` does. Hold a
+  #     different value here and sign-in succeeds against the api while this socket rejects the
+  #     session the api just issued. The member logs in and chat never connects, which presents
+  #     as a broken client rather than as a wrong key.
+  #   * **MEDIA_SIGNING_SECRET must NOT be the api's.** Nothing in this role reads it; it is
+  #     required only because the schema is flat, so it needs a distinct throwaway that clears the
+  #     16 character floor and nothing more. `fly secrets list` therefore shows a different digest
+  #     here from the api's, and that is correct rather than drift. fly/api.toml carries the full
+  #     reasoning and the Cloudflare Worker half of it.
+  #
   # --- Identity and object storage ---
   #
   # Required by the schema and unread by this role, exactly like the media pair below. One flat
@@ -89,6 +142,11 @@ primary_region = 'iad'
   auto_start_machines = true
   min_machines_running = 1
 
+  # A floor, not a count. See the same note in fly/api.toml: `fly deploy` creates two machines
+  # for an app with a service unless passed `--ha=false`, and nothing in this file can express a
+  # number. On this role two is worth having on purpose rather than by accident - a single
+  # gateway machine means every client in the club reconnects at once every time it restarts.
+
 # Set explicitly rather than inherited, because the default is not documented and community
 # reports put it at 60 seconds, which is the kind of value that silently drops long-lived
 # sockets and gets diagnosed as a client bug.
@@ -112,3 +170,20 @@ primary_region = 'iad'
   interval = '15s'
   timeout = '5s'
   grace_period = '15s'
+
+# The guest, pinned rather than defaulted.
+#
+# A machine with no [[vm]] block takes Fly's default guest, shared-cpu-1x at 256 MB, which is
+# what this app took until 2026-08-23. 512 MB for the same reason the worker takes it: this is
+# the role that holds every client's socket open simultaneously, so per-connection state plus
+# Node's own footprint is not a thing to leave at a platform default and discover during the
+# reconnect storm that a restart produces.
+#
+# It does NOT need the api's 1 GB, and the difference is not a guess. sharp is reached from the
+# api's media routes and from the worker's derive step, and from nowhere in this role: the only
+# static `import sharp` in the tree is in `media/pipeline.ts`, which this process never loads.
+# See fly/api.toml's [[vm]] block for why that one import decides the api's number.
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'
+  processes = ['app']
