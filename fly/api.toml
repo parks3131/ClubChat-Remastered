@@ -301,7 +301,7 @@ primary_region = 'iad'
   # both sides have been shown to hold the same MEDIA_SIGNING_SECRET. That ordering is what
   # makes a wrong Worker survivable: set this back to 'presign', deploy, and every photo
   # resolves again with no code change and no migration to undo.
-  MEDIA_URL_MODE = 'presign'
+  MEDIA_URL_MODE = 'cdn'
 
   # No path, and no trailing slash. config.ts documents at length why the slash is
   # load-bearing; the short of it is that the signature covers the object key alone, so a value

@@ -59,7 +59,7 @@
   // and no alert on a 5xx rate, which is an accepted gap recorded in the ADR - so this dashboard
   // is the only place an exception here is visible at all. Off by default on new Workers, which
   // is exactly the state that makes a silent gap silent twice over.
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
 
   // MEDIA_SIGNING_SECRET and MEDIA_SIGNING_SECRET_PREVIOUS are secrets and are deliberately absent
   // from this file. Anything under "vars" here is plaintext in the repo and readable in the
@@ -75,7 +75,18 @@
   // HIT_CACHE_CONTROL in src/index.ts carries the evidence and the one command that settles it
   // against the real deployment.
 
-  // No "routes" here yet, on purpose. cdn.<domain> is attached as a Workers Custom Domain, and a
-  // route naming a zone the account does not hold fails `wrangler deploy` outright rather than at
-  // request time. Add it in the same change that attaches the domain, not before.
+  // cdn.clubchatapp.com, attached 2026-08-23 as a Workers Custom Domain in the same change that
+  // added this entry, which is what the note here used to ask for. A route naming a zone the
+  // account does not hold fails `wrangler deploy` outright rather than at request time, so this
+  // line is also the assertion that the zone is held.
+  //
+  // `custom_domain` rather than a plain route: a Custom Domain gives the Worker its own DNS
+  // record and certificate and makes it the origin, where a route sits in front of an origin that
+  // would still have to exist. There is no origin behind cdn - the Worker is the whole of it.
+  //
+  // This does NOT re-enable workers.dev. `workers_dev` is explicitly false above rather than
+  // left to its default, so the shipped `defaultWorkersDev = routes.length === 0` never applies.
+  // Read the NO SECOND HOSTNAME note before changing either line: the signed message covers no
+  // host, so any hostname this Worker answers on is a complete front door to both buckets.
+  "routes": [{ "pattern": "cdn.clubchatapp.com", "custom_domain": true }]
 }
