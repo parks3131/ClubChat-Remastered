@@ -771,7 +771,17 @@ section 2 actually needed. Instrumentation shortens the search; it never ends it
 
 `@sentry/node` is **already a dependency** and already catching errors. Its performance half adds
 distributed tracing: each request becomes a trace, each database call a span, with the tree and
-the timings. Turning it on is a config change, not a build.
+the timings.
+
+> **Correction, 2026-08-23: this is a CODE change, not a configuration change**, and the sentence
+> that stood here said the opposite for four days. `tracesSampleRate: 0` is a **literal** in
+> `packages/server/src/monitoring.ts`, and again in `apps/mobile/src/monitoring.ts`, each with its
+> reason in a comment beside it. Nothing reads an environment variable for it. So setting
+> `SENTRY_DSN`, which happened on 2026-08-23 and did switch error reporting on for all three
+> roles, changed nothing whatever about tracing, and no amount of `fly secrets` or `[env]` ever
+> will. The server half is an edit plus a `fly deploy`; the client half is an edit plus a build,
+> or an over-the-air update once one exists. The wrong claim also reached
+> [the roadmap](20-road-to-the-first-club.md) milestone 3 and is corrected there.
 
 **Why it is first.** Everything measured in this document is a laptop against a database on the
 same machine. The 133-statement poll read cost 12ms locally and would cost far more across a
@@ -781,11 +791,12 @@ only entry that changes that without new infrastructure.
 Costs: sampling rate has to be chosen (1-10% of traces is normal), and spans carrying query text
 need the same redaction rule the dev tracer already applies.
 
-> **Still off as of 2026-08-21, and now blocked rather than merely undone.** The obstacle is not
-> the configuration, which is a line; it is that there is nowhere to send a trace FROM. Nothing
-> has ever run outside a development machine, so switching this on today buys a laptop reporting
-> on itself, which is the exact thing section 7 exists to stop counting as a measurement. It
-> belongs with milestone 5, and so do source maps and the first symbolicated production error.
+> **Still off as of 2026-08-23, and no longer blocked.** The obstacle was never the sample rate.
+> Until 2026-08-23 there was nowhere to send a trace FROM, so switching this on bought a laptop
+> reporting on itself, which is the exact thing section 7 exists to stop counting as a
+> measurement. Three roles now run in production and a DSN reaches all three, so that obstacle is
+> gone and what is left is the two literals above. Section 8 records what is watching production
+> while they stay at zero.
 
 ### 6.2 `pg_stat_statements` - what the database thinks is expensive
 
@@ -799,12 +810,25 @@ you find the query nobody suspected, rather than confirming the one you did.
 
 It would have shown the poll N+1 as one statement with an absurd call count.
 
-> **Done on 2026-08-21.** Preloaded in `docker-compose.yml` and in the test container, with
-> `track=all` and `track_utility=off`. `CREATE EXTENSION` stays out of the migrations on purpose:
-> it wants rights the application role should not be assumed to have, and a migration that can
-> fail on a managed provider is a worse trade than a command run once. Section 7.3 is the first
-> thing it answered - it put the whole cost of a concurrent send on the row lock, at two orders of
-> magnitude clear of the next statement.
+> **Done on 2026-08-21, on a laptop.** Preloaded in `docker-compose.yml` and in the test
+> container, with `track=all` and `track_utility=off`. Section 7.3 is the first thing it answered
+> - it put the whole cost of a concurrent send on the row lock, at two orders of magnitude clear
+> of the next statement.
+>
+> **Done in production on 2026-08-23, and it was not before.** `CREATE EXTENSION
+> pg_stat_statements` was run once against the production Neon database; it reports version
+> **1.11** and answers queries. Neon already carries the library in `shared_preload_libraries`, so
+> that single statement was the entire operation and no provider setting was touched. This is the
+> first instrument in the project's history that watches something other than a development
+> machine, and it is the reason 8.1 can say what it says about `curl`.
+>
+> **It is an operational step and deliberately NOT a migration. Do not "fix" that.** Two reasons,
+> and the second is the one that decides it. `CREATE EXTENSION` wants rights the application role
+> should not be assumed to have. And the library has to be preloaded before the statement can
+> succeed at all, so a `CREATE EXTENSION` sitting in the migration chain fails on every
+> environment that does not preload it - which breaks the one property migrations exist to have,
+> that they replay cleanly from zero (`AGENTS.md` non-negotiable 2). A command run once by hand,
+> recorded here, is the cheaper trade in both directions.
 
 ### 6.3 `EXPLAIN (ANALYZE, BUFFERS)` and `auto_explain` - why one query is slow
 
@@ -866,13 +890,14 @@ all three processes. What it cannot do is watch somebody else's phone in another
 ### Recommended order
 
 1. **Turn on Sentry performance tracing** - already paid for, and it is the only production visibility.
-2. **`pg_stat_statements`** - one config line, finds what nobody suspected.
+2. **`pg_stat_statements`** - one statement per database, finds what nobody suspected.
 3. **A large seeded fixture** - the thing that would have caught both N+1s automatically.
 
 Everything after that waits for real load.
 
-**Two and three are done, and one is blocked on something that does not exist yet.** See section
-7, which records what they measured.
+**Two and three are done, in development and now in production. One is still undone and is no
+longer blocked.** Section 7 records what two and three measured on a laptop; section 8 records
+what production has been able to say for itself since 2026-08-23.
 
 ---
 
@@ -893,7 +918,7 @@ order is what was executed.
 | A club-sized fixture | `src/test/large-fixture.ts` | The above, at a size a club reaches |
 | Statement-count guards | `src/test/large-fixture-reads.test.ts` | Whether a cost scales with input |
 | Plan assertions | `src/test/hot-path-plans.test.ts` | Whether one statement uses its index |
-| `pg_stat_statements` | preloaded in `docker-compose.yml` and the test container | What the database spends its life on |
+| `pg_stat_statements` | preloaded in `docker-compose.yml` and the test container, and installed on the production Neon database since 2026-08-23 | What the database spends its life on |
 | The load test | `npm run load:test` | How fast, and how it behaves under contention |
 
 **The fixture is 300 members, 20 polls with 3,600 votes, 20 events, 50 photos and 5,070 messages
@@ -1013,22 +1038,23 @@ worse than no section.**
   the process. Production is Fly.io against Neon, where every round trip in section 7.2's counts
   gains real latency - which is exactly why those counts matter as much as these rates, and why
   `/sync` at 405 statements reads differently there than it does here.
-- **Sentry performance tracing is still off** (`tracesSampleRate: 0` in `monitoring.ts`). It is
-  configuration rather than a build, as 6.1 says, and it is blocked on something a configuration
-  change cannot supply: there is nowhere to send traces from, because nothing has ever run outside
-  a development machine. That is milestone 5, and [Deployment](21-deployment.md) now records the
-  rules that deploy will have to follow - including that the Sentry DSN is the one value safe to
-  ship in a client. Turning tracing on before there is somewhere to send it would mean a laptop
-  reporting on itself, which is the thing this section exists to stop pretending is a measurement.
-- **Source maps, and a symbolicated production error, wait on the same thing** for the same reason.
+- **Sentry performance tracing is still off** (`tracesSampleRate: 0` in `monitoring.ts`, and the
+  same literal in the client's). Two things this bullet said on 2026-08-21 were wrong and are
+  corrected in 6.1: it is a **code** change rather than a configuration one, and the thing it was
+  blocked on - having anywhere to send a trace FROM - stopped being true on 2026-08-23. Section 8
+  carries what that leaves unwatched.
+- **Source maps and a symbolicated production error are three separate things**, not the one
+  blocked row this bullet used to treat them as. [The roadmap](20-road-to-the-first-club.md)
+  milestone 3 separates them and owns their standing.
 - **The concurrent-connection half of ten-times-peak is not measured.** 30,000 sockets is a
   property of the gateway process and the host's file descriptors, not of these two queries, and a
   laptop reporting a number for it would be an invention wearing a number.
 - **The iPhone is still barely measured** (3.6), unchanged.
 
-So milestone 3's four exit criteria stand at: the fixture and its guards **done**,
-`pg_stat_statements` **queryable**, the load test **run with both named hot spots measured**, and
-the two Sentry-shaped criteria **blocked on milestone 5** rather than outstanding through neglect.
+Three of milestone 3's four exit criteria were met by the work in this section and the fourth was
+not. **The standing itself is not restated here**, because it moved on 2026-08-23 and two
+documents disagreeing about one milestone is exactly how one of them goes stale:
+[the roadmap](20-road-to-the-first-club.md) milestone 3 owns it, criterion by criterion.
 
 ### 7.5 What measuring it found that counting it could not
 
@@ -1055,3 +1081,110 @@ section 6 already states about instrumentation and is worth restating from the o
 **measurement tells you what a system DID, and a reviewer told to disagree tells you what it will
 do next.** The `/events` batching, written carefully and passing its own new guard, carried the
 uuid regression into the gateway where no HTTP hook could have caught it.
+
+---
+
+## 8. What watches production, and what does not, 2026-08-23
+
+**Section 7 measured a system nobody else could reach. This section is about the one real members
+will.** The three roles first ran outside a laptop on 2026-08-23, which changes what can be
+measured and, more usefully, changes what can be *missed*. It is deliberately thin on numbers and
+thick on gaps, because after one day with four accounts the numbers are the least interesting thing
+here.
+
+Scope, so this does not grow into a second copy of two other files.
+[Deployment](21-deployment.md) owns what is deployed and how it got there;
+[the roadmap](20-road-to-the-first-club.md) owns which milestone each gap belongs to and the order
+they get closed in. This section owns exactly one question: **if something broke right now, what
+would say so.**
+
+### 8.1 The first production numbers, and why four users is not a load test
+
+Read off the running system on 2026-08-23:
+
+| | |
+|---|---|
+| Database connections in use | **4**, against a ceiling of **450** |
+| Database size | **11 MB** |
+| Errors captured, across all three roles | **zero** |
+| Outbox backlog | **zero unprocessed**, maximum `attempts` of **1** |
+| `api /ready` from a laptop | **34 to 56 ms** wall clock, five samples |
+
+**Every one of those is a healthy number and not one of them is evidence.** There are four accounts
+on the system. The connection figure is under 1% of a ceiling nothing has approached, the 11 MB is
+mostly schema, an outbox that never retried is an outbox nothing asked much of, and zero errors
+across a quiet day is also what a dead system reports. Deploying did not retire section 7's caveat;
+it added a second one alongside it. **Every load number this project has is still a laptop against
+a database on the same machine, and every production number is a club of four people on one quiet
+day.**
+
+**The latency figure is worth reading as a method note rather than as a measurement, and it is the
+argument for everything in 6.1 and 6.2.** `/ready` reaches Postgres; `/health` answers from process
+memory and cannot fail. From this laptop the two are **indistinguishable** - both land between 34
+and 58 ms, of which roughly 20 to 35 ms is the TLS handshake alone. So a wall-clock reading taken
+from outside measures the network to `iad` and says nothing whatever about the round trip to Neon
+that the endpoint exists to make. An earlier reading the same day put the same endpoint near 170 ms.
+Both are honest readings of a laptop's network and neither is a reading of the server. **`curl`
+cannot see inside the machine.** The two instruments that can are one `CREATE EXTENSION`, now run,
+and two literals, not yet changed.
+
+### 8.2 What is actually watching, role by role
+
+| Role | Liveness | Errors reach | Note |
+|---|---|---|---|
+| `api` | Fly check on `/ready`, every 15s | Sentry, since `SENTRY_DSN` entered the `[env]` block on 2026-08-23 | The check gates traffic and deploy success |
+| `gateway` | Fly check on `/ready`, every 15s | Sentry, same day | Same |
+| `worker` | **Nothing**, by design: no ingress, so no endpoint to check | Sentry, same day | Its only boot signal is one log line |
+| `cdn-worker` | Nothing | **Nothing.** Cloudflare's own logs only | An accepted gap, [ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) and [Deployment](21-deployment.md) obligation 4 |
+
+`initMonitoring` in `packages/server/src/monitoring.ts` is what puts a server failure through
+Sentry, and the capture sites are already in the right places: a 5xx on the api, a **parked**
+outbox event, a failed drain tick, a rejected socket frame, the rate limiter failing open. That
+half is built and has been since 2026-08-03. Everything below is the half that is not.
+
+### 8.3 The gaps, worst first
+
+**1. Nothing turns a parked outbox event into a notification, and a parked event is the only
+durable evidence an effect never ran.** First because of what missing it costs. An effect that
+never runs is a notification nobody receives, a card that never appears, a photo that never reaches
+a gallery - and the member's experience of it is not an error, it is silence.
+`effect-coverage.test.ts` exists because three event types were parked for the entire life of the
+Eboard space and nothing said so.
+
+**The wiring here is better than "nothing is watching" and short of an alert.** `worker/drain.ts`
+captures to Sentry at the park with `where: worker.outbox.parked`, deliberately at the eighth
+attempt rather than on every retry, so a flaky push that succeeds on attempt two does not bury the
+report that matters. What does not exist is the last hop: **no alert rule has been configured or
+seen firing**, so whether a Sentry issue becomes something a human reads is unproved. The observable
+symptom today is a member saying a photo never appeared.
+
+Two shapes it does not cover at all, and they are the quiet ones. A parked event requires the drain
+to have **run** and failed eight times, so **a worker that is wedged rather than failing produces no
+parked events, because it attempts nothing** - and per 8.2 the worker is the one role with nothing
+checking that it is alive. And a drain tick that fails every time is captured
+(`worker.drain.tick`), but from outside it looks exactly like an empty outbox, which is what the
+comment at that call site already says about itself.
+
+**2. No real production error has ever reached Sentry.** Reporting is wired on all three roles as of
+2026-08-23 and has never been exercised, so "errors reach a human" is a claim rather than a fact.
+This project has already been wrong about exactly this shape twice in one week - the Resend domain
+badge, read wrongly in both directions before a mail settled it, and `PLATFORM_MODERATORS`, where a
+mistyped address produces the same successful import, the same healthy machine and the same
+reassuring log line. One deliberately raised 5xx settles it in a minute, and until it is raised the
+honest description is the one [Deployment](21-deployment.md) uses about the configuration: it reads
+identically to a working one from every angle except the Sentry project itself.
+
+**3. Performance tracing is off, so nothing records production latency at all.** Nothing per route,
+nothing per query, nothing over time. 6.1 above, corrected: it is two literals and not a setting.
+`pg_stat_statements` now answers the database's half of this question in production, which section 7
+found to be the more useful half; the application's half has no answer of any kind.
+
+**4. Nothing alerts on the api or the gateway being down.** Fly's check pulls an unhealthy machine
+out of the proxy pool, and each role runs **one** machine, so "pulled from the pool" and "the role
+is down" are the same event. Fly restarts a process that exits, which covers a crash and does not
+cover a wedge - a process still answering `/health` from memory while `/ready` fails is depooled and
+left running. Nothing external pings any hostname on any interval. An api that stopped answering
+overnight reaches the founder when he next opens the app, or when a member tells him.
+
+**5. Nothing pages on a CDN Worker exception.** Listed only so the table in 8.2 is not read as
+coverage. It is an accepted gap recorded in ADR-0044 before the deployment and unchanged by it.

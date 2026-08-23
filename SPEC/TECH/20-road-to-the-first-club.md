@@ -32,6 +32,12 @@ rather than argued again here: the deploy went first because milestone 3's last 
 nowhere to report FROM without it. What follows 3 and 4 is the *pilot*, not the deployment, and
 nothing about the exception moves that.
 
+**Ordering the milestones is a different question from ordering the next actions**, and after
+2026-08-23 it is the second one that a session picking this up actually has: four milestones are
+now each partly done, so the next step is not "finish 3" but a phase order that cuts across them.
+[What comes next, and why in that order](#what-comes-next-and-why-in-that-order-from-2026-08-23)
+at the foot of this file is that order, with the reason for each position.
+
 ---
 
 ## Milestone 1 - The review lands
@@ -142,9 +148,11 @@ measured one.
 
 [`TECH/18`](18-mission-backend-cleaning.md) section 6 already surveys the techniques and
 recommends the order; this milestone is that order executed. Sentry performance tracing (already
-a dependency; its performance half is configuration), `pg_stat_statements`, and the seeded large
-fixture - hundreds of members, dozens of cards in one chat, fifty photos in a gallery - that
-would have caught both N+1s automatically instead of leaving them to a trace of a lucky account.
+a dependency; its performance half is **a literal in two source files rather than configuration**,
+which this line had wrong until 2026-08-23 - see [`TECH/18`](18-mission-backend-cleaning.md) 6.1),
+`pg_stat_statements`, and the seeded large fixture - hundreds of members, dozens of cards in one
+chat, fifty photos in a gallery - that would have caught both N+1s automatically instead of
+leaving them to a trace of a lucky account.
 Plus the two Phase 4 leftovers this depends on: the load test at ten times projected peak, whose
 two first numbers [Build phases](16-build-phases.md) already names (the per-channel `last_seq`
 row lock under concurrent sends, and the access-context query), and source maps, without which a
@@ -153,7 +161,9 @@ production trace is minified noise.
 *Done when:*
 
 - *A production-shaped environment reports per-route latency and query counts with no laptop
-  attached: Sentry tracing live, `pg_stat_statements` queryable.*
+  attached: Sentry tracing live, `pg_stat_statements` queryable **against the production
+  database**.* The last three words are not tightening after the fact - "with no laptop attached"
+  was always the criterion, and this row was once marked met by a laptop.
 - *The large seeded fixture exists, and the batch routes and `/sync` run against it in the suite
   with statement-count guards.*
 - *The load test has run at ten times projected peak, the two named hot spots have measured
@@ -168,7 +178,7 @@ did not notice when it ordered the milestones.
 | Criterion | Standing |
 |---|---|
 | The fixture, and guards on the batch routes and `/sync` | **Done.** 300 members, 20 polls with 3,600 votes, 50 photos, 5,070 messages |
-| `pg_stat_statements` queryable | **Done.** Preloaded in development and in the test container |
+| `pg_stat_statements` queryable in production | **Done 2026-08-23, and it was not before.** This row read "done" from 2026-08-21 on the strength of `docker-compose.yml` and the test container, which is a laptop, against a criterion whose own words are "with no laptop attached". `CREATE EXTENSION pg_stat_statements` has now been run once against the production Neon database: version **1.11**, and queryable. Neon already carries the library in `shared_preload_libraries`, so that one statement was the whole operation. It is an operational step and deliberately **not** a migration - a `CREATE EXTENSION` in the chain fails anywhere the library is not preloaded, which breaks the property that migrations replay cleanly from zero. [`TECH/18`](18-mission-backend-cleaning.md) 6.2 carries the reasoning so nobody "fixes" this by adding one |
 | The load test at ten times peak, both hot spots | **Done.** Row lock 2.3x headroom and gapless under contention; access context 26x |
 | Sentry tracing live, and an error arriving symbolicated | **Unblocked 2026-08-23. Neither half done.** Errors have somewhere to go and none has arrived; tracing is still switched off by a constant |
 
@@ -227,6 +237,18 @@ milestone 6.
   fixed or recorded as a known gap with the founder's explicit acceptance, item by item.*
 - *The accessibility audit has run once, covering the four dimensions above.*
 - *No device-pass item remains in `TODO.md`.*
+
+**Standing, 2026-08-23: no platform has been through the checklist end to end, and the three are
+nowhere near equally far from it.** iOS is the only one with real device evidence of any kind - the
+five paths in milestone 5 were proved by hand on a physical iPhone against production, and the
+member-card surface has been broken on iOS twice in ways the web client did not show
+(`AGENTS.md` failure modes 29 and 30). Web is exercised continuously in development and has never
+been walked against `PRD/18` as a checklist. **Android has never been run once**, on a device or an
+emulator, and nothing in this repo records an attempt. The accessibility audit has not started. So
+the accurate reading is not "one platform mostly done": it is unstarted as a checklist on all
+three, with very different amounts of incidental evidence sitting behind each - which is the gap
+the scope nuance above is about, and the reason the roster's actual platforms decide what blocks
+milestone 6.
 
 ## Milestone 5 - A production that could take them
 
@@ -341,6 +363,101 @@ observed facts about usage, not work items.
   `TODO.md` under the standing triage.*
 - *At the end of the window, the club chooses to keep using it. That is the criterion underneath
   all the others.*
+
+---
+
+## What comes next, and why in that order, from 2026-08-23
+
+The milestones above say what must be **true**. This says what to do **next**, which is a different
+question and the one a session picking this up cold actually has. It cuts across milestones 3, 4, 5
+and 6 rather than running down them, because the deployment left four of them each partly done and
+the cheapest next step in each is not the same size.
+
+**The reason for each position is the load-bearing part of this section, not the list.** A list can
+be resequenced by anybody who thinks two items look independent; a reason has to be argued with
+first. A snapshot of where the running system stood on the day this was written is published at
+<https://claude.ai/code/artifact/2659e56c-293a-4482-b261-019e8b949161>.
+
+### 1. Make failure visible
+
+Force a 5xx on the api and watch it arrive in Sentry. Force a parked outbox event and wire the
+alert that carries it to a human. Turn performance tracing on, which is a code change rather than a
+setting ([`TECH/18`](18-mission-backend-cleaning.md) 6.1).
+
+**First because every later phase puts more real usage on the system, and doing that blind is the
+actual risk.** No other phase here is dangerous on its own; running phases 2 through 6 with an
+unproved error path is, and it is dangerous in the direction this project already knows well - a
+failure that reports nothing looks exactly like no failure. Two of the three are milestone 5 exit
+criteria and the third is milestone 3's, so this phase closes rows in both.
+[`TECH/18`](18-mission-backend-cleaning.md) section 8 is the inventory of what is and is not
+watching production, and 8.3 orders the gaps by what missing one costs.
+
+### 2. Prove the data survives
+
+Restore a Neon backup once, and confirm the rows come back.
+
+**Here because it stops being cheap the moment a real club puts a month of conversation in.** Today
+the production database is 11 MB across four accounts, so a restore costs minutes and nothing is
+lost if it goes badly. This is the milestone 5 criterion whose entire point is that a backup nobody
+has restored is a hope, and the cost of testing a hope only ever moves in one direction.
+
+### 3. Wire over-the-air updates
+
+`expo-updates`, a `runtimeVersion`, and a channel in `apps/mobile/app.json`.
+
+**Before a pilot, because it is a native change that has to ship inside a build.** Add it after the
+roster installs and the version they are holding is the one version that can never be fixed without
+another build, another submission and another review. Add it before, and the first bug a real
+member reports costs twenty minutes rather than days. [Deployment](21-deployment.md)'s table of how
+a change reaches a person is that argument in full; this phase is what makes its third row real.
+
+**One trap, already established and not yet written into a rule.** `eas update` does **not** read a
+build profile's `env` block from `eas.json`; only `eas build` does. So the three public values
+those profiles gained on 2026-08-23 - the api URL, the WebSocket URL and the mobile Sentry DSN -
+must **also** exist in the EAS dashboard's `production` environment, or the first over-the-air
+publish inlines `localhost` over a correctly built app, silently, and every install that takes the
+update points at a laptop. It is the same defect those profiles were added to fix, one layer along,
+which is why it is worth naming before the work rather than after it.
+
+### 4. Write the legal texts
+
+The Privacy Policy and the Terms, reachable from where sign-up already says they are, and stating
+the obligation [ADR-0005](../decisions/0005-no-end-to-end-encryption.md) creates: with no
+end-to-end encryption, the Privacy Policy must say that message content is readable by the service.
+
+**Here because it unblocks external TestFlight, which will not take a build without a policy URL,
+and for no other reason.** It is not engineering work and nothing above depends on it. It sits at
+four rather than at one because nothing is waiting on it except phase 6, and phase 6 is waiting on
+everything.
+
+### 5. Run the device sweep
+
+The full [Acceptance checklist](../PRD/18-acceptance-checklist.md) end to end on iOS, Android and
+web, plus the accessibility audit that has never run at all: contrast, dynamic type, reduced
+motion, screen-reader order.
+
+**Here because it is the longest phase and the one most likely to generate work, and because
+running it before phase 3 means shipping every fix it finds as a full build.** It is milestone 4
+entire, and milestone 4's scope nuance binds it: the three-platform run stays the standing gate,
+while the pilot itself gates on the platforms its roster actually holds.
+
+### 6. Onboard the pilot club
+
+Milestone 6. **Last, and carrying one item that is not work at all:** external TestFlight needs
+Apple's Beta App Review, at one to two days. That is a queue rather than a step, and it is the only
+thing on this road that cannot be shortened by doing it more carefully - so it is started early
+within this phase rather than reached at the end of it.
+
+### The two moves this order exists to refuse
+
+**Onboarding a club before phase 1.** It is the tempting one, because the app works and a club is
+the entire point, and it would mean the first month of real usage is also the month nothing was
+watching. Every gap in [`TECH/18`](18-mission-backend-cleaning.md) 8.3 is a gap whose cost is paid
+by members rather than reported to the founder.
+
+**Doing phase 3 after the roster installs.** It reads like a small reordering and it is not: it is
+the difference between a twenty-minute fix and a build, a submission and a review, for every single
+bug the pilot finds.
 
 ---
 

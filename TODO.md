@@ -9,6 +9,11 @@ anything that cost a debugging session graduates into
 [`SPEC/TECH/14`](SPEC/TECH/14-engineering-pitfalls.md). Both of those are permanent; this file is
 meant to shrink. **Delete an item when it is done - do not tick it and leave it.**
 
+**The roadmap is [`SPEC/TECH/20`](SPEC/TECH/20-road-to-the-first-club.md)**, which owns the
+milestones and, since 2026-08-23, an ordered plan of what to do next with the reason for each
+position. Read that one if the question is "what should I work on"; read this one if the question
+is "what is broken".
+
 ---
 
 ## Next up
@@ -67,20 +72,18 @@ meant to shrink. **Delete an item when it is done - do not tick it and leave it.
       traffic in a measured window. `GET /media/urls?ids=` took it from 1.15 requests per picture
       to 0.42, verified by scrolling a picture-heavy chat on the phone.
 
-- [ ] **Turn on Sentry performance tracing, and add `pg_stat_statements`.** The query counter
-      built on 2026-08-19 measures **development only**, and every number in
-      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md) is a laptop against a database on the
-      same machine - the 133-statement poll read cost 12ms there and would cost far more across a
-      network on Fly. **Nothing measures production at all.** `@sentry/node` is already a
-      dependency and already catching errors; its performance half is a config change rather than
-      a build. `TECH/18` section 6 surveys the eight techniques and recommends an order: Sentry
-      first, `pg_stat_statements` second, a large seeded fixture third.
-
-- [ ] **No test has ever built a realistic amount of data, and that is why both N+1s survived.**
-      Every fixture in this repo creates one or two rows; the trace found the defects because a
-      real account had 26 poll cards in one conversation. A seeded "large" club - hundreds of
-      members, dozens of cards in a chat, fifty photos in a gallery - is the thing that would
-      have caught them automatically. See `TECH/18` 6.5.
+- [ ] **Turn on Sentry performance tracing. It is a CODE change, not a setting, and that is the
+      part everything about this item got wrong.** `tracesSampleRate: 0` is a literal in
+      `packages/server/src/monitoring.ts` and again in `apps/mobile/src/monitoring.ts`, each with
+      its reason in a comment beside it, and nothing anywhere reads an environment variable for
+      it. So setting `SENTRY_DSN` on 2026-08-23, which did switch **error reporting** on for all
+      three roles, changed nothing whatever about tracing. The server half is an edit plus a
+      `fly deploy`; the client half is an edit plus a build, or an over-the-air update once one
+      exists. Choose a sample rate while you are in there - 1 to 10% of traces is normal - and
+      apply the redaction the dev tracer already uses to any span that would carry query text.
+      **Nothing records production latency today**, per route or per query;
+      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md) 6.1 has the survey, and its section 8
+      has the full list of what is going unwatched in the meantime.
 
 - [ ] **Recurrence** is the next real feature, and is deferred rather than pending - see below.
       Nothing else in Weekly Meetups is outstanding: Nudge shipped and was verified on a device on
