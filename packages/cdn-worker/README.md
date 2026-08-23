@@ -67,6 +67,23 @@ cd packages/cdn-worker
 npx wrangler deploy
 ```
 
+**The deployed version and this source are not always from the same moment, and that is allowed
+for comments only.** The Worker live on `cdn.clubchatapp.com` is version
+`5b7727ec-f3e4-4c37-8a22-eb959391f892`, deployed 2026-08-23. Later the same day the docblocks in
+`src/index.ts` and `wrangler.jsonc` were corrected to record the edge-cache measurement, and that
+edit was deliberately **not** redeployed.
+
+The running code is byte-identical either way, because esbuild strips comments before the bundle
+is uploaded, and the upload size was unchanged. The reasoning for leaving it: this Worker sits in
+front of every private photo in the product, and `wrangler deploy` was chosen to stay a by-hand
+step until it is boring precisely because of that. Publishing a new version of the edge to change
+a comment spends that risk on nothing.
+
+**What this means when you next deploy for a real reason:** the version id will jump and will
+include those comment changes, which is fine and needs no explanation. What would NOT be fine is
+reading this drift as evidence the deployed Worker is stale in some way that matters. Check
+behaviour with `/__parity` (see below), never by comparing version ids against git.
+
 Check the bundle first if anything about the imports changed:
 
 ```bash

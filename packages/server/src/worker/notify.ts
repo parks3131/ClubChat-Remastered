@@ -48,7 +48,10 @@ export const NOTIFICATION_SLOTS = 4;
  * The idempotency key for one kind of notification from one event.
  *
  * Slot 0 is the only or primary notification of an event, 1 is a mention, 2 is a direct
- * message. Slot 3 is spare, so the next kind is a constant rather than another re-keying.
+ * message, and 3 is the per-message chat push from ADR-0032, which writes no notification row
+ * and only buzzes. Slot 3 was the spare this docstring was holding for the next kind; the next
+ * kind arrived and took it, so a fifth kind needs `NOTIFICATION_SLOTS` raised rather than a
+ * free slot. Raising it renumbers every key, so it is a change to make deliberately.
  */
 export const notificationKey = (outboxEventId: number, slot: 0 | 1 | 2 | 3 = 0): number =>
   outboxEventId * NOTIFICATION_SLOTS + slot;
