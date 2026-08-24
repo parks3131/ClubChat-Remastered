@@ -47,6 +47,24 @@ is "what is broken".
       swaps to "Reconnecting" when the socket drops - so a status line shows the app's own name
       whenever nothing is wrong. Decide what it should say when healthy, or drop it.
 
+- [ ] **The unread badge is the only surface that goes stale without saying so.** Every other
+      offline surface tells the truth: a chat raises "Offline. Showing saved messages.", the chat
+      header swaps to "Reconnecting", and `use-load` says "You appear to be offline". The tab
+      badge does none of that. It keeps drawing its last known number at full confidence, so a
+      member sitting on the tab bar with no signal is looking at a count that is quietly wrong and
+      has no way to tell.
+
+      **Bounded, which is why it is deferred and not urgent.** The count is re-read rather than
+      accumulated and `IDLE_REFRESH_MS` is 60s, so it self-corrects within a minute of the network
+      coming back, and an app that is properly offline is obvious from any screen that loads. This
+      is about the honesty of one glyph, not about a wrong number in the database.
+
+      Options, cheapest first: dim the badge while `offline` is true, or put a dot on the tab bar,
+      or decide a silently stale count is acceptable for a value this small and write that down.
+      Note that `offline` already reaches the chat screen from the provider, so the state is in
+      hand and only the tab layout needs it. Raised 2026-08-24 while reading the wire, deferred on
+      purpose.
+
 - [ ] **The app asks for more than it needs, and the open half of that lives in
       [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md).** Fourteen defects found and fixed by
       watching the wire, ten on 2026-08-18 and four on 08-19, and **the batching family is closed**
