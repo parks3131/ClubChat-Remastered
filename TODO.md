@@ -18,6 +18,20 @@ is "what is broken".
 
 ## Next up
 
+- [ ] **DMARC reports start arriving now, and want reading in about two weeks.**
+      `_dmarc` is `v=DMARC1; p=none; rua=mailto:dmarc@clubchatapp.com; fo=1` as of 2026-08-25, and
+      `dmarc@` genuinely receives - proved by an SMTP `RCPT TO` returning `250`, not by a test
+      message. **Before that day there was no `rua` at all**, so no receiver had ever generated a
+      report and the path to `p=quarantine` was blocked without anybody knowing. Read a fortnight
+      of them, look for a legitimate sender a strict policy would break, then tighten.
+      `scripts/drills/dmarc-drill.sh` walks it.
+
+- [ ] **The `d=` alignment check, which is ten minutes and has never been done.** Trigger a real
+      password reset to a Gmail address, open the message, three-dot menu, "Show original", and
+      read the three lines at the top. SPF, DKIM and DMARC should all say PASS, and **DKIM's `d=`
+      must be `clubchatapp.com`** rather than the provider's. If it is the provider's, alignment is
+      riding on SPF alone and breaks silently the day the envelope path changes.
+
 - [ ] **Two always-null compatibility keys are load-bearing, and nothing can tell you when they
       stop being.** `readMeetup` returns `location: null` and `mapPoint: null` for builds shipped
       before ADR-0049, because their `DetailLine` and `directionsUrl` guard with `=== null` and

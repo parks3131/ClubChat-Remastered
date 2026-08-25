@@ -10,11 +10,18 @@
  * Privacy Policy and the Profile screen - and three copies of a contact address is three chances
  * to update two of them.
  *
- * > **The mailbox has to actually receive mail before this ships.** A published contact that
- * > bounces is worse than none: a member trying to report something serious gets silence, and it
- * > is the specific thing a reviewer checks by hand. `clubchatapp.com` was registered on
- * > 2026-08-07 and its sending domain is still unverified (ADR-0020), so this address is a
- * > placeholder until somebody confirms a mailbox behind it.
+ * > **The mailbox receives, as of 2026-08-25, and until that day it did not.** A published
+ * > contact that bounces is worse than none: a member reporting something serious gets silence,
+ * > and it is the specific thing a reviewer checks by hand. This address returned
+ * > `550 Address does not exist` for its entire life up to that date, on a domain whose MX records
+ * > pointed at Namecheap's forwarding service - which cannot work here, because Namecheap only
+ * > forwards for domains using its own nameservers and this one uses Cloudflare's. The records
+ * > were present and inert, which is why nothing looked wrong.
+ * >
+ * > It is now a Cloudflare Email Routing rule to the founder's inbox, proved by an SMTP `RCPT TO`
+ * > returning `250` rather than by sending a test message and watching for a bounce. **That
+ * > distinction is the lesson**: the first check of this address read a message in the Sent folder
+ * > as proof of delivery, and the bounce arrived afterwards.
  */
 export const SUPPORT_EMAIL = 'support@clubchatapp.com';
 
