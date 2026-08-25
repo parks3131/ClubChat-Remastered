@@ -37,7 +37,7 @@ primary_region = 'iad'
   # to the process logger otherwise. Here that fallback is a log line inside a machine with no
   # service, no health check and nothing tailing it. What a reader would see instead of an alert
   # is thumbnails silently never appearing and the outbox growing.
-  SENTRY_DSN = 'https://f4737021a3d55097c56ff4c479b9cdaa@o4511847446609920.ingest.us.sentry.io/4511847456964608'
+  SENTRY_DSN = 'https://f4737021da01d0ecb8922534cd123364@o4511847446609920.ingest.us.sentry.io/4511847456964608'
   SENTRY_ENVIRONMENT = 'production'
 
   # How much traffic is timed. A tenth, matching the other two files, and for the reasons

@@ -34,7 +34,7 @@ primary_region = 'iad'
   # What is lost without it on THIS role: a socket frame that throws, a rejected session, and a
   # publish that fails become log lines inside a machine nobody is tailing - on the one process
   # whose failures are felt by every connected client at once.
-  SENTRY_DSN = 'https://f4737021a3d55097c56ff4c479b9cdaa@o4511847446609920.ingest.us.sentry.io/4511847456964608'
+  SENTRY_DSN = 'https://f4737021da01d0ecb8922534cd123364@o4511847446609920.ingest.us.sentry.io/4511847456964608'
   SENTRY_ENVIRONMENT = 'production'
 
   # How much traffic is timed. A tenth, matching the other two files, and for the reasons

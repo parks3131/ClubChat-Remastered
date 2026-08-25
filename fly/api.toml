@@ -68,7 +68,7 @@ primary_region = 'iad'
   #
   # SENTRY_RELEASE is deliberately not here. It is a Docker build arg (see the Dockerfile), so
   # it is baked per image rather than per app, which is the only way it can name the commit.
-  SENTRY_DSN = 'https://f4737021a3d55097c56ff4c479b9cdaa@o4511847446609920.ingest.us.sentry.io/4511847456964608'
+  SENTRY_DSN = 'https://f4737021da01d0ecb8922534cd123364@o4511847446609920.ingest.us.sentry.io/4511847456964608'
   SENTRY_ENVIRONMENT = 'production'
 
   # How much of production's traffic is TIMED, as opposed to reported when it breaks.
