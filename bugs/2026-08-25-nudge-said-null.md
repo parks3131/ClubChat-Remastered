@@ -71,6 +71,30 @@ that no rendered body contains `"undefined"`. It passed on 2026-08-14 and every 
 the fixture supplied a place that production no longer had, and because the missing value arrived
 through `String(null)` rather than as an absent key. It now refuses `"null"` as well.
 
+**The migration broke a rule the repo had already written down.**
+[`SPEC/TECH/21`](../SPEC/TECH/21-deployment.md) rule 4: *"Add columns. Never rename or drop one in
+the same release as the code that stops using it. Expand, migrate, contract: three releases weeks
+apart, not one."* Migration 0041 drops `location`, `map_lat` and `map_lng` in the same release as
+the code that stopped reading them. I wrote it without opening that file.
+
+Nobody caught it until a **peer session hit it at deploy time** and stopped to ask. The cost, had
+it gone out unexamined: Fly runs `release_command` before swapping machines, so between the
+migration applying and the new image serving, the old code queries columns that no longer exist.
+That window covers `/calendar`, `GET /meetups/:id`, the meetup week read, and meetup create and
+edit - the whole surface, reads and writes, not one endpoint.
+
+**Deployed anyway, deliberately.** One test meetup, no club onboarded, the founder watching the
+rollout. Splitting the migration would not have delivered the nudge fix any sooner, because that
+fix is code-only and the column drop is tidy-up. What it would have cost is restructuring a
+migration a peer session had already committed and was mid-deploy with. **Recorded here because
+the reasoning stops holding the moment a real club exists**, and rule 4 is only a habit if it is
+followed when it is inconvenient.
+
+**A second Fly app had to go out in the same window.** The worker is deployed separately and has
+no `release_command`. Old worker code reads `event.payload['location']`; the new API writes
+`title`. Deploying the API alone would have produced "nudged the club about **undefined**" - the
+same bug in a new costume. The deploy dialog that caught rule 4 did not mention the worker at all.
+
 **Two mistakes on a shared machine.** Started an API on port 3000 - the founder's port - which
 failed with `EADDRINUSE` and went unread, so the surface gate unknowingly ran against his already
 running instance. Then killed processes with `pgrep -f`, which took his dev API down with mine. Use

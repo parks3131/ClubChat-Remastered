@@ -6,6 +6,22 @@
 
 ## Before writing it
 
+- [ ] **Does this DROP or RENAME anything?** If so, stop and read
+      [Deployment](../TECH/21-deployment.md) rule 4 before writing a line. A drop must not ship in
+      the same release as the code that stops using it. Fly runs `release_command` **before**
+      swapping machines, so between the migration applying and the new image serving, the old
+      code is querying a column that no longer exists - and that window covers every read *and
+      write* that touched it, not the one endpoint you were thinking about.
+
+      Expand, migrate, contract: the code that stops reading it goes out first, the drop follows in
+      a later release. Missed on 2026-08-25 by writing the drop without opening this file; a peer
+      session caught it at deploy time. See [`bugs/`](../../bugs/2026-08-25-nudge-said-null.md).
+
+- [ ] **Does anything else deploy alongside it?** The worker and the gateway are separate Fly apps
+      with no `release_command` of their own. A change to an outbox payload is written by the api
+      and read by the worker, so shipping one without the other means a live event whose reader
+      does not understand it.
+
 - [ ] Does an existing table already model this? The domain is deliberately pattern-heavy;
       something that looks novel is usually a sign an existing abstraction was not understood.
 - [ ] Which **invariant** does this data carry? Every invariant in
