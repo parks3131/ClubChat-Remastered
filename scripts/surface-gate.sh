@@ -243,6 +243,11 @@ echo "== the two routes that take no session at all =="
 # works for a signed-in caller and say nothing about the case that matters.
 check 404 "an unknown invite token previews as 404, and reveals nothing" "$API/invites/nosuchtoken000000000000/preview"
 check 404 "a malformed invite token is 404, never 500" "$API/invites/not-a-token/preview"
+# THESE TWO NEED A CONFIGURED SIGNING SECRET, and answer 200 without one. That is not a bug:
+# an unconfigured webhook acknowledges everything on purpose, so Resend stops retrying a state
+# that cannot recover. But it means the security assertion silently tests nothing unless
+# RESEND_WEBHOOK_SECRET is set for the server under test. CI sets a throwaway one for exactly
+# this reason. If you see 200 here, the server has no secret, not a broken refusal.
 check 401 "the mail webhook refuses a body with no signature" -X POST -H 'content-type: application/json' -d '{}' "$API/webhooks/resend"
 check 401 "the mail webhook refuses a forged signature" -X POST -H 'content-type: application/json' \
   -H 'svix-id: msg_gate' -H 'svix-timestamp: 1' -H 'svix-signature: v1,Zm9yZ2Vk' -d '{}' "$API/webhooks/resend"

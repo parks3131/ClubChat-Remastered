@@ -108,6 +108,13 @@ jobs:
         run: npm run db:prove
 
       - name: Start the API
+        env:
+          # A throwaway signing secret, so the surface gate can prove the mail webhook REFUSES a
+          # forged signature. Without one the route is unconfigured, and an unconfigured route
+          # answers 200 to everything by design - it acknowledges so that Resend stops retrying a
+          # condition that cannot recover - which means the security assertion would silently
+          # test nothing. It is not a real secret and matches nothing at Resend.
+          RESEND_WEBHOOK_SECRET: whsec_Y2x1YmNoYXQtY2ktbm90LWEtcmVhbC1zZWNyZXQtMzI=
         run: |
           cd packages/server
           node --env-file=../../.env src/api/main.ts > /tmp/api.log 2>&1 &
