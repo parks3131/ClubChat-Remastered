@@ -17,6 +17,20 @@
       a later release. Missed on 2026-08-25 by writing the drop without opening this file; a peer
       session caught it at deploy time. See [`bugs/`](../../bugs/2026-08-25-nudge-said-null.md).
 
+- [ ] **And does any SHIPPED build read it?** Rule 4 is about the deploy window, which closes on
+      its own in about a minute. [Rule 5](../TECH/21-deployment.md) - *a response may gain a field,
+      it may never lose one* - is about installed apps, and **it does not close on its own**.
+
+      Dropping a column usually stops a read returning the KEY, not just the value, and **absent is
+      not null to a build that already exists**. A guard written as `value === null` passes
+      `undefined` straight through to `value.trim()`. That is a crash, not a blank row, and it
+      crashed the founder's phone on 2026-08-25 while the api answered 200 in 27ms.
+
+      Checking this means opening the component the field reaches, not the comment above the call
+      site. If a shipped build reads it, keep the key on the response as an always-null
+      compatibility field and **write the removal condition at the return site** - it is a fact
+      about which builds are installed, which no one will remember.
+
 - [ ] **Does anything else deploy alongside it?** The worker and the gateway are separate Fly apps
       with no `release_command` of their own. A change to an outbox payload is written by the api
       and read by the worker, so shipping one without the other means a live event whose reader

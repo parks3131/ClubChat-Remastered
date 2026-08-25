@@ -1,6 +1,6 @@
 # A nudge told a club "18:00 at null"
 
-**2026-08-25** · Fixed in `ffa06a5` · [ADR-0049](../SPEC/decisions/0049-a-meetup-says-where-with-a-link-and-nothing-else.md)
+**2026-08-25** · Fixed in `ab80e02`, deployed same day · [ADR-0049](../SPEC/decisions/0049-a-meetup-says-where-with-a-link-and-nothing-else.md)
 
 ## What was seen
 
@@ -83,12 +83,46 @@ migration applying and the new image serving, the old code queries columns that 
 That window covers `/calendar`, `GET /meetups/:id`, the meetup week read, and meetup create and
 edit - the whole surface, reads and writes, not one endpoint.
 
-**Deployed anyway, deliberately.** One test meetup, no club onboarded, the founder watching the
-rollout. Splitting the migration would not have delivered the nudge fix any sooner, because that
-fix is code-only and the column drop is tidy-up. What it would have cost is restructuring a
-migration a peer session had already committed and was mid-deploy with. **Recorded here because
-the reasoning stops holding the moment a real club exists**, and rule 4 is only a habit if it is
-followed when it is inconvenient.
+**Shipped anyway, deliberately - and the reasoning was sound for the risk we had named.** One test
+meetup, no club onboarded, the founder watching the rollout. Splitting the migration would not have
+delivered the nudge fix any sooner, because that fix is code-only and the column drop is tidy-up.
+
+We had named the wrong risk.
+
+**The drop crashed the app on the founder's phone, minutes after the deploy.** Not in the sixty
+second window both sessions were watching. The api was never wrong - `GET /meetups/:id` answered
+200 in 27ms - and then the installed build stopped making requests at all, because it had thrown.
+
+The read stopped returning the `location` **key**, not just its value, and to a build that already
+exists **absent is not null**:
+
+```js
+// DetailLine, in the shipped binary
+if ((value === null || value.trim().length === 0) && placeholder === undefined) return null;
+```
+
+`||` short-circuits. For `undefined`, `value === null` is false, so it evaluates `value.trim()` and
+throws. The guard handles null and only null. A second one was latent and would have surfaced next
+week looking like a fresh bug: `directionsUrl` guards `point !== null` then reads `point.lat`, so
+an absent `mapPoint` throws the same way - but only on a meetup with **no** map link, because a
+link returns one line earlier.
+
+Both keys are back on `readMeetup` as always-null compatibility keys; the columns stay dropped. The
+removal condition is written at the return site rather than remembered, because it is a fact about
+which builds are installed on phones, not a fact about this repo.
+
+**This was the third rule in the same file, one level above where either session looked.** TECH/21
+rule 4 is about the deploy window; **rule 5 - "a response may gain a field, it may never lose one"**
+is the one that mattered, and it does not close on its own the way a rollout does.
+
+**And I had explicitly checked this and got it wrong.** Before the deploy I reported that the old
+binary would "degrade gracefully", because `DetailLine` "hides empty rows". I had read the comment
+above the call site. I had never opened `DetailLine`. That is the fourth time in one session that a
+comment was treated as the implementation - after blaming the founder for a field the form does not
+have, after reporting a resolver "never built" that exists under another name, and after writing
+"deployed" into a commit message on the strength of a message pasted into a different session's
+dialog. **It is the first one that reached a real person's phone**, and the difference between the
+first three and this one is only luck about which surface the mistake landed on.
 
 **A second Fly app had to go out in the same window.** The worker is deployed separately and has
 no `release_command`. Old worker code reads `event.payload['location']`; the new API writes
