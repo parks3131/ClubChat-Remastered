@@ -17,6 +17,14 @@
  * `idle_timeout` is set explicitly there because the platform default is undocumented.
  */
 
+/*
+ * FIRST, above every other import, and the position is load-bearing.
+ *
+ * This starts the Sentry SDK before `fastify`, `pg` and `ioredis` are loaded, which is the only
+ * moment OpenTelemetry can wrap them. Below any of them and the traces silently lose their
+ * database spans while continuing to look fine. See `instrument.ts`.
+ */
+import '../instrument.ts';
 import { randomUUID } from 'node:crypto';
 import pino from 'pino';
 import { createAuth } from '../auth.ts';

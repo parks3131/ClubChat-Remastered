@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // rootDir is "." rather than "./src" because vitest.config.ts lives at the package
+    // root and must be typechecked too, and TypeScript 6 stopped inferring rootDir from
+    // the source files. Same reason packages/cdn-worker and packages/server state it.
+    "rootDir": ".",
+    // No "node" here, and that is the point. This package is bundled for workerd, which
+    // has no Node globals, and naming them would let a `Buffer` or a `process.env` compile
+    // cleanly here and fail at the edge. `@cloudflare/vitest-pool-workers` is what declares
+    // the `cloudflare:test` module the tests import.
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "test/**/*.ts", "vitest.config.ts"]
+}

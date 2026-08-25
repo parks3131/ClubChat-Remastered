@@ -1,12 +1,18 @@
 /**
  * Root layout.
  *
- * Only four things live at this level, and what they have in common is that **none of them shows
+ * Only five screens live at this level, and what they have in common is that **none of them shows
  * the tab bar**:
  *
  *  - `index` and `sign-in`, which run before there is a session to have destinations for.
- *  - `legal/*`, readable signed in AND signed out, which is why they sit outside every guard.
+ *  - `forgot-password` and `reset-password`, reached from sign-in and so outside every guard.
  *  - `chat/[channelId]`, which is the one signed-in screen that covers the bar.
+ *
+ * **`legal/*` used to be here too**, as two screens carrying the Privacy Policy and the Terms in
+ * React Native. They were removed on 2026-08-25: the text now lives once, in `docs/legal/*.md`,
+ * the apex site renders it, and sign-up and Profile open those pages in the browser. The screens
+ * were the only copy of either document that existed anywhere, which is why an App Store listing
+ * had nothing to point at and somebody without the app could not read what they were agreeing to.
  *
  * **Everything else moved inside `(tabs)/(main)`** on 2026-07-30, so the tab bar stays put on the
  * club hub, every roster, every list and every leaf - which is v1's rule, recorded in
@@ -28,7 +34,7 @@ import { SessionProvider } from '../src/chat-provider.tsx';
 import { CurrentSpaceProvider } from '../src/current-space.tsx';
 import { FontGate } from '../src/fonts.tsx';
 import { initMonitoring } from '../src/monitoring.ts';
-import { BackTo, STACK_MOTION, motionFor} from '../src/nav.tsx';
+import { STACK_MOTION, motionFor} from '../src/nav.tsx';
 import { PushGate } from '../src/push-gate.tsx';
 import { color, type } from '../src/theme.ts';
 
@@ -133,25 +139,6 @@ function RootLayout() {
                 */
                 ...motionFor(route.params),
               })}
-            />
-
-            {/*
-              Readable signed in AND signed out, which is why they are outside every guard - and
-              why their back control points at Profile rather than at a screen behind the guard.
-            */}
-            <Stack.Screen
-              name="legal/privacy"
-              options={{
-                title: 'Privacy Policy',
-                headerLeft: () => <BackTo href="/profile" label="Profile" />,
-              }}
-            />
-            <Stack.Screen
-              name="legal/terms"
-              options={{
-                title: 'Terms',
-                headerLeft: () => <BackTo href="/profile" label="Profile" />,
-              }}
             />
           </Stack>
           </CurrentSpaceProvider>

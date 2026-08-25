@@ -39,11 +39,11 @@ way in.
     Each tier is simply handed its own link and never sees the other. See
     [ADR-0025](../decisions/0025-a-members-invite-link-obeys-the-join-policy.md).
 5c. **The link can also be shown as a QR code**, for handing the club to somebody in the room
-    rather than in a message. It carries the same link and grants nothing extra. **It currently
-    opens the club only for somebody who already has the app** - a phone without ClubChat gets no
-    prompt and no page, which is [ADR-0010](../decisions/0010-link-only-invites.md)'s recorded and
-    still-unbuilt web fallback, and the screen says so plainly rather than letting a member find
-    out at a club fair.
+    rather than in a message. It carries the same link and grants nothing extra. **It opened the
+    club only for somebody who already had the app** - a phone without ClubChat got no prompt and
+    no page, which is [ADR-0010](../decisions/0010-link-only-invites.md)'s recorded gap, and the
+    screen said so plainly rather than letting a member find out at a club fair. Rule 5e closes
+    that gap, and the screen's warning goes when the web page is serving.
 
 5d. **A member can also scan somebody else's code, from the same screen** *(added 2026-08-12)*.
     Until then the code could only be shown, which made it useful in a message and useless in the
@@ -60,6 +60,22 @@ way in.
     first, and it is used for nothing else - no photo is taken or stored. A code that is not
     ClubChat's is refused without leaving the scanner, since almost everything a camera is pointed
     at belongs to somebody else.
+5e. **A link opened by somebody who does not have the app lands on a web page that names the club,
+    and names nothing else.** A code taped to a table is scanned by strangers, and "you have been
+    invited to a club" is not an invitation - it is a request to install an app on the strength of
+    a URL found on a table. So the page says the club's name and how many members it has, offers
+    the app, and stops there.
+
+    **The token is what permits that, and it already permits more.** Anybody holding the link can
+    redeem it and be inside the club a second later, so naming the club to that same holder
+    discloses strictly less than they already have. Nothing follows from it beyond the name and
+    the count: **nothing about a member ever appears on that page**, no name, no picture, no
+    count of admins, and neither the club's description nor its join policy.
+
+    **A link that does not work produces one page, whatever is wrong with it.** Unknown, revoked,
+    expired, and belonging to a club that has since been deleted are the same page, because
+    telling them apart would confirm to a stranger that a club with that token once existed. See
+    [ADR-0046](../decisions/0046-an-invite-token-names-its-own-club-without-a-session.md).
 6. **Switching a club from `request` to `open` auto-approves every currently pending
    request**, rather than stranding them with no approval step left in the product.
 7. Join policy is editable after creation.
@@ -108,7 +124,8 @@ way in.
 | Invalid, revoked, or malformed join link | A plain "This invite link is no longer valid" screen, offering club search as the way forward |
 | Join link opened while signed out | Routed to sign-in first, then the join completes |
 | Join link opened twice | The second attempt is a no-op, not an error |
-| Join link opened without the app installed | Falls back to a web page for that club, which both works in the browser and offers the app |
+| Join link opened without the app installed | Falls back to a web page for that club, which both works in the browser and offers the app. It names the club and its member count, and nothing else |
+| A dead link opened in a browser rather than the app | One page for unknown, revoked, expired, and a club since deleted. The four are deliberately not told apart |
 | Owner tries to leave | The Leave action is not shown at all - transfer is the only path |
 | A banned person taps Join, or opens the invite link | Told plainly they cannot rejoin this club. There is deliberately no in-app appeal path: naming a contact would hand a determined harasser a specific person to pursue |
 | A banned person has a request still pending | The request is cleared by the ban, so no admin is asked to decide something already decided |
@@ -131,6 +148,10 @@ read anything inside it.
 - [ ] The join link joins a second account instantly, even on a request club.
 - [ ] Sharing and copying the join link works on iOS, Android, and web.
 - [ ] There is no screen anywhere that asks a user to type an invite code.
+- [ ] A join link opened by somebody with no account names the club it belongs to, and the answer
+      carries no member name, no club id, no description, and no join policy. **Asserted against
+      the whole response, not by checking the two expected fields are there.**
+- [ ] A revoked link and a link that never existed are refused identically in the browser.
 - [ ] Promote and demote both work and are both announced in chat.
 - [ ] An Owner can remove an Admin; a non-Owner Admin cannot.
 - [ ] Transferring ownership leaves exactly one Owner, with the previous Owner an Admin.

@@ -34,13 +34,13 @@ import {
 } from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import * as Clipboard from 'expo-clipboard';
-import * as Linking from 'expo-linking';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import type Svg from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { clubApi } from '../../../../../src/api.ts';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
+import { inviteLink } from '../../../../../src/invite-link.ts';
 import { QrCode } from '../../../../../src/qr-code.tsx';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import { Avatar, ConfirmDialog, DataScreen } from '../../../../../src/ui.tsx';
@@ -176,7 +176,7 @@ export default function ClubShareScreen() {
             <Pressable
               onPress={() => {
                 if (loadedClub === null) return;
-                const url = Linking.createURL(`/join/${loadedClub.inviteToken}`);
+                const url = inviteLink(loadedClub.inviteToken);
                 void Share.share({ message: url }).catch(() => undefined);
               }}
               accessibilityRole="button"
@@ -200,7 +200,7 @@ export default function ClubShareScreen() {
       <DataScreen load={load} errorMessage="Couldn't load this club.">
         {(data) => {
           const club = data.club;
-          const inviteUrl = Linking.createURL(`/join/${club.inviteToken}`);
+          const inviteUrl = inviteLink(club.inviteToken);
 
           return (
             <>
@@ -250,6 +250,13 @@ export default function ClubShareScreen() {
                   forced correction level `H`, and `H` spends modules on redundancy. With nothing
                   over the middle the same link is drawn in fewer, larger modules - which is what
                   matters when somebody is reading it off a phone across a table.
+
+                  That headroom is what absorbed the move from `clubchat://join/<token>` to the
+                  https link: 59 characters became 72, so at level `M` the grid went from 33
+                  modules to 37, and at `CODE_SIZE` each module went from about 6.7pt to about
+                  5.9pt. The same 72 characters at level `H` would need 49 modules and about
+                  4.5pt each, which is the version of this screen that would have had a scanning
+                  problem.
                 */}
                 <QrCode value={inviteUrl} size={CODE_SIZE} svgRef={svgRef} />
 
@@ -315,14 +322,27 @@ export default function ClubShareScreen() {
               */}
 
               {/*
-                A code carrying an app-scheme link does nothing on a phone without ClubChat - no
-                prompt, no error, no page - and a member handing it to a stranger at a club fair
-                is exactly who finds that out the hard way. `PRD/04` rule 5c requires the screen to
-                say so rather than let it be discovered. ADR-0010's owed https join page is the
-                fix, and it is not on this screen.
+                **This line used to state a limitation, and now states that there is not one.**
+
+                The code carried `clubchat://join/<token>`, which does nothing at all on a phone
+                without ClubChat - no prompt, no error, no page - and a member handing the code to
+                a stranger at a club fair was exactly who found that out the hard way. So the
+                screen said so: "Scanning works for people who already have ClubChat. Send the link
+                to anybody else."
+
+                ADR-0010 named an https join page as the mitigation on 2026-07-28 and it went
+                unbuilt until 2026-08-25. It exists now (`packages/site-worker`, ADR-0045), the
+                code carries the https link, and the app claims that path as a universal link - so
+                one string opens the app for somebody who has it and a page with the club's name
+                for somebody who does not. That closes `PRD/04`'s "join link opened without the app
+                installed" edge case.
+
+                It is still one short sentence rather than a description of the mechanism, for the
+                reason the removed paragraph above records: this screen is held out to another
+                person, and narrating what a link does reads as a warning.
               */}
               <Text style={styles.note}>
-                Scanning works for people who already have ClubChat. Send the link to anybody else.
+                Anybody can scan this. Without ClubChat installed, it opens a page for the club.
               </Text>
 
               {/*

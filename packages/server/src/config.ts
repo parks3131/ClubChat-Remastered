@@ -7,6 +7,7 @@
  */
 
 import { z } from 'zod';
+import { decodeWebhookSecret } from './mail-webhook.ts';
 
 /**
  * An optional variable where PRESENT AND EMPTY means the same thing as absent.
@@ -40,6 +41,26 @@ const optionalEnv = () =>
       const trimmed = value?.trim();
       return trimmed === undefined || trimmed === '' ? undefined : trimmed;
     });
+
+/**
+ * A sample rate where PRESENT AND EMPTY means the same thing as absent, and where a typo is a
+ * boot failure rather than a silent zero.
+ *
+ * `z.coerce.number()` alone would be wrong in both directions on this field. It reads `''` as
+ * `0` - and `''` is exactly what `fly secrets set NAME=` and a bare key in `.env.example`
+ * produce, the same three producers `optionalEnv()` above exists for. It also reads `'off'` as
+ * `NaN`, which `.min(0)` then rejects, and that half is right: the field is named in the error
+ * and somebody fixes it, rather than tracing silently stopping because of a plausible word.
+ *
+ * Reading empty as zero is the specific failure this whole field exists to end. Tracing was off
+ * because `monitoring.ts` said `tracesSampleRate: 0`; a config that reads an unset variable as
+ * zero would put the same silence one layer down, where it looks configured.
+ */
+const rateEnv = (fallback: number) =>
+  z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.coerce.number().min(0).max(1).default(fallback),
+  );
 
 const Env = z.object({
   DATABASE_URL: z.string().min(1),
@@ -111,6 +132,30 @@ const Env = z.object({
    */
   SENTRY_DSN: optionalEnv(),
   SENTRY_ENVIRONMENT: z.string().default('development'),
+  /**
+   * What fraction of traffic is traced, between 0 and 1.
+   *
+   * > **Tracing was off by a constant, not by omission.** `monitoring.ts` carried
+   * > `tracesSampleRate: 0` with a comment saying performance was a separate decision, and the
+   * > separate decision was never made - so for the whole life of the deployment a slow request
+   * > left no record anywhere, and the only way to change that was to edit code, rebuild an image
+   * > and redeploy three apps.
+   *
+   * Here instead, so the rate is an operational dial: `fly secrets set
+   * SENTRY_TRACES_SAMPLE_RATE=0.01` and a restart turns it down without shipping code. That
+   * matters most in the case it exists for - a spike in traffic burning quota at 3am is a
+   * situation where waiting on a Docker build is the wrong shape of fix.
+   *
+   * **A tenth, and the number is a cost decision rather than a technical one.** At one live club
+   * it is a few hundred traces a day, which is enough to see a pattern and small enough that
+   * nobody has to think about the bill; 1.0 on a live system is a bill the founder has not
+   * agreed to. What it is NOT is a measure of coverage: errors are unaffected by this and are
+   * always sent in full. This only decides how many *timings* are kept.
+   *
+   * The liveness routes are excluded from tracing entirely, whatever this says, because Fly polls
+   * them every few seconds for ever and they measure nothing. See `monitoring.ts`.
+   */
+  SENTRY_TRACES_SAMPLE_RATE: rateEnv(0.1),
   /**
    * The commit this build came from, so a stack trace maps to a source.
    *
@@ -185,6 +230,31 @@ const Env = z.object({
    * anybody touching a credential.
    */
   MAIL_FROM: optionalEnv(),
+  /**
+   * The secret Resend signs its webhooks with, or absent.
+   *
+   * Optional for the same reason `RESEND_API_KEY` is: development and CI run the whole flow
+   * without one. Absent means `POST /webhooks/resend` refuses with a 503 and reports itself once,
+   * rather than silently accepting anything - see `api/mail-webhook.ts`.
+   *
+   * **Validated here rather than at the first request, and that is the point of the refine.**
+   * Resend presents this as `whsec_` plus base64; a value that is truncated, re-wrapped by an
+   * editor, or pasted with a character missing produces a different, shorter key and then every
+   * webhook 401s. That failure is invisible: it looks exactly like internet noise, and nothing
+   * was ever going to be recorded to notice the absence of. A boot failure naming the field is
+   * the honest version, and it is the same argument `assertProductionMailer` is built on.
+   *
+   * Distinct from `RESEND_API_KEY` on purpose. The key sends mail; this only verifies what comes
+   * back, so a leak of one must not become a leak of the other (non-negotiable 5).
+   */
+  RESEND_WEBHOOK_SECRET: optionalEnv().refine(
+    (value) => value === undefined || decodeWebhookSecret(value) !== null,
+    {
+      message:
+        'RESEND_WEBHOOK_SECRET is not a usable signing secret - Resend presents it as ' +
+        '"whsec_" followed by base64, and this one does not decode to at least 16 bytes',
+    },
+  ),
 }).refine((env) => !env.RESEND_API_KEY || Boolean(env.MAIL_FROM), {
   /*
    * A key with no From address is the one half-configuration worth catching at boot. Resend

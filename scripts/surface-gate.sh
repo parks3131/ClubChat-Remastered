@@ -234,6 +234,19 @@ check 409 "DELETE /me while owning a club"  -X DELETE "${AO[@]}" "$API/me"
 check 200 "DELETE /me as a plain member"    -X DELETE "${AM[@]}" "$API/me"
 check 401 "the deleted account's token is dead" "${AM[@]}" "$API/clubs"
 
+echo "== the two routes that take no session at all =="
+# Added 2026-08-25 with the apex join page and the Resend bounce webhook. Both are
+# unauthenticated on purpose, which is exactly why they belong in a gate that runs over TCP:
+# an auth mistake on either one is invisible to a unit test that never binds a port.
+#
+# No Authorization header on any of these, deliberately. Passing one would prove the route
+# works for a signed-in caller and say nothing about the case that matters.
+check 404 "an unknown invite token previews as 404, and reveals nothing" "$API/invites/nosuchtoken000000000000/preview"
+check 404 "a malformed invite token is 404, never 500" "$API/invites/not-a-token/preview"
+check 401 "the mail webhook refuses a body with no signature" -X POST -H 'content-type: application/json' -d '{}' "$API/webhooks/resend"
+check 401 "the mail webhook refuses a forged signature" -X POST -H 'content-type: application/json' \
+  -H 'svix-id: msg_gate' -H 'svix-timestamp: 1' -H 'svix-signature: v1,Zm9yZ2Vk' -d '{}' "$API/webhooks/resend"
+
 echo "== malformed ids are 404, never 500 =="
 for p in "/clubs/not-a-uuid" "/users/not-a-uuid" "/races/not-a-uuid" "/polls/not-a-uuid" "/eboards/not-a-uuid" "/channels/undefined/messages"; do
   check 404 "GET $p" "${AO[@]}" "$API$p"

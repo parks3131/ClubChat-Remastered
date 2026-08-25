@@ -311,13 +311,34 @@ Policy must state that message content is readable by the service.
   until it is replaced, and the R2 credential is read AND write where the Worker only reads.
   [Deployment](21-deployment.md)'s obligation 1 is the standing record.
 
-### Standing, 2026-08-23
+### Standing, 2026-08-25
 
 Work is on branch `deploy`. **The first deployment in the project's history ran on 2026-08-23**:
 three Fly apps in `iad`, one machine each, from one image built once and deployed to all three by
 digest, with the Neon migration run by the api's `release_command` before any machine took traffic.
 [Deployment](21-deployment.md) owns the procedure and which of its steps have been performed; this
 table owns where the milestone stands.
+
+Against this milestone's exit criteria as of 2026-08-25, after the P1 and P2 pass:
+
+| Exit criterion | Standing |
+|---|---|
+| Full stack serves from production, founder's phone runs a normal day against it | **Done 2026-08-23.** Signup, chat, photo upload, push to a real iPhone, and password-reset mail all proved with server-side evidence |
+| A database restore from a real backup performed once | **Not done.** `scripts/drills/restore-drill.mjs` exists, refuses by default, and asserts real row counts rather than trusting the API's success. It has never been run: it needs a Neon API key and project id |
+| A parked outbox event and a raised 5xx each reached a human, forced not assumed | **Not done, and this is the one that reads as done.** Both drills exist and both run end to end locally. Neither has been fired at production, so **no production error has ever reached a human**. It also needs an alert rule in Sentry that routes to an inbox; without one the drill lands and reaches nobody |
+| A stranger installs through TestFlight and signs up unassisted | **Not done.** Internal distribution only |
+| Mail arrives from the product's own domain, old key dead, DMARC verifies | **Half done.** Mail is proved. DMARC is `p=none` with no `rua=`, so no receiver has ever sent an aggregate report and the path to `p=quarantine` needs about two weeks of them first |
+| Privacy Policy and Terms reviewed, state the ADR-0005 obligation, reachable from sign-up | **Written, not reviewed.** `docs/legal/` holds both, written from the code rather than from a template, and they discharge the ADR-0005 obligation in plain language. They link from sign-up and from Profile. Legal review by a lawyer is untouched, and both documents say so |
+| Media served in `cdn` mode, `/__parity` agrees, a signed URL survives an hour boundary | **Done 2026-08-23** |
+| `cf-cache-status` read off a real signed URL | **Done 2026-08-23.** ABSENT, so nothing is held at the edge |
+| The R2 key rotated, the Cloudflare token revoked, the old Resend key deleted, the local secrets file gone | **Declined, not pending.** The founder deferred all four rotations on 2026-08-23 and declined again on 2026-08-25. Treat it as a closed decision rather than outstanding work |
+
+Two further things that block this milestone and were not on its list, both found on 2026-08-25 by
+running something rather than reading it: **there is no previous image to roll back to** on any of
+the three Fly apps, and **`clubchatapp.com` answers 522** while the app now links to it for both
+legal documents and every invite. See [`TODO.md`](../../TODO.md).
+
+The table below is the branch state on the morning of 2026-08-23, kept for its reasoning.
 
 | Piece | Standing |
 |---|---|

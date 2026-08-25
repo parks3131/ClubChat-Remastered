@@ -18,6 +18,45 @@ is "what is broken".
 
 ## Next up
 
+- [ ] **Nothing built on 2026-08-25 has been proved in production, and the monitoring item is the
+      one that reads as done when it is not.** Both drills exist and both have been run end to end
+      locally, so the code path is proved and the LAST HOP IS NOT: no deliberate 5xx and no parked
+      outbox event has ever reached a human. Firing them needs a deploy, and it also needs somebody
+      to confirm in Sentry that an alert rule on `clubchat-server` actually routes to an inbox.
+      Without that rule the drill lands in Sentry, reaches nobody, and looks like it passed.
+
+- [ ] **`clubchatapp.com` answers 522 and the app already links to it.** `packages/site-worker` is
+      built, tested and never deployed. The mobile app deleted its in-app legal screens, so Privacy
+      Policy and Terms now open on the apex and nowhere else, and every invite link and QR code the
+      app hands out points at `https://clubchatapp.com/join/<token>`. Nothing is broken today
+      because the change has not reached a build. **The ordering rule is now in
+      [`TECH/21`](SPEC/TECH/21-deployment.md): the Worker deploys before any build that links to
+      it.**
+
+- [ ] **Tracing is live on two of four surfaces, and the configuration reads as done on all four.**
+      The mobile app produces no traces because nothing starts a root span: it needs
+      `Sentry.reactNavigationIntegration()` wired to the expo-router container ref, which can only
+      be verified on a device. The worker produces none for the same reason, and there the right
+      unit of work is a real decision rather than a wiring job - a span per drain tick on a poll
+      loop is a bill for mostly-empty spans. Both were left deliberately rather than guessed at.
+
+- [ ] **There is nothing to roll a deploy back to.** Found by running the new rollback drill in dry
+      run against the real Fly apps on 2026-08-25: all five releases across `clubchat-api`,
+      `clubchat-gateway` and `clubchat-worker` carry one identical image digest. The next deploy
+      creates the second image and the drill becomes runnable. Until then the rollback lever
+      described in `TECH/21` does not exist.
+
+- [ ] **DMARC collects nothing, so tightening it is a fortnight rather than an edit.**
+      `_dmarc.clubchatapp.com` is `v=DMARC1; p=none;` with no `rua=`, so no receiver has ever sent
+      an aggregate report. Add `rua=` first, read about two weeks of reports to confirm
+      authentication is passing, and only then move to `p=quarantine`. Doing it in the other order
+      is how real mail starts going to spam. `scripts/drills/dmarc-drill.sh` walks it.
+
+- [ ] **`apps/mobile/app.json` declares no `android.package`.** So the Android application id has
+      no source of truth in the repo, while the site Worker has to name one in
+      `/.well-known/assetlinks.json`. Android app links are parked by decision, but the missing
+      package name is a real gap that will bite the moment they are not.
+
 - [ ] **Something is escaping the pinned strip's notice cards.** An accent-tinted rounded shape
       sits below the front card, offset right, cut off where the next card overlaps it. Found on
       the Simulator on 2026-08-14 and **reproducible**: it travels with the cards when the strip is
@@ -90,18 +129,21 @@ is "what is broken".
       traffic in a measured window. `GET /media/urls?ids=` took it from 1.15 requests per picture
       to 0.42, verified by scrolling a picture-heavy chat on the phone.
 
-- [ ] **Turn on Sentry performance tracing. It is a CODE change, not a setting, and that is the
-      part everything about this item got wrong.** `tracesSampleRate: 0` is a literal in
-      `packages/server/src/monitoring.ts` and again in `apps/mobile/src/monitoring.ts`, each with
-      its reason in a comment beside it, and nothing anywhere reads an environment variable for
-      it. So setting `SENTRY_DSN` on 2026-08-23, which did switch **error reporting** on for all
-      three roles, changed nothing whatever about tracing. The server half is an edit plus a
-      `fly deploy`; the client half is an edit plus a build, or an over-the-air update once one
-      exists. Choose a sample rate while you are in there - 1 to 10% of traces is normal - and
-      apply the redaction the dev tracer already uses to any span that would carry query text.
-      **Nothing records production latency today**, per route or per query;
-      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md) 6.1 has the survey, and its section 8
-      has the full list of what is going unwatched in the meantime.
+- [ ] **Add `pg_stat_statements`, and a large seeded fixture.** The Sentry half of this item was
+      done on 2026-08-25: tracing is live on the api and the gateway behind
+      `SENTRY_TRACES_SAMPLE_RATE`, defaulting to 0.1, with `/health`, `/ready` and `/__parity`
+      never traced. **What is still true is the sentence this item was really about**: the query
+      counter built on 2026-08-19 measures development only, every number in
+      [`TECH/18`](SPEC/TECH/18-mission-backend-cleaning.md) is a laptop against a database on the
+      same machine, and the 133-statement poll read that cost 12ms there would cost far more
+      across a network on Fly. `TECH/18` section 6 recommends `pg_stat_statements` second and a
+      large seeded fixture third.
+
+- [ ] **No test has ever built a realistic amount of data, and that is why both N+1s survived.**
+      Every fixture in this repo creates one or two rows; the trace found the defects because a
+      real account had 26 poll cards in one conversation. A seeded "large" club - hundreds of
+      members, dozens of cards in a chat, fifty photos in a gallery - is the thing that would
+      have caught them automatically. See `TECH/18` 6.5.
 
 - [ ] **Recurrence** is the next real feature, and is deferred rather than pending - see below.
       Nothing else in Weekly Meetups is outstanding: Nudge shipped and was verified on a device on

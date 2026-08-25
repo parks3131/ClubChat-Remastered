@@ -40,6 +40,19 @@ primary_region = 'iad'
   SENTRY_DSN = 'https://f4737021a3d55097c56ff4c479b9cdaa@o4511847446609920.ingest.us.sentry.io/4511847456964608'
   SENTRY_ENVIRONMENT = 'production'
 
+  # How much traffic is timed. A tenth, matching the other two files, and for the reasons
+  # fly/api.toml records at length: it is a cost decision, errors are unaffected by it, and it is
+  # changed by editing the line and redeploying the same image rather than by shipping code.
+  SENTRY_TRACES_SAMPLE_RATE = '0.1'
+
+  # Worth knowing on THIS role: the worker has no HTTP server, so the automatic instrumentation
+  # has nothing to start a trace from and this value currently changes nothing here. It is set
+  # anyway so the three files say the same thing, and so the day an effect wraps its dispatch in
+  # a span there is no second decision to remember.
+  #
+  # What the worker does report is unchanged and is not sampled: a parked event, a failed drain
+  # tick and an uncaught exception are errors, and every error is sent.
+
   # --- The six secrets, and THIS is the app where forgetting them is silent ---
   #
   # DATABASE_URL, REDIS_URL, BETTER_AUTH_SECRET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY and

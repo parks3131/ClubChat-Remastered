@@ -13,6 +13,19 @@ it was: the deployment as designed, plus the rules that bind every change.
 when it happened**, which was the point of writing them early. Every one is free to follow from the
 first deploy and expensive to retrofit: once a few hundred people hold a build of the app, a compatibility mistake
 cannot be un-shipped, only followed by another release.
+**This is deployed.** Since 2026-08-23 the three roles run as three Fly apps in the `clubchat`
+organization, one machine each in `iad`: `clubchat-api` at `api.clubchatapp.com`,
+`clubchat-gateway` at `ws.clubchatapp.com`, and `clubchat-worker` with no ingress. Postgres is
+Neon, migrated by the api's Fly `release_command`, and `cdn.clubchatapp.com` is a Cloudflare
+Worker. [The first cutover](#the-first-cutover) below is the procedure that was followed, kept
+because the next environment will follow it too. Anything in this repo still saying nothing is
+deployed is stale.
+
+Most of this document was written *before* that first deploy, on purpose. Every rule below is free
+to follow from the first deploy and expensive to retrofit: once a few hundred people hold a build
+of the app, a compatibility mistake cannot be un-shipped, only followed by another release.
+[The drills](#the-drills) is the part written after, and it covers the three things that are
+supposed to protect a live system and had never once been performed.
 
 [Stack and hosting](15-stack-and-hosting.md) owns **which** technology and why. This document owns
 **how a change reaches a person**, and does not restate it.
@@ -628,6 +641,407 @@ is as of 2026-08-23, the day the cutover ran.**
 
 ---
 
+## The drills
+
+Three things are supposed to protect this deployment, and as of 2026-08-25 not one of them had
+ever been performed: **no backup had ever been restored**, **no machine had ever been rolled
+back**, and the sending domain published `v=DMARC1; p=none`, which is the policy that explicitly
+tells receivers to do nothing. Each is a [milestone 5](20-road-to-the-first-club.md) exit
+criterion. Each has the same shape of failure, which is why none of them got done: from every
+angle except the one that matters they look finished, and the angle that matters is only visible
+by performing them.
+
+Each drill is a script under `scripts/drills/`, and all three share the same three properties so
+that reading one teaches the others:
+
+- **Dry run by default.** They print the plan and change nothing. `--execute` is the only thing
+  that makes the first two act, and the DMARC one has no execute mode at all.
+- **They refuse rather than guess.** Exit `2` means "I refused and changed nothing". Exit `1`
+  means "I tried and it did not work". Exit `0` means it did what it printed.
+- **They prove rather than report.** A green API response, a command that exits `0`, and a
+  dashboard that says *verified* are all things this system has produced while being broken.
+
+| Drill | Script | What it touches | When to run it |
+|---|---|---|---|
+| Database restore | `scripts/drills/restore-drill.mjs` | Creates and deletes one Neon branch. Never writes to the production branch | Quarterly, and before any change big enough to make you want the option |
+| Machine rollback | `scripts/drills/rollback-drill.sh` | Restarts one machine, twice | After the second image deploy, then quarterly |
+| DMARC tightening | `scripts/drills/dmarc-drill.sh` | Nothing at all. Read-only DNS | Before each policy step, and whenever mail is reconfigured |
+
+Neither of the first two reads a secret from a file. `NEON_PROJECT_ID` and `NEON_API_KEY` are
+exported into one shell, and `fly` uses whatever `fly auth whoami` reports (non-negotiable 5).
+
+---
+
+### Drill 1: restore the database
+
+**A backup nobody has restored is a hope.** Neon's history is continuous and a restore is a branch
+away, which is exactly what makes it easy to never test: the dashboard shows the history, and it
+is there, right up until the evening somebody needs it and finds out that the retention window,
+the schema or the roles are not what they assumed.
+
+**It restores onto a NEW branch and never onto production.** The script issues exactly two
+mutating calls: `POST /branches` to create one, and `DELETE /branches/{id}` on the branch it just
+created. It never calls `POST /projects/{id}/branches/{id}/restore`, which is the endpoint that
+rewrites an EXISTING branch in place and is what "restore the database" means to most people. That
+endpoint does not appear in the file. It also never reads `DATABASE_URL`: the only connection
+string it can use is the one Neon returns for the branch this run made, and even that is checked
+against the production endpoint hosts before a client is opened.
+
+#### Run it
+
+```
+export NEON_PROJECT_ID=<from the Neon console URL>
+export NEON_API_KEY=<a personal API key, this shell only>
+
+# 1. Dry run. Prints the real plan and changes nothing.
+node scripts/drills/restore-drill.mjs --target restore-drill-2026-08-25
+
+# 2. The drill.
+node scripts/drills/restore-drill.mjs --target restore-drill-2026-08-25 --execute
+```
+
+`--target` is required, must start with `restore-drill-`, and a production identifier is refused
+before a single HTTP call is made. `--at <RFC3339>` picks the moment to restore to and defaults to
+one hour ago. `--keep` leaves the branch behind.
+
+#### What the dry run prints
+
+Captured on 2026-08-25 with no key exported, which is the first thing anybody will run:
+
+```
+ClubChat restore drill
+======================
+
+project        cool-project-12345678
+new branch     restore-drill-2026-08-25
+restore point  2026-08-25T12:30:55.699Z
+mode           dry run (nothing will change)
+
+this repo expects 40 migrations, newest stamped 1787197792141
+
+NEON_API_KEY is not set, so the live checks below were skipped:
+  - that the restore point is inside the project history window
+  - that the target name is free
+  - which endpoint hosts belong to production
+```
+
+With a key it goes further, entirely in reads: the project name, the parent branch and its id, the
+history window with the oldest restorable moment spelled out as a timestamp, the production
+endpoint hosts, and then the numbered plan and the line `dry run complete. Nothing was created,
+changed or deleted.`
+
+#### What it proves
+
+`201 Created` proves a branch exists. It says nothing about whether that branch holds the schema,
+the rows, or the moment anybody asked for, and all three have the same shape from the API: a green
+response. So the drill connects to the restored branch and asks it questions. The checks live in
+`scripts/drills/restore-proof.mjs`:
+
+| Check | Rules out |
+|---|---|
+| `tables-present` | An empty branch, or a branch of the wrong project |
+| `migration-ledger` | A schema that is not this repo's. Compares both the row count in `drizzle.__drizzle_migrations` and its newest stamp against `meta/_journal.json` |
+| `row-counts` | A correctly migrated database with nothing in it. **This is the one that makes the drill worth running** |
+| `point-in-time` | A copy of HEAD rather than of the requested moment |
+| `referential-integrity` | A torn restore: rows pointing at parents that are not there |
+| `writable` | A branch you can read but could not promote. Proved by committing a transaction |
+
+**`users >= 1` alone would not catch an empty restore, and that is why the gate names five
+tables.** Migration `0001_seed_system_actor` inserts a user, so a freshly migrated database with
+no usage at all already satisfies it. `clubs`, `club_memberships`, `channels` and `messages` have
+no seeded rows and are the ones doing the work.
+
+**`point-in-time` can only ever prove "not newer than".** A restore to a moment when nothing had
+been written since is indistinguishable from a copy of HEAD, and no timestamp comparison can fix
+that. It is stated here rather than implied.
+
+#### The checks have been watched failing
+
+```
+node scripts/drills/restore-proof.selftest.mjs
+```
+
+Needs Docker, takes about half a minute, and touches nothing but its own throwaway container. It
+drives the proof through four states of one real database and asserts what it says about each:
+empty (the table check must fail), migrated with no rows (the schema and ledger checks must pass
+and the row gate must fail), seeded (everything passes), and seeded with the restore timestamp set
+before the rows were written (the point-in-time check must fail). A gate that has never been seen
+to fail has proved nothing, which is AGENTS.md standing instruction 11 applied to a script instead
+of a test.
+
+#### What failure looks like
+
+| Symptom | Meaning |
+|---|---|
+| `REFUSED: "main" reads as a production identifier` | Working as designed. Name a `restore-drill-` branch |
+| `ERROR: GET /projects/... -> 401` | The API key is wrong or revoked. Nothing was created |
+| `REFUSED: --at ... is outside this project's history window of Ns` | The moment asked for is older than retention. The refusal prints the oldest restorable timestamp |
+| `FAIL row-counts   below the gate: clubs=0 ...` | **The real finding.** The restore produced a database with a schema and no data |
+| `FAIL migration-ledger  applied=38 expected=40` | The restore point predates the last two migrations. Expected if `--at` is old; alarming if it is not |
+| `FAIL point-in-time  rows newer than the restore point` | The branch is not a snapshot of the moment requested |
+
+On any failure the branch is **kept**, not deleted, and the exact `curl -X DELETE` to remove it is
+printed. A failed restore is the one you want to look at. On success the branch is deleted unless
+`--keep` was passed, and the delete re-reads the branch first and refuses if it comes back marked
+default or protected.
+
+A branch that is left behind costs storage for as long as it exists. Delete it when the
+investigation is over.
+
+---
+
+### Drill 2: roll a machine back
+
+**Only the machine half is a drill, and the schema half is already decided.** A schema change is
+never rolled back, only followed forward: migrations are additive and run as the api app's
+`release_command`, on a temporary machine using the newly built image, before any machine is
+updated. The previous image therefore runs correctly against the newer schema, and there is
+nothing to un-apply. What has never been performed is the machine rollback, against a schema that
+stays exactly where it is.
+
+**`fly machine update`, never `fly deploy --image`.** `fly deploy` against `fly/api.toml` runs
+`release_command` again, which is a migration, during a rollback drill, which is the one thing
+this drill must not do. `fly machine update` changes one machine's image and runs no release
+command at all. It is also surgical: it names a machine, so it cannot fan out to the other two
+apps.
+
+#### Run it
+
+```
+# Dry run against exactly one app.
+./scripts/drills/rollback-drill.sh --app clubchat-api
+
+# The drill. Prompts for the app name to be typed before it acts.
+./scripts/drills/rollback-drill.sh --app clubchat-api --execute
+```
+
+`--app` is required and accepts exactly one of `clubchat-api`, `clubchat-gateway`,
+`clubchat-worker`. `--app all` is refused by name, because it is the thing somebody will try.
+Giving `--app` twice is refused. An app with more than one machine is refused, because that shape
+needs a decision rather than a default. `--to <image>` overrides the image to roll back to.
+
+#### It is not runnable yet, and that is the current answer
+
+Measured on 2026-08-25, read-only, against all three apps:
+
+```
+Every one of this app's 3 releases carries the SAME image digest:
+  registry.fly.io/clubchat-api@sha256:9f9e58a2c4f1d0aab06847023567503bc9f1af410f6bed84707c1333b3faef0d
+
+A release is created by a secret or config change as well as by a deploy, so several
+releases of one image is normal. It also means this app has never run a second image,
+and there is therefore nothing to roll back TO.
+
+REFUSED: no previous image exists.
+```
+
+`clubchat-api` has three releases, `clubchat-gateway` and `clubchat-worker` one each, and every
+one of the five carries that same digest. The cutover built one image and deployed it to all
+three, exactly as [the first cutover](#the-first-cutover) describes, and the api's two extra
+releases are secret and config changes, which create a release without creating an image.
+
+So **rollback is untested because it is not yet possible**, which is a different statement from
+"untested" and worth recording as such. The drill becomes runnable at the next real deploy, which
+is the moment a second digest exists. Run it that same day, while the previous image is known
+good.
+
+#### What the plan prints
+
+Real output from 2026-08-25, with `--to` supplied so the plan renders:
+
+```
+app            clubchat-api
+role           api
+mode           dry run (nothing will change)
+readiness      GET https://api.clubchatapp.com/ready must return 200
+
+machine        080e9036b99048  region iad  state started
+running now    registry.fly.io/clubchat-api@sha256:9f9e58a2...
+roll back to   registry.fly.io/clubchat-api@sha256:00000000...
+
+plan
+----
+1. fly machine update 080e9036b99048 --app clubchat-api --image <previous> --yes --wait-timeout 300
+2. wait for the role's readiness signal
+3. fly machine update 080e9036b99048 --app clubchat-api --image <current> --yes --wait-timeout 300
+4. wait for the readiness signal again
+5. assert the machine's image is byte-identical to the one it started on
+```
+
+**The readiness signal differs by role, and the worker's is not a health check.** The api and the
+gateway are polled at `https://api.clubchatapp.com/ready` and `https://ws.clubchatapp.com/ready`
+until one returns `200`, up to 40 attempts five seconds apart. The worker has no ingress and
+therefore no health gate at all, so its gate is the line it writes once it has built the pool, the
+Redis connection and the S3 client: `worker started, draining outbox and running the scheduler`.
+The script waits for the machine to reach `started` and then greps `fly logs --no-tail` for
+exactly that string. Its absence is the failure, which is the same reasoning the cutover uses.
+
+`--skip-health-checks` is never passed. The check is the instrument.
+
+#### What failure looks like
+
+| Symptom | Meaning |
+|---|---|
+| `REFUSED: ... is not one of this deployment's three apps` | Typo, or an app that is not part of this drill |
+| `REFUSED: <app> has N machines` | Somebody scaled a role. Decide what the other machines should do first |
+| `REFUSED: machine ... is 'stopped', not 'started'` | Fix that before drilling a rollback on it |
+| `ERROR: <app> did not become ready on the previous image` | **The finding the drill exists for**: the image you would roll back to does not serve traffic. Rollback is not available until that is understood |
+| `ERROR: the roll-forward update failed` | The app is still on the PREVIOUS image. The recovery command is printed |
+| `ERROR: the machine did NOT come back to the image it started on` | Compare `fly machine list --app <app> --json` against the digest in the output above |
+
+Every failure path prints the exact `fly machine update ... --image <the image it started on>`
+needed to put the app back by hand.
+
+The final assertion is not "both commands exited 0". It re-reads the machine's image and requires
+it to be byte-identical to the digest recorded before the drill started.
+
+**One flyctl detail that will otherwise cost an afternoon.** `fly releases --json` on flyctl
+v0.4.87 marshals Go field names, so the image reference key is `ImageRef`, not `imageRef`.
+Published examples show the camelCase form, and reading it yields `null` silently rather than an
+error. The script tries `.imageRef // .ImageRef // .image_ref // .image` and refuses with the raw
+release table if none of them resolve, rather than picking a wrong image.
+
+---
+
+### Drill 3: tighten DMARC
+
+#### Where it stands today
+
+Measured on 2026-08-25 with `./scripts/drills/dmarc-drill.sh`, against the Cloudflare
+nameservers directly and again through `8.8.8.8`:
+
+| Record | Name | Value |
+|---|---|---|
+| SPF | `send.clubchatapp.com` TXT | `v=spf1 include:amazonses.com ~all` |
+| Bounce | `send.clubchatapp.com` MX | `10 feedback-smtp.us-east-1.amazonses.com` |
+| DKIM | `resend._domainkey.clubchatapp.com` TXT | a 218 character public key |
+| **DMARC** | **`_dmarc.clubchatapp.com` TXT** | **`v=DMARC1; p=none;`** |
+
+SPF, DKIM and the bounce path are all published and agree between the origin and a public
+resolver. **The DMARC record has no `rua=`**, so no aggregate reports are being generated
+anywhere, and there is therefore no evidence on which to tighten anything.
+
+#### Why `p=none` is there, and why it is not the finish
+
+SPF proves the sending server is authorized for the envelope domain. DKIM proves the message was
+signed and unaltered. **Neither looks at the `From:` header, which is the only address a member
+ever sees**, so both can pass for an attacker's own domain while ClubChat's name is displayed.
+DMARC is the record that requires the domain which passed SPF or DKIM to *align* with the visible
+`From:`, and states what a receiver should do when it does not.
+
+`p=none` says "do nothing about it, but tell me". It was the correct first move: it changes no
+delivery decision and it clears the `DMARC: FAIL` that an absent record produces. It is not
+protection. A spoofed password-reset mail is delivered exactly as it was before, and password
+reset is the highest-value phishing target this product will ever send, because a spoofed one is
+convincing precisely by looking like the mail members were taught to expect.
+
+#### The warning, which is already recorded and is not hypothetical
+
+**Tightening to `quarantine` before authentication is confirmed working is how real mail gets sent
+to spam.** [The sending domain checklist](../templates/sending-domain-checklist.md) opens with the
+case that makes it concrete: on 2026-08-07 `parkstechusa.com` read *verified* in the Resend
+dashboard while publishing no SPF and no DKIM at all. Every record had been lost in a nameserver
+move a month earlier, and mail kept being accepted the whole time. **Delivery is not
+authentication.** A `p=reject` published in that window would have sent every password-reset mail
+to spam or had it refused outright, while the provider dashboard went on saying `delivered`,
+because that word only means a receiving server accepted the bytes.
+
+#### The record edit
+
+One TXT record in Cloudflare DNS for `clubchatapp.com`. Name `_dmarc`, and Cloudflare appends the
+domain itself, so do not type the full name. TTL Auto. DNS only; a TXT record cannot be proxied.
+
+**Step 1, now. Add reporting, leave the policy alone.**
+
+```
+before  v=DMARC1; p=none;
+after   v=DMARC1; p=none; rua=mailto:dmarc@clubchatapp.com; fo=1
+```
+
+This changes no delivery decision at all. It starts the evidence.
+
+**`dmarc@clubchatapp.com` has to actually receive mail, or the record looks complete while every
+report is thrown away.** The apex publishes MX records pointing at the registrar's forwarding
+hosts (`eforward1-5.registrar-servers.com`), so the DNS half is already there, but a forwarding
+host still needs a **rule for that exact address**. Confirm one exists before relying on it. An
+address on a different domain is dropped entirely unless that domain publishes an authorization
+record for it, which is why the address above is on the sending domain.
+
+**Step 2, after at least two weeks of reports.**
+
+```
+before  v=DMARC1; p=none; rua=mailto:dmarc@clubchatapp.com; fo=1
+after   v=DMARC1; p=quarantine; rua=mailto:dmarc@clubchatapp.com; fo=1
+```
+
+**Step 3, after quarantine has run clean.** Same edit again with `p=reject`.
+
+#### Confirm authentication is passing FIRST, and what evidence to look for
+
+The drill script refuses to green-light a tightening while any check fails, and prints
+`DO NOT MAKE THAT EDIT YET`. But DNS cannot tell you the thing that actually matters, and neither
+can the provider dashboard. Only a receiver can:
+
+1. Trigger a real password reset to a Gmail address, from the live app.
+2. Open the message, the per-message three-dot menu, **Show original**.
+3. Read all three lines at the top:
+   - `SPF: PASS` with domain `send.clubchatapp.com`
+   - `DKIM: PASS` with domain `clubchatapp.com`. **The `d=` must be `clubchatapp.com`**, not the
+     provider's own domain, or alignment is being carried by SPF alone and anything that changes
+     the envelope path later breaks it silently.
+   - `DMARC: PASS`
+4. Read the aggregate reports for around two weeks and look for legitimate senders a strict policy
+   would break. This domain publishes an apex SPF for registrar mail forwarding
+   (`v=spf1 include:spf.efwd.registrar-servers.com ~all`) which does **not** include the mail
+   provider, so anything sent with an apex envelope is exactly what those reports exist to
+   surface.
+
+After the edit, re-check both resolvers and send one more real message:
+
+```
+dig +short TXT _dmarc.clubchatapp.com @mona.ns.cloudflare.com
+dig +short TXT _dmarc.clubchatapp.com @8.8.8.8
+```
+
+**Wait out the negative cache before believing a failure.** Resolvers cache absences as well as
+answers, and the window is the SOA minimum, which `dig +short SOA clubchatapp.com` currently
+reports as **1800 seconds**. A `FAIL` minutes after publishing a record that `dig` can already see
+is that, not a misconfiguration.
+
+#### What failure looks like
+
+| Symptom | Meaning |
+|---|---|
+| `FAIL  spf` or `FAIL  dkim` | Stop. A policy published now is an instruction to reject your own mail |
+| `FAIL  propagation` | The origin and `8.8.8.8` disagree. Wait out the TTL and re-run before doing anything else |
+| `FAIL  aggregate reports` | No `rua=`. This is today's state, and step 1 above is the fix |
+| `FAIL  rua mailbox` | The reporting address is on a domain with no MX. Reports would go nowhere |
+| `DKIM: PASS` with a `d=` that is not `clubchatapp.com` | Alignment is resting on SPF alone. Do not tighten |
+
+#### Why this drill has no `--execute`
+
+The other two act. This one only reads, and has no flag that would change that. The record lives
+in Cloudflare and the edit is one field of one TXT record; a script holding a Cloudflare token
+able to rewrite the apex zone is a far larger standing risk than the thirty seconds it saves, and
+that token is on the list of credentials to revoke rather than keep (obligation 1 above).
+
+---
+
+### What the drills do not cover
+
+Written down so the coverage is not overread.
+
+- **Redis.** Upstash holds ephemeral state and its loss is a documented degrade rather than data
+  loss ([Failure modes](11-failure-modes.md)), so there is nothing to restore and no drill. What
+  is untested is the degrade itself: nobody has pulled Redis out from under a running client and
+  watched sync recover.
+- **R2.** Object loss has no drill and no restore path. Media is the one part of this system with
+  no second copy anywhere.
+- **The Worker.** Still reports no errors anywhere (obligation 5 above), so a rollback drill for
+  `cdn.clubchatapp.com` would have nothing to read a failure from.
+
+---
+
 ## Open
 
 Recorded so that silence is not read as a decision.
@@ -657,6 +1071,19 @@ Recorded so that silence is not read as a decision.
   alert has been forced to reach a human. **The mail domain came off this line on 2026-08-23**, when
   reset mail arrived from the product's own domain; what is left of it is the DMARC tightening in
   obligation 3 above.
+- ~~The rollback procedure.~~ **Closed 2026-08-25.** The schema half was already decided: a schema
+  change is never rolled back, only followed forward, which is what rules 4 to 7 make safe by
+  keeping every migration additive. Migrations run as the api app's `release_command`, on a
+  temporary machine using the newly built image, before any machine is updated, and a failure there
+  stops the deploy. The machine half is now [drill 2](#drill-2-roll-a-machine-back), written and
+  refusing correctly. **It has still never been performed, and right now it cannot be**: all five
+  releases across the three apps carry one image digest, so no previous image exists to roll back
+  to. That becomes possible at the next deploy.
+- Backup restore and the mail domain are now [drill 1](#drill-1-restore-the-database) and
+  [drill 3](#drill-3-tighten-dmarc). Both are built, and neither has been executed against
+  production: drill 1 needs a Neon API key, drill 3 needs two weeks of aggregate reports that are
+  not being collected yet because the DMARC record has no `rua=`. Monitoring remains a
+  [milestone 5](20-road-to-the-first-club.md) exit criterion rather than an open choice.
 - Kafka still has no hosted provider ([Stack and hosting](15-stack-and-hosting.md)). Managed Kafka
   is the largest single line item in any hosting estimate at this scale, so the provider choice is
   as much a cost decision as a technical one.

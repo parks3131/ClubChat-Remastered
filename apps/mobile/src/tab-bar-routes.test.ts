@@ -87,8 +87,6 @@ describe('the screens that must not have it', () => {
     `/moderation/${CLUB}`,
     '/dm/new',
     '/profile/edit',
-    '/legal/terms',
-    '/legal/privacy',
     '/sign-in',
     '/join/some-token',
   ])('hides it on %s', (path) => {

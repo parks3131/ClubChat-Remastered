@@ -182,6 +182,11 @@ Immutable once accepted. A spec says what and how; an ADR says **why this and no
 | [0042](decisions/0042-a-membership-write-carries-the-role-it-was-authorized-against.md) | A membership write carries the role it was authorized against, and a lost race is a refusal |
 | [0043](decisions/0043-the-three-roles-deploy-as-three-fly-apps.md) | The three roles deploy as three Fly apps from one image, and the gateway is an HTTP service so its readiness can be checked |
 | [0044](decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md) | The CDN is a Cloudflare Worker that verifies the signature before it reads a bucket, and the signing secret rotates on the edge alone |
+| [0045](decisions/0045-the-apex-is-a-standalone-worker.md) | The apex is a standalone Worker, separate from the CDN, so a public page cannot share a blast radius with the thing that signs media reads |
+| [0046](decisions/0046-an-invite-token-names-its-own-club-without-a-session.md) | An invite token names its own club without a session, because the holder can already redeem it and a name discloses strictly less |
+| [0047](decisions/0047-bounces-are-recorded-and-reported-never-suppressed.md) | A bounce is recorded and reported, never suppressed, so a dead address cannot lock a real person out of their own reset |
+| [0048](decisions/0048-updates-are-keyed-to-a-fingerprint.md) | Over-the-air updates are keyed to a fingerprint, so a bundle can never land on a binary whose native modules cannot run it |
+| [0049](decisions/0049-a-meetup-says-where-with-a-link-and-nothing-else.md) | A meetup says where with a link and nothing else, after a nudge told a club "18:00 at null" |
 
 ## Templates
 

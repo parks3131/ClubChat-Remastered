@@ -8,8 +8,19 @@ never shown to other members.
 
 **Behaviour rules**
 
-1. Sign-up takes an email and a password. A consent line below the password field links to
-   the Privacy Policy and the Terms.
+1. Sign-up takes a name, an email and a password. A consent line below the password field
+   states the 18+ minimum and links to the Privacy Policy and the Terms of Service. **Both links
+   open in the browser**, at `https://clubchatapp.com/privacy` and
+   `https://clubchatapp.com/terms`; the app carries no copy of either text.
+1a. **ClubChat is 18+, declared rather than verified.** The consent line is where the member
+    declares it, and the Terms and the Privacy Policy both state it. There is no date-of-birth
+    gate and no server-side check, deliberately: collecting every member's birthday to test
+    something almost nobody misstates is the wrong trade for a club app. The declaration is what
+    the store age rating rests on, and what keeps a one-to-one messaging surface out of the
+    children's-privacy regimes. Settled 2026-08-12; see
+    [ADR-0026](../decisions/0026-filter-hate-speech-not-profanity.md). *(Recorded here 2026-08-25.
+    It had been settled in an ADR, stated on two screens and enforced nowhere, and this document -
+    the one that governs sign-up - did not contain the word.)*
 2. Sign-up handles the "email confirmation required" case explicitly - the user is told to
    confirm, never left on a silent failure.
 3. **The session persists across app restarts.** A returning user lands in the app, not on
@@ -48,7 +59,19 @@ never shown to other members.
     export another member's profile picture.** A photograph somebody posts into a conversation
     carries all three, because that is content; a face is identity, and the absence of the menu is
     the enforcement rather than a styling choice.
-9. Privacy Policy and Terms are readable **both signed out and signed in**.
+9. Privacy Policy and Terms of Service are readable **both signed out and signed in**, and from
+   outside the app entirely. They are web pages, rendered from `docs/legal/privacy-policy.md` and
+   `docs/legal/terms-of-service.md`, which are the single copy of each text; sign-up and the
+   Profile screen open them in the browser. *(Until 2026-08-25 they were two React Native
+   screens, so the only copy of either document that existed anywhere was the one on the phone:
+   an App Store listing had nothing to point at, and somebody who had not installed the app could
+   not read what they were being asked to agree to.)*
+9a. **The Privacy Policy states plainly that message content is readable by the service**, direct
+    messages included. That is a standing obligation from
+    [ADR-0005](../decisions/0005-no-end-to-end-encryption.md) rather than a wording preference:
+    the product has no end-to-end encryption because the server composes system messages,
+    notification bodies and moderation views, and the document has to say so where a member will
+    read it. Discharged 2026-08-25, and pinned by a test so a rewrite cannot quietly soften it.
 10. Signing out returns to sign-in and clears the session.
 11. **Account deletion is permanent, self-service, and confirmation-gated on every
     platform.** It anonymises the profile and permanently blocks future sign-in.
@@ -65,9 +88,12 @@ never shown to other members.
     offers "Forgot password?", which takes an email and sends a link.
 14. **The request always answers the same way, whether or not the address is registered.** "If
     that email is registered, we have sent a link" and nothing more - a different answer for a
-    known address turns the form into a test for whether somebody has an account here, and clubs
-    include minors. The screen never reveals which case it was, and the user is told to check
-    their inbox rather than left on a silent success.
+    known address turns the form into a test for whether any given person has an account here,
+    which is a fact about somebody that is not the asker's to have. The screen never reveals which
+    case it was, and the user is told to check their inbox rather than left on a silent success.
+    *(The reason given here until 2026-08-25 was "clubs include minors". ADR-0026 settled the
+    minimum age at 18, so that premise is gone; the rule is not, because the oracle is the
+    problem.)*
 15. **A reset link expires after an hour, works once, and signs every other device out.** The
     first two are what stops a forwarded or leaked email being a standing key. The third is the
     point of the whole feature: reset is the path somebody takes *because* they think their
@@ -104,5 +130,6 @@ Emailing a temporary password rather than a link (a live credential in cleartext
 somebody remembers to change it). Security questions (a second secret to forget, and one whose
 answers a clubmate often knows). Owner-mediated reset (hands a club officer a way into a
 member's account, which is a larger power than any role in this product has). Public profiles
-(clubs are small and often include minors). Usernames separate from full
+(a club is a small private group, and a member's face, school and city are not the internet's
+business). Usernames separate from full
 names (clubs use real names). Aggressive session expiry (this is a club chat, not a bank).

@@ -283,6 +283,13 @@
       "breakpoints": true
     },
     {
+      "idx": 40,
+      "version": "7",
+      "when": 1787667805126,
+      "tag": "0040_mail_events",
+      "breakpoints": true
+    },
+    {
       "idx": 41,
       "version": "7",
       "when": 1787754205126,

@@ -10,6 +10,12 @@
  * The shape deliberately matches `MediaStore`/`FakeMediaStore` and `Monitor`/`silentMonitor()` -
  * a real one for production, a fake the tests assert against, injected from the entrypoint. A
  * reader who has met one of the three has met all of them.
+ *
+ * **This file is the outbound direction only, and `send` resolving means "Resend accepted it for
+ * delivery", never "it arrived".** What happens afterwards - a hard bounce, a spam complaint, a
+ * send that never left - comes back over a webhook and is handled in `mail-webhook.ts` and
+ * `api/mail-webhook.ts`. Nothing there reads back into this file: there is deliberately no
+ * suppression list and no send-path check, and ADR-0047 records why.
  */
 
 import type { FastifyBaseLogger } from 'fastify';

@@ -19,6 +19,78 @@ Newest first.
 
 ---
 
+## 2026-08-25 - Milestone 5's remainder: the things that had been described but never done
+
+Six items off `TODO.md` in one pass, chosen because each was a promise the repo had made and not
+kept: production error monitoring that reached no human, a backup nobody had restored, legal texts
+that were a first draft, no over-the-air path, an invite link that did nothing for anybody without
+the app, and mail bounces nothing consumed. Built by seven agents in parallel against a written
+interface contract, then reviewed by three more whose only job was to disprove them.
+
+**The review is the part worth reading.** The build passed its own gate - 2077 tests, clean
+typecheck, clean em dash lint - and the reviewers still found twenty-seven things, three of them
+critical. A green suite meant the code did what its authors thought; it said nothing about whether
+what they thought was right, and on three counts it was not.
+
+### What the reviewers found that the suite could not
+
+**An invite token was being shipped to Sentry.** `GET /invites/:token/preview` carries a bearer
+credential in its path, and the route's author knew it: the route sets `logLevel: 'warn'` with a
+docblock saying the url IS a bearer credential, and logs the route pattern instead of the url.
+That closed the pino sink. Two Sentry sinks stayed open behind it - span attributes on every
+sampled transaction, and `request.url` on every error event regardless of the sample rate - and a
+reviewer demonstrated it by building a real client from the repo's own `sentryInitOptions()`,
+pointing it at a capturing transport and sending 300 requests: 27,050 occurrences of the token in
+the envelopes actually sent. **The lesson is about the shape of the fix, not the miss.** A
+per-route opt-out has to be remembered once per sink, per route, forever. The redaction is now
+central and pattern-based, so a route added next year is covered whether or not its author has
+read that file.
+
+**The Privacy Policy stated something false, and two agents wrote both halves on the same day.**
+One turned performance tracing on across all three server roles and the mobile app. The other,
+writing the legal text, read the code before the first had finished and wrote "No performance
+tracing. Crash reporting is on; performance tracing is off." The suite was green with a false
+statement in a document about to be published as a legal one. There is now a test that pins the
+claim, so the next contradiction fails the build instead of shipping.
+
+**The first over-the-air update would have bricked every install.** The three `EXPO_PUBLIC_*`
+values exist only in `eas.json` build profiles, and `eas update` does not read those. A published
+bundle would have carried `http://localhost:3000` as a literal, on phones with nothing listening
+on port 3000. The documentation half of that fix is a flag somebody has to remember at 2am, so the
+real fix is `endpoint.ts`: a release build with no API address refuses to start rather than
+starting wrong. That inverts the usual call deliberately, and the reason is `expo-updates` itself -
+a throw during bundle evaluation makes it mark that update failed, never launch it again on that
+device, and fall back to the last one that worked. **A bundle that refuses to start recalls itself
+phone by phone. A bundle that starts and points at localhost has to be recalled by a person.**
+
+### Three defects that were already live, found by running things rather than reading them
+
+**Every 5xx since launch reached Sentry stripped of everything that made it useful.**
+`@sentry/node` 10 captures Fastify 5 errors itself through the diagnostics channel, before the
+error handler runs, and Dedupe then drops ours as the duplicate. So the event that survived was the
+SDK's, which knows nothing about `where`, `method`, `route` or `userId`, and ours - the entire
+grouping design - was thrown away. Invisible from inside the process: `capture` ran, returned an
+event id, an issue appeared. Only the tags were missing. See [`BUGS.md`](BUGS.md).
+
+**There is nothing to roll back to.** The rollback drill, run in dry-run against the real Fly apps,
+found all five releases across the three apps carrying one identical image digest. The safety net
+described in [`SPEC/TECH/21`](SPEC/TECH/21-deployment.md) did not exist. It starts existing at the
+next deploy, which is the first time a second distinct image will exist.
+
+**DMARC generates no reports.** `_dmarc.clubchatapp.com` is `v=DMARC1; p=none;` with no `rua=`, so
+no receiver is sending aggregate reports and none ever has. The path to `p=quarantine` needs about
+two weeks of those reports first, which makes the DMARC item a fortnight rather than an edit.
+
+### What is built and not proved
+
+Everything here is local. **No drill has been fired at production, so it is still true that no
+production error has ever reached a human** - which was the whole point of the monitoring item, and
+is the one line in this entry most likely to be misread as done. The apex Worker has never been
+deployed and `clubchatapp.com` still answers 522, while the app now links to it for both legal
+documents and every invite. That ordering is now a rule in `SPEC/TECH/21`. Tracing is live on two
+of four surfaces: the mobile navigation integration and a worker root span are deliberately not
+guessed at, because the first needs a device to verify and the second is a volume decision worth
+making on purpose.
 ## 2026-08-23 - The first deployment, and the nine defects the audit found first
 
 ClubChat runs in production. Three Fly apps in `iad`, one machine each from one image; Neon migrated

@@ -4,7 +4,7 @@ Keep Expo + Expo Router. The screen map, navigation rules and design system in [
 [Design system](13-design-system.md) are all still correct and represent real shipped work - the remaster is a backend and
 data-flow change, not a UI rewrite.
 
-Four things are new:
+What is new here, numbered so it can be cited:
 
 ### 1. Local persistence
 
@@ -106,3 +106,61 @@ disagreed about the name's colour, which is the whole argument for it being one.
 react-native-web renders a `Pressable` as a real `<button>` only when its role says so, and the
 event and meeting cards are buttons themselves. `disabled` is not the alternative - it was tried,
 and it disables descendants, so every option inside a poll card went dead.
+
+### 6. The JavaScript can be replaced without a store release
+
+`expo-updates`, publishing through EAS Update. Two properties are structural and neither should be
+softened without reading [ADR-0048](../decisions/0048-updates-are-keyed-to-a-fingerprint.md).
+
+**Compatibility is decided by a fingerprint, never by a version number.** `runtimeVersion` is
+`{ "policy": "fingerprint" }`: a hash of everything affecting the native runtime - the dependency
+tree, the `plugins` array, `app.json`, any local native module. An update can therefore only be
+offered to a binary built from the same tree. This is what makes [Deployment](21-deployment.md)
+rule 3 - *"a native build ships before the JavaScript that imports it, never after"* - a property of
+the system rather than a rule somebody has to remember. The alternative policies key it to a version
+string, which here is owned by EAS and auto-incremented, so it moves when nothing native has changed
+and stays still when something has.
+
+**An update is never on the launch path.** `checkAutomatically: "ON_LOAD"` with
+`fallbackToCacheTimeout: 0`: checked at launch, downloaded in the background, applied at the
+**next** launch. The app already holds its first frame on the font gate ([Design
+system](13-design-system.md) rule 4), and a second gate in front of that one, on a request that can
+time out, is a cold start indistinguishable from a hang. There is deliberately no update UI and no
+`reloadAsync` call anywhere in the app.
+
+`eas.json` gives `preview` and `production` a channel each, named for the profile. `development`
+has none: it builds a dev client, which loads its JavaScript from Metro.
+
+**Nothing in `app/` or `src/` imports `expo-updates`, and that is the finished state rather than
+an omission.** The whole of the behaviour is native, configured through `app.json`; the only
+JavaScript API it offers is for the update UI this deliberately does not have. The dependency
+therefore looks unused to anything that counts imports, and removing it would leave an `updates`
+block that reads as configured while no code implements it - which is why `src/app-config.test.ts`
+asserts the dependency is present as well as asserting the configuration.
+
+### 7. An invite link is one https URL, and the app has no link handler
+
+The link a club hands out is `https://clubchatapp.com/join/<token>`, built by `inviteLink` in
+`src/invite-link.ts` and used by the share sheet, the copy control and the QR code alike. It
+replaced `clubchat://join/<token>`, which was nothing at all to a phone without the app installed.
+The app claims that path - `ios.associatedDomains`, plus one auto-verifying Android intent filter
+scoped to `/join/` - and `packages/site-worker` serves the two association files that make the
+claim true. [ADR-0045](../decisions/0045-the-apex-is-a-standalone-worker.md) has the whole shape.
+
+**There is no deep link handler in this app, and adding one would be a defect.** Expo Router takes
+the URL the OS delivers, strips the origin off an `https://` one and the scheme off a custom one,
+and navigates to what is left, so `https://clubchatapp.com/join/x` and `clubchat://join/x` both
+reduce to `join/x` and land on the same screen with no code involved. Claiming the path was the
+whole of the client work. A hand-written listener would be a second handler racing the first.
+
+**The custom scheme keeps working, permanently.** Links already sent sit in conversations and codes
+already printed are taped to walls; neither can be recalled.
+
+`tokenFromScan` matches on the **path** and never on the scheme, because the scanner reads a string
+rather than asking the OS to open it, and that string has four spellings across platforms and build
+types. Anchoring on the scheme works on the founder's phone and fails in development.
+
+Both halves of the link claim fail **silently** when they disagree: a path the app does not claim
+opens a web page instead, and an Android package that does not match the published `assetlinks.json`
+fails verification with nothing logged anywhere. `src/app-config.test.ts` therefore reads `app.json`
+and `eas.json` as data and pins the values the app, the Worker and EAS all have to agree on.

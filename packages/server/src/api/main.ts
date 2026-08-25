@@ -7,6 +7,14 @@
  * a refactor. See SPEC/TECH/00-overview.md.
  */
 
+/*
+ * FIRST, above every other import, and the position is load-bearing.
+ *
+ * This starts the Sentry SDK before `fastify`, `pg` and `ioredis` are loaded, which is the only
+ * moment OpenTelemetry can wrap them. Below any of them and the traces silently lose their
+ * database spans while continuing to look fine. See `instrument.ts`.
+ */
+import '../instrument.ts';
 import { pino } from 'pino';
 import { createAuth } from '../auth.ts';
 import { loadConfig } from '../config.ts';

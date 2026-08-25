@@ -27,6 +27,7 @@ import { Link, Redirect, useRouter } from 'expo-router';
 import { accountApi, ApiError, clubApi } from '../../../../src/api.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { formatDateOfBirth } from '../../../../src/dates.ts';
+import { PRIVACY_URL, TERMS_URL } from '../../../../src/legal.ts';
 import { RemoteImage } from '../../../../src/media-bubble.tsx';
 import { supportMailto } from '../../../../src/support.ts';
 import { pickSquarePhoto, uploadAvatar, UploadError } from '../../../../src/upload.ts';
@@ -247,9 +248,26 @@ export default function ProfileScreen() {
             <View style={styles.card}>
               <LinkRow icon="manage-accounts" label="Edit Profile" href="/profile/edit" />
               <View style={styles.linkDivider} />
-              <LinkRow icon="lock" label="Privacy Policy" href="/legal/privacy" />
+              {/*
+                Both open in the browser. `docs/legal/*.md` is the only copy of either document
+                and the apex site renders them, so the app links out rather than carrying a
+                second rendering of the text that nothing keeps in step. Same mechanism as the
+                support row below, which is the app's existing pattern for an external URL.
+
+                The label says "Terms of Service" and the document is titled the same, which it
+                was not while the screen header said "Terms" and the sign-up line said "Terms".
+              */}
+              <LinkRow
+                icon="lock"
+                label="Privacy Policy"
+                onPress={() => void Linking.openURL(PRIVACY_URL).catch(() => {})}
+              />
               <View style={styles.linkDivider} />
-              <LinkRow icon="description" label="Terms of Service" href="/legal/terms" />
+              <LinkRow
+                icon="description"
+                label="Terms of Service"
+                onPress={() => void Linking.openURL(TERMS_URL).catch(() => {})}
+              />
               <View style={styles.linkDivider} />
               {/*
                 Published contact information, which Apple's guideline 1.2 requires of any app

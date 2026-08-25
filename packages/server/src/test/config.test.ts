@@ -178,3 +178,55 @@ describe('optional variables that arrive empty', () => {
       .toThrow(/MAIL_FROM/);
   });
 });
+
+/**
+ * How much of production's traffic is traced.
+ *
+ * > **This is the variable that did not exist while `monitoring.ts` said `tracesSampleRate: 0`.**
+ * > Tracing was not unconfigured, it was switched off by a constant in the source, so turning it
+ * > on meant editing code, rebuilding an image and redeploying three apps - which is why it stayed
+ * > off for the whole life of the deployment.
+ *
+ * Two properties worth pinning, both about the ways a rate silently becomes zero:
+ *
+ *  1. **Present and empty is the default, not `0`.** `z.coerce.number()` reads `''` as `0`,
+ *     and `''` is what `fly secrets set NAME=` and a bare key in `.env.example` both produce.
+ *     Reading that as "trace nothing" would restore the exact silence this field exists to end,
+ *     while the config looked configured.
+ *  2. **A value that is not a number is refused rather than coerced.** `SENTRY_TRACES_SAMPLE_RATE=off`
+ *     is the obvious thing to type, and `Number('off')` is `NaN`. A boot failure with the field
+ *     named is the honest answer; falling back to a default would hide the typo forever.
+ */
+describe('SENTRY_TRACES_SAMPLE_RATE', () => {
+  it('defaults to a tenth of traffic rather than to nothing', () => {
+    expect(loadConfig(base).SENTRY_TRACES_SAMPLE_RATE).toBe(0.1);
+  });
+
+  it('reads a present-and-empty value as the default, NOT as zero', () => {
+    expect(loadConfig({ ...base, SENTRY_TRACES_SAMPLE_RATE: '' }).SENTRY_TRACES_SAMPLE_RATE).toBe(0.1);
+  });
+
+  it('reads a whitespace-only value as the default, for the same reason', () => {
+    expect(loadConfig({ ...base, SENTRY_TRACES_SAMPLE_RATE: ' \n' }).SENTRY_TRACES_SAMPLE_RATE).toBe(0.1);
+  });
+
+  it('takes an explicit zero, which is how tracing is turned off without a deploy', () => {
+    expect(loadConfig({ ...base, SENTRY_TRACES_SAMPLE_RATE: '0' }).SENTRY_TRACES_SAMPLE_RATE).toBe(0);
+  });
+
+  it('takes a rate a secret store padded with a newline', () => {
+    expect(loadConfig({ ...base, SENTRY_TRACES_SAMPLE_RATE: ' 0.25\n' }).SENTRY_TRACES_SAMPLE_RATE).toBe(0.25);
+  });
+
+  it('refuses a rate above one rather than clamping it', () => {
+    expect(() => loadConfig({ ...base, SENTRY_TRACES_SAMPLE_RATE: '2' })).toThrow(/SENTRY_TRACES_SAMPLE_RATE/);
+  });
+
+  it('refuses a negative rate', () => {
+    expect(() => loadConfig({ ...base, SENTRY_TRACES_SAMPLE_RATE: '-1' })).toThrow(/SENTRY_TRACES_SAMPLE_RATE/);
+  });
+
+  it('refuses something that is not a number rather than reading it as zero', () => {
+    expect(() => loadConfig({ ...base, SENTRY_TRACES_SAMPLE_RATE: 'off' })).toThrow(/SENTRY_TRACES_SAMPLE_RATE/);
+  });
+});

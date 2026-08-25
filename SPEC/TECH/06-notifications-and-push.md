@@ -171,3 +171,59 @@ none of this adds an authorization hop. That is the single fact that makes the w
 writes to it. It suppresses the **push only** - the notification row is still written and the
 unread count still accrues, because mute is not "mark as read" and conflating the two would
 silently mark things read that nobody looked at.
+
+### Mail is the third transport, and it is the only one that can fail silently
+
+Push and the inbox are both in-system: an expo push receipt comes back, a notification row either
+exists or does not, and the worker's own effects are asserted end to end. Mail leaves the building.
+`ResendMailer` posts the message, Resend answers `200` for **accepted for delivery**, and whatever
+happens next happens at somebody else's mail server minutes later.
+
+That gap was open from the day mail was wired up.
+[ADR-0020](../decisions/0020-resend-is-the-mail-provider.md) recorded it as its own follow-up: a
+hard bounce meant a reset link went nowhere and nothing in the product knew. The member is looking
+at a page saying "check your inbox" - the same page everybody sees, because
+[Accounts and profile](../PRD/03-accounts-and-profile.md) rule 14 makes that response identical
+whether or not the address exists - and the only record of the failure is a row in a dashboard
+belonging to the provider.
+
+**`POST /webhooks/resend` closes it.** It is the fourth public route on the api, beside `/health`,
+`/ready` and `/__parity`, and the only one of the four that writes. Three event types are consumed:
+
+| Resend event | Stored as | Reported |
+|---|---|---|
+| `email.bounced`, `bounce.type = Permanent` | `mail_events.kind = 'bounced'` | Yes - the address will never receive anything |
+| `email.bounced`, `Transient` or `Undetermined` | the same row, with `bounce_type` | No - a full mailbox clears on its own |
+| `email.complained` | `kind = 'complained'` | Yes - somebody marked a password reset as spam |
+| `email.failed` | `kind = 'failed'` | Yes - the send never left: our quota, our key, our domain |
+
+Everything else Resend emits - `email.sent`, `email.delivered`, `email.opened` and the rest - is
+acknowledged with a `200` and recorded nowhere. A table of those is a log nobody reads that grows
+with every message, and a non-2xx would make Resend retry it for ten hours.
+
+Four properties are worth carrying into any change here, because each is a way this is built wrong
+without anything looking wrong:
+
+- **The signature is verified over the RAW request body, before anything in it is parsed.** This
+  is the only route in the API that retains raw bytes, through a content-type parser encapsulated
+  in its own plugin scope. Fastify's default parser hands a handler the parsed object, and
+  re-serializing that produces different bytes for the same payload - so a verifier built on
+  `request.body` refuses every genuine delivery, with the correct secret, and reads as a wrong one.
+- **The idempotency key is `(provider_event_id, email)`, not the delivery id alone.** Resend
+  documents at-least-once delivery with retries at 5s, 5m, 30m, 2h, 5h and 10h, and one delivery
+  may name several recipients. Only a row that was actually inserted raises an alarm, which is what
+  stops the retry schedule becoming six copies of one incident.
+- **Nothing reads `mail_events` to decide whether to send.** There is no suppression list, and
+  [ADR-0047](../decisions/0047-bounces-are-recorded-and-reported-never-suppressed.md) records why
+  at length - the short version being that Resend maintains its own, that ours could only diverge
+  from it, and that any suppression we owned could take away the only account-recovery path a
+  member has. This is a record and an alarm, not a gate.
+- **The alarm is the existing monitor**, under `api.mail.bounced`, `api.mail.complained` and
+  `api.mail.failed`, which means it is the same path a 5xx takes ([Stack and hosting](15-stack-and-hosting.md)).
+  The whole point of the feature is that somebody finds out, and a row nobody is told about would
+  be the original defect with a table added to it.
+
+**What is still open** is the retention question `notifications` already has: `mail_events` grows
+without a sweep. It grows at the rate of the product's failures rather than of its traffic, so it
+is a smaller version of the same debt, and it should be swept by whatever eventually sweeps the
+other.

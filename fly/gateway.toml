@@ -37,6 +37,11 @@ primary_region = 'iad'
   SENTRY_DSN = 'https://f4737021a3d55097c56ff4c479b9cdaa@o4511847446609920.ingest.us.sentry.io/4511847456964608'
   SENTRY_ENVIRONMENT = 'production'
 
+  # How much traffic is timed. A tenth, matching the other two files, and for the reasons
+  # fly/api.toml records at length: it is a cost decision, errors are unaffected by it, and it is
+  # changed by editing the line and redeploying the same image rather than by shipping code.
+  SENTRY_TRACES_SAMPLE_RATE = '0.1'
+
   # TRUST_PROXY is deliberately NOT set here, and this is not an oversight to be tidied up.
   # Nothing the gateway serves reads request.ip: no rate limiter, no auth by address, no
   # per-IP anything on /health or /ready. So a forged X-Forwarded-For has nothing to

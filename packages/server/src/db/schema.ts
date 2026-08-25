@@ -2125,3 +2125,82 @@ export const mediaObjects = pgTable(
   ],
 );
 
+// ---------------------------------------------------------------------------
+// Outbound mail events
+// ---------------------------------------------------------------------------
+
+/**
+ * What Resend told us happened to a message after we handed it over.
+ *
+ * > **This table exists because a hard bounce and a delivered message looked identical.**
+ * > ADR-0020 recorded it as its own open follow-up: "Resend has webhooks for both and nothing
+ * > consumes them, so a hard bounce still means a reset link went nowhere and nothing in the
+ * > product knows." A member asks for a password reset, is told to check their inbox, and the only
+ * > record of the failure is a row in somebody else's dashboard.
+ *
+ * Only the three kinds worth acting on are written here (`bounced`, `complained`, `failed`), never
+ * the ordinary lifecycle. A table of `email.delivered` rows is a log nobody reads that grows with
+ * every message sent; see `mail-webhook.ts` for the mapping and ADR-0047 for the reasoning.
+ *
+ * **`email` carries no foreign key to `users`, and that is deliberate rather than an omission.**
+ * Three reasons, any one of which is enough. The address that bounced is frequently one that
+ * belongs to nobody - a member mistyped it at sign-up, which is exactly the case this table exists
+ * to surface. A member may change their address afterwards, and the event is a fact about the
+ * address at the time rather than about whichever account holds it now. And a cascade would delete
+ * the evidence at the moment an account is removed, which is when somebody is most likely to be
+ * asking what happened to it.
+ *
+ * **Nothing reads this table to decide whether to send.** There is no suppression list here and
+ * ADR-0047 records why at length: Resend maintains its own, a second one could only diverge from
+ * it, and ours would be the one able to lock a member out of the only account-recovery path they
+ * have. This is a record and an alarm, not a gate.
+ */
+export const mailEvents = pgTable(
+  'mail_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /**
+     * Resend's own id for this DELIVERY: the `svix-id` header, not anything in the body.
+     *
+     * Resend documents at-least-once delivery and retries on a schedule of 5 seconds, 5 minutes,
+     * 30 minutes, 2 hours, 5 hours and 10 hours, so the same event WILL arrive twice - a 500 from
+     * us, or an acknowledgement that was slow, is enough. Their own guidance is to key on this:
+     * "store processed `svix-id` values and skip any duplicates."
+     */
+    providerEventId: text('provider_event_id').notNull(),
+    /** `bounced` | `complained` | `failed`. Constrained below rather than trusted. */
+    kind: text('kind').notNull(),
+    /** Lower cased at the boundary, because an address is an inbox rather than a string. */
+    email: text('email').notNull(),
+    /**
+     * `Permanent`, `Transient` or `Undetermined` for a bounce; null for everything else.
+     *
+     * The column that decides whether a row is an incident. A permanent bounce means the address
+     * will never receive anything; a transient one is a full mailbox that clears on its own. Kept
+     * as the provider's own spelling rather than folded into a boolean, so a value Resend adds
+     * later arrives as data instead of as a lie.
+     */
+    bounceType: text('bounce_type'),
+    /** The provider's words: a bounce message, or a failure reason such as `reached_daily_quota`. */
+    detail: text('detail'),
+    /** `data.email_id`: which send this is about, so a report ties back to a row in Resend. */
+    providerMessageId: text('provider_message_id'),
+    /** When it happened, from the envelope. Falls back to receipt time, never to null. */
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    /**
+     * The idempotency key, and the reason it is a pair rather than the delivery id alone.
+     *
+     * One delivery can name several recipients (`data.to` is an array), and each of those is its
+     * own row. Keying on `provider_event_id` alone would record the first address and silently
+     * drop the rest; keying on the pair records them all, and a redelivery of the same event
+     * conflicts row for row. The insert is `ON CONFLICT DO NOTHING` against exactly this.
+     */
+    uniqueIndex('mail_events_delivery').on(t.providerEventId, t.email),
+    check('mail_events_kind_valid', sql`kind in ('bounced', 'complained', 'failed')`),
+    /** "What has happened to this address" - the one question anybody asks this table. */
+    index('mail_events_by_email').on(t.email, t.occurredAt.desc()),
+  ],
+);

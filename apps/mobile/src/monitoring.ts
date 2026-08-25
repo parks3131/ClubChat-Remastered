@@ -68,11 +68,36 @@ export function initMonitoring(): void {
      */
     environment: config.sentryEnvironment,
     /*
-     * Errors only. Performance tracing is a separate decision with its own quota cost and its own
-     * privacy questions, and belongs with a performance pass rather than being smuggled in with
-     * crash reporting.
+     * How much is timed, from `config.ts` rather than from a constant here.
+     *
+     * > **This said `tracesSampleRate: 0` with a comment calling performance a separate decision.
+     * > The separate decision was never made**, on either half of the system, so nothing anywhere
+     * > has ever recorded how long anything took in front of a real member.
+     *
+     * A tenth, the same number the three server roles use, because both halves report into one
+     * Sentry organisation and therefore one quota. Errors are unaffected: a crash is always sent.
+     *
+     * **What this will and will not produce today, stated plainly rather than discovered later.**
+     * The SDK's automatic instrumentation attaches HTTP spans to a root span, and the root spans
+     * on a phone come from navigation - which needs `Sentry.reactNavigationIntegration()`
+     * registered against expo-router's navigation container in `app/_layout.tsx`. That is not
+     * wired, so a raised rate will mostly find nothing to sample yet. The rate is configuration
+     * first so that wiring it is one change rather than two, and so the value can be turned down
+     * for the build after this one without touching code.
      */
-    tracesSampleRate: 0,
+    tracesSampleRate: config.sentryTracesSampleRate,
+    /*
+     * Which hosts a `sentry-trace` header is attached to, and it is a short list on purpose.
+     *
+     * The SDK's default on a native build is a regular expression that matches everything, so a
+     * trace header goes on every outgoing request, to anybody. This app also fetches signed media
+     * from `cdn.clubchatapp.com`, and there is no reason for a third party to receive a header
+     * describing our tracing. Pinning it to the API has the
+     * second effect of making the server half of a trace joinable at all: the api's sampler
+     * inherits an incoming decision rather than re-rolling it, so the phone's span and the
+     * server's span end up in one trace instead of two halves of a story.
+     */
+    tracePropagationTargets: [config.apiUrl],
     /*
      * **Off, and this is a privacy decision rather than a default left alone.** Session Replay
      * records the screen, and this app shows private one-to-one conversations. `PRD/16` allows no

@@ -13,6 +13,7 @@
     },
     "preview": {
       "distribution": "internal",
+      "channel": "preview",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api.clubchatapp.com",
         "EXPO_PUBLIC_WS_URL": "wss://ws.clubchatapp.com",
@@ -22,6 +23,7 @@
     },
     "production": {
       "autoIncrement": true,
+      "channel": "production",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api.clubchatapp.com",
         "EXPO_PUBLIC_WS_URL": "wss://ws.clubchatapp.com",

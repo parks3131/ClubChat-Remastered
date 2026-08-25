@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -14,6 +15,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Redirect, router } from 'expo-router';
 import { useSession } from '../src/chat-provider.tsx';
 import { config } from '../src/config.ts';
+import { PRIVACY_URL, TERMS_URL } from '../src/legal.ts';
 import { ARRIVED_FORWARD } from '../src/nav.tsx';
 import { signIn, signUp } from '../src/session.ts';
 import { color, radius, space, type } from '../src/theme.ts';
@@ -169,34 +171,40 @@ export default function SignIn() {
 
         {mode === 'sign-up' && (
           // PRD/03 rule 1: a consent line below the password field. The documents must be
-          // readable both signed out and signed in, which is why this sits here and not
-          // behind the auth gate.
+          // readable both signed out and signed in, which is why they are web pages rather than
+          // screens behind the auth gate.
           //
           // The age is stated here as well as in the Terms, because a declared minimum age is
           // what the store age rating rests on and nobody reads the Terms. Declaring rather
           // than collecting a date of birth is deliberate - see ADR-0026.
           //
           // > **Both documents are reachable from here, and that is a requirement rather than a
-          // > courtesy.** Apple's guideline 1.2 is discharged by the Terms screen's "no
-          // > tolerance" wording, and `legal/terms.tsx` has always said the consent line links
-          // > to it - while this line was plain text for the life of the project, so the only
-          // > stated route to the document somebody is agreeing to did not exist. Found on
-          // > 2026-08-12 by reading the rendered screen rather than the code.
+          // > courtesy.** Apple's guideline 1.2 is discharged by the Terms' "no tolerance"
+          // > wording, and the Terms have always said the consent line links to them - while
+          // > this line was plain text for the life of the project, so the only stated route to
+          // > the document somebody is agreeing to did not exist. Found on 2026-08-12 by
+          // > reading the rendered screen rather than the code.
+          //
+          // **They open in the browser, and the app carries no copy of either text.**
+          // `docs/legal/*.md` is the single source; until 2026-08-25 the app held its own
+          // rendering of both, which meant the only version of the documents that existed
+          // anywhere was the one on the phone. `Linking.openURL` is the app's existing pattern
+          // for an external URL, `.catch` for a device with no browser registered.
           <View style={styles.consent}>
             <Text style={styles.consentText}>
               By creating an account you confirm you are 18 or over, and you agree to the{' '}
               <Text
                 style={styles.consentLink}
-                onPress={() => router.push('/legal/terms')}
+                onPress={() => void Linking.openURL(TERMS_URL).catch(() => {})}
                 accessibilityRole="link"
-                accessibilityLabel="Read the Terms"
+                accessibilityLabel="Read the Terms of Service"
               >
-                Terms
+                Terms of Service
               </Text>{' '}
               and the{' '}
               <Text
                 style={styles.consentLink}
-                onPress={() => router.push('/legal/privacy')}
+                onPress={() => void Linking.openURL(PRIVACY_URL).catch(() => {})}
                 accessibilityRole="link"
                 accessibilityLabel="Read the Privacy Policy"
               >

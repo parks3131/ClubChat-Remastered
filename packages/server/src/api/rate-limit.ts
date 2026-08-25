@@ -61,6 +61,66 @@ export const AUTH_BUCKET: Bucket = { burst: 10, refillPerSec: 0.2 };
 export const PASSWORD_RESET_BUCKET: Bucket = { burst: 3, refillPerSec: 1 / 300 };
 
 /**
+ * Resend's bounce and complaint webhook, against **one constant key**.
+ *
+ * Every other bucket in this file keys on somebody - a user id, an IP, an address - because every
+ * other route has many callers. This one has exactly one legitimate caller, so there is nothing to
+ * key on and a constant is the honest shape.
+ *
+ * **Consumed only AFTER the signature verifies, which is what makes a constant key safe.** Keyed
+ * ahead of verification it would be a denial of the signal rather than a defence: anybody able to
+ * reach the port could empty the bucket with unsigned junk, every genuine delivery would be
+ * refused, and Resend would give up after ten hours of retries. Behind the check, the only thing
+ * that can spend it is Resend.
+ *
+ * 60 in reserve refilling at one a second, which is far above anything this product can produce -
+ * it sends single-digit mails a day - and still bounded, so a bounce storm against a large list
+ * cannot write unboundedly fast. A refusal is safe here in a way it is nowhere else: a 429 makes
+ * Resend retry on its own schedule, so the event is delayed rather than lost.
+ */
+export const MAIL_WEBHOOK_BUCKET: Bucket = { burst: 60, refillPerSec: 1 };
+
+/** The one key `MAIL_WEBHOOK_BUCKET` is counted against. There is one caller, so there is one key. */
+export const MAIL_WEBHOOK_LIMIT_KEY = 'rate:http:webhook:resend';
+
+/**
+ * The public invite preview, per **caller address**, since there is no account to key on.
+ *
+ * `GET /invites/:token/preview` is read by somebody who has just scanned a QR code and does not
+ * have ClubChat, so there is no session, no user id, and nothing about them that is not
+ * self-asserted. `request.ip` is the one identity here that a caller cannot choose - a forwarded
+ * header would be a fresh bucket per request for anybody who wanted one - and it is meaningful
+ * only because `trustProxy` is configured deliberately; see `TRUST_PROXY` in config.ts.
+ *
+ * **This bucket is a ceiling on database work, and it is not what keeps a token secret.** That is
+ * the token's own 32 bytes of CSPRNG: enumerating a 256-bit space is not made infeasible by a
+ * limit, it was already infeasible, and a limit tight enough to matter against guessing would
+ * refuse real visitors for nothing. So the number is set where a lecture hall cannot reach it and
+ * a script pointed at the endpoint still cannot spend the api's afternoon.
+ *
+ * **Per IP is a coarser control here than it looks, and the reason is worth stating.** The
+ * expected caller is the apex Worker (ADR-0045), which calls this endpoint server-side, so every
+ * visitor to the join page arrives from one of Cloudflare's shared egress addresses rather than
+ * from their own. A whole freshers' fair therefore shares one bucket, which is why 120 in reserve
+ * refilling at 5 a second: a club fair is a few hundred scans over an afternoon and this absorbs
+ * that in a minute. The refusal is safe when it does come - the join page renders without the
+ * club's name rather than claiming the invite is dead - but it is still a worse page, so the
+ * generous side is the correct side to err on.
+ */
+export const INVITE_PREVIEW_BUCKET: Bucket = { burst: 120, refillPerSec: 5 };
+
+/**
+ * The key a preview request counts against.
+ *
+ * Namespaced away from `rate:http:all:` for the reason every override is: the caller here is an
+ * address rather than a user, and a shared namespace would put a Cloudflare egress address and a
+ * user id in the same keyspace where a collision is somebody else's allowance.
+ */
+export function invitePreviewLimitKey(ip: string): string {
+  return `rate:http:preview:${ip}`;
+}
+
+/**
  * The key a reset request counts against: a hash of the address, never the address.
  *
  * Two reasons, and the second is the one that matters. Redis is not the system of record for

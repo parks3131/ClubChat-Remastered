@@ -40,6 +40,8 @@ import {
 } from './rate-limit.ts';
 import { readIdentity } from '../domain/account.ts';
 import { registerDevDashboard, type RouteEntry } from '../dev/dashboard.ts';
+import { registerInvitePreview } from './invite-preview.ts';
+import { registerMailWebhook } from './mail-webhook.ts';
 import { beginQueryCount, type QueryCount } from '../dev/queries.ts';
 import { readBody } from '../dev/trace.ts';
 import { registerAccountRoutes } from './routes/account.ts';
@@ -471,6 +473,39 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         version: deps.config.SENTRY_RELEASE ?? 'unknown',
       }),
   );
+
+  /**
+   * Resend's bounce and complaint webhook: the fourth public route, and the only one that writes.
+   *
+   * Here, on the root instance, for the reason the three above are: Resend holds no session and
+   * never will, and the per-user limiter keys on `request.userId`, which a public caller does not
+   * have. What authenticates it is an HMAC over the raw request body rather than a session, and
+   * `api/mail-webhook.ts` holds the whole of that check along with the content-type parser that
+   * keeps those raw bytes intact.
+   *
+   * Registered through a function rather than written out here, unlike `/ready` and `/__parity`,
+   * because it brings a scope, a parser and a handler with it - and `refuseTooMany` is handed over
+   * the way `registerDevDashboard` is handed its `log`, so the one refusal shape this API uses is
+   * not copied into a second file. ADR-0047.
+   */
+  registerMailWebhook(app, { deps, refuseTooMany });
+
+  /**
+   * The public invite preview: the fifth public route, and the only one that reads a club.
+   *
+   * Here, on the root instance, for the reason the four above are: the caller is somebody who has
+   * just scanned a QR code, has never heard of ClubChat, and has no account to hold a session in.
+   * What authorizes the read is the invite token in the path - already a bearer credential that
+   * grants far more than the club's name - rather than anything about who is asking.
+   * `api/invite-preview.ts` holds the whole of that reasoning, and `domain/invite-preview.ts`
+   * enforces the projection in SQL so no handler has to be careful with a row. ADR-0046.
+   *
+   * Registered through a function rather than written out here, like the webhook above and unlike
+   * `/ready` and `/__parity`, because `refuseTooMany` is handed over the same way: it has a bucket
+   * of its own - the per-user limiter cannot serve a route with no user - and the one refusal
+   * shape this API uses is not copied into a second file.
+   */
+  registerInvitePreview(app, { deps, refuseTooMany });
 
   /**
    * Every unhandled failure in a route, in one place.

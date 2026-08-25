@@ -2,12 +2,14 @@
  * Client configuration.
  *
  * `EXPO_PUBLIC_*` variables are inlined into the bundle, so only values that are safe to
- * ship in a client may go here. That is the whole list: two URLs and a Sentry DSN. Any key
- * that bypasses authorization must never appear in a client bundle (AGENTS.md
- * non-negotiable 5).
+ * ship in a client may go here. That is the whole list: two URLs, a Sentry DSN, and two values
+ * that only describe how much this build reports. Any key that bypasses authorization must never
+ * appear in a client bundle (AGENTS.md non-negotiable 5).
  */
 
 import { Platform } from 'react-native';
+import { resolveEndpoint } from './endpoint.ts';
+import { traceSampleRate } from './trace-rate.ts';
 
 /**
  * `localhost` resolves to the device itself on a physical phone, so a real device needs
@@ -16,8 +18,26 @@ import { Platform } from 'react-native';
 const defaultHost = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
 
 export const config = {
-  apiUrl: process.env['EXPO_PUBLIC_API_URL'] ?? `http://${defaultHost}:3000`,
-  wsUrl: process.env['EXPO_PUBLIC_WS_URL'] ?? `ws://${defaultHost}:3001`,
+  /*
+   * Resolved through `endpoint.ts` rather than with `??`, because the two shapes differ exactly
+   * where it matters. `??` treats "nothing set it" as "use the laptop", which is right on a laptop
+   * and is an app that can never reach anything once it is on somebody else's phone. The resolver
+   * keeps the convenience for a development build and makes absence fatal for a release one.
+   */
+  apiUrl: resolveEndpoint({
+    variable: 'EXPO_PUBLIC_API_URL',
+    raw: process.env['EXPO_PUBLIC_API_URL'],
+    protocols: ['http:', 'https:'],
+    developmentFallback: `http://${defaultHost}:3000`,
+    isDevelopment: __DEV__,
+  }),
+  wsUrl: resolveEndpoint({
+    variable: 'EXPO_PUBLIC_WS_URL',
+    raw: process.env['EXPO_PUBLIC_WS_URL'],
+    protocols: ['ws:', 'wss:'],
+    developmentFallback: `ws://${defaultHost}:3001`,
+    isDevelopment: __DEV__,
+  }),
   /**
    * Where a crash on the phone goes.
    *
@@ -51,4 +71,24 @@ export const config = {
    */
   sentryEnvironment:
     process.env['EXPO_PUBLIC_SENTRY_ENVIRONMENT'] ?? (__DEV__ ? 'development' : 'production'),
+  /**
+   * How much of this build's activity is TIMED, as opposed to reported when it breaks.
+   *
+   * A tenth, matching the three server roles, so there is one number to reason about across a
+   * system whose halves share one Sentry organisation and therefore one quota. Errors are
+   * unaffected by it: a crash is always sent.
+   *
+   * **Unlike the server's, this cannot be turned down without shipping a build**, because an
+   * `EXPO_PUBLIC_*` variable is inlined into the JavaScript bundle at build time rather than read
+   * at boot. That is a property of the platform rather than a decision: a phone has no
+   * environment to restart into. The knob is here so the next build can carry a different number
+   * without a code change, which is as close as a client gets.
+   *
+   * Parsed rather than read, because an empty value would otherwise mean zero. See
+   * `trace-rate.ts` - the trap is real and the default is what protects it.
+   */
+  sentryTracesSampleRate: traceSampleRate(
+    process.env['EXPO_PUBLIC_SENTRY_TRACES_SAMPLE_RATE'],
+    0.1,
+  ),
 } as const;

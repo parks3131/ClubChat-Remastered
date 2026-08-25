@@ -71,6 +71,33 @@ primary_region = 'iad'
   SENTRY_DSN = 'https://f4737021a3d55097c56ff4c479b9cdaa@o4511847446609920.ingest.us.sentry.io/4511847456964608'
   SENTRY_ENVIRONMENT = 'production'
 
+  # How much of production's traffic is TIMED, as opposed to reported when it breaks.
+  #
+  # Until 2026-08-25 `monitoring.ts` carried `tracesSampleRate: 0` with a comment saying
+  # performance was a separate decision. The separate decision was never made, so for the whole
+  # life of this deployment a slow request left no record anywhere, and turning that around meant
+  # editing code, rebuilding an image and redeploying three apps.
+  #
+  # A tenth. The number is a COST decision rather than a technical one: at one live club it is a
+  # few hundred traces a day, enough to see a pattern and small enough that nobody thinks about
+  # the bill. 1.0 on a live system is a bill nobody agreed to. Errors are unaffected by this and
+  # are always sent in full - this decides how many TIMINGS are kept, nothing else.
+  #
+  # Turning it down does not need a deploy of new CODE. Edit this line and redeploy the same image
+  # by digest - `fly deploy --config fly/api.toml --image registry.fly.io/clubchat-api@sha256:<d>`,
+  # step 4 of TECH/21 - which rebuilds nothing and restarts the machine with the new value.
+  # `config.ts` reads it once, at boot.
+  #
+  # Setting it to `0` is how tracing is switched off entirely. An EMPTY value is read as the
+  # default rather than as zero, because `fly secrets set NAME=` and a bare key in .env.example
+  # both produce an empty string, and reading that as "trace nothing" would put the old silence
+  # back while the config looked configured.
+  #
+  # /health, /ready and /__parity are never traced whatever this says. Fly polls them every few
+  # seconds for ever and they measure nothing; at any rate above zero they would be almost
+  # everything recorded. See UNTRACED_PATHS in packages/server/src/monitoring.ts.
+  SENTRY_TRACES_SAMPLE_RATE = '0.1'
+
   # `1`, not `true`, and the difference is the whole point. config.ts documents it: Fly's
   # edge proxy is the only ingress and appends the client address to X-Forwarded-For, so a
   # hop count of 1 is exactly right. Left at `false`, request.ip is the proxy's address and
