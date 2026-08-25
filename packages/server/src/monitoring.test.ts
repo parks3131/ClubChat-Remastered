@@ -7,7 +7,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { initMonitoring, redactUrl, sentryInitOptions, silentMonitor } from './monitoring.ts';
+import {
+  initMonitoring,
+  redactQueryString,
+  redactUrl,
+  sentryInitOptions,
+  silentMonitor,
+} from './monitoring.ts';
 import type { Config } from './config.ts';
 
 /** Only the fields `initMonitoring` reads. The rest of `Config` is irrelevant here. */
@@ -234,5 +240,37 @@ describe('redactUrl', () => {
 
   it('does not throw on a value that is not a URL at all', () => {
     expect(redactUrl('not a url')).toBe('not a url');
+  });
+});
+
+/*
+ * A BARE query string, which is the shape two of the sinks actually deliver.
+ *
+ * Found in review after the first fix shipped green. `url.query` (OpenTelemetry) and
+ * `request.query_string` (Sentry's httpIntegration, and it survives `sendDefaultPii: false`) both
+ * carry a query string with NO leading `?`. Handing either to `redactUrl` parses the whole thing
+ * as a path, finds no `?`, and returns the secret verbatim - so the query half of the redactor was
+ * dead code for exactly the sinks it existed for. Every test written for it fed it a URL with a
+ * `?` in it, so all of them passed.
+ */
+describe('redactQueryString', () => {
+  it('redacts a secret-named value with no leading question mark', () => {
+    expect(redactQueryString('token=SECRET123&page=2')).toBe('token=[redacted]&page=2');
+  });
+
+  it('redacts every secret-named key, not just the first', () => {
+    expect(redactQueryString('token=A&key=B&page=2')).toBe('token=[redacted]&key=[redacted]&page=2');
+  });
+
+  it('is case insensitive on the key', () => {
+    expect(redactQueryString('Token=SECRET123')).toBe('Token=[redacted]');
+  });
+
+  it('leaves a query with nothing secret in it alone', () => {
+    expect(redactQueryString('page=2&sort=name')).toBe('page=2&sort=name');
+  });
+
+  it('does not choke on a valueless pair', () => {
+    expect(redactQueryString('flag&token=SECRET123')).toBe('flag&token=[redacted]');
   });
 });

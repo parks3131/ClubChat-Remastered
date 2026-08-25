@@ -641,15 +641,26 @@ describe('the route as an operational surface', () => {
    * nothing - and says so once, because it cannot recover on its own and reporting it per delivery
    * would be the same message forever.
    */
-  it('refuses with 503 when no signing secret is configured, and reports itself once', async () => {
+  /*
+   * CHANGED IN REVIEW, from 503 to 200, and the assertion was asserting the defect.
+   *
+   * Resend retries anything that is not a 2xx at 5s, 5m, 30m, 2h, 5h and 10h. A missing signing
+   * secret is the one condition here that provably CANNOT recover on its own: nothing hands a
+   * running process a secret later. So a 503 bought six redeliveries, an error log each, and the
+   * bounce was lost after ten hours anyway. The alarm is the once-only capture, which is what this
+   * test should have been protecting all along and still does.
+   */
+  it('acknowledges without recording when no signing secret is configured, and reports itself once', async () => {
     const spy = spyMonitor();
     const app = appWith({ RESEND_WEBHOOK_SECRET: undefined }, { monitor: spy.monitor });
     await app.ready();
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const response = await deliver(app, HARD_BOUNCE);
-      expect(response.status).toBe(503);
-      expect(JSON.parse(response.body)).toEqual({ error: 'not_configured' });
+      // 200 so Resend stops retrying a condition that cannot change; `recorded: false` so the
+      // body still says plainly that nothing was written.
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body)).toEqual({ ok: true, recorded: false });
     }
 
     expect(await rows()).toEqual([]);

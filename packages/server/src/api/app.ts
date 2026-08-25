@@ -28,6 +28,7 @@ import { fromNodeHeaders } from 'better-auth/node';
 import { parityFingerprint } from '@clubchat/shared/media-signing';
 import { trustProxyOption } from '../config.ts';
 import { createReadinessCheck } from '../health.ts';
+import { redactUrl } from '../monitoring.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { isSessionUsable } from '../policy/predicates.ts';
 import { isUuid, type AppDeps } from './plumbing.ts';
@@ -178,7 +179,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         kind: 'http',
         id: request.id,
         method: request.method,
-        url: request.url,
+        /*
+         * Redacted, because this buffer is SERVED over the network by the /dev route and this
+         * repo runs two stacks side by side by design. A live invite token in here is a bearer
+         * credential readable by anything that can reach the dev port. Third sink found for the
+         * same credential, after the pino one and the two Sentry ones: the argument for a central
+         * redactor is that a route author cannot be expected to remember each of them, and this
+         * is the sink that argument missed.
+         */
+        url: redactUrl(request.url),
         route: request.routeOptions?.url ?? null,
         status: reply.statusCode,
         ms,
@@ -529,7 +538,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         method: request.method,
         // The route PATTERN, not the URL: `/clubs/:id/polls` groups, `/clubs/<uuid>/polls`
         // makes a distinct issue per club and buries the fact that one route is failing.
-        route: request.routeOptions?.url ?? request.url,
+        route: request.routeOptions?.url ?? redactUrl(request.url),
         userId: request.userId ?? null,
       });
     } else {

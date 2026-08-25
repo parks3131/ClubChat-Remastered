@@ -97,7 +97,10 @@ const PRODUCTION_NAMES = new Set([
 ]);
 
 /** Only `finished`, `skipped` and `cancelled` are terminal. `failed` is retryable, so it is not. */
-const TERMINAL_OPERATION_STATES = new Set(['finished', 'skipped', 'cancelled']);
+// `error` is terminal and was missing, so a genuinely failed restore polled for the full ten
+// minutes and then reported a timeout instead of the failure, at the moment it happened.
+// `failed` stays out on purpose: Neon retries that one.
+const TERMINAL_OPERATION_STATES = new Set(['finished', 'skipped', 'cancelled', 'error']);
 
 const USAGE = `
 Restore drill: restore Neon history onto a NEW branch and prove it came back.

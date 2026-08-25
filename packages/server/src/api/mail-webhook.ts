@@ -119,7 +119,14 @@ export function registerMailWebhook(
               { reason: 'not_configured' },
             );
           }
-          return reply.code(503).send({ error: 'not_configured' });
+          /*
+           * 200, not 503, and this file argues for it two paragraphs up without applying it here.
+           * Resend retries anything that is not a 2xx at 5s, 5m, 30m, 2h, 5h and 10h. A missing
+           * secret CANNOT recover on its own - nothing will hand this process one later - so six
+           * redeliveries buy nothing, take an error log each, and the bounce is lost at the end
+           * regardless. Acknowledge, and let the once-only capture above be the alarm.
+           */
+          return reply.code(200).send({ ok: true, recorded: false });
         }
 
         /*

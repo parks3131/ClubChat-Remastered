@@ -39,8 +39,17 @@
 import { loadConfig } from './config.ts';
 import { startSentry } from './monitoring.ts';
 
+/*
+ * NARROW, and the narrowness is the point. An earlier version wrapped `startSentry(loadConfig())`
+ * together, on the reasoning that the only failure reaching the catch is `loadConfig` refusing the
+ * environment. That was wrong: a throw out of `Sentry.init` - a malformed DSN, an integration
+ * constructor, an incompatible SDK bump - landed in the same catch and was discarded, and the
+ * process then booted with no client while `capture` returned without throwing. Telemetry off,
+ * silently, which is the exact failure the rest of this module exists to prevent.
+ */
+let bootConfig;
 try {
-  startSentry(loadConfig());
+  bootConfig = loadConfig();
 } catch {
   /*
    * Deliberately silent, and this is the one place in this package where a bare catch is right.
@@ -51,3 +60,9 @@ try {
    * put a telemetry file's stack trace above the readable one.
    */
 }
+
+/*
+ * Outside the catch. If the SDK itself refuses to start, that throws here and takes the process
+ * with it, which is correct: a role that cannot report is a role nobody will hear from.
+ */
+if (bootConfig !== undefined) startSentry(bootConfig);

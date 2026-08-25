@@ -62,6 +62,6 @@ export function inviteLink(token: string): string {
  * refused rather than silently yielding a token with the extra glued on.
  */
 export function tokenFromScan(raw: string): string | null {
-  const match = /\/(?:--\/)?join\/([A-Za-z0-9_-]+)\/?$/.exec(raw.trim());
+  const match = /\/(?:--\/)?join\/([A-Za-z0-9_-]{16,128})\/?$/.exec(raw.trim());
   return match?.[1] ?? null;
 }

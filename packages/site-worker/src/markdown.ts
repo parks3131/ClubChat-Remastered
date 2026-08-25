@@ -55,6 +55,8 @@ import { escapeHtml, safeHref } from './html.ts';
  * sentinels, and a legal document about data handling is exactly the kind of document that might.
  */
 const CODE_PLACEHOLDER = '\u0000';
+/** The same trick for a link's opening tag. See `inline`. */
+const LINK_PLACEHOLDER = '\u0001';
 
 const HEADING = /^(#{1,6})\s+(.*)$/;
 const HORIZONTAL_RULE = /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/;
@@ -91,22 +93,45 @@ function inline(escaped: string): string {
     return CODE_PLACEHOLDER;
   });
 
-  const formatted = withPlaceholders
-    // Links before emphasis, so `[**text**](url)` puts the emphasis inside the anchor rather than
-    // leaving a stray `<strong>` wrapped around half of it.
-    .replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (match, text: string, url: string) => {
+  /*
+   * The OPENING TAG is lifted out, exactly like a code span, and for the same reason.
+   *
+   * An earlier version ran the emphasis passes straight over the anchor this one emits, and those
+   * passes have no idea what a tag boundary is: `[x](https://e.com/_foo_)` came out as
+   * `<a href="https://e.com/<em>foo</em>">x</a>`. Not an injection - the attribute is double
+   * quoted and `"` is already escaped - but a dead link, in the two documents sign-up points at.
+   * Only the tag is stashed, never the link TEXT, so `[**text**](url)` still emphasises properly
+   * inside the anchor.
+   */
+  const openTags: string[] = [];
+  const withLinks = withPlaceholders.replace(
+    /\[([^\]]*)\]\(([^)\s]+)\)/g,
+    (_match, text: string, url: string) => {
       const href = safeHref(url);
       // A link this renderer will not vouch for keeps its text and loses its destination. Dropping
       // the whole thing would silently remove a sentence from a legal document; keeping the href
       // would be the vulnerability. Showing the words without the link is the honest third option.
-      return href === null ? text : `<a href="${href}">${text}</a>`;
-    })
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(?<![\w*])\*([^*\n]+)\*(?![\w*])/g, '<em>$1</em>')
-    .replace(/(?<![\w_])_([^_\n]+)_(?![\w_])/g, '<em>$1</em>');
+      if (href === null) return text;
+      openTags.push(`<a href="${href}">`);
+      return `${LINK_PLACEHOLDER}${text}</a>`;
+    },
+  );
 
+  const formatted = withLinks
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    /*
+     * `(?!\s)` and `(?<!\s)` are CommonMark's left- and right-flanking rules, and without them
+     * ordinary prose is silently italicised: `5 * 3 * 2` rendered as `5 <em> 3 </em> 2`. The
+     * surrounding lookarounds only guarded the character OUTSIDE each delimiter, never the one
+     * inside it.
+     */
+    .replace(/(?<![\w*])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\w*])/g, '<em>$1</em>')
+    .replace(/(?<![\w_])_(?!\s)([^_\n]+?)(?<!\s)_(?![\w_])/g, '<em>$1</em>');
+
+  let linkIndex = 0;
+  const withTags = formatted.replace(/\u0001/g, () => openTags[linkIndex++] ?? '');
   let index = 0;
-  return formatted.replace(/\u0000/g, () => codeSpans[index++] ?? '');
+  return withTags.replace(/\u0000/g, () => codeSpans[index++] ?? '');
 }
 
 /** One table row's cells, from `| a | b |` or from `a | b`. */

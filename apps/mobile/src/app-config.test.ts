@@ -84,8 +84,22 @@ describe('Android app links', () => {
     expect(httpsFilters).toHaveLength(1);
   });
 
-  it('auto-verifies, without which the OS never claims the link at all', () => {
-    expect(httpsFilters[0]?.autoVerify).toBe(true);
+  /*
+   * CHANGED IN REVIEW. This asserted `autoVerify: true`, which sounds right and could only fail.
+   *
+   * `autoVerify` makes Android fetch `/.well-known/assetlinks.json` on install and check it for
+   * this app's signing fingerprint. `packages/site-worker/src/associations.ts` serves `[]` while
+   * `ANDROID_CERT_FINGERPRINTS` is empty, and it is empty, because there is no Android build and
+   * no signing key to take a fingerprint from. Verification against an empty statement list does
+   * not fail open, it fails: the OS marks the app unverified for the host and the link opens the
+   * browser forever. Claiming a verification that cannot pass is worse than not claiming one, so
+   * this stays off until there is a fingerprint to put behind it.
+   *
+   * The iOS half is complete and unaffected: it is asserted in `associations.test.ts` against a
+   * real team id.
+   */
+  it('does not claim auto-verification while no signing fingerprint exists to back it', () => {
+    expect(httpsFilters[0]?.autoVerify).toBeUndefined();
   });
 
   it('is a browsable VIEW filter, which is what a tapped link delivers', () => {

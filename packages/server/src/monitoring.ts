@@ -131,6 +131,29 @@ const SECRET_QUERY_KEYS = new Set(['token', 'secret', 'key', 'code', 'password',
 const REDACTED = '[redacted]';
 
 /**
+ * A bare query string with any credential-named value replaced. No leading `?`.
+ *
+ * Separate from `redactUrl` because the two receive different shapes and one of them has no `?`
+ * to find. OpenTelemetry's `url.query` attribute is the query string WITHOUT the question mark,
+ * and Sentry's `request.query_string` is the same - so passing either to `redactUrl` parses the
+ * whole thing as a PATH, finds no `?`, and returns the secret untouched. That was a real hole:
+ * `redactUrl('token=SECRET&x=1')` returned it verbatim, so the query half of this redactor was
+ * dead code for exactly the two sinks it was written for. Found in review, not by the tests,
+ * because every test fed it a URL with a `?` in it.
+ */
+export function redactQueryString(query: string): string {
+  return query
+    .split('&')
+    .map((pair) => {
+      const eq = pair.indexOf('=');
+      if (eq === -1) return pair;
+      const key = pair.slice(0, eq);
+      return SECRET_QUERY_KEYS.has(key.toLowerCase()) ? `${key}=${REDACTED}` : pair;
+    })
+    .join('&');
+}
+
+/**
  * The same URL with any credential in it replaced, or the input unchanged when there is none.
  *
  * Parsed by splitting rather than with `new URL`, because most of what arrives here is not a whole
@@ -154,14 +177,8 @@ export function redactUrl(value: string): string {
     }
   }
 
-  const redactedQuery = query.join('?').split('&').map((pair) => {
-    const eq = pair.indexOf('=');
-    if (eq === -1) return pair;
-    const key = pair.slice(0, eq);
-    return SECRET_QUERY_KEYS.has(key.toLowerCase()) ? `${key}=${REDACTED}` : pair;
-  });
-
-  const rebuilt = segments.join('/') + (query.length > 0 ? `?${redactedQuery.join('&')}` : '');
+  const rebuilt =
+    segments.join('/') + (query.length > 0 ? `?${redactQueryString(query.join('?'))}` : '');
   return fragment.length > 0 ? `${rebuilt}#${fragment.join('#')}` : rebuilt;
 }
 
@@ -170,13 +187,20 @@ export function redactUrl(value: string): string {
  * new attribute is a visible addition here instead of something a wildcard quietly did or did not
  * catch.
  */
-const URL_ATTRIBUTES = ['url.full', 'url.path', 'url.query', 'http.url', 'http.target'];
+const URL_ATTRIBUTES = ['url.full', 'url.path', 'http.url', 'http.target'];
+
+/* Carries a query string with no `?`, so it needs `redactQueryString` and not `redactUrl`. */
+const QUERY_ATTRIBUTES = ['url.query'];
 
 function redactAttributes(data: Record<string, unknown> | undefined): void {
   if (data === undefined) return;
   for (const key of URL_ATTRIBUTES) {
     const current = data[key];
     if (typeof current === 'string') data[key] = redactUrl(current);
+  }
+  for (const key of QUERY_ATTRIBUTES) {
+    const current = data[key];
+    if (typeof current === 'string') data[key] = redactQueryString(current);
   }
 }
 
@@ -190,10 +214,15 @@ function redactAttributes(data: Record<string, unknown> | undefined): void {
  * It redacts and returns the event. It never returns `null`: dropping the report would take the
  * 5xx with it, and losing the error is a worse outcome than the URL that made it interesting.
  */
-function redactEvent<T extends { request?: { url?: string }; contexts?: Record<string, unknown>; spans?: unknown[]; breadcrumbs?: unknown[] }>(
-  event: T,
-): T {
+function redactEvent<T extends Sentry.Event>(event: T): T {
   if (typeof event.request?.url === 'string') event.request.url = redactUrl(event.request.url);
+  /*
+   * Populated by the SDK's own httpIntegration, and it SURVIVES `sendDefaultPii: false`, so it is
+   * not covered by turning PII off. Another sink that stayed open behind the one that was closed.
+   */
+  if (typeof event.request?.query_string === 'string') {
+    event.request.query_string = redactQueryString(event.request.query_string);
+  }
 
   const trace = event.contexts?.['trace'] as { data?: Record<string, unknown> } | undefined;
   redactAttributes(trace?.data);
