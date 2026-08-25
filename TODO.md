@@ -43,12 +43,13 @@ is "what is broken".
       phone on the channel failing to launch once. Run `eas env:set --environment production` for
       the three `EXPO_PUBLIC_*` values first. `ADR-0048` documents the publish command.
 
-- [ ] **Nothing built on 2026-08-25 has been proved in production, and the monitoring item is the
-      one that reads as done when it is not.** Both drills exist and both have been run end to end
-      locally, so the code path is proved and the LAST HOP IS NOT: no deliberate 5xx and no parked
-      outbox event has ever reached a human. Firing them needs a deploy, and it also needs somebody
-      to confirm in Sentry that an alert rule on `clubchat-server` actually routes to an inbox.
-      Without that rule the drill lands in Sentry, reaches nobody, and looks like it passed.
+- [ ] **A deliberately parked outbox event has still never reached a human.** The 5xx half of this
+      is DONE and proved on 2026-08-25: a real error raised inside the production api reached
+      Sentry, matched the `production` alert rule, and arrived on the founder's phone by itself.
+      Issue id `021d94c07bb3425e8e0855d42390de21`. The outbox half needs
+      `scripts/drills/outbox-park.mjs` run against production, and note the alert rule fires on
+      "a new issue is created" - a repeat of an existing drill message adds an event to the
+      existing issue and sends no mail, which reads as a failure and is not one.
 
 - [ ] **`clubchatapp.com` answers 522 and the app already links to it.** `packages/site-worker` is
       built, tested and never deployed. The mobile app deleted its in-app legal screens, so Privacy
