@@ -20,7 +20,9 @@ server, not in the database.
 | Why a decision was made, and what was rejected | [`decisions/`](decisions/) |
 | To add a feature, a migration, or a resource | [`templates/`](templates/) |
 | How to work in this repo | [`../AGENTS.md`](../AGENTS.md) |
-| How we got here, bug by bug | [`../HISTORY.md`](../HISTORY.md) |
+| Every bug that reached a running app, one row each | [`../BUGS.md`](../BUGS.md) |
+| One of those bugs in full, and what went wrong fixing it | [`../bugs/`](../bugs/) |
+| How we got here, milestone by milestone | [`../HISTORY.md`](../HISTORY.md) |
 
 **Start here:** [PRD/00-overview.md](PRD/00-overview.md) →
 [TECH/19-system-synthesis.md](TECH/19-system-synthesis.md) (the whole system in one read, pointing

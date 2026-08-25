@@ -53,8 +53,14 @@ field and why one should not be added back.*
    > plainly.** A place was the required field and the headline until then; the form does not ask
    > for one now, and the name took its place, because with no place nothing else identifies a
    > meetup. The map link is what answers "where" for a phone, and the location notes answer it
-   > for a person once they are there. **Meetups authored before that date keep their place and
-   > still show it** - the column was not destroyed to tidy a form.
+   > for a person once they are there.
+
+   > **The old place is gone entirely as of 2026-08-25**
+   > ([ADR-0049](../decisions/0049-a-meetup-says-where-with-a-link-and-nothing-else.md)). It was
+   > kept for ten days after the form stopped asking, on the reasoning that removing a field from
+   > a form is no reason to destroy what people already entered. What it actually cost was a nudge
+   > that told a whole club **"18:00 at null"**, because the notification still read the column
+   > nobody was filling in. A field the form does not collect is a field the row does not have.
 
    > **The name and the last two arrived 2026-08-15** ([ADR-0037](../decisions/0037-a-meetup-carries-a-name-and-a-pasted-map-link.md)).
    > The name is what lets this feature belong to a club that is not a running club, which is the

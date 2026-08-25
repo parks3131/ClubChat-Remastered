@@ -41,29 +41,50 @@ without being restated. Section 5 is the repo-specific part.
    was never preceded by a reproduction is a guess. Once fixed, re-run the same reproduction
    to prove it.
 
+5. **Log it in two places, in the same change.** Any bug that reached a running app - the phone,
+   the deployed API, the web build - gets:
+
+   - **A row in [`BUGS.md`](BUGS.md).** Three columns: what broke, what fixed it, and **what went
+     wrong while fixing it**. A sentence or two each, ending in a link to the detail file. This
+     file is an index, so keep it short enough to read whole.
+   - **A file in [`bugs/`](bugs/)**, named `YYYY-MM-DD-short-slug.md`. One bug per file, so the
+     index never grows into another `HISTORY.md` and nobody has to read 9,000 lines to find one
+     incident.
+
+   **The third column is the one worth writing and the one everybody skips.** A wrong first
+   diagnosis, a test that should have caught it and did not, a second bug found on the way, a file
+   that had to change for reasons unrelated to the fix, a mistake made on the shared machine.
+   Columns one and two can be reconstructed from the commit later; column three cannot be
+   recovered by anyone once the session ends. Write the wrong turns down, including your own.
+
+   Not for a bug caught by a test before it shipped - that is just work. This is for the ones a
+   person hit. A lesson that applies beyond the one bug is **promoted** into the relevant `TECH/`
+   doc or an ADR, because `bugs/` is exactly where somebody working on an unrelated feature will
+   never look.
+
 ### Verifying
 
-5. **Be picky about the UI. Pixel perfection is the standard.** When testing end to end,
+6. **Be picky about the UI. Pixel perfection is the standard.** When testing end to end,
    treat anything that looks off as a defect worth fixing, including things unrelated to the
    current task: misaligned rows, inconsistent spacing, a header that jumps, a colour that
    does not match the token, a control a few pixels from where it belongs. Fix it along the
    way rather than filing it.
-6. **Hold engineering hygiene to the same bar.** A failing test, a flaky test, or a type error
+7. **Hold engineering hygiene to the same bar.** A failing test, a flaky test, or a type error
    gets fixed when you see it, whether or not you caused it. Never work around a flake by
    re-running until it passes, and never leave the suite in a state where a red result is
    normal.
 
 ### Reporting
 
-7. **Report outcomes faithfully.** If tests fail, say so and show the output. If a step was
+8. **Report outcomes faithfully.** If tests fail, say so and show the output. If a step was
    skipped or a part of the scope was left out, say that explicitly rather than letting a
    summary imply completeness. When something is done and verified, say so plainly without
    hedging.
-8. **Never claim something works without having run it.** "Should work" is not a result.
+9. **Never claim something works without having run it.** "Should work" is not a result.
 
 ### Asking
 
-9. **A question to the founder is a multiple choice with real trade-offs, not an open one.**
+10. **A question to the founder is a multiple choice with real trade-offs, not an open one.**
    Restate what you understood back to him first, name the options, and say what each one costs
    - an open question hands the work of framing the decision back to the person who asked for
    the work. Recommend one and say why. Reserve it for decisions that are genuinely his: two
@@ -73,7 +94,7 @@ without being restated. Section 5 is the repo-specific part.
 
 ### Re-entering
 
-10. **Write every user-facing message for cold re-entry.** The founder is juggling several
+11. **Write every user-facing message for cold re-entry.** The founder is juggling several
     projects, each with several concurrent sessions, and has usually lost the thread by the time
     he comes back to any one of them. Every message you write is a cold start for its reader:
     assume he remembers nothing from the scrollback.
@@ -84,7 +105,7 @@ without being restated. Section 5 is the repo-specific part.
       earlier fix" or "option B from before". Restate the thing in place, every time.
     - **Self-contained questions.** A question must carry everything needed to answer it: the
       background, the options, the trade-offs, and your recommendation. Never require scrolling
-      back. This is instruction 9 with the context included rather than assumed.
+      back. This is instruction 10 with the context included rather than assumed.
     - **One question at a time.** When several questions or next steps are open at once, say so up
       front ("three decisions are waiting, here is the first"), then present only the first and
       wait for the answer before raising the next. Never dump them all at once; it is too much
@@ -97,7 +118,7 @@ without being restated. Section 5 is the repo-specific part.
 
 ### Testing
 
-11. **Failing test first, then implement, then verify.** Write the test that states the behaviour
+12. **Failing test first, then implement, then verify.** Write the test that states the behaviour
     you want and watch it FAIL, implement the least that turns it green, then run the full suite
     and the type check. A test written after the code and passing on its first run has proved
     nothing: it has never been seen to fail, so it may be asserting something that was already
@@ -125,12 +146,12 @@ without being restated. Section 5 is the repo-specific part.
    not fixtures.
 4. **Type check and the full test suite must pass before any change is "done."** No
    exceptions, no "I'll fix it in the next commit."
-5. **No secrets in the repo.** Only keys that are safe to ship in a client. Any key that
+6. **No secrets in the repo.** Only keys that are safe to ship in a client. Any key that
    bypasses authorization must never appear in code, docs, logs, or a commit message.
-6. **Every authorization change is proved, not reasoned about.** Attempt the forbidden action
+7. **Every authorization change is proved, not reasoned about.** Attempt the forbidden action
    as the unprivileged actor and watch it be rejected. Reading the rule and concluding it
    looks right is not verification.
-7. **Never run a git command that acts on the whole working tree.** `git add -A`, `git add .`,
+8. **Never run a git command that acts on the whole working tree.** `git add -A`, `git add .`,
    `git commit -a`, `git stash`, `git reset --hard`, `git checkout -- .`, `git clean`,
    `git switch`. Somebody else's unfinished work is usually in this directory, and every one of
    these either destroys it or takes it into your commit without saying so. Name your paths.
@@ -171,15 +192,15 @@ Order matters. Each step catches a class the previous one cannot.
 
 1. **Type check.** Strict mode. A hand-maintained type can silently degrade rather than error,
    so a type failure here is often a docs bug rather than a code bug.
-2. **Test suite.** Zero failures, zero flakes. See standing instruction 6.
+2. **Test suite.** Zero failures, zero flakes. See standing instruction 7.
 3. **Live smoke test in the running app.** This catches what code review does not.
 4. **For anything touching navigation, test direct URL entry and page refresh**, not just
    clicking through. A back control that only renders when history exists will never surface
    any other way.
-5. **For anything destructive, confirm the underlying data actually changed.** A confirmation
+6. **For anything destructive, confirm the underlying data actually changed.** A confirmation
    dialog can report success, log nothing, and do nothing, particularly where a platform
    stubs out the dialog API.
-6. **For anything cross-platform, verify on each platform separately.** A brand-new
+7. **For anything cross-platform, verify on each platform separately.** A brand-new
    cross-platform API working on one OS is not evidence it works on the other. Prefer the
    older, documented path for anything on a hot path.
 
@@ -193,7 +214,7 @@ Order matters. Each step catches a class the previous one cannot.
 3. **If a decision was architectural and non-obvious, write an ADR**, with the rejected
    alternative recorded.
 4. **Commit only when asked.** No agent co-author line.
-5. **Branch and review policy: direct to main from the founder's own tree, a branch from
+6. **Branch and review policy: direct to main from the founder's own tree, a branch from
    anywhere else.** Recorded from observed practice rather than chosen freshly - the whole
    history is on `main`, and it stayed sound while one agent worked at a time. From 2026-08-15
    several run at once, so an agent with a worktree of its own commits to its branch and pushes
@@ -303,26 +324,26 @@ in this section is chosen to convert the silent case into the loud one.
    recognise is staged, stop and say so rather than unstaging it - it may belong to a commit
    somebody else is halfway through making.
 
-5. **Commit every green slice immediately.** The exposure is uncommitted work sitting in a shared
+6. **Commit every green slice immediately.** The exposure is uncommitted work sitting in a shared
    directory, and it grows with every minute. In your own worktree it is safe indefinitely.
 
-6. **Numbers are claimed, not discovered.** Migration numbers and the failure-mode list in 5.3
+7. **Numbers are claimed, not discovered.** Migration numbers and the failure-mode list in 5.3
    are both sequential, and two agents appending at once produce a duplicate rather than a
    conflict - which nothing will catch. Say which number you are taking before you take it, and
    re-read the highest one immediately before you write. `0031` was claimed by one agent while
    another was checking for exactly that.
 
-7. **Pushing:** `git fetch origin && git merge --ff-only origin/main` from a shared tree, or a
+8. **Pushing:** `git fetch origin && git merge --ff-only origin/main` from a shared tree, or a
    rebase from your own worktree where nobody else's work is at risk. If either refuses, stop and
    report it. Never force, and never rebase or amend a commit that has been pushed.
 
-8. **A syntax error in a shared file takes down somebody else's server.** Everything runs under
+9. **A syntax error in a shared file takes down somebody else's server.** Everything runs under
    `node --watch`, so a half-saved file restarts the founder's API into a crash - a stray backtick
    inside a `sql` template did exactly that on 2026-08-15. Metro is the same hazard pointed at the
    phone: an unfinished save is a red screen in his hand. Write imports before usage, and prefer
    one whole-file write to a sequence of partial ones.
 
-9. **A builder never drives its own verification.** The agent that just wrote a feature is carrying
+10. **A builder never drives its own verification.** The agent that just wrote a feature is carrying
    the whole transcript that produced it, routinely 150k to 200k tokens. Verification is the
    opposite shape of work: many turns of watching a run, answering a prompt, and applying a small
    fix. Every one of those turns resends the builder's entire context, so a park, decide and resume
@@ -357,7 +378,9 @@ in this section is chosen to convert the silent case into the loud one.
 | [`SPEC/TECH/`](SPEC/TECH/) | How it is built, and what must not break | Product justification (link to the PRD instead) |
 | [`SPEC/DESIGN/`](SPEC/DESIGN/) | What a surface looks like, and why | Any measurement the code owns - record the **relationship**, not the value |
 | [`SPEC/decisions/`](SPEC/decisions/) | Why we chose this over the alternative | Implementation detail that will drift |
-| [`HISTORY.md`](HISTORY.md) | How we got here, bug by bug | Anything needed to work today |
+| [`BUGS.md`](BUGS.md) | Every bug that reached a running app, one row each | Narrative - it is an index and must stay readable whole in under a minute |
+| [`bugs/`](bugs/) | One bug, in full: what was seen, what it was, what went wrong while fixing | Anything a second bug also needs - that belongs in a TECH doc or an ADR |
+| [`HISTORY.md`](HISTORY.md) | How we got here, milestone by milestone | Individual bug write-ups - those go in `bugs/` |
 | `AGENTS.md` (this file) | How to work | Anything specific to one feature |
 
 **A design spec is per *surface*, not per screen** - a reusable piece of interface with its own
@@ -550,7 +573,7 @@ that records how to recognise the class._
    **Rule: state `rootDir` and `types` explicitly in every package's tsconfig.** Also: `baseUrl`
    is deprecated and `moduleResolution: node` is gone - do not reintroduce either.
 
-5. **Vitest and Node accept different TypeScript, so a green suite is not evidence the server
+6. **Vitest and Node accept different TypeScript, so a green suite is not evidence the server
    boots.** Symptom: every test passed, typecheck passed, and all three server processes
    died at startup with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`. Root cause: a **parameter
    property** (`constructor(readonly x: T)`). Vitest transforms with esbuild, which supports
@@ -559,7 +582,7 @@ that records how to recognise the class._
    `npm run check:runtime` imports every module the way production does.** That check exists
    precisely because no other gate in the pipeline can see this class.
 
-6. **An unbound global passed around as a method fails only in a browser.** Symptom: sync
+7. **An unbound global passed around as a method fails only in a browser.** Symptom: sync
    silently failed on web with "Failed to execute 'fetch' on 'Window': Illegal invocation",
    while the test suite and the whole exit drill passed. Root cause: a getter returning the
    bare global `fetch`, then called as `this.fetch(...)`, which invokes it with `this` set to
@@ -569,7 +592,7 @@ that records how to recognise the class._
    doubly so because the caller logs and continues on the principle that realtime is an
    enhancement.
 
-7. **`db.execute` does not apply Drizzle's column type coercion.** Symptom:
+8. **`db.execute` does not apply Drizzle's column type coercion.** Symptom:
    `row.created_at.toISOString is not a function`, from code that typechecked cleanly. Root
    cause: a typed `select()` hands back a `Date` for a timestamptz, but raw `execute()`
    hands back the driver's value, which is a **string**. The hand-written row type said
@@ -579,7 +602,7 @@ that records how to recognise the class._
    is why section 2.3 puts "a type failure here is often a docs bug" first: the type passing
    proves only that you and the compiler agree, not that either of you is right.
 
-8. **A bundle-time resolution failure cannot be caught by a runtime `try`/`catch`.** Symptom:
+9. **A bundle-time resolution failure cannot be caught by a runtime `try`/`catch`.** Symptom:
    the web app hung forever on a spinner after sign-up. Root cause: `expo-sqlite`'s web build
    imports a `.wasm` binary that Metro does not resolve by default, so the *whole bundle*
    failed - and the graceful in-memory fallback inside `openMessageStore` never ran, because
@@ -598,7 +621,7 @@ that records how to recognise the class._
    never at the top of the file.** How to recognise the class: the package is in `package.json`,
    the import resolves, typecheck is clean, and the app renders nothing at all.
 
-9. **A hand-copied SQL predicate does not diverge loudly. It diverges silently, and every copy
+10. **A hand-copied SQL predicate does not diverge loudly. It diverges silently, and every copy
    stays individually correct.** Symptom: none, for a whole phase. Race chat existed, had
    messages in it, and was invisible in the channel list, the unread counts, the badge and the
    notification audience - because "which channels can this user reach" had been written out four
@@ -608,7 +631,7 @@ that records how to recognise the class._
    ships, and the question "what else asks this same question?" has more than one answer. Grep for
    the join, not for the feature - the copies will not mention the feature they are missing.
 
-10. **A predicate exported as an alias of another is invisible to any audit that counts
+11. **A predicate exported as an alias of another is invisible to any audit that counts
     predicates.** Symptom: none yet - caught while adding a fourth channel scope, one step before
     it would have silently removed a documented capability. `canPostInChannel` was
     `isChannelMember` and `canPinInChannel` was `isChannelAdmin`, so a scope where posting and
@@ -618,7 +641,7 @@ that records how to recognise the class._
     body is one word.** An alias is a claim that two things will never diverge, and the cost of
     being wrong is a permission that silently changes for a scope nobody re-read.
 
-11. **A subsystem can be complete on both sides and still be unreachable, because nothing joins
+12. **A subsystem can be complete on both sides and still be unreachable, because nothing joins
     them.** Symptom: the media pipeline passed every server test - presigned upload, size
     re-verification, thumbnail derivation, an authorization hop proved four ways - and no photo
     could be sent or displayed by the app. Two joins were missing: the message envelope never
@@ -1122,7 +1145,7 @@ that records how to recognise the class._
     asking for zero and sending nothing are indistinguishable there - and `pg` was in fact sending
     nothing, because it writes the parameter behind `if (params.statement_timeout)` and `0` is
     falsy. That assertion could never fail. **Rule: an assertion whose expected value equals the
-    system's default proves nothing, and instruction 11's "watch it fail" is what catches it.**
+    system's default proves nothing, and instruction 12's "watch it fail" is what catches it.**
     How to recognise the class: the test asserts an absence, a zero, an empty list or a default,
     and the code path that would produce it anyway has never been disabled to check. Found on
     2026-08-21 on the first ever connection to production infrastructure, which is exactly the

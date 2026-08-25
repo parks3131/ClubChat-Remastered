@@ -315,30 +315,30 @@ calendar_events       id, club_id, type, title, starts_at, ends_at, location, ma
                       -- map_url is a pasted Google or Apple Maps link, validated by
                       -- isMapLink before it is stored, because a stored URL becomes a
                       -- Directions button that opens it. Deliberately NO map_lat /
-                      -- map_lng: those exist on meetups for a hand-placed pin and
-                      -- nothing places one on an event, so a column that could only
-                      -- ever be null is absent rather than reserved.
-meetups               id, club_id, meetup_date, meetup_time, title, location,
-                      location_notes, description, map_url, map_lat, map_lng,
+                      -- map_lng - and none on meetups either since ADR-0049, which
+                      -- removed the pair for the same reason this table never had one:
+                      -- a column that could only ever be null is absent rather than
+                      -- reserved.
+meetups               id, club_id, meetup_date, meetup_time, title,
+                      location_notes, description, map_url,
                       created_by, updated_by, created_at
                       INDEX (club_id, meetup_date, meetup_time)
-                      CHECK ((map_lat IS NULL) = (map_lng IS NULL))
-                      CHECK (map_lat IS NULL OR (map_lat BETWEEN -90 AND 90
-                                             AND map_lng BETWEEN -180 AND 180))
                       -- Was routine_workouts, whose CHECK listed ten sports. The CHECK
                       -- is DELETED, not replaced: a meetup has no type, category or
                       -- kind of any sort (ADR-0029), and the free-text description is
                       -- the only place what the club is doing is ever recorded. A
                       -- reader who assumes the missing column is an oversight should
                       -- read that ADR before adding one back.
-                      -- title, meetup_date and meetup_time are NOT NULL, and location
-                      -- is NOT. That is the reverse of how it shipped: the place was
-                      -- the required field and the headline until 2026-08-15, when
-                      -- ADR-0037 gave a meetup a name and the form stopped collecting
-                      -- a place at all. The migration backfilled title from location,
-                      -- which is exactly what the headline used to be, and the column
-                      -- stays because the meetups already holding real text in it
-                      -- should still say where the club met.
+                      -- title, meetup_date and meetup_time are NOT NULL. There is NO
+                      -- location column, and that is the reverse of how it shipped:
+                      -- the place was the required field and the headline until
+                      -- 2026-08-15, when ADR-0037 gave a meetup a name and the form
+                      -- stopped collecting a place. The migration backfilled title
+                      -- from location. The column was then kept, empty and unread, for
+                      -- ten days - during which the nudge notification still read it
+                      -- and pushed the literal word "null" to a club. ADR-0049 removed
+                      -- it. A field the form does not collect is a field the row does
+                      -- not have.
                       -- The name is what lets this feature belong to a club that is
                       -- not a running club - "morning book reading", "swim practice
                       -- night" - which is ADR-0029's generalisation reached from the
@@ -346,14 +346,17 @@ meetups               id, club_id, meetup_date, meetup_time, title, location,
                       -- location_notes is how to find the club once you are there
                       -- ("the wooden archway; parking is tight"), which is a different
                       -- fact from the place and one a map pin cannot say.
-                      -- map_url is the pasted link, kept verbatim, and map_lat/map_lng
-                      -- are the point read out of it - so the link is the record and
-                      -- the coordinates are the cache. numeric rather than float: a
-                      -- coordinate is compared and displayed, and binary floating
-                      -- point turns 42.0887 into 42.088699999999996 on the way back.
-                      -- The two CHECKs above are why the pair cannot be half-written
-                      -- or off the earth; map-link.ts refuses the same thing kindly,
-                      -- and this is the place it cannot get in at all.
+                      -- map_url is the pasted link, kept verbatim, and is the whole
+                      -- of "where". It is validated by isMapLink before storage - a
+                      -- host allowlist, because a stored URL becomes a Directions
+                      -- button every member taps and maps.google.com.evil.test reads
+                      -- as Google to a person.
+                      -- There is NO map_lat / map_lng. They existed until ADR-0049 as
+                      -- a cache of the point read out of the link, kept so an embedded
+                      -- map could return without a migration. They were null on every
+                      -- meetup any phone ever created: the Google share sheet emits a
+                      -- short link that resolves to a place name, not a point. What
+                      -- was being kept reversible had never held anything.
                       -- NOTHING DRAWS THE POINT TODAY. A meetup with a link shows a
                       -- Directions button and no map; the columns are kept so the map
                       -- can return without a migration. See ADR-0037, which records

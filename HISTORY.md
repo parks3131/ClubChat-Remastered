@@ -1,7 +1,13 @@
 # History
 
-How we got here, bug by bug. The specs stay summary-level because they load into context every
-session; the long narrative lives here (`AGENTS.md` section 2.4.2).
+How we got here, milestone by milestone. The specs stay summary-level because they load into
+context every session; the long narrative lives here (`AGENTS.md` section 2.4.2).
+
+**Individual bugs are no longer written up here.** This file passed 8,000 lines, which is past the
+point where anyone reads it to find one incident. A bug that reached a running app gets a row in
+[`BUGS.md`](BUGS.md) and a file of its own in [`bugs/`](bugs/) - see `AGENTS.md` standing
+instruction 5. What stays here is the shape of a milestone: what was built, what it cost, and what
+was still not true at the end of it.
 
 Newest first.
 
