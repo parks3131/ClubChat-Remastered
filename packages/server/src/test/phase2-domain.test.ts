@@ -736,7 +736,7 @@ describe('content notification behaviour', () => {
     for (let i = 0; i < 7; i += 1) {
       await createMeetup(h.db, await ctxFor(f.ownerId), {
         clubId: f.clubId, meetupDate: `2026-04-0${i + 1}`,
-        meetupTime: '18:00', title: 'Practice', location: 'Memorial Park gate',
+        meetupTime: '18:00', title: 'Practice',
       });
     }
     await drainAll();
@@ -1021,7 +1021,7 @@ describe('the meetup week', () => {
     // A past week, so no days are hidden.
     await createMeetup(h.db, await ctxFor(f.ownerId), {
       clubId: f.clubId, meetupDate: '2026-01-06', meetupTime: '18:30',
-      title: 'Practice', location: 'Track', description: '8 x 400m',
+      title: 'Practice', description: '8 x 400m',
     });
 
     const week = await readMeetupWeek(h.db, await ctxFor(f.memberId), f.clubId, '2026-01-05');
@@ -1033,7 +1033,7 @@ describe('the meetup week', () => {
     expect(tuesday?.empty).toBe(false);
     // HH:MM on the wire. Postgres hands back HH:MM:SS and nobody wants to read the seconds.
     expect(tuesday?.meetups[0]?.time).toBe('18:30');
-    expect(tuesday?.meetups[0]?.location).toBe('Track');
+    expect(tuesday?.meetups[0]?.title).toBe('Practice');
     // An empty day is otherwise ambiguous between "nothing on" and "not posted yet".
     const monday = week.days.find((d) => d.date === '2026-01-05');
     expect(monday?.empty).toBe(true);
@@ -1053,7 +1053,6 @@ describe('the meetup week', () => {
       // Today, not a fixed date: a nudge is refused for a day that has been, so a hardcoded
       // date would pass until it did not.
       clubId: f.clubId, meetupDate: todayKey(), meetupTime: '18:30', title: 'Practice',
-      location: 'Track',
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -1087,7 +1086,7 @@ describe('the meetup week', () => {
     // things to tell people about, so nudging one must not silence the rest. Same DAY, because
     // only today's are nudgeable at all.
     const other = await createMeetup(h.db, await ctxFor(f.ownerId), {
-      clubId: f.clubId, meetupDate: todayKey(), meetupTime: '07:00', title: 'Practice', location: 'The Anchor',
+      clubId: f.clubId, meetupDate: todayKey(), meetupTime: '07:00', title: 'Practice',
     });
     expect(other.ok).toBe(true);
     if (!other.ok) return;
@@ -1105,7 +1104,7 @@ describe('the meetup week', () => {
     const f = await setup();
     for (const [label, date] of [['a day that has been', '2020-01-06'], ['a future day', tomorrow()]] as const) {
       const made = await createMeetup(h.db, await ctxFor(f.ownerId), {
-        clubId: f.clubId, meetupDate: date, meetupTime: '18:30', title: 'Practice', location: 'Track',
+        clubId: f.clubId, meetupDate: date, meetupTime: '18:30', title: 'Practice',
       });
       expect(made.ok, label).toBe(true);
       if (!made.ok) return;
@@ -1132,7 +1131,7 @@ describe('the meetup week', () => {
     const f = await setup();
     for (const date of daysOfThisWeek()) {
       await createMeetup(h.db, await ctxFor(f.ownerId), {
-        clubId: f.clubId, meetupDate: date, meetupTime: '18:30', title: 'Practice', location: 'Track',
+        clubId: f.clubId, meetupDate: date, meetupTime: '18:30', title: 'Practice',
       });
     }
     const week = await readMeetupWeek(h.db, await ctxFor(f.memberId), f.clubId, mondayOfToday());
@@ -1155,7 +1154,7 @@ describe('the meetup week', () => {
      */
     const f = await setup();
     const created = await createMeetup(h.db, await ctxFor(f.ownerId), {
-      clubId: f.clubId, meetupDate: todayKey(), meetupTime: '19:00', title: 'Practice', location: 'Room 204',
+      clubId: f.clubId, meetupDate: todayKey(), meetupTime: '19:00', title: 'Practice',
     });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
@@ -1190,7 +1189,8 @@ describe('the meetup week', () => {
      * anything saved as one form, and is what makes clearing a description work. The cost is that
      * every caller has to send back what it does not edit - and until 2026-08-17 the meetup
      * composer did not, so saving an unchanged old meetup erased the place it met at and any
-     * location notes it had.
+     * location notes it had. The place column went with ADR-0049; `locationNotes` is now the
+     * field standing in for every future one that has a control the composer must not forget.
      *
      * Asserted here rather than only in the client, because this is the half that makes the
      * client's carry-through necessary. If this ever becomes absent-KEEPS, this test fails and
@@ -1202,7 +1202,6 @@ describe('the meetup week', () => {
       meetupDate: '2026-01-07',
       meetupTime: '18:30',
       title: 'Practice',
-      location: 'Memorial Park gate',
       locationNotes: 'Meet at the wooden archway',
     });
     expect(created.ok).toBe(true);
@@ -1220,34 +1219,33 @@ describe('the meetup week', () => {
       .select()
       .from(meetups)
       .where(eq(meetups.id, created.meetupId));
-    expect(afterPartial[0]?.location, 'a partial save must be what erases it').toBeNull();
-    expect(afterPartial[0]?.locationNotes).toBeNull();
+    expect(
+      afterPartial[0]?.locationNotes,
+      'a partial save must be what erases it',
+    ).toBeNull();
 
     // And a whole one keeps them, which is what the composer now sends.
     const whole = await updateMeetup(h.db, await ctxFor(f.ownerId), created.meetupId, {
       meetupDate: '2026-01-07',
       meetupTime: '18:30',
       title: 'Practice',
-      location: 'Memorial Park gate',
       locationNotes: 'Meet at the wooden archway',
     });
     expect(whole.ok).toBe(true);
 
     const afterWhole = await h.db.select().from(meetups).where(eq(meetups.id, created.meetupId));
-    expect(afterWhole[0]?.location).toBe('Memorial Park gate');
     expect(afterWhole[0]?.locationNotes).toBe('Meet at the wooden archway');
   });
 
   it('holds several meetups on one day, in time order', async () => {
     // A morning session and an evening social are two meetups, not one squashed together.
     const f = await setup();
-    for (const [time, location] of [
+    for (const [time, title] of [
       ['19:00', 'The Anchor'],
       ['06:30', 'Track'],
     ] as const) {
       await createMeetup(h.db, await ctxFor(f.ownerId), {
-        clubId: f.clubId, meetupDate: '2026-01-07', meetupTime: time,
-        title: location, location,
+        clubId: f.clubId, meetupDate: '2026-01-07', meetupTime: time, title,
       });
     }
 
@@ -1327,7 +1325,6 @@ describe('the merged calendar feed', () => {
       meetupDate: '2027-03-09',
       meetupTime: '18:30',
       title: 'Practice',
-      location: 'Track, west gate',
       description: null,
     });
 
@@ -1336,10 +1333,11 @@ describe('the merged calendar feed', () => {
 
     expect(meetup, 'a meetup did not reach the feed').toBeDefined();
     /*
-     * The NAME is the title. It was the place until 2026-08-15, when the form stopped asking for
-     * a place at all and the name became required in its stead - so the feed's COALESCE now
-     * matters only for the meetups that existed before, whose names were backfilled FROM their
-     * places by migration 0033.
+     * The NAME is the title, and since ADR-0049 it is the only thing the feed can read. It was
+     * the place until 2026-08-15, when the form stopped asking for a place at all and the name
+     * became required in its stead; migration 0033 backfilled the names of the meetups that
+     * already existed FROM their places, and 0041 dropped the column the feed fell back to, so
+     * there is no longer a COALESCE here to be right about.
      */
     expect(meetup!.title).toBe('Practice');
     // Verbatim. Not an instant, not shifted, not normalised through a Date.
@@ -1357,7 +1355,6 @@ describe('the merged calendar feed', () => {
       meetupDate: '2027-03-10',
       meetupTime: '07:00',
       title: 'Practice',
-      location: 'Boathouse',
       description: null,
     });
 
@@ -1431,7 +1428,6 @@ describe('the merged calendar feed', () => {
       meetupDate: '2027-04-14',
       meetupTime: '19:00',
       title: 'Practice',
-      location: 'Somewhere',
       description: null,
     });
 

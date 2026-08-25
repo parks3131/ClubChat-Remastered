@@ -277,12 +277,17 @@ export const notificationParams = {
   news_post_created: club.merge(actor).extend({ postId: Uuid }),
   news_post_tagged: club.merge(actor).extend({ postId: Uuid }),
   /**
-   * Where and when, carried as params rather than as a sentence.
+   * What it is called and when, carried as params rather than as a sentence.
    *
-   * The place and time are copied in rather than joined at read time, for the same reason every
+   * The name and time are copied in rather than joined at read time, for the same reason every
    * `actorName` here is denormalised: the row must render without a join, and it is a record of
-   * what the club was told at the time. A meetup edited afterwards does not silently rewrite the
+   * what the club was told at the time. A meetup renamed afterwards does not silently rewrite the
    * notification that went out about it.
+   *
+   * **`title` rather than a place, since 2026-08-25.** This carried `location` until then, which
+   * was the meetup's free-text place - and ADR-0037 had stopped collecting that on 2026-08-15,
+   * ten days earlier. Every nudge in between read an empty column and pushed the word "null" to
+   * the whole club. See ADR-0049 for the removal that followed.
    */
   meetup_nudged: club.merge(actor).extend({
     meetupId: Uuid,
@@ -290,7 +295,8 @@ export const notificationParams = {
     meetupDate: z.string(),
     /** `HH:MM`, wall-clock in the club's own day. */
     meetupTime: z.string(),
-    location: z.string(),
+    /** What the club calls this one. `NOT NULL` on the row, so always a real string here. */
+    title: z.string(),
   }),
 
   announcement: z
@@ -843,18 +849,23 @@ export function renderNotification(n: {
     case 'news_post_tagged':
       return { title: p['clubName']!, body: `${p['actorName']} named you in a post` };
     /*
-     * Where and when, in that order, because they are what the reader needs off a lock screen.
+     * What it is called and when, because they are what the reader needs off a lock screen.
      *
      * The actor is named for the same reason every other line here names one: a push that says
-     * only "6:30 PM at the Track" reads like the app deciding to buzz, and a nudge is somebody
-     * choosing to. The day is the raw date rather than a weekday - this function is pure and
-     * locale-free by design (see the note above about a second locale being another
-     * implementation, not a migration), and the client formats it when it draws the row.
+     * only "6:30 PM" reads like the app deciding to buzz, and a nudge is somebody choosing to.
+     *
+     * **"today" is true when it is sent and ages afterwards, and that is accepted.** Only today's
+     * meetups can be nudged - `nudgeMeetup` refuses any other date - so the word is correct on the
+     * lock screen, which is where a nudge is actually read. Scrolled back to a week later in the
+     * Notifications tab it reads as if the meetup were still ahead; the relative timestamp drawn
+     * beside every row ("5m ago", "6d ago") is what carries the correction. Chosen deliberately on
+     * 2026-08-25 over naming the date, because no date can be formatted here: this function is
+     * pure and locale-free by design and the client is what knows the reader's locale.
      */
     case 'meetup_nudged':
       return {
         title: p['clubName']!,
-        body: `${p['actorName']} nudged: ${p['meetupTime']} at ${p['location']}`,
+        body: `${p['actorName']} nudged the club about ${p['title']}, today at ${p['meetupTime']}`,
       };
     /*
      * The room is the title and the speaker is in the body, which is the opposite of `dm_message`

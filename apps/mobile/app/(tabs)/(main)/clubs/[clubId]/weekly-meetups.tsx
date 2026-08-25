@@ -116,7 +116,7 @@ function momentFrom(dateKey: string, hour: number, minute: number): Date {
  */
 type MeetupEditable = Pick<
   Meetup,
-  'id' | 'time' | 'location' | 'description' | 'title' | 'locationNotes' | 'mapUrl' | 'mapPoint'
+  'id' | 'time' | 'description' | 'title' | 'locationNotes' | 'mapUrl'
 >;
 
 /** What the form is doing: adding to a given day, or editing one that exists. */
@@ -589,7 +589,7 @@ function MeetupComposer({
    * **It had no field at all until 2026-08-17**, though ADR-0037 specified it, the route accepted
    * it and the meetup's own screen drew it - so the only way to set one was to call the API by
    * hand, and `updateMeetup` is a whole-form save, so opening the composer on a meetup that had
-   * one and pressing Save silently wiped it. See the note on `location` in `submit`.
+   * one and pressing Save silently wiped it. See the whole-form note in `meetup-body.ts`.
    */
   const [locationNotes, setLocationNotes] = useState(existing?.locationNotes ?? '');
   /*
@@ -721,10 +721,7 @@ function MeetupComposer({
      * this is a WHOLE-FORM save, so any field the form does not send is a field it erases. See
      * `meetup-body.ts`, and the regression it exists to hold.
      */
-    const body = toMeetupBody(
-      { when, title, description, locationNotes, mapUrl },
-      existing === null ? null : { location: existing.location },
-    );
+    const body = toMeetupBody({ when, title, description, locationNotes, mapUrl });
     try {
       if (existing === null) await contentApi.createMeetup(clubId, body);
       else await contentApi.updateMeetup(existing.id, body);

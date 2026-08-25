@@ -200,12 +200,13 @@ export async function readCalendarFeed(
     -- carries a timezone, so an instant built from the two would put Tuesday's meetup on Monday
     -- for a member reading from another country.
     --
-    -- The title is the meetup's NAME, falling back to its place. A name is optional and arrived on
+    -- The title is the meetup's NAME, and since ADR-0049 there is nothing to fall back to: the
+    -- place column it used to COALESCE against is gone, and title is NOT NULL. (No backticks in
+    -- here: this is a template literal and one would end it. AGENTS.md 2.5.8.) A name arrived on
     -- 2026-08-15 to let this feature belong to a club that is not a running club - "morning book
-    -- reading" rather than a location standing in for one. COALESCE rather than a branch in JS so
-    -- the sort and the search see the same string the reader does.
+    -- reading" rather than a location standing in for one.
     SELECT 'meetup'::text, mu.id::text, mu.club_id::text, cl.name,
-           COALESCE(NULLIF(mu.title, ''), mu.location),
+           mu.title,
            mu.meetup_date::text, true, mu.meetup_time::text, true
       FROM meetups mu
       JOIN clubs cl ON cl.id = mu.club_id

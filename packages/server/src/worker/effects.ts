@@ -2455,8 +2455,15 @@ export const handlers: Record<string, EffectHandler> = {
       actorName: ctx.actorName,
       meetupId: String(event.payload['meetupId']),
       meetupDate: String(event.payload['meetupDate']),
+      // Still carried, and it must be: `meetup_nudged` requires it and the rendered line reads
+      // "... today at 18:30". It was dropped here alongside `location` on 2026-08-25 and the
+      // producer never stopped emitting it, so every nudge threw in `parseNotificationParams`
+      // and notified nobody at all.
       meetupTime: String(event.payload['meetupTime']),
-      location: String(event.payload['location']),
+      // `title`, never `location`: the place column was retired by ADR-0037 and removed by
+      // ADR-0049. `String(null)` is the text "null", which is why the old one shipped a bug
+      // rather than an empty string - see the note on the payload in `nudgeMeetup`.
+      title: String(event.payload['title']),
     }),
   }),
 

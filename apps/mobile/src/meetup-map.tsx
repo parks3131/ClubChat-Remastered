@@ -16,32 +16,30 @@
  * rebuild-and-reinstall on every device. If it is ever removed, remove it knowing that: it is not
  * an oversight, and the pod is the expensive half to restore.
  *
- * The server still reads a point out of a link when the link carries one, and `meetups` still
- * holds it. Nothing draws it today. That is also deliberate - it costs one nullable column pair
- * and keeps the decision reversible - and it is why `map-link.ts` and its tests are still here.
+ * **The stored coordinates are gone as of 2026-08-25**, and this comment used to say they were
+ * kept so the decision stayed reversible. ADR-0049 found the pair empty on every meetup a phone
+ * had ever created - the Google share sheet emits a short link that resolves to a place name, not
+ * a point - so what was being kept reversible was a column pair that never held anything. The
+ * pasted link is now the whole of "where", and `map-link.ts` survives only as the gate that
+ * refuses a link to somewhere that is not a map.
  */
 
-import { Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { color, radius, space, type } from './theme.ts';
-
-type Point = { lat: number; lng: number };
 
 /**
  * Whatever the platform's own maps app will accept.
  *
- * **The pasted link first, always.** It is the exact place somebody chose - a Google Maps URL opens
+ * **The pasted link, or nothing.** It is the exact place somebody chose - a Google Maps URL opens
  * the Google Maps app when it is installed and the browser when it is not, and either lands on the
- * right spot, including the ones no geocoder can find. The point is a fallback for a meetup that
- * somehow has coordinates and no link, which is not a state the app can currently produce.
+ * right spot, including the ones no geocoder can find.
+ *
+ * There was a coordinate fallback here until ADR-0049, for a meetup that somehow had a point and
+ * no link. No surface could produce that state, and the coordinates it read are gone.
  */
-export function directionsUrl(mapUrl: string | null, point: Point | null): string | null {
+export function directionsUrl(mapUrl: string | null): string | null {
   if (mapUrl !== null && mapUrl.trim().length > 0) return mapUrl.trim();
-  if (point !== null) {
-    return Platform.OS === 'ios'
-      ? `https://maps.apple.com/?daddr=${point.lat},${point.lng}`
-      : `geo:${point.lat},${point.lng}?q=${point.lat},${point.lng}`;
-  }
   /*
    * Nothing to open. Deliberately NOT a text search on the location: "Bimini" or "the wooden
    * archway entrance" sends somebody to whatever Maps guesses that means, which is worse than the
@@ -52,15 +50,13 @@ export function directionsUrl(mapUrl: string | null, point: Point | null): strin
 
 export function MeetupDirections({
   mapUrl,
-  point,
   place,
 }: {
   mapUrl: string | null;
-  point: { lat: number; lng: number } | null;
   /** Only for the screen reader - the button says "Directions" and the place is above it. */
   place: string;
 }) {
-  const target = directionsUrl(mapUrl, point);
+  const target = directionsUrl(mapUrl);
   if (target === null) return null;
 
   return (

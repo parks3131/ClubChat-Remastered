@@ -1440,10 +1440,10 @@ export const calendarEvents = pgTable(
      * "where", and a member who has learned that a pasted link turns into Directions on one must
      * not find it missing on the other.
      *
-     * **No `map_lat` / `map_lng` here, unlike `meetups`.** Those exist there for a hand-placed pin,
-     * and nothing places one on an event - `directionsUrl` opens the stored URL and only falls
-     * back to coordinates when there is no link. Columns that would always be null are absent
-     * rather than reserved.
+     * **No coordinates here, and none on `meetups` either since 2026-08-25.** This table never
+     * had them; the meetup pair went with ADR-0049, which found them empty on every row a phone
+     * had ever created. `directionsUrl` opens the stored URL and nothing else. Columns that would
+     * always be null are absent rather than reserved.
      *
      * Validated by `isMapLink` before it is stored, because a stored URL becomes a button that
      * opens it.
@@ -1482,10 +1482,13 @@ export const calendarEvents = pgTable(
  * club will be doing (`description`, free text).** The first two are `NOT NULL`, because the
  * surface exists to answer them.
  *
- * **`location` is nullable and is no longer collected**, which is the reverse of how this
- * shipped: the place was the required field and the headline until 2026-08-15, when ADR-0037
- * gave a meetup a name and the form stopped asking for a place. `title` was backfilled from it.
- * Where is now answered by `mapUrl` for a phone and `locationNotes` for a person.
+ * **There is no `location` column, and there has not been one since 2026-08-25.** The place was
+ * the required field and the headline until 2026-08-15, when ADR-0037 gave a meetup a name and
+ * the form stopped asking for a place; `title` was backfilled from it. The column was then kept
+ * empty and unread for ten days, during which the nudge notification still read it and pushed the
+ * word "null" to a club. ADR-0049 removed it, along with the `map_lat`/`map_lng` pair kept for a
+ * pin nothing ever drew. Where is now answered by `mapUrl` for a phone and `locationNotes` for a
+ * person, and by nothing else.
  *
  * **There is no type, category or kind column, and that absence is the design.** A per-club,
  * admin-editable catalog of activity types was specified in full and rejected; see ADR-0029,
@@ -1510,15 +1513,6 @@ export const meetups = pgTable(
       .references(() => clubs.id, { onDelete: 'cascade' }),
     meetupDate: date('meetup_date').notNull(),
     meetupTime: time('meetup_time').notNull(),
-    /**
-     * The place, as free text. **Optional since 2026-08-15, and no longer collected.**
-     *
-     * It was required, and it was the headline. The founder's redesign replaced it with a pasted
-     * map link - "the link is the place" - so the form no longer asks for one and new rows carry
-     * null. The column stays because 80 meetups already hold real text in it and a member reading
-     * one back should still see where the club met.
-     */
-    location: text('location'),
     description: text('description'),
     /**
      * What the club calls this one. Optional, and the reason it exists is reach rather than
@@ -1549,16 +1543,6 @@ export const meetups = pgTable(
      * is the record and the coordinates are the cache.
      */
     mapUrl: text('map_url'),
-    /**
-     * The point read out of `map_url`, in degrees. Both or neither.
-     *
-     * `numeric` rather than a float: a coordinate is a decimal quantity that gets compared and
-     * displayed, and binary floating point turns 42.0887 into 42.088699999999996 on the way back.
-     * The pair is constrained to the earth in `constraint-proof.sql` rather than only in
-     * `map-link.ts`, because a handler races and a constraint does not.
-     */
-    mapLat: numeric('map_lat', { precision: 9, scale: 6 }),
-    mapLng: numeric('map_lng', { precision: 9, scale: 6 }),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     /** Who last changed it. Same rule and same reasoning as `calendar_events.updated_by`. */
     updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
@@ -1566,20 +1550,6 @@ export const meetups = pgTable(
   },
   (t) => [
     index('meetups_by_club').on(t.clubId, t.meetupDate, t.meetupTime),
-    /*
-     * A point is both halves or neither. Half a coordinate is not a place, and the screen that
-     * draws it would centre on a latitude with no longitude, which is a map of the wrong line.
-     */
-    check('meetup_point_is_whole', sql`(map_lat IS NULL) = (map_lng IS NULL)`),
-    /*
-     * And on the earth. `map-link.ts` refuses an out-of-range pair too, and this is deliberately
-     * the second place rather than the only one: the parser is where a bad paste is caught kindly,
-     * this is where it cannot get in at all. A handler races; a constraint does not.
-     */
-    check(
-      'meetup_point_on_earth',
-      sql`map_lat IS NULL OR (map_lat BETWEEN -90 AND 90 AND map_lng BETWEEN -180 AND 180)`,
-    ),
   ],
 );
 
@@ -2154,3 +2124,4 @@ export const mediaObjects = pgTable(
       .where(sql`status = 'ready' and channel_id is not null`),
   ],
 );
+

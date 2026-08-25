@@ -149,11 +149,12 @@ check 200 "GET news search"          "${AM[@]}" "$API/clubs/$CLUB/news?q=Bingham
 check 200 "GET news tag candidates as owner"  "${AO[@]}" "$API/clubs/$CLUB/news/member-candidates"
 # Non-disclosing: a member who cannot post must not learn the roster by exclusion.
 check 404 "GET news tag candidates as member" "${AM[@]}" "$API/clubs/$CLUB/news/member-candidates"
-# A meetup is named rather than placed since 2026-08-15: the form asks for a link, not a place,
+# A meetup is named rather than placed since 2026-08-15, and carries no place column at all since
+# 2026-08-25 (ADR-0049): the form asks for a link, not a place,
 # so the NAME is what a blank is refused for. This gate is what caught the rename reaching every
 # test and none of the callers - `npm test` was green while CI was red, because the gate goes over
 # TCP against a running server and a test does not.
-check 201 "POST meetup" -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30","title":"Practice","location":"Memorial Park gate"}' "$API/clubs/$CLUB/meetups"
+check 201 "POST meetup" -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30","title":"Practice","mapUrl":"https://maps.apple.com/?ll=42.0887,-75.9698"}' "$API/clubs/$CLUB/meetups"
 check 400 "meetup with no name"       -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30"}' "$API/clubs/$CLUB/meetups"
 check 400 "meetup with a blank name"  -X POST "${AO[@]}" "${JSON[@]}" -d '{"meetupDate":"2027-05-03","meetupTime":"18:30","title":"   "}' "$API/clubs/$CLUB/meetups"
 check 400 "meetups without a monday"  "${AO[@]}" "$API/clubs/$CLUB/meetups"

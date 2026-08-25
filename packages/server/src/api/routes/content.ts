@@ -268,23 +268,19 @@ export function registerContentRoutes(app: FastifyInstance, deps: AppDeps): void
      * name a meetup, and with no place this is the only thing that can.
      */
     title: z.string().trim().min(1).max(120),
-    /** Optional, and no longer asked for: the pasted link is the place. */
-    location: z.string().trim().max(300).nullish(),
     description: z.string().max(5_000).nullish(),
     locationNotes: z.string().max(2_000).nullish(),
     /*
-     * A LINK, never a coordinate. The domain reads the point out of it, so a client cannot put a
-     * pin somewhere the link does not go - and a link on a host that is not a map is dropped
-     * rather than stored, because whatever is stored ends up behind a button that opens it.
+     * A LINK, and the only answer to "where" a meetup has. A link on a host that is not a map is
+     * dropped rather than stored, because whatever is stored ends up behind a Directions button
+     * that every member of the club taps.
+     *
+     * No coordinates are accepted alongside it. They were, until ADR-0049 removed the columns
+     * they fed - an older client that still sends `mapLat`/`mapLng` has them ignored here rather
+     * than refused, which is what `nullish()` on everything else already means for a field the
+     * server has stopped caring about.
      */
     mapUrl: z.string().trim().max(2_000).nullish(),
-    /*
-     * A pin the admin placed by hand, for the case a link cannot answer: a Google "share a place"
-     * link carries no coordinates at any hop, only a name and a feature id. Range-checked here,
-     * and again by a CHECK constraint on the column.
-     */
-    mapLat: z.number().min(-90).max(90).nullish(),
-    mapLng: z.number().min(-180).max(180).nullish(),
   });
 
   /** Notifies nobody and posts nothing. A meetup is reference material, not an event. */

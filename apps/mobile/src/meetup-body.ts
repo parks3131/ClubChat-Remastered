@@ -22,22 +22,6 @@ export type MeetupDraft = {
   mapUrl: string;
 };
 
-/**
- * The fields of the meetup being edited that the composer does **not** offer a control for.
- *
- * `null` when creating, since there is nothing to carry forward.
- */
-export type MeetupCarriedOver = {
-  /**
-   * The place, as free text.
-   *
-   * The form stopped asking for one on 2026-08-15 (ADR-0037) and the name took its place. The
-   * column stayed, because the meetups written before that hold real text in it and the detail
-   * screen still shows it.
-   */
-  location: string | null;
-} | null;
-
 /** `HH:MM`, 24-hour, in the club's own day. */
 function wallClock(when: Date): string {
   const hh = String(when.getHours()).padStart(2, '0');
@@ -72,9 +56,13 @@ function orNull(text: string): string | null {
  * `location`. So opening the composer on a meetup written before the place was dropped, changing
  * nothing, and pressing Save silently erased where the club met.
  *
- * A field this screen does not edit is a field it must not erase.
+ * **Every field of a meetup now has a control on the form**, since ADR-0049 removed `location`,
+ * which was the last one that did not. The second parameter this function used to take existed
+ * only to carry that field through untouched, and went with it. The rule it enforced has not
+ * gone anywhere: a field this screen does not edit is a field it must not erase, so anything
+ * added to the row later either gets a control here or gets carried the same way.
  */
-export function toMeetupBody(draft: MeetupDraft, carried: MeetupCarriedOver): MeetupBody {
+export function toMeetupBody(draft: MeetupDraft): MeetupBody {
   return {
     // Split from ONE local moment. The wire carries a wall-clock date and time, never an instant,
     // because a club's week is its own day and not the reader's - see ADR-0029.
@@ -84,17 +72,10 @@ export function toMeetupBody(draft: MeetupDraft, carried: MeetupCarriedOver): Me
     description: orNull(draft.description),
     locationNotes: orNull(draft.locationNotes),
     /*
-     * Carried through untouched. The one field here the form holds without owning.
-     *
-     * Deliberately not omitted "because the form does not edit it" - under a whole-form save that
-     * is exactly what deletes it.
-     */
-    location: carried?.location ?? null,
-    /*
-     * The link, and no coordinates. This client places no pin: the map picture was taken out on
-     * 2026-08-15 and Directions opens the link itself, which is exact. The server still reads a
-     * point out of a link that carries one, and the route still accepts a hand-placed pair - see
-     * ADR-0037 - so the map can return without touching either end.
+     * The link, and nothing derived from it. This client places no pin and neither does the
+     * server: the map picture was taken out on 2026-08-15 and the coordinates it would have used
+     * were removed by ADR-0049, having been empty on every meetup a phone ever created. Directions
+     * opens the pasted link itself, which is exact.
      */
     mapUrl: orNull(draft.mapUrl),
   };

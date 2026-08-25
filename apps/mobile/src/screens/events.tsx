@@ -234,7 +234,7 @@ export function EventView({ eventId }: { eventId: string }) {
               `point` is always null here - an event has no hand-placed pin, so the stored URL is
               the only thing that can open, which is why the column has no lat/lng beside it.
             */}
-            <MeetupDirections mapUrl={event.mapUrl} point={null} place={event.location ?? ''} />
+            <MeetupDirections mapUrl={event.mapUrl} place={event.location ?? ''} />
 
             {/*
               Directions is the only button on this screen now.

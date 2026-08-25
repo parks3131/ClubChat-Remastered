@@ -804,26 +804,6 @@ SELECT pg_temp.assert_rejected(
   $$INSERT INTO meetups (club_id, meetup_date, meetup_time, title)
     VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', NULL, 'Track session')$$);
 
--- A map point is both halves or neither. Half a coordinate is not a place, and the screen would
--- centre on a latitude with no longitude - a confident map of the wrong line.
-SELECT pg_temp.assert_rejected(
-  'meetups - a latitude with no longitude',
-  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, title, map_lat)
-    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '18:00', 'Track', 42.0887)$$);
-
--- And it has to be on the earth. `map-link.ts` refuses an out-of-range pair when a link is pasted,
--- and this is deliberately the second place rather than the only one: the parser is where a bad
--- paste is caught kindly, this is where it cannot get in at all.
-SELECT pg_temp.assert_rejected(
-  'meetups - a point off the earth',
-  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, title, map_lat, map_lng)
-    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '18:00', 'Track', 91, 0)$$);
-
-SELECT pg_temp.assert_rejected(
-  'meetups - a longitude past the antimeridian',
-  $$INSERT INTO meetups (club_id, meetup_date, meetup_time, title, map_lat, map_lng)
-    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '2026-04-01', '18:00', 'Track', 0, 181)$$);
-
 -- Nudge is rate limited by an EXCLUDE constraint, not by a check in a handler, because two
 -- admins tapping the bell in the same second is exactly what a read-then-write loses (ADR-0030).
 -- The window is per MEETUP since ADR-0031, which is what the second and third inserts prove

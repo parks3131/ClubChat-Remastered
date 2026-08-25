@@ -319,9 +319,9 @@ export type NewsPost = {
  * name backfilled from its place and one created after has never had a place - so this is the one
  * place that would need to change if either ever became empty again.
  */
-export function meetupHeadline(meetup: { title: string; location?: string | null }): string {
+export function meetupHeadline(meetup: { title: string }): string {
   const named = meetup.title.trim();
-  return named.length > 0 ? named : (meetup.location?.trim() ?? 'Meetup');
+  return named.length > 0 ? named : 'Meetup';
 }
 
 export type Meetup = {
@@ -344,14 +344,8 @@ export type Meetup = {
   title: string;
   /** How to find the club once you are there. A pin cannot say "the wooden archway". */
   locationNotes: string | null;
-  /** The pasted Google or Apple Maps link, or null. Opens in Maps. */
+  /** The pasted Google or Apple Maps link, or null. Opens in Maps, and is the only "where". */
   mapUrl: string | null;
-  /**
-   * Where to draw the pin, or null when the link named a place without coordinates.
-   *
-   * Null WITH a `mapUrl` is an ordinary state rather than a failure: the link still opens.
-   */
-  mapPoint: { lat: number; lng: number } | null;
   /**
    * When THIS meetup's bell comes back, or null if it is live.
    *
@@ -364,37 +358,26 @@ export type Meetup = {
 };
 
 /**
- * What the create and edit forms send. `location` and `meetupTime` are required: the surface
- * exists to answer where and when, and a club that has not decided types "TBC".
+ * What the create and edit forms send. `title` and `meetupTime` are required: the surface exists
+ * to answer what and when, and where is a pasted link or nothing.
  */
 export type MeetupBody = {
   /** `YYYY-MM-DD`. */
   meetupDate: string;
   /** `HH:MM`, 24-hour. */
   meetupTime: string;
-  /** Optional and no longer collected by this app: the pasted link is the place. */
-  location?: string | null;
   /** Required. Something has to name a meetup, and the place no longer does. */
   title: string;
   description?: string | null;
   locationNotes?: string | null;
   /**
-   * A pasted Google or Apple Maps link. **A link, never a coordinate.**
+   * A pasted Google or Apple Maps link, and the only answer to "where" a meetup carries.
    *
-   * The server reads the point out of it, including following the short link the Google Maps app
-   * shares, and refuses to store a URL whose host is not a map. So this client sends what somebody
-   * pasted and nothing else, and cannot decide where the pin lands.
+   * The server refuses to store a URL whose host is not a map, because a stored link becomes a
+   * Directions button every member taps. No coordinates travel with it in either direction: they
+   * were stored until ADR-0049 for a pin nothing ever drew.
    */
   mapUrl?: string | null;
-  /**
-   * A pin placed by hand, for the case a link cannot answer.
-   *
-   * **A Google "share a place" link carries no coordinates at any hop** - only a name and a
-   * feature id. Apple Maps links and Google dropped-pin links do, so those need no tap. When both
-   * are present the tap wins: somebody chose it on a map while looking at where the club meets.
-   */
-  mapLat?: number | null;
-  mapLng?: number | null;
 };
 
 /** One meetup, for its own screen. `GET /meetups/:id`. */
@@ -406,13 +389,10 @@ export type MeetupDetail = {
   date: string;
   /** `HH:MM`, the club's own clock. */
   time: string;
-  /** Null on anything created after the place stopped being collected. */
-  location: string | null;
   description: string | null;
   title: string;
   locationNotes: string | null;
   mapUrl: string | null;
-  mapPoint: { lat: number; lng: number } | null;
   /** Who added it. Null once their account is gone; the meetup outlives them. */
   creatorId: string | null;
   creatorName: string | null;

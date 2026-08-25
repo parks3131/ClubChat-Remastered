@@ -153,13 +153,6 @@ export default function MeetupScreen() {
 
             <Card>
               {/*
-                Where is a line only for the meetups that still carry one: the form stopped asking
-                for a place on 2026-08-15 and the Directions button below is where it lives now.
-                `DetailLine` omits a row with nothing in it, so this simply disappears on anything
-                made since, rather than showing an empty label.
-              */}
-              <DetailLine label="Where" value={meetup.location} />
-              {/*
                 "Description", here and in the composer, which now match.
 
                 They deliberately did not until 2026-08-17: the form asked "What are we doing?" on
@@ -200,11 +193,7 @@ export default function MeetupScreen() {
               With no link there is no button at all, rather than a button that hands Maps a text
               search for "Bimini" and sends somebody wherever it guesses that is.
             */}
-            <MeetupDirections
-              mapUrl={meetup.mapUrl}
-              point={meetup.mapPoint}
-              place={meetupHeadline(meetup)}
-            />
+            <MeetupDirections mapUrl={meetup.mapUrl} place={meetupHeadline(meetup)} />
           </ScrollView>
         );
       }}

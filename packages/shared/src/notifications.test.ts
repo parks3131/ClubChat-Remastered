@@ -138,7 +138,7 @@ const fixtures: { [K in NotificationType]: Record<string, unknown> } = {
     meetupId: MEETUP,
     meetupDate: '2026-08-14',
     meetupTime: '18:30',
-    location: 'Memorial Park gate',
+    title: 'Track session',
   },
   announcement: {
     clubId: CLUB,
@@ -277,10 +277,21 @@ describe('rendering', () => {
       const rendered = renderNotification({ type, params: fixtures[type] });
       expect(rendered.title.length, `${type} title`).toBeGreaterThan(0);
       expect(rendered.body.length, `${type} body`).toBeGreaterThan(0);
-      // A missing param surfacing as the literal "undefined" in someone's inbox is the
-      // most likely rendering bug, and the easiest to miss by eye.
-      expect(rendered.body, `${type} body`).not.toContain('undefined');
-      expect(rendered.title, `${type} title`).not.toContain('undefined');
+      /*
+       * A missing param surfacing as a word in someone's inbox is the most likely rendering bug
+       * and the easiest to miss by eye.
+       *
+       * **"null" is checked as well as "undefined", and that is not symmetry for its own sake.**
+       * This assertion existed and passed on 2026-08-14 while the nudge was pushing "18:00 at
+       * null" to a real club, because the fixture supplied a place that production no longer had
+       * and the missing value arrived through `String(null)` rather than as a missing key. A
+       * fixture can only prove the shape it is given; checking both words is what makes this
+       * catch the failure that actually happened.
+       */
+      for (const ghost of ['undefined', 'null']) {
+        expect(rendered.body, `${type} body`).not.toContain(ghost);
+        expect(rendered.title, `${type} title`).not.toContain(ghost);
+      }
     }
   });
 

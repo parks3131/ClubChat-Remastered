@@ -557,7 +557,6 @@ describe('weekly meetups', () => {
       meetupDate: '2027-05-03',
       meetupTime: '18:30',
       title: 'Practice',
-      location: 'Memorial Park gate',
       description: '8 x 400m, then a cool-down loop',
     });
     expect(created.status).toBe(201);
@@ -573,7 +572,7 @@ describe('weekly meetups', () => {
     expect(week.body.days[0].date).toBe('2027-05-03');
     expect(week.body.days[0].meetups).toHaveLength(1);
     expect(week.body.days[0].meetups[0].time).toBe('18:30');
-    expect(week.body.days[0].meetups[0].location).toBe('Memorial Park gate');
+    expect(week.body.days[0].meetups[0].title).toBe('Practice');
     // A day with nothing on it says so explicitly rather than being an empty absence.
     expect(week.body.days[1].empty).toBe(true);
 
@@ -676,10 +675,10 @@ describe('weekly meetups', () => {
 
   /*
    * A name, location notes and a map link, added 2026-08-15 so this feature belongs to a club that
-   * is not a running club. The assertions worth having are about the LINK: the client sends one
-   * and never a coordinate, so the server is the only thing that decides where the pin goes.
+   * is not a running club. The coordinate assertions that used to sit here went with ADR-0049:
+   * nothing reads a point out of a link any more, and the link itself is the whole of "where".
    */
-  it('takes a name, notes and a map link, and reads the point out of the link itself', async () => {
+  it('takes a name, notes and a map link, and keeps the link verbatim', async () => {
     const owner = await signUp('MapOwner');
     const member = await signUp('MapMember');
     const { clubId } = await createClubAs(owner);
@@ -689,7 +688,6 @@ describe('weekly meetups', () => {
       meetupDate: '2027-06-01',
       meetupTime: '06:30',
       title: 'Morning Miles',
-      location: 'Nature Preserve Entrance',
       locationNotes: 'Meet at the wooden archway. Parking is tight.',
       mapUrl: 'https://www.google.com/maps/place/Preserve/@42.0887,-75.9698,17z',
     });
@@ -698,10 +696,14 @@ describe('weekly meetups', () => {
     const detail = await as(member, 'GET', `/meetups/${created.body.meetupId}`);
     expect(detail.status).toBe(200);
     expect(detail.body.meetup.title).toBe('Morning Miles');
-    expect(detail.body.meetup.location).toBe('Nature Preserve Entrance');
     expect(detail.body.meetup.locationNotes).toContain('wooden archway');
-    // The point came from the link. Nothing in the request said 42.0887.
-    expect(detail.body.meetup.mapPoint).toEqual({ lat: 42.0887, lng: -75.9698 });
+    // Stored exactly as pasted. It becomes a Directions button and nothing derives from it.
+    expect(detail.body.meetup.mapUrl).toBe(
+      'https://www.google.com/maps/place/Preserve/@42.0887,-75.9698,17z',
+    );
+    // The place column is gone, so the response must not carry one at all (ADR-0049).
+    expect(detail.body.meetup).not.toHaveProperty('location');
+    expect(detail.body.meetup).not.toHaveProperty('mapPoint');
     // The date and clock still travel apart.
     expect(detail.body.meetup.date).toBe('2027-06-01');
     expect(detail.body.meetup.time).toBe('06:30');
@@ -715,20 +717,19 @@ describe('weekly meetups', () => {
       meetupDate: '2027-06-02',
       meetupTime: '18:00',
       title: 'Practice',
-      location: 'Track',
-      // A lookalike host, which parses as a coordinate perfectly well and must still be refused:
-      // the stored URL ends up behind a Directions button that opens it.
+      // A lookalike host, which reads as Google to a person and must still be refused: the stored
+      // URL ends up behind a Directions button that every member of the club taps.
       mapUrl: 'https://maps.google.com.evil.test/?q=42.0887,-75.9698',
     });
     expect(created.status).toBe(201);
 
     const detail = await as(owner, 'GET', `/meetups/${created.body.meetupId}`);
     expect(detail.body.meetup.mapUrl).toBeNull();
-    expect(detail.body.meetup.mapPoint).toBeNull();
   });
 
-  it('clears the pin when an edit clears the link', async () => {
-    // Otherwise the map keeps drawing where the club used to meet, which is worse than no map.
+  it('clears the link when an edit clears it', async () => {
+    // Otherwise Directions keeps opening where the club used to meet, which is worse than no
+    // button at all.
     const owner = await signUp('EditMapOwner');
     const { clubId } = await createClubAs(owner);
 
@@ -737,24 +738,21 @@ describe('weekly meetups', () => {
         meetupDate: '2027-06-03',
         meetupTime: '18:00',
         title: 'Practice',
-        location: 'Track',
         mapUrl: 'https://maps.apple.com/?ll=42.0887,-75.9698',
       })
     ).body.meetupId as string;
 
-    expect((await as(owner, 'GET', `/meetups/${id}`)).body.meetup.mapPoint).not.toBeNull();
+    expect((await as(owner, 'GET', `/meetups/${id}`)).body.meetup.mapUrl).not.toBeNull();
 
     await as(owner, 'PATCH', `/meetups/${id}`, {
       meetupDate: '2027-06-03',
       meetupTime: '18:00',
       title: 'Practice',
-      location: 'Track',
       mapUrl: null,
     });
 
     const after = await as(owner, 'GET', `/meetups/${id}`);
     expect(after.body.meetup.mapUrl).toBeNull();
-    expect(after.body.meetup.mapPoint).toBeNull();
   });
 
   it('hides a meetup in a club the reader is not in, as a 404 rather than a 403', async () => {
@@ -776,49 +774,33 @@ describe('weekly meetups', () => {
   });
 
   /*
-   * The pin an admin places by hand, which exists because a Google "share a place" link carries no
-   * coordinates at any hop - found on the device, not in a test, because the test stubbed the
-   * redirect with the shape a DROPPED-PIN share produces.
+   * A hand-placed pin was accepted here until ADR-0049, because a Google "share a place" link
+   * carries no coordinates at any hop and something had to be able to supply one. No surface ever
+   * sent one, the columns it fed were empty on every row a phone created, and both are gone. What
+   * replaces those two tests is this: coordinates sent by an older client are IGNORED rather than
+   * refused, so a build compiled before the change keeps saving meetups.
    */
-  it('takes a hand-placed pin, and lets it win over the link', async () => {
+  it('ignores coordinates an older client still sends, rather than refusing the meetup', async () => {
     const owner = await signUp('PinOwner');
     const { clubId } = await createClubAs(owner);
 
-    const id = (
-      await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
-        meetupDate: '2027-07-01',
-        meetupTime: '18:00',
-        title: 'Practice',
-        location: 'Appalachian Dining Hall',
-        // A real Google place-share resolves to this shape: a name, and no point anywhere.
-        mapUrl: 'https://maps.google.com/maps?q=Appalachian+Dining+Hall,+Vestal,+NY',
-        mapLat: 42.0887,
-        mapLng: -75.9698,
-      })
-    ).body.meetupId as string;
-
-    const detail = await as(owner, 'GET', `/meetups/${id}`);
-    expect(detail.body.meetup.mapPoint).toEqual({ lat: 42.0887, lng: -75.9698 });
-    // The link is still stored, because it is still the exact record of the place and it is what
-    // Directions opens.
-    expect(detail.body.meetup.mapUrl).toContain('maps.google.com');
-  });
-
-  it('refuses a pin that is not on the earth', async () => {
-    const owner = await signUp('BadPinOwner');
-    const { clubId } = await createClubAs(owner);
-
-    const refused = await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
-      meetupDate: '2027-07-02',
+    const created = await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+      meetupDate: '2027-07-01',
       meetupTime: '18:00',
       title: 'Practice',
-      location: 'Track',
-      mapLat: 91,
-      mapLng: 0,
+      mapUrl: 'https://maps.google.com/maps?q=Appalachian+Dining+Hall,+Vestal,+NY',
+      // The shape a TestFlight build from before 2026-08-25 still sends. Zod strips an unknown
+      // key rather than rejecting the body, which is what makes this a non-breaking change.
+      mapLat: 42.0887,
+      mapLng: -75.9698,
     });
-    // Refused at the edge rather than clamped: a coordinate from a client is a coordinate from a
-    // client, and the column's CHECK is the second line rather than the only one.
-    expect(refused.status).toBe(400);
+    expect(created.status).toBe(201);
+
+    const detail = await as(owner, 'GET', `/meetups/${created.body.meetupId}`);
+    // Stored: the link. Not stored, and not on the response at all: anything derived from it.
+    expect(detail.body.meetup.mapUrl).toContain('maps.google.com');
+    expect(detail.body.meetup).not.toHaveProperty('mapPoint');
+    expect(detail.body.meetup).not.toHaveProperty('mapLat');
   });
 
   it('refuses to nudge any day but today, in both directions', async () => {
