@@ -86,12 +86,6 @@ is "what is broken".
       creates the second image and the drill becomes runnable. Until then the rollback lever
       described in `TECH/21` does not exist.
 
-- [ ] **DMARC collects nothing, so tightening it is a fortnight rather than an edit.**
-      `_dmarc.clubchatapp.com` is `v=DMARC1; p=none;` with no `rua=`, so no receiver has ever sent
-      an aggregate report. Add `rua=` first, read about two weeks of reports to confirm
-      authentication is passing, and only then move to `p=quarantine`. Doing it in the other order
-      is how real mail starts going to spam. `scripts/drills/dmarc-drill.sh` walks it.
-
 - [ ] **`apps/mobile/app.json` declares no `android.package`.** So the Android application id has
       no source of truth in the repo, while the site Worker has to name one in
       `/.well-known/assetlinks.json`. Android app links are parked by decision, but the missing

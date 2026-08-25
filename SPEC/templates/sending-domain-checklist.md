@@ -105,5 +105,16 @@ spoofed one is convincing precisely by looking like the mail members were taught
       transport and `RecordingMailer` covers the flow; **only a live run covers the join.**
 - [ ] Watch the API log for `[mail] not sent - no transport configured`. That line means it fell
       back to `LoggingMailer` and the integration was never exercised.
-- [ ] Bounce and complaint webhooks remain unconsumed - see ADR-0020. Until they are, a hard
-      bounce means a reset link went nowhere and nothing in the product knows.
+- [ ] Point Resend's webhook at `POST /webhooks/resend` and set `RESEND_WEBHOOK_SECRET` on the
+      api. **Done for clubchatapp.com on 2026-08-25**; ADR-0047 records the shape. Two things to
+      know when checking it: an UNCONFIGURED webhook answers `200` to everything on purpose, so a
+      `200` there means "no secret" rather than "working"; once the secret is set an unsigned or
+      forged request is refused with `401 bad_signature`, and that flip is the proof it took.
+- [ ] **Confirm the domain can RECEIVE, not just send, before publishing any address on it.**
+      A published contact that bounces is worse than none. On clubchatapp.com every address
+      returned `550 Address does not exist` for months while the apex MX pointed at the
+      registrar's forwarding hosts - which only serve domains using the registrar's own
+      nameservers, and this one uses Cloudflare's. The records were present, well formed and
+      inert. Check it with an SMTP `RCPT TO` against the domain's MX and read the code, not by
+      sending yourself a test message: a message sitting in Sent proves nothing, and the bounce
+      arrives afterwards.

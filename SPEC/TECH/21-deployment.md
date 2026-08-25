@@ -915,11 +915,29 @@ nameservers directly and again through `8.8.8.8`:
 | SPF | `send.clubchatapp.com` TXT | `v=spf1 include:amazonses.com ~all` |
 | Bounce | `send.clubchatapp.com` MX | `10 feedback-smtp.us-east-1.amazonses.com` |
 | DKIM | `resend._domainkey.clubchatapp.com` TXT | a 218 character public key |
-| **DMARC** | **`_dmarc.clubchatapp.com` TXT** | **`v=DMARC1; p=none;`** |
+| **DMARC** | **`_dmarc.clubchatapp.com` TXT** | **`v=DMARC1; p=none; rua=mailto:dmarc@clubchatapp.com; fo=1`** |
 
 SPF, DKIM and the bounce path are all published and agree between the origin and a public
-resolver. **The DMARC record has no `rua=`**, so no aggregate reports are being generated
-anywhere, and there is therefore no evidence on which to tighten anything.
+resolver.
+
+**Corrected later the same day.** The table above first recorded `v=DMARC1; p=none;` with no
+`rua=`, so no aggregate reports were being generated anywhere and there was no evidence on which
+to tighten anything. An `rua` was added, and adding it exposed a larger problem: **no address at
+`clubchatapp.com` could receive mail at all.** The apex MX pointed at `eforward1-5.registrar-servers.com`,
+the registrar's forwarding service, which only serves domains using the registrar's own
+nameservers - and this domain uses Cloudflare's, because Cloudflare serves the CDN and the apex
+site. The records were present, well formed and permanently inert, so nothing looked wrong.
+`support@clubchatapp.com` had therefore bounced for its entire life while being published in the
+Privacy Policy, the Terms and the Profile screen as the contact Apple's guideline 1.2 requires.
+
+The apex now runs **Cloudflare Email Routing**: MX at `route1/2/3.mx.cloudflare.net`, a
+`cf2024-1._domainkey` DKIM record for forwarded mail, and `v=spf1 include:_spf.mx.cloudflare.net ~all`.
+`send.clubchatapp.com` is untouched throughout, which is why sending was never affected: Resend's
+envelope, SPF and bounce path all live on that subdomain.
+
+**The old apex SPF was deleted BEFORE the replacement was added, not after.** Two `v=spf1` records
+on one domain are read by receivers as no SPF at all, and this project has a recorded near-miss on
+exactly that. Verify with `dig +short clubchatapp.com TXT | grep -c spf1`, which must return 1.
 
 #### Why `p=none` is there, and why it is not the finish
 
