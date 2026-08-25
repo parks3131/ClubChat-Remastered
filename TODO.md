@@ -18,6 +18,31 @@ is "what is broken".
 
 ## Next up
 
+- [ ] **Two always-null compatibility keys are load-bearing, and nothing can tell you when they
+      stop being.** `readMeetup` returns `location: null` and `mapPoint: null` for builds shipped
+      before ADR-0049, because their `DetailLine` and `directionsUrl` guard with `=== null` and
+      then dereference: absent throws where null is handled. It crashed the founder's phone on
+      2026-08-25 minutes after the deploy, and the second one was latent.
+
+      **The removal condition is a fact about which builds are installed on phones**, which is not
+      queryable from this repo and is why it is written at the return site rather than remembered.
+      It becomes checkable the first time an over-the-air update ships, because from then on the
+      installed base is something EAS can answer. Until then both keys stay.
+
+- [ ] **Over-the-air updates are wired in the repo and MUST NOT be published yet.** `expo-updates`
+      57.0.17 is installed, `app.json` carries the `updates` block and a fingerprint runtime
+      version, and `eas.json` has `preview` and `production` channels. **None of that reaches the
+      build in TestFlight**, which was made from `73a8172` before any of it existed, so the app
+      people hold cannot take an update and every fix to it is still a full rebuild.
+
+      **Publishing before the EAS server-side environment variables exist would be worse than not
+      publishing.** `eas update` does not read the `env` blocks in `eas.json` build profiles, so a
+      bundle published today carries no `EXPO_PUBLIC_API_URL` at all. `endpoint.ts` now makes that
+      fatal rather than silently pointing at localhost, which is the recoverable failure - a bundle
+      that refuses to start is rolled back by `expo-updates` per device - but it is still every
+      phone on the channel failing to launch once. Run `eas env:set --environment production` for
+      the three `EXPO_PUBLIC_*` values first. `ADR-0048` documents the publish command.
+
 - [ ] **Nothing built on 2026-08-25 has been proved in production, and the monitoring item is the
       one that reads as done when it is not.** Both drills exist and both have been run end to end
       locally, so the code path is proved and the LAST HOP IS NOT: no deliberate 5xx and no parked
