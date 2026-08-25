@@ -545,6 +545,35 @@ function mondayOf(dateKey: string): string {
 }
 
 describe('weekly meetups', () => {
+  /*
+   * A shipped app crashed on this exact absence, so the key is pinned rather than the value.
+   *
+   * 0041 dropped `meetups.location` and the read stopped returning the key at all. `DetailLine`
+   * in the build people had installed guards with `value === null` and then calls `value.trim()`:
+   * it handles null and throws on undefined, so opening any meetup took the whole app down within
+   * minutes of the 2026-08-25 deploy. The column is gone for good; the KEY has to stay until no
+   * pre-ADR-0049 build is installed anywhere.
+   *
+   * `toHaveProperty` and not a truthiness check, deliberately. `expect(body.location).toBeNull()`
+   * passes on a response that omits the key entirely, which is the bug.
+   */
+  it('still answers with a location key, always null, for builds that predate ADR-0049', async () => {
+    const owner = await signUp('MeetupCompatOwner');
+    const { clubId } = await createClubAs(owner);
+
+    const created = await as(owner, 'POST', `/clubs/${clubId}/meetups`, {
+      meetupDate: '2027-06-07',
+      meetupTime: '19:00',
+      title: 'Compatibility',
+    });
+    expect(created.status).toBe(201);
+
+    const read = await as(owner, 'GET', `/meetups/${created.body.meetupId}`);
+    expect(read.status).toBe(200);
+    expect(read.body.meetup).toHaveProperty('location');
+    expect(read.body.meetup.location).toBeNull();
+  });
+
   it('creates a meetup that notifies nobody and posts nothing', async () => {
     const owner = await signUp('MeetupOwner');
     const member = await signUp('MeetupMember');
@@ -701,9 +730,18 @@ describe('weekly meetups', () => {
     expect(detail.body.meetup.mapUrl).toBe(
       'https://www.google.com/maps/place/Preserve/@42.0887,-75.9698,17z',
     );
-    // The place column is gone, so the response must not carry one at all (ADR-0049).
-    expect(detail.body.meetup).not.toHaveProperty('location');
-    expect(detail.body.meetup).not.toHaveProperty('mapPoint');
+    /*
+     * CHANGED 2026-08-25. This asserted both keys were ABSENT, which was right about the schema
+     * and wrong about the phones. The columns are gone; the KEYS have to stay, because two
+     * different components in the shipped build guard with `=== null` and then dereference:
+     * `DetailLine` does `value.trim()` and `directionsUrl` does `point.lat`. Both handle null and
+     * both throw on undefined, and the first one took the whole app down on a real device within
+     * minutes of the deploy. Absent is not the same as null to a client that already exists.
+     */
+    expect(detail.body.meetup.location).toBeNull();
+    expect(detail.body.meetup.mapPoint).toBeNull();
+    expect(detail.body.meetup).toHaveProperty('location');
+    expect(detail.body.meetup).toHaveProperty('mapPoint');
     // The date and clock still travel apart.
     expect(detail.body.meetup.date).toBe('2027-06-01');
     expect(detail.body.meetup.time).toBe('06:30');
@@ -799,7 +837,13 @@ describe('weekly meetups', () => {
     const detail = await as(owner, 'GET', `/meetups/${created.body.meetupId}`);
     // Stored: the link. Not stored, and not on the response at all: anything derived from it.
     expect(detail.body.meetup.mapUrl).toContain('maps.google.com');
-    expect(detail.body.meetup).not.toHaveProperty('mapPoint');
+    /*
+     * `mapPoint` is present and null, not absent. See the note on the other read: the shipped
+     * build's `directionsUrl` guards with `point !== null` and then reads `point.lat`, so an
+     * absent key throws where a null one is handled. `mapLat` genuinely stays absent - the
+     * shipped client declares it optional and only ever SENDS it.
+     */
+    expect(detail.body.meetup.mapPoint).toBeNull();
     expect(detail.body.meetup).not.toHaveProperty('mapLat');
   });
 

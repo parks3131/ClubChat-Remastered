@@ -574,6 +574,29 @@ export async function readMeetup(
       title: row.title,
       locationNotes: row.location_notes,
       mapUrl: row.map_url,
+      /*
+       * COMPATIBILITY SHIM for builds shipped before ADR-0049, and it is load-bearing today.
+       *
+       * 0041 dropped `meetups.location`, and this read simply stopped returning the key. The
+       * TestFlight build in people's hands reads it, and `DetailLine` in that build guards with
+       * `value === null` and then calls `value.trim()`. `null` it handles; `undefined` throws,
+       * and the meetup screen crashed the whole app on 2026-08-25 within minutes of the deploy.
+       *
+       * So the column is gone and the KEY is not. Always null, never read from a row.
+       *
+       * REMOVE IT when no build older than the first post-ADR-0049 release is still installed,
+       * and not before. That is a fact about phones, not about this repo, so it cannot be
+       * checked from here - which is exactly why it is written down rather than remembered.
+       */
+      location: null,
+      /*
+       * The second one, found the same way and latent rather than reported. `directionsUrl` in
+       * the shipped build reads `if (point !== null) { ... point.lat ... }`: `undefined` takes
+       * that branch and throws. It only bites a meetup with NO map link, because a link
+       * short-circuits one line earlier - so it would have surfaced later, on a different
+       * meetup, looking like a new bug. Same removal condition as `location`.
+       */
+      mapPoint: null,
       creatorId: row.created_by,
       creatorName: row.creator_name,
       creatorImage: row.creator_image,
@@ -597,6 +620,13 @@ export type MeetupDetail = {
   title: string;
   locationNotes: string | null;
   mapUrl: string | null;
+  /**
+   * Always null. A compatibility key for builds shipped before ADR-0049, whose `DetailLine`
+   * throws on `undefined` and handles `null`. See the note at the return site.
+   */
+  location: null;
+  /** Always null. Compatibility key, same reason as `location`. See the return site. */
+  mapPoint: null;
   /** Who added it. Null once their account is gone; the meetup outlives them. */
   creatorId: string | null;
   creatorName: string | null;
