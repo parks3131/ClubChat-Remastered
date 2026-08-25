@@ -204,3 +204,43 @@ they cost.
     with no error at `pod install`, no error at compile, and a `null` at runtime that the optional
     require then handles perfectly. Which is to say the safety net above will hide this one, so
     check `Podfile.lock` for the pod by name after adding a module.
+
+### Configuration, and the difference between present and true
+
+38. **A config check that reads the value proves its SHAPE. Only the other end proves the VALUE.**
+    On 2026-08-25 production error reporting was found never to have worked: `fly/*.toml` carried a
+    Sentry DSN whose key was invented, sharing eight leading characters with the real one and
+    fabricated after that. Sentry answered every event `403 with_reason: ProjectId`. **Five layers
+    reported success on the way past it** - `loadConfig` accepted it (present, well formed), the
+    config-completeness check passed (it feeds each `[env]` block through the real `loadConfig`,
+    which cannot know what a valid key is), `Sentry.init` accepted it (the SDK never asks the
+    server), the transport delivered the bytes and `Sentry.flush()` returned TRUE (the CONNECTION
+    was accepted, the EVENT was refused), and `Monitor.flush` swallows even that flag by design.
+    The forced-5xx drill reported `status=500` with correct tags and was a false pass.
+    `scripts/drills/sentry-ingest-check.mjs` posts one event and prints the HTTP status, which is
+    the only thing that can tell a present credential from a working one. Run it against any
+    write-only address - a DSN, an ingest key, a webhook target - before believing a deploy reports.
+
+39. **"It reports success" is not evidence when the reporter is the thing being tested.** The
+    same shape three times in one repo now: a `/health` that could not fail, a `flush` that returns
+    true for a rejected event, and a drill whose own success line could not mean delivery. Where a
+    component's job is to tell you about failure, its own success signal is worthless and the check
+    has to come from outside it.
+
+### Clients you have already shipped
+
+40. **Absent is not null to a build that already exists.** Dropping a column usually stops a read
+    returning the KEY, not just the value, and a guard written `x === null` passes `undefined`
+    straight through to `x.trim()`. On 2026-08-25 that crashed the app on the founder's phone within
+    minutes of a deploy, on a meetup screen, while the api answered 200 in 27ms. A second one was
+    latent in `directionsUrl` (`point !== null` then `point.lat`) and would have surfaced a week
+    later looking like a fresh bug. Keep the key as an always-null compatibility field and write the
+    removal condition at the return site: it is a fact about which builds are installed on phones,
+    which nothing in this repo can query.
+
+41. **Ask what the column FEEDS before asking what reads it.** The migration named `map_lat` and
+    `map_lng`; the client read `mapPoint`, built by `toPoint(row.map_lat, row.map_lng)`, whose name
+    appears nowhere in the migration. Grepping shipped builds for the dropped column's name returns
+    a confident, correct, useless answer. Derived, renamed and multi-column fields all have this
+    shape, and the search that would have found it is the one nobody ran.
+
