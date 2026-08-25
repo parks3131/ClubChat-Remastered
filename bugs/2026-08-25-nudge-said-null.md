@@ -109,7 +109,23 @@ link returns one line earlier.
 
 Both keys are back on `readMeetup` as always-null compatibility keys; the columns stay dropped. The
 removal condition is written at the return site rather than remembered, because it is a fact about
-which builds are installed on phones, not a fact about this repo.
+which builds are installed on phones, not a fact about this repo. Nobody can query it today; once
+`expo-updates` ships, it becomes checkable and these shims become deletable.
+
+**`readMeetup` was the only unsafe surface, and the reason is the guard style rather than the
+screen.** The week read omits both keys too and is fine, because its two touches are
+`carried?.location ?? null` and `meetup.location?.trim() ?? 'Meetup'` - optional chaining, safe on
+absent. `readMeetup` was the one place the value reached a `=== null` test standing in front of a
+method call. When hunting for this class of break, look for the guards, not for the screens.
+
+**And a name-based search would have found only half of it.** `location` is one column producing
+one identically-named field, so grepping the app for it lands on the call site. `mapPoint` is
+`toPoint(row.map_lat, row.map_lng)` - two columns feeding one differently-named key, and the
+migration never says the word `mapPoint`. Grepping the shipped build for `map_lat`, `map_lng`,
+`mapLat` and `mapLng` finds only the optional create-input fields, which are only ever sent, so the
+honest conclusion is "nothing shipped reads these". The migration checklist now asks what a column
+*feeds* before it asks what reads it, because the grep that would have found this is the one nobody
+ran.
 
 **This was the third rule in the same file, one level above where either session looked.** TECH/21
 rule 4 is about the deploy window; **rule 5 - "a response may gain a field, it may never lose one"**

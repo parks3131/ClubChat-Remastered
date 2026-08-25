@@ -17,7 +17,20 @@
       a later release. Missed on 2026-08-25 by writing the drop without opening this file; a peer
       session caught it at deploy time. See [`bugs/`](../../bugs/2026-08-25-nudge-said-null.md).
 
-- [ ] **And does any SHIPPED build read it?** Rule 4 is about the deploy window, which closes on
+- [ ] **First, what does the column FEED?** Before asking what reads it, list every response key
+      built from it. Grep the domain layer for the column name and follow it to the return site.
+      A column and the field it becomes are usually the same word, which is what makes this step
+      feel skippable, and the case where they diverge is exactly the case the next grep cannot see.
+
+      On 2026-08-25 the read was `mapPoint: toPoint(row.map_lat, row.map_lng)` - two columns
+      feeding one differently-named key. The migration names `map_lat` and `map_lng` and never says
+      `mapPoint`. Grepping the shipped app for the column names finds only `mapLat?`/`mapLng?` on
+      the create input, both optional and only ever sent, so the honest conclusion is "nothing
+      shipped reads these" - and then `directionsUrl` throws on the first meetup with no map link.
+      Derived fields, renamed fields, and a field assembled from several columns all have this
+      shape.
+
+- [ ] **Then, does any SHIPPED build read those RESPONSE KEYS?** Rule 4 is about the deploy window, which closes on
       its own in about a minute. [Rule 5](../TECH/21-deployment.md) - *a response may gain a field,
       it may never lose one* - is about installed apps, and **it does not close on its own**.
 
@@ -27,9 +40,15 @@
       crashed the founder's phone on 2026-08-25 while the api answered 200 in 27ms.
 
       Checking this means opening the component the field reaches, not the comment above the call
-      site. If a shipped build reads it, keep the key on the response as an always-null
-      compatibility field and **write the removal condition at the return site** - it is a fact
-      about which builds are installed, which no one will remember.
+      site. **The danger is the guard style, not the screen.** A value that reaches
+      `x === null` before `x.trim()` crashes on absent; the same value behind `x?.trim()` or
+      `carried?.x ?? null` is fine. Find the guards, not the surfaces.
+
+      If a shipped build reads it, keep the key on the response as an always-null compatibility
+      field and **write the removal condition at the return site** - it is a fact about which
+      builds are installed on phones, which nobody can query and nobody will remember. Once
+      `expo-updates` ships that fact becomes checkable and these shims become deletable; until
+      then they are permanent.
 
 - [ ] **Does anything else deploy alongside it?** The worker and the gateway are separate Fly apps
       with no `release_command` of their own. A change to an outbox payload is written by the api
