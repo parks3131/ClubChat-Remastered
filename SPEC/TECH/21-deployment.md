@@ -160,11 +160,18 @@ and `wss://ws.clubchatapp.com` present. `http://localhost:3000` appears in that 
 not a fault: `endpoint.ts` passes it as the `developmentFallback` argument, which a release bundle
 never reads, and an unset variable throws there rather than quietly using it.
 
-**Published is not arrived, and this one is not yet confirmed on the device.** With
+**Published is not arrived, and this row was written weak until it was.** With
 `fallbackToCacheTimeout` at `0` the check happens on one launch and the swap on the next, so the
-proof is `Update 01a04463` at the bottom of Profile after two relaunches. Until that is seen, the
-honest state of this row is *published and matched to the right runtime version*, which is a weaker
-claim than the four before it and is written that way on purpose.
+proof is `Update 01a04463` at the bottom of Profile after two relaunches. **It was read off the
+device on 2026-08-27 and it says `01a04463`**, so this row is now the same strength as the four
+before it: published, matched, and arrived.
+
+**That makes the loop closed across a native change, which is the first time.** The four earlier
+updates all reached build 5, a build that already existed when they were published. This one
+reached a build made the same day, at a runtime version that did not exist that morning, over a
+package that cannot travel over the air at all. The sequence a native change actually costs is
+therefore proved rather than reasoned about: **build, submit, install, then publish at the new
+runtime version** - and everything after that install is minutes again.
 
 The fingerprint check in front of it is [`TECH/14`](14-engineering-pitfalls.md) pitfall 42, and it
 is the one that fails silently: an update that does not match the target build's runtime version

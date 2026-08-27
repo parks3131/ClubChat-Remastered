@@ -30,8 +30,11 @@ placeholder with its bubble-sized image. None of them needed a build, a submissi
 `expo-image` cannot travel over the air, so it forced build 1.0.0 (6) - installed from TestFlight at
 13:54, photo behaviour confirmed on the device by the person who reported it - and, because a native
 change moves the runtime version, a fifth update at `bfe9e13f` to reopen the channel the new build
-listens on. **The day is therefore both halves of the argument in one:** four fixes that reached a
-phone in minutes, and one that could not, for exactly the reason the fingerprint exists.
+listens on. **That fifth update was read back off the device the same evening** - `Update 01a04463`
+at the bottom of Profile - so the path across a native change is proved end to end and not merely
+published into. **The day is therefore both halves of the argument in one:** four fixes that
+reached a phone in minutes, one that could not, for exactly the reason the fingerprint exists, and
+then the channel reopened on the far side of it.
 
 The shape of the day is the point. A defect was reported from a device at 09:27 with two screen
 recordings, reproduced on the Simulator, fixed, published and confirmed fixed on that same device
