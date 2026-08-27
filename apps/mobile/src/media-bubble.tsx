@@ -208,9 +208,27 @@ export function PhotoBubble({ mediaId, localUri, variant = 'display', mine }: Ph
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uri]);
 
+  /*
+   * The box this photo will occupy, decided ONCE and used by all three states.
+   *
+   * > **The placeholder used to be a hardcoded square while the photo was `photoSize(ratio)`.** So
+   * > every non-square picture arrived by growing or shrinking its own hole, and everything below
+   * > it jumped: a 1200x1900 portrait draws at 240x320, which is eighty points taller than the
+   * > 240x240 it was waiting in. Reported as "images take a while to load" - the load is under half
+   * > a second, and what is actually being watched is a wrongly shaped grey box and then the
+   * > conversation moving.
+   *
+   * The ratio is already known before any byte arrives: `rememberedRatio` survives mounts, keyed
+   * by media id rather than by the url that rotates hourly, and the server sends width and height
+   * beside the url for a photo it has never drawn before. It was known and not used.
+   *
+   * `photoSize(null)` is the square, so the unmeasured case is unchanged.
+   */
+  const size = photoSize(ratio);
+
   if (failed) {
     return (
-      <View style={[styles.photoPlaceholder, styles.photoUnavailable]}>
+      <View style={[styles.photoPlaceholder, size, styles.photoUnavailable]}>
         <Text style={styles.unavailableText}>Photo unavailable</Text>
       </View>
     );
@@ -218,7 +236,7 @@ export function PhotoBubble({ mediaId, localUri, variant = 'display', mine }: Ph
 
   if (!uri) {
     return (
-      <View style={[styles.photoPlaceholder, styles.photoLoading]}>
+      <View style={[styles.photoPlaceholder, size, styles.photoLoading]}>
         <ActivityIndicator color={color.accent} />
       </View>
     );
@@ -236,8 +254,6 @@ export function PhotoBubble({ mediaId, localUri, variant = 'display', mine }: Ph
    * conversation while a landscape stays comfortably wide, and means no photo is ever cropped or
    * padded to fit a frame it does not have.
    */
-  const size = photoSize(ratio);
-
   return (
     <Image
       source={{ uri }}
@@ -321,9 +337,11 @@ const styles = StyleSheet.create({
     gone. It keeps its grey, because THAT grey is honest - it is the absence of an image rather
     than a frame around one.
   */
+  /*
+    No width or height of its own: `photoSize` owns the box, for the placeholder exactly as for
+    the photo. A second opinion here is what made the two disagree.
+  */
   photoPlaceholder: {
-    width: PHOTO_MAX_WIDTH,
-    height: PHOTO_MAX_WIDTH,
     borderRadius: radius.md,
     overflow: 'hidden',
     backgroundColor: color.fallback,
