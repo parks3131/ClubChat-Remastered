@@ -18,7 +18,7 @@ unless it names an exception, and the exceptions a DM carries are listed in
 | Pinning | Admin-only, with a floating dismissible pinned strip |
 | Highlights | Pinned / Announcements / Reports tabs over the same conversation |
 | Jump-to-message | Tapping a reply's quote, or arriving from a mention notification, lands on that exact message, highlighted |
-| Unread-aware entry | Chat opens on the first unread message |
+| Entry | Chat opens at the newest message, always |
 | Jump-to-latest | A floating "N new messages" control once messages arrive while the reader is back in history. Tapping lands on the FIRST of them, to read forward |
 | System messages | Joins, leaves, adds, removes, promotions, demotions |
 | Auto-posted cards | A created poll, event, or meeting posts itself into the relevant chat |
@@ -52,8 +52,14 @@ second is a feature the whole product would have to bend around. Threads remain 
 1. **One chat implementation serves all four scopes.** Feature parity is total.
 2. **Chat loads the most recent ~40 messages** and pages further backward as the user scrolls
    up.
-3. **Chat opens positioned on the first unread message, with no visible scroll motion.** If
-   fully caught up, it opens at the bottom.
+3. **Chat opens at the newest message, with no visible scroll motion.** Always, whether or not
+   anything was unread.
+
+   *(Until 2026-08-27 it opened on the first unread message instead, travelling up to it. Changed
+   at the founder's request after watching the app beside GroupMe: opening a club and being at the
+   bottom is what every chat he uses does, and it is what he expects. The "Last read" rule below
+   still marks where reading stopped - see 3c - because marking the place and being moved to it
+   are different favours.)*
 
    **Who caused the movement decides whether there is any.** Somebody else's message never moves
    the reader - it is announced by the control in rule 3b instead. The reader's own action always
@@ -71,8 +77,9 @@ second is a feature the whole product would have to bend around. Threads remain 
    forward through what they missed rather than arriving after it. The count covers arrivals
    since they last saw the newest message, not since they opened the app.
 3c. **A "Last read" rule marks where reading stopped**, drawn above the first message that was
-   unread **when the screen opened**, and it is what the arrival lands on rather than the message
-   beneath it. It appears only when something actually was unread.
+   unread **when the screen opened**. It appears only when something actually was unread, and it
+   is a marker rather than a destination: scrolling up finds it, and the control in 3b is what
+   offers the trip. *(It was the arrival's landing target until 2026-08-27; see rule 3.)*
 
    **Unread is a fact about the moment of arrival, not a property a message keeps.** The rule is
    decided once, on entry, and nothing that arrives afterwards can create one or move one - not

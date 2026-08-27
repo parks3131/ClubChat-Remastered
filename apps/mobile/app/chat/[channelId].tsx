@@ -183,6 +183,16 @@ const CARDS_ARE_LONG_PRESSABLE = Platform.OS !== 'web';
  */
 const KEEP_VISIBLE_ANCHOR = { minIndexForVisible: 0 } as const;
 
+/**
+ * How many content changes a send may keep chasing its own message through.
+ *
+ * A sent message settles in stages - pending bubble, then the acked row that replaces it, then
+ * any card or photo beside it finishing its measurement - and each stage is a content change that
+ * leaves a single scroll short. Six is comfortably more than those stages and small enough that a
+ * list which never settles releases the reader almost immediately.
+ */
+const FOLLOW_ATTEMPTS = 6;
+
 /** Where a pressed message sits on screen, so the menu can open beside it. */
 type MessageAnchor = { y: number; height: number };
 
@@ -2714,6 +2724,31 @@ export default function ChatScreen() {
    * rather than a duration.
    */
   const landingAttemptsRef = useRef(0);
+  /**
+   * Armed by a send, and spent by the scroll below once the message it wants actually exists.
+   *
+   * > **A send could not scroll to its own message, because at the moment of sending there is no
+   * > such row.** `scrollToNewest()` was called one line before `sendWithRetry`, so it animated to
+   * > whatever was newest at that instant - the message BEFORE yours. The optimistic row was then
+   * > inserted below the viewport, and `maintainVisibleContentPosition`, whose entire job is to
+   * > hold visible content still while the list resizes, held it there. What you had just written
+   * > sat under the composer with a **"1 new message"** pill over it announcing your own words back
+   * > to you, and nothing moved until you dragged. Reproduced on the Simulator on 2026-08-27 and
+   * > measured on the founder's phone before that: about 2.6 seconds of stillness, then whatever
+   * > his finger did.
+   *
+   * So the intent is recorded rather than acted on, and the effect below spends it.
+   */
+  const followOwnSendRef = useRef(false);
+  /**
+   * How many times the follow may be re-applied as the list settles.
+   *
+   * The same bound, for the same reason, as `landingAttemptsRef` above: the row arrives as a
+   * pending bubble, is swapped for the acked message a moment later, and any card or photo near
+   * it can change height again after that. Each of those is a content change that would leave a
+   * single scroll short. Bounded rather than timed, so it cannot pin anybody.
+   */
+  const followAttemptsRef = useRef(0);
   useEffect(() => {
     if (landedRef.current || loading || rows.length === 0) return;
     landedRef.current = true;
@@ -2724,42 +2759,54 @@ export default function ChatScreen() {
      * them in a control that offers to scroll to where they already are would be noise.
      */
     setSeenThrough(newestSeq);
-    if (around !== undefined) return;
-
-    const lastRead = entryLastReadRef.current;
-    if (lastRead === null) return;
-    const firstUnread = rows.find(
-      (row) => row.kind === "message" && row.message.seq > lastRead,
-    );
-    if (!firstUnread) return;
-
     /*
-     * > **Held, not just applied once, because the list is still measuring itself.**
-     * >
-     * > A card renders as an empty shell and grows ~180px when its fetch lands; a photo does the
-     * > same when its bytes arrive. Placing the first unread message at the top of the screen the
-     * > instant the rows exist therefore computes an offset against content that has not finished
-     * > existing - and if the messages below it are still shells, the offset needed is larger than
-     * > the content available, so it clamps to the bottom and stays there. Measured: the target
-     * > resolved correctly to seq 11 and the list still sat at offset 0.
+     * **And that is the whole arrival. A conversation opens at the bottom.**
      *
-     * So the target is remembered and re-applied as the content settles. `pendingLanding` is
-     * cleared the moment the reader touches the list, which is what stops this from becoming the
-     * yanking bug it is descended from: they always win.
+     * > This used to travel: it found the first unread message, or the "Last read" rule above it,
+     * > and held that row at the top of the screen while the cards below it finished measuring.
+     * > The founder asked for the plain behaviour on 2026-08-27 - open a club, be at the newest
+     * > message, the way every chat app he uses behaves.
+     *
+     * **The divider is unaffected and still drawn.** Where you left off is worth marking; it is
+     * not worth being moved to. Scrolling up finds it exactly where it was, and the "N new
+     * messages" control is what offers the trip when there is one to make.
+     *
+     * A `?around=` jump still owns the position outright and is applied by its own effect above.
+     *
+     * **The re-application machinery it used is not gone, it moved.** A jump into history lands
+     * among exactly the cards and photos that change height after they render, so a single
+     * placement computes its offset against content that does not finish existing and clamps to
+     * the bottom. That is still true - it is just now the "N new messages" control's problem
+     * rather than the arrival's, and `pendingLandingRef` is set there.
      */
+  }, [loading, rows, around, newestSeq]);
+
+  /**
+   * Take the sender to their own message, once it is really in the list.
+   *
+   * **Keyed on `rows`, which is the state the optimistic row lands in**, so this runs on the first
+   * render that HAS the message rather than on the tick that asked for it. That ordering is the
+   * entire fix; see `followOwnSendRef` for what the old ordering did.
+   *
+   * **Only ever the reader's own send.** A message from somebody else must never move anybody -
+   * that is the rule the "N new messages" control exists to keep, and it is why this is a ref set
+   * at the send rather than a reaction to the list growing.
+   */
+  useEffect(() => {
+    if (!followOwnSendRef.current || rows.length === 0) return;
+    if (followAttemptsRef.current >= FOLLOW_ATTEMPTS) {
+      followOwnSendRef.current = false;
+      return;
+    }
+    followAttemptsRef.current += 1;
     /*
-     * The DIVIDER is the landing target when there is one, not the message under it.
-     *
-     * Placing the first unread message at the top of the screen puts the rule that explains it
-     * one row above the fold, so the reader arrives among new messages with the thing that says
-     * so just out of sight. Landing on the rule itself is what makes it do its job, and it is
-     * also the sturdier target: `LAST_READ_ROW` is a constant, so the re-application below cannot
-     * lose it to a rebuilt row object the way a message can.
+     * Any arrival placement still in flight is abandoned here. Sending is a deliberate move to the
+     * bottom, and a landing that is still re-applying itself as cards measure would drag the
+     * sender back up out of the message they had just written.
      */
-    const target = invertedRows.includes(LAST_READ_ROW) ? LAST_READ_ROW : firstUnread;
-    pendingLandingRef.current = target;
-    placeAtTop(target);
-  }, [loading, rows, invertedRows, around, newestSeq, placeAtTop]);
+    pendingLandingRef.current = null;
+    scrollToNewest();
+  }, [rows, scrollToNewest]);
 
   /**
    * Keep "what the reader has seen" level with the conversation while they are at the bottom.
@@ -3145,8 +3192,12 @@ export default function ChatScreen() {
       Sending is a deliberate return to the newest message, wherever the reader had scrolled to.
       Posting from halfway up the history and being left there, unable to see what you just
       said, is the one case where movement is what somebody wants.
+
+      ARMED here, not performed here. The message does not exist yet; the effect that owns
+      `followOwnSendRef` scrolls once it does.
     */
-    scrollToNewest();
+    followOwnSendRef.current = true;
+    followAttemptsRef.current = 0;
     // Disarmed as the message goes, so the NEXT one is an ordinary message. An announcement
     // toggle that stays armed is how somebody posts three of them by accident, and each one
     // notifies the whole space.
@@ -3364,8 +3415,9 @@ export default function ChatScreen() {
       if (!picked) return;
 
       const uploaded = await uploadAttachment(channelId, picked, kind);
-      // Same deliberate return to the newest message as a typed send. See `send`.
-      scrollToNewest();
+      // Same deliberate return to the newest message as a typed send, armed the same way. See `send`.
+      followOwnSendRef.current = true;
+      followAttemptsRef.current = 0;
       await client.sendWithRetry(channelId, "", {
         type: kind,
         mediaId: uploaded.mediaId,
@@ -3411,7 +3463,9 @@ export default function ChatScreen() {
         "photo",
         photo.crop ?? undefined,
       );
-      scrollToNewest();
+      // Armed, not performed. Same as `send`.
+      followOwnSendRef.current = true;
+      followAttemptsRef.current = 0;
       await client.sendWithRetry(channelId, photo.caption, {
         type: "photo",
         mediaId: uploaded.mediaId,
@@ -4081,6 +4135,8 @@ export default function ChatScreen() {
           */
           onScrollBeginDrag={() => {
             pendingLandingRef.current = null;
+            // The send's follow gives way to a finger for the same reason the arrival does.
+            followOwnSendRef.current = false;
           }}
           scrollEventThrottle={16}
           onScroll={(event) => {
@@ -4609,11 +4665,18 @@ export default function ChatScreen() {
         <Pressable
           style={styles.newMessages}
           onPress={() => {
-            placeAtTop(
-              rows.find(
-                (row) => row.kind === "message" && row.message.seq > seenThrough,
-              ),
+            /*
+              Held as the content settles, not merely applied once - the same treatment the
+              arrival used to give itself before arrivals stopped travelling. A jump into
+              history lands among exactly the cards and photos that change height after they
+              render, which is what made a single placement clamp to the bottom.
+            */
+            const target = rows.find(
+              (row) => row.kind === "message" && row.message.seq > seenThrough,
             );
+            pendingLandingRef.current = target ?? null;
+            landingAttemptsRef.current = 0;
+            placeAtTop(target);
             setSeenThrough(newestSeq);
           }}
           accessibilityRole="button"
