@@ -85,7 +85,7 @@ is "what is broken".
       it matters the first time this runs from CI.
 
 - [ ] **Request Beta App Review, because it is a queue and not a step.** Internal TestFlight works -
-      the founder installed 1.0.0 (5) on 2026-08-27. External testers need Apple's review at one to
+      the founder installed 1.0.0 (5) and then 1.0.0 (6) on 2026-08-27. External testers need Apple's review at one to
       two days, and it is the only item on the road to the first club that cannot be shortened by
       doing it more carefully, so it starts early rather than when the roster is ready.
 

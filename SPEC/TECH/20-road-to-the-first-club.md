@@ -290,9 +290,9 @@ Policy must state that message content is readable by the service.
   not unmet, it was unreachable - Sentry had received no production error of any kind because it
   refused all of them with a 403. **The parked outbox half is still open.**
 - *A stranger can install through TestFlight and sign up unassisted.* **Still open, and closer.**
-  Build 1.0.0 (5) was submitted to App Store Connect on 2026-08-27, processed by Apple, and
-  installed from TestFlight - but by the founder, on the founder's own phone, through internal
-  distribution. **No stranger has installed anything**, which is the whole of this criterion.
+  Builds 1.0.0 (5) and then 1.0.0 (6) were submitted to App Store Connect on 2026-08-27, processed
+  by Apple, and installed from TestFlight - but by the founder, on the founder's own phone, through
+  internal distribution. **No stranger has installed anything**, which is the whole of this criterion.
   External TestFlight additionally needs Apple's Beta App Review, which is a queue rather than a
   step and is the one item on this road that care cannot shorten.
 - *Mail arrives from the product's own domain, the old key is dead, and DMARC verifies.* **One of
@@ -438,8 +438,9 @@ has restored is a hope, and the cost of testing a hope only ever moves in one di
 **Done 2026-08-27**, and the repo half had been done since 08-25 - what was missing was that
 nobody had run any of it. `eas.json` had been failing schema validation since 08-23, which made
 every `eas` command refuse to run, including the `eas env:set` this phase names below. Four
-`EXPO_PUBLIC_*` values now exist in both EAS environments. Build 1.0.0 (5) carries channel
-`production` and runtime `7d3ffda1`, and is installed on a phone. **The first update published to
+`EXPO_PUBLIC_*` values now exist in both EAS environments. Build 1.0.0 (5) carried channel
+`production` and runtime `7d3ffda1`, and was installed on a phone; build 1.0.0 (6) replaced it on the
+same device later the same day, at runtime `bfe9e13f`. **The first update published to
 that channel the same day and was seen on the phone**, which closes this phase end to end rather
 than as far as a receiver: update `01a0433e-9f9c-7505-b4c1-d4f5caa3f27b`, carrying the Profile
 screen's version line, read back off the device after two relaunches.

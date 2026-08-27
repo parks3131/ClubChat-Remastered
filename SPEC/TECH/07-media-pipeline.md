@@ -164,7 +164,7 @@ GET /media/:id                     ← authenticated, authorized (same membershi
 |---|---|
 | Debt 8 - nothing ever deleted from storage | `media_objects` has an owner reference; deleting the owner enqueues `media.orphaned`; nightly GC job |
 | Debt 9 - no size or MIME limits | Enforced at upload-intent *and* re-verified at complete |
-| No image resizing; full-resolution originals served | Worker derives `thumb` (400px), `bubble` (800px) and `display` (1600px) variants; the gallery grid renders `thumb` and the full-screen viewer renders `display`. See "Three sizes" below for `bubble`, which the server derives and the client does not yet ask for |
+| No image resizing; full-resolution originals served | Worker derives `thumb` (400px), `bubble` (800px) and `display` (1600px) variants; the gallery grid renders `thumb`, the chat bubble renders `bubble` as of 2026-08-27, and the full-screen viewer renders `display`. See "Three sizes" below |
 | Gallery signs an entire photo history in one unpaginated call | Gallery pages like anything else; URLs are stable so there is nothing to "sign in batches" |
 
 ### Which way up, and how big
@@ -257,8 +257,13 @@ its first path segment - the thing [ADR-0044](../decisions/0044-the-cdn-is-a-wor
 Worker routes on - is unchanged, and the signature is an HMAC over the whole key string either
 way. The Worker needs no new configuration and no redeploy for a new size.
 
-**The client does not ask for `bubble` yet.** The server derives it and will serve it; chat still
-requests `display`, so nothing on a phone gets smaller until `apps/mobile` asks for the new name.
+**The client asks for `bubble` as of 2026-08-27** (commit `cc6ed2a`). `PhotoBubble` requests it
+instead of `display`, which for a 240pt slot on a 3x screen is roughly a fifth of the pixels and
+about 3.4MB of decoded memory against 13MB - the reason iOS was evicting chat photos between visits.
+`VARIANT_FALLBACKS` degrades a photo uploaded before the size existed to `display` rather than
+breaking, and the 19 already in production were backfilled. **It shipped server-first on purpose**:
+had a phone asked for a name the route's validator did not know, every chat photo would have read
+"Photo unavailable". See [`TECH/21`](21-deployment.md) rule 1.
 
 ---
 

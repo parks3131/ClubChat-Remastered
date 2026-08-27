@@ -112,21 +112,59 @@ written.
 and, because that package would not run against the module core this project had, the SDK-wide
 alignment [`TECH/14`](14-engineering-pitfalls.md) pitfall 45 describes. **A native change moves the
 runtime version, so build 5 stops being reachable over the air the moment build 6 exists** - four
-updates reached it, all four confirmed, and the fifth would have reached nothing. That is the
+updates reached it, all four confirmed, and a fifth published against it would have reached nothing. That is the
 protection working rather than a fault, and it is the reason the two JavaScript-only halves of the
 photo work were deployed and published BEFORE this one rather than bundled with it.
 
-**It arrived and was confirmed on the founder's iPhone within the hour**, which closes the loop this
-path was built for: a defect reported from a device at 09:27, reproduced, fixed, published and
+**That second update arrived and was confirmed on the founder's iPhone within the hour** - the
+second, not the build above it, which landed later the same day and is recorded below. It closes
+the loop this path was built for: a defect reported from a device at 09:27, reproduced, fixed, published and
 confirmed fixed on that same device by 10:18, with no build, no submission and no Apple review in
 between. Before 2026-08-27 that round trip was days.
 
 **A third update the same day, and by then it was a working loop rather than an event.** Update
 group `1d4ea79f-bec3-46c5-aa35-d04ff1acbe89`, iOS update `01a043cb-8e5d-7ca0-81d1-d367c29606de`,
 commit `14025613882a57157d4062eaba578caa5725c088`, carrying the chat message grouping in
-[`PRD/05`](../PRD/05-chat.md) rule 3e. Confirmed on the device. **Three updates, three clean
-commits, one runtime version, no builds** - which is the answer to "how fast can a change reach a
+[`PRD/05`](../PRD/05-chat.md) rule 3e. Confirmed on the device. **Three updates by that point,
+three clean commits, one runtime version, no builds** - which is the answer to "how fast can a change reach a
 person" that this document's table has claimed since before any of it ran.
+
+**A fourth update closed out build 5's runtime version.** Update group
+`8bbc8f31-5d59-45d1-ae55-0599937228e8`, iOS update `01a04406-a303-75d7-90bd-bb94cdfc7c56`, commit
+`cc6ed2a37975f8d8ffb7c0547695abb5d0fea275`, carrying the right-shaped photo placeholder and the
+bubble-sized image from [`BUGS.md`](../../BUGS.md), 2026-08-27. It is the last thing
+`7d3ffda1f1f71a38b15e0d92511d40e6eb3f1c7c` can ever be sent, and it was published knowing that.
+
+**Build 1.0.0 (6) reached the founder's iPhone at 13:54 on 2026-08-27**, 67.7 MB, and the photo
+behaviour was confirmed on the device by the person who reported it. That closes
+[`bugs/2026-08-27-a-photo-waited-in-a-square-hole.md`](../../bugs/2026-08-27-a-photo-waited-in-a-square-hole.md)
+on real hardware rather than in a Simulator, which matters for that fix specifically: two of its
+three causes - the memory cost of decoding a 1600px image into a 240pt slot, and the disk cache that
+survives an app being evicted - do not exist on a laptop.
+
+**The fifth update is the first at build 6's runtime version, and it exists to reopen the path
+rather than to carry anything.** Update group `9ce98d41-7127-4286-bcdf-f074792f0d18`, iOS update
+`01a04463-1456-77a0-b4c7-d94f31fae81d`, commit `a7e6ffee8bd4d47f5f30fbd5f9e69c09aa5d3d13` with no
+asterisk, runtime version `bfe9e13f237478450cf6a5383915466e1e15d392`. Build 6 already embeds this
+code, so nothing about the app changes when it lands; what changes is that the `production` branch
+now holds an update at the runtime version the installed build actually asks for. **Publishing it
+while nothing depends on it is the point** - it is the only way to learn that the path across a
+native change still works other than needing it during a defect.
+
+**Three checks ran in front of it, and each is a way this publish is known to fail quietly.**
+`npx expo-updates fingerprint:generate --platform ios` returned `bfe9e13f...`, compared against
+build 6's runtime version rather than eyeballed. `eas env:list production` was read back, confirming
+the four `EXPO_PUBLIC_*` values exist in the environment that `--environment production` selects.
+And the exported bundle was searched for what it had inlined, finding `https://api.clubchatapp.com`
+and `wss://ws.clubchatapp.com` present. `http://localhost:3000` appears in that bundle too and is
+not a fault: `endpoint.ts` passes it as the `developmentFallback` argument, which a release bundle
+never reads, and an unset variable throws there rather than quietly using it.
+
+**Published is not arrived, and this one is not yet confirmed on the device.** With
+`fallbackToCacheTimeout` at `0` the check happens on one launch and the swap on the next, so the
+proof is `Update 01a04463` at the bottom of Profile after two relaunches. Until that is seen, the
+honest state of this row is *published and matched to the right runtime version*, which is a weaker
+claim than the four before it and is written that way on purpose.
 
 The fingerprint check in front of it is [`TECH/14`](14-engineering-pitfalls.md) pitfall 42, and it
 is the one that fails silently: an update that does not match the target build's runtime version

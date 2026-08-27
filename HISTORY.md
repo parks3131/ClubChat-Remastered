@@ -19,12 +19,19 @@ Newest first.
 
 ---
 
-## 2026-08-27 - Three updates in one day, and the chat surface they carried
+## 2026-08-27 - Five updates, one build, and the chat surface they carried
 
-**The over-the-air path stopped being a milestone and became how work reaches the phone.** Three
-updates published to `production`, all against runtime `7d3ffda1`, all confirmed on the founder's
-iPhone: the version line, the chat send-scroll fix, and message grouping. No builds, no
-submissions, no Apple.
+**The over-the-air path stopped being a milestone and became how work reaches the phone.** Four
+updates published to `production` against runtime `7d3ffda1`, all four confirmed on the founder's
+iPhone: the version line, the chat send-scroll fix, message grouping, and the right-shaped photo
+placeholder with its bubble-sized image. None of them needed a build, a submission or Apple.
+
+**Then the fifth thing the phone needed was a native package, and that is a different path.**
+`expo-image` cannot travel over the air, so it forced build 1.0.0 (6) - installed from TestFlight at
+13:54, photo behaviour confirmed on the device by the person who reported it - and, because a native
+change moves the runtime version, a fifth update at `bfe9e13f` to reopen the channel the new build
+listens on. **The day is therefore both halves of the argument in one:** four fixes that reached a
+phone in minutes, and one that could not, for exactly the reason the fingerprint exists.
 
 The shape of the day is the point. A defect was reported from a device at 09:27 with two screen
 recordings, reproduced on the Simulator, fixed, published and confirmed fixed on that same device

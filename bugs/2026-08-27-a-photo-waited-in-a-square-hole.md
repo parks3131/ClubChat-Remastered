@@ -94,3 +94,17 @@ The disk cache was proved by taking the network away: the app was killed to clea
 cache, MinIO - the only source of the bytes - was stopped, the app was cold-launched, and the photo
 still rendered. `Library/Caches/com.hackemist.SDImageCache/default` holds it, a directory that did
 not exist before.
+
+**And then it was confirmed on the phone it was reported from.** Everything above is a Simulator
+proof, against a local MinIO, on a machine fast enough that the defect had to be instrumented into
+view. The report came from a device, so the close has to come from one too. Build `1.0.0 (6)` -
+runtime version `bfe9e13f237478450cf6a5383915466e1e15d392`, built from `4d7daf4` - installed from
+TestFlight at 13:54 on 2026-08-27, and the founder confirmed the behaviour is right: re-entering a
+chat no longer shows a grey square that changes shape when the picture lands, and a photo seen once
+comes back without a wait.
+
+That distinction is worth keeping rather than collapsing into "fixed". Two of the three causes here
+**cannot be reproduced on a laptop at all**: the memory cost of decoding a 1600px image into a 240pt
+slot, and an operating system evicting it between visits, are properties of a phone under memory
+pressure. The Simulator can prove the cache directory exists. Only the device can prove the thing
+that was complained about stopped happening.
