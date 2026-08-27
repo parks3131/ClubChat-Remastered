@@ -101,17 +101,6 @@ is "what is broken".
       guarantee than one addressed by a digest, and it is worth deciding whether that is
       acceptable or whether the deploy path should go back to digests.
 
-- [ ] **Decide what `react-native-maps` is for, because it now costs something.** It is imported
-      nowhere. `apps/mobile/src/meetup-map.tsx` keeps it deliberately, so a map can come back
-      without a native build, and [ADR-0049](SPEC/decisions/0049-a-meetup-says-where-with-a-link-and-nothing-else.md)
-      is why there is no map today. That was free until the fingerprint runtime version made
-      `node_modules` part of the app's identity: the package holds the one file a local
-      `pod install` rewrites, so an unused dependency is now the thing that breaks builds and
-      silently swallows over-the-air updates ([`TECH/14`](SPEC/TECH/14-engineering-pitfalls.md)
-      pitfall 42). Two honest options - drop it and reinstate it the day a map is wanted, or keep
-      it and put the fingerprint check in front of every build and publish. Right now it is neither,
-      which is the only answer that is definitely wrong.
-
 - [ ] **`eas submit` may need an App Store Connect API key.** The `production` submit profile
       carries `ios.ascAppId` and nothing else - no `appleId`, no `ascApiKeyPath` - so a
       `--non-interactive` submit fails unless a key is already stored on EAS. Fine interactively;

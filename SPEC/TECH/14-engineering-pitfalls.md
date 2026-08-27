@@ -267,10 +267,10 @@ they cost.
     npx expo-updates fingerprint:generate --platform ios
     ```
 
-    It must equal the Runtime Version on the build the update is aimed at. `npm ci` restores the
-    file. Note that `react-native-maps` is imported nowhere - `apps/mobile/src/meetup-map.tsx`
-    keeps it deliberately so the map can come back without a native build - so the cheapest durable
-    fix is a decision about that dependency rather than a check somebody has to remember.
+    It must equal the Runtime Version on the build the update is aimed at, and `npm ci` restores
+    the file. **The dependency itself is settled and is not the thing to change here**:
+    `apps/mobile/src/meetup-map.tsx` records why it stays installed, and ADR-0037 and ADR-0049
+    carry the reasoning. This pitfall is about running the check, not about the package.
 
 43. **A malformed `eas.json` disables every `eas` command, not the one it belongs to.** `eas`
     validates the whole file before doing anything, so an `ascAppId` sitting at
