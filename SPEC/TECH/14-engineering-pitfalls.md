@@ -279,3 +279,19 @@ they cost.
     and found on 2026-08-27, because in between nobody ran an `eas` command - and the documents
     that named `eas env:set` as the next step were naming a command that could not run. **A config
     file nothing has executed since it changed is untested, whatever it looks like.**
+
+44. **A capability added to `app.json` does not reach the provisioning profile that already
+    exists.** `ios.associatedDomains` gained `applinks:clubchatapp.com` on 2026-08-25, for the
+    invite links the site Worker serves. The App Store profile was issued on 2026-08-23. EAS
+    reuses a profile it considers valid rather than reissuing it, so the build reached Xcode and
+    failed there: *"Provisioning profile ... doesn't include the Associated Domains capability"*.
+    Regenerating it is `eas credentials`, which has no non-interactive flags, so this is a step a
+    person performs.
+
+    **The pattern is the point, and 2026-08-27 was the third instance in one morning.** The
+    invalid `eas.json` (pitfall 43), the mutated fingerprint source (pitfall 42) and this profile
+    were all created or invalidated on 2026-08-23 to 08-25 and sat unexercised until something
+    finally ran. **Work that lands in the repo and is never executed is not done, it is
+    unmeasured** - and the gap here was four days of a repo that read as finished. A change that
+    alters entitlements, native config or a build tool's config file should be followed by running
+    the thing it configures, in the same session that made it.
