@@ -5075,7 +5075,18 @@ const styles = StyleSheet.create({
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   list: {
     padding: space.md,
-    gap: space.sm,
+    /*
+      The TIGHTEST separation any two rows may have, which is the one between two bubbles from the
+      same person still talking. Everything that should stand further apart asks for it by name -
+      `messageRowRunStart`, `cardRow`, and the four marker rows, each of which already carries its
+      own padding.
+
+      > **It was `space.sm` and it was uniform, which is the thing that made it wrong.** A row gap
+      > set on the container cannot know whether the same person is speaking, so every pair of
+      > bubbles sat the same distance apart whoever sent them. Making it the minimum and pushing
+      > the difference out to the rows is what lets a run read as one person talking.
+    */
+    gap: space.xs,
     /*
      * The newest message clears the composer by more than the gutter, so it reads as sitting
      * above the bar rather than tucked beneath it.
@@ -5156,7 +5167,7 @@ const styles = StyleSheet.create({
    * beside the headline are what carry "this is different" at a glance down a scrolling list; the
    * oversized INFO is clipped texture rather than a label anyone is meant to read.
    */
-  announcementWrap: { alignItems: "center", paddingHorizontal: space.sm, paddingVertical: space.xs },
+  announcementWrap: { alignItems: "center", paddingHorizontal: space.sm, paddingVertical: space.sm },
   announcementCard: {
     width: "100%",
     maxWidth: 420,
@@ -5561,7 +5572,8 @@ const styles = StyleSheet.create({
    * plus the face and the name.
    */
   messageRow: { alignItems: "flex-start" },
-  messageRowRunStart: { marginTop: space.sm },
+  // Enough, with the list's own gap, to keep a new speaker as far from the last one as before.
+  messageRowRunStart: { marginTop: space.md - space.xs },
   messageRowMine: { alignItems: "flex-end" },
   /*
     A spacer the height of an author line, for a row that has none yet.
@@ -5616,7 +5628,7 @@ const styles = StyleSheet.create({
   },
   sentText: { ...type.body, fontSize: 15, color: color.textPrimary },
   receivedText: { ...type.body, fontSize: 15, color: color.textPrimary },
-  systemRow: { alignItems: "center", paddingVertical: space.xs },
+  systemRow: { alignItems: "center", paddingVertical: space.sm },
   /*
     The "Last read" rule: a line through the conversation with the label sitting in it.
 
@@ -5670,7 +5682,7 @@ const styles = StyleSheet.create({
     nothing to sit beside, so the pills stack underneath on their own.
   */
   // A card always heads a run, so it takes the run-start separation rather than a gap of its own.
-  cardRow: { marginTop: space.sm },
+  cardRow: { marginTop: space.md - space.xs },
   /*
     Who posted it, above the card rather than inside it.
 
@@ -5687,7 +5699,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: space.sm,
-    paddingBottom: space.sm,
+    /*
+      Between the two gaps either side of it, deliberately. The founder asked for this one to close
+      "a little distance" and said in the same breath that it need not be as thin as the gap between
+      two bubbles - so it sits above that and below what it was. A run reads as a heading with its
+      messages under it; too far and the heading floats free of them, too near and it stops being a
+      heading at all.
+    */
+    paddingBottom: space.xs + 2,
     alignSelf: "flex-start",
   },
   /*
