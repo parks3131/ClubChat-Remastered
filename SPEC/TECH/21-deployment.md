@@ -177,6 +177,18 @@ The fingerprint check in front of it is [`TECH/14`](14-engineering-pitfalls.md) 
 is the one that fails silently: an update that does not match the target build's runtime version
 reaches no phone and reports success.
 
+**The sixth update is the first to carry a fix at build 6's runtime version.** Update group
+`ccd20c92-6d4f-4bc7-a63b-b5a5f89a34d9`, iOS update `01a044bf-47b8-7f33-b8c0-049538ecb8a0`, commit
+`a9234e04f0b9b98072180e395b6251a3b33aab33` with no asterisk, runtime version
+`bfe9e13f237478450cf6a5383915466e1e15d392`, generated and compared against build 6's before
+publishing rather than after. It carries the bubble-tail fix in [`BUGS.md`](../../BUGS.md), reported
+off the founder's iPhone at 15:22 and **confirmed fixed on that same phone the same afternoon**.
+
+**So the path the fifth update reopened has now been used for what it exists for.** The fifth was
+deliberately empty: build 6 already embedded its code, so nothing on the device could have changed
+and the proof had to be an id at the bottom of Profile. This one changed something the person who
+reported it was looking at, which is the other half of the same claim.
+
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because
 `cdn.<domain>` has to validate the `exp`/`sig` pair that [Media pipeline](07-media-pipeline.md)

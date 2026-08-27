@@ -82,7 +82,9 @@ sides and no corner pointed at anybody. Moving the face is what turned that corn
 and turned the sent one into a tail aimed away from its own sender. The founder read it off his
 phone the same afternoon and sent a photograph with the bubble circled and arrows drawn at it.
 `styles.sent` is now the mirror of `styles.received`. **The lesson is not about corners:** a
-change that mirrors one thing has to be asked what else was pointing at it.
+change that mirrors one thing has to be asked what else was pointing at it. It went out as the sixth
+update, `01a044bf`, and he read the corner off his phone the same afternoon - the first update to
+carry a fix rather than a version line across build 6's runtime version.
 
 ### What is still not true
 
