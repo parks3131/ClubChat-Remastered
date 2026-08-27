@@ -91,6 +91,30 @@ second is a feature the whole product would have to bend around. Threads remain 
    the date, with the year only when it is not this one. Quieter than the rule above, and the
    contrast is deliberate - a date says where you are, the rule says where to start reading.
 
+3e. **A spell of messages from one person is introduced once.** The face and the name sit over the
+   first of them; the rest are bubbles under it. A run ends when somebody else speaks, when an hour
+   of silence passes, or when anything full width sits between two messages - a date heading, the
+   "Last read" rule, a system line, a tombstone, an announcement, or a poll, event or meeting card.
+   A card always heads a run of its own: it carries a whole object rather than a turn in somebody's
+   talking.
+
+   **One rule, with no branch on who is reading.** The same in a direct message as in a club chat,
+   and the same for your own messages as for anybody else's. All three of those were offered as
+   separate treatments on 2026-08-27 and all three were declined, which is worth recording because
+   each of them is a plausible-looking special case somebody will propose again.
+
+   **The gap between two bubbles says whether the same person is still talking.** Inside a run it
+   is the list's own row gap and nothing more; a run is separated from what precedes it by that
+   gap again, plus the face and the name. The relationship is the rule - a run must read as one
+   person speaking rather than as a column of separate remarks - and the measurements belong to
+   `theme.ts`.
+
+   *(Before this, every message carried the face and the name, and every pair of bubbles sat the
+   same distance apart whoever sent them. Reported from a photograph of a DM: a conversation with
+   two people in it, naming both of them on every line, with a repeated name circled. The pair
+   under the circle were nineteen minutes apart, which is why the silence that ends a run is an
+   hour and not the five minutes most chat apps use.)*
+
 4. **Opening a chat marks it read**, which clears its unread count everywhere. Nothing else
    clears it.
 5. **Only an admin of that space can post an announcement or pin a message.** In race chat

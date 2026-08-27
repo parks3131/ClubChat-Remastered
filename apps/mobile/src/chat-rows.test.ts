@@ -10,7 +10,15 @@
 
 import { describe, expect, it } from 'vitest';
 import type { MessageEnvelope } from '@clubchat/shared';
-import { buildChatRows, decideLastReadAnchor, type Row } from './chat-rows.ts';
+import { SYSTEM_ACTOR_ID } from '@clubchat/shared';
+import {
+  buildChatRows,
+  decideLastReadAnchor,
+  decideRunStarts,
+  LAST_READ_ROW,
+  rowKey,
+  type Row,
+} from './chat-rows.ts';
 
 /** A message row, with only the fields this module reads. */
 function message(seq: number, createdAt = '2026-08-01T12:00:00.000Z'): Row {
@@ -119,5 +127,182 @@ describe('day headings', () => {
     ];
     const displayed = asDisplayed(buildChatRows(rows, { lastReadAnchor: null, now }));
     expect(kinds(displayed)).toEqual(['day', 'message', 'day', 'pending']);
+  });
+});
+
+/**
+ * Runs: the face and the name are drawn once for a spell of messages, not once per message.
+ *
+ * **The rule came off a photograph.** The founder circled a second "Parks RPK" and avatar in a
+ * DIRECT MESSAGE - a conversation with two people in it, naming both of them on every line - and
+ * the two messages under it were **19 minutes apart**. That single fact settles the shape of this:
+ * the 5-minute break most chat apps use would have repeated the header exactly where he circled
+ * it, so the gap here is an hour.
+ *
+ * The other three answers he gave are all "no special cases": the same rule in a DM as in a group
+ * chat, and the same rule for his own messages as for everybody else's. There is one rule in this
+ * file and no branches on who is reading.
+ */
+describe('runs of consecutive messages', () => {
+  const ALICE = '11111111-1111-4111-8111-111111111111';
+  const BOB = '22222222-2222-4222-8222-222222222222';
+  const NOON = Date.UTC(2026, 7, 1, 12, 0, 0);
+
+  /** A message `minutes` after noon, from `senderId`. UTC noon so no local day boundary is near. */
+  function from(
+    seq: number,
+    senderId: string,
+    minutes = 0,
+    extra: Partial<MessageEnvelope> = {},
+  ): Row {
+    return {
+      kind: 'message',
+      message: {
+        seq,
+        senderId,
+        createdAt: new Date(NOON + minutes * 60_000).toISOString(),
+        type: 'text',
+        deletedAt: null,
+        linkedPollId: null,
+        linkedEventId: null,
+        linkedMeetingId: null,
+        ...extra,
+      } as MessageEnvelope,
+    };
+  }
+
+  const pending = (clientMsgId: string): Row => ({
+    kind: 'pending',
+    clientMsgId,
+    body: 'hi',
+    failed: false,
+    type: 'text',
+  });
+
+  /** What the reader actually sees: which rows draw a face and a name. */
+  const starters = (rows: readonly Row[], viewerId: string | null = ALICE) => {
+    const built = buildChatRows(rows, { lastReadAnchor: null, now: new Date(NOON) });
+    const set = decideRunStarts(built, { viewerId, now: new Date(NOON) });
+    return built
+      .filter((row) => row.kind === 'message' || row.kind === 'pending')
+      .filter((row) => set.has(rowKey(row)))
+      .map((row) => rowKey(row))
+      .sort();
+  };
+
+  it('draws the header once for a spell from one person', () => {
+    expect(starters([from(1, BOB, 0), from(2, BOB, 3), from(3, BOB, 10)])).toEqual(['m-1']);
+  });
+
+  /*
+   * The pair from the photograph. 12:12 and 12:31 are 19 minutes apart and he circled the second
+   * header as the thing to remove, which is why the gap below is an hour and not five minutes.
+   */
+  it('keeps nineteen minutes inside one run, which is the case that was reported', () => {
+    expect(starters([from(1, BOB, 12), from(2, BOB, 31)])).toEqual(['m-1']);
+  });
+
+  it('starts a new run after an hour of silence', () => {
+    expect(starters([from(1, BOB, 0), from(2, BOB, 61)])).toEqual(['m-1', 'm-2']);
+  });
+
+  it('starts a new run whenever the speaker changes', () => {
+    expect(starters([from(1, BOB, 0), from(2, ALICE, 1), from(3, BOB, 2)])).toEqual([
+      'm-1',
+      'm-2',
+      'm-3',
+    ]);
+  });
+
+  /*
+   * No branch on who is reading. He was offered the option of dropping his own name and face
+   * entirely and chose to keep them, once per run, exactly like everybody else's.
+   */
+  it('treats the reader own messages the same as anybody else', () => {
+    expect(starters([from(1, ALICE, 0), from(2, ALICE, 3)])).toEqual(['m-1']);
+  });
+
+  it('starts a new run under a date heading', () => {
+    // A day apart, so `buildChatRows` puts a heading between them. Something full width sat in
+    // the gap, so the next bubble has to say who is speaking again.
+    expect(starters([from(1, BOB, 0), from(2, BOB, 24 * 60)])).toEqual(['m-1', 'm-2']);
+  });
+
+  it('starts a new run under the Last read rule', () => {
+    const rows = [from(1, BOB, 0), from(2, BOB, 1)];
+    const built = buildChatRows(rows, { lastReadAnchor: 2, now: new Date(NOON) });
+    const set = decideRunStarts(built, { viewerId: ALICE, now: new Date(NOON) });
+    expect(set.has('m-2')).toBe(true);
+  });
+
+  it('starts a new run under a system message', () => {
+    const joined = from(2, SYSTEM_ACTOR_ID, 1, { body: 'Casey joined the club' });
+    expect(starters([from(1, BOB, 0), joined, from(3, BOB, 2)])).toEqual(['m-1', 'm-3']);
+  });
+
+  it('starts a new run under an announcement, which draws its own sender line', () => {
+    const shout = from(2, BOB, 1, { type: 'announcement' });
+    expect(starters([from(1, BOB, 0), shout, from(3, BOB, 2)])).toEqual(['m-1', 'm-3']);
+  });
+
+  it('starts a new run under a tombstone', () => {
+    const gone = from(2, BOB, 1, { deletedAt: new Date(NOON).toISOString() });
+    expect(starters([from(1, BOB, 0), gone, from(3, BOB, 2)])).toEqual(['m-1', 'm-3']);
+  });
+
+  /*
+   * A card is full width and carries its own attribution, so it always heads its own run AND the
+   * next message starts one - there is a whole card between them.
+   */
+  it('gives a card its own run, on both sides of it', () => {
+    const poll = from(2, BOB, 1, { linkedPollId: 'p1' });
+    expect(starters([from(1, BOB, 0), poll, from(3, BOB, 2)])).toEqual(['m-1', 'm-2', 'm-3']);
+  });
+
+  /*
+   * A DELETED card renders nothing at all - not even a tombstone, because a card has no replies
+   * to leave dangling. Nothing is drawn, so nothing should break: two messages either side of it
+   * are visually adjacent, and giving the second one a header would put a face in the middle of a
+   * run for a row the reader cannot see.
+   */
+  it('is not broken by a deleted card, which draws nothing', () => {
+    const goneCard = from(2, BOB, 1, {
+      linkedPollId: 'p1',
+      deletedAt: new Date(NOON).toISOString(),
+    });
+    expect(starters([from(1, BOB, 0), goneCard, from(3, BOB, 2)])).toEqual(['m-1']);
+  });
+
+  it('groups a message being sent with the reader own previous one', () => {
+    expect(starters([from(1, ALICE, 0), pending('c1')])).toEqual(['m-1']);
+  });
+
+  it('starts a run for a message being sent after somebody else spoke', () => {
+    expect(starters([from(1, BOB, 0), pending('c1')])).toEqual(['m-1', 'p-c1']);
+  });
+
+  it('groups consecutive messages being sent', () => {
+    expect(starters([from(1, ALICE, 0), pending('c1'), pending('c2')])).toEqual(['m-1']);
+  });
+
+  /*
+   * A send is happening NOW, so it is compared against the clock rather than against a timestamp
+   * it does not have yet. An hour-old message of your own does not adopt it.
+   */
+  it('does not group a send with an hour-old message of the reader own', () => {
+    const rows = [from(1, ALICE, 0), pending('c1')];
+    const built = buildChatRows(rows, { lastReadAnchor: null, now: new Date(NOON + 61 * 60_000) });
+    const set = decideRunStarts(built, {
+      viewerId: ALICE,
+      now: new Date(NOON + 61 * 60_000),
+    });
+    expect(set.has('p-c1')).toBe(true);
+  });
+
+  it('names rows the way the list already keys them', () => {
+    expect(rowKey(from(7, BOB))).toBe('m-7');
+    expect(rowKey(pending('abc'))).toBe('p-abc');
+    expect(rowKey({ kind: 'day', dateKey: '2026-08-01' })).toBe('d-2026-08-01');
+    expect(rowKey(LAST_READ_ROW)).toBe('last-read');
   });
 });

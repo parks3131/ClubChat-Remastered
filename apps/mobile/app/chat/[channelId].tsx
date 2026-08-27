@@ -36,7 +36,9 @@ import { useSession } from "../../src/chat-provider.tsx";
 import {
   buildChatRows,
   decideLastReadAnchor,
+  decideRunStarts,
   LAST_READ_ROW,
+  rowKey,
   type Row,
 } from "../../src/chat-rows.ts";
 import { formatDaySeparator } from "../../src/dates.ts";
@@ -1305,22 +1307,34 @@ function AuthorLine({
  */
 const PendingRow = memo(function PendingRow({
   row,
+  startsRun,
   onRetry,
   onJumpToQuote,
 }: {
   row: Extract<Row, { kind: "pending" }>;
+  /** Whether this send heads a run, and therefore needs the space an author line will take. */
+  startsRun: boolean;
   onRetry: (clientMsgId: string) => void;
   onJumpToQuote: (seq: number) => void;
 }) {
   return (
-    <View style={[styles.messageRow, styles.messageRowMine]}>
+    <View
+      style={[
+        styles.messageRow,
+        startsRun && styles.messageRowRunStart,
+        styles.messageRowMine,
+      ]}
+    >
       {/*
         A spacer the exact height of an author line, not an author line. The client knows its own
         user id but not its own name, so there is no name to write and no initial to draw; leaving
         the slot empty instead would let the bubble jump upward by a whole avatar the moment the
         ack arrives and the real line takes the space.
+
+        Only when this send HEADS a run. Reply to yourself a second time and the acked row will
+        draw no author line either, so reserving one here would open a gap that never fills.
       */}
-      <View style={styles.avatarSpacer} />
+      {startsRun && <View style={styles.avatarSpacer} />}
       <View style={styles.bubbleWrapMine}>
         <BubbleContainer
           mine
@@ -1390,6 +1404,7 @@ const MessageRow = memo(function MessageRow({
   message,
   userId,
   mine,
+  startsRun,
   isJumpTarget,
   onSelect,
   onReact,
@@ -1404,6 +1419,14 @@ const MessageRow = memo(function MessageRow({
   /** The viewer, for marking their own reactions. Null only before auth resolves. */
   userId: string | null;
   mine: boolean;
+  /**
+   * Whether this row heads a spell of messages from one person, and so draws the face and name.
+   *
+   * **Decided over the whole list, in `chat-rows.ts`, never here.** "Is this the first of a run" is
+   * a question about the row before this one, and a memoized row cannot see its neighbours - which
+   * is the whole reason it is a prop rather than something this component works out.
+   */
+  startsRun: boolean;
   isJumpTarget: boolean;
   /**
    * Open the long-press menu for this message. The card's own dots call it too.
@@ -1606,8 +1629,12 @@ const MessageRow = memo(function MessageRow({
         {/*
           Null when the message was cached before this column existed. It renders unattributed
           rather than blank-labelled, and the next sync fills it in.
+
+          A card always heads its own run - it is full width and carries a whole object, not a
+          turn in somebody's spell of talking - so `startsRun` is true here in practice. It is
+          still asked, so this branch cannot drift from the rule that decides it.
         */}
-        {message.senderName !== null && (
+        {startsRun && message.senderName !== null && (
           <AuthorLine
             name={message.senderName}
             image={message.senderImage}
@@ -1682,6 +1709,7 @@ const MessageRow = memo(function MessageRow({
     <View
       style={[
         styles.messageRow,
+        startsRun && styles.messageRowRunStart,
         mine && styles.messageRowMine,
         isJumpTarget && styles.jumpTarget,
       ]}
@@ -1691,11 +1719,15 @@ const MessageRow = memo(function MessageRow({
         same component, so the two cannot drift again.
 
         Null when the message was cached before this column existed. It renders unattributed
-        rather than blank-labelled, and the next sync fills it in. Shown on BOTH sides:
-        attribution on your own messages is not redundant, or an own bubble would be the only
-        unlabelled thing on screen.
+        rather than blank-labelled, and the next sync fills it in.
+
+        **Shown on BOTH sides, and now once per RUN rather than once per message.** The founder was
+        offered the option of dropping his own name and face entirely, the way GroupMe and
+        WhatsApp do, and declined it on 2026-08-27: one rule, no branch on who is reading, in a DM
+        exactly as in a group chat. So the only thing that changed is how often this is drawn - see
+        `decideRunStarts`.
       */}
-      {message.senderName !== null && (
+      {startsRun && message.senderName !== null && (
         <AuthorLine
           name={message.senderName}
           image={message.senderImage}
@@ -2374,6 +2406,21 @@ export default function ChatScreen() {
     [rows, lastReadAnchor],
   );
 
+  /**
+   * Which rows draw a face and a name, given that a spell from one person only needs one.
+   *
+   * **Decided over the whole list rather than per row**, because "is this the first of a run" is a
+   * question about the row BEFORE this one, and a memoized row component cannot see its
+   * neighbours. Computed in `chat-rows.ts` beside the day headings and the "Last read" rule, which
+   * is not tidiness: two of the four things that end a run are markers that module inserts, so it
+   * is the only place that can see all four. It is also the only part of this screen's arithmetic
+   * that can be tested, and it is - `chat-rows.test.ts`.
+   */
+  const runStarts = useMemo(
+    () => decideRunStarts(invertedRows, { viewerId: userId }),
+    [invertedRows, userId],
+  );
+
   /** The newest message this screen currently holds, or 0 for an empty conversation. */
   const newestSeq = useMemo(
     () =>
@@ -3016,18 +3063,9 @@ export default function ChatScreen() {
    * it is handed stops changing - hence the `useCallback`s above, each taking a `seq` and closing
    * over nothing that moves per row.
    */
-  const keyExtractor = useCallback((row: Row) => {
-    switch (row.kind) {
-      case "message":
-        return `m-${row.message.seq}`;
-      case "pending":
-        return `p-${row.clientMsgId}`;
-      case "day":
-        return `d-${row.dateKey}`;
-      case "lastRead":
-        return "last-read";
-    }
-  }, []);
+  // One definition, in `chat-rows.ts`, because the run set reports by the same key the list
+  // renders by. Two copies of it would drift and the grouping would silently stop matching rows.
+  const keyExtractor = useCallback((row: Row) => rowKey(row), []);
 
   const renderRow = useCallback(
     ({ item }: { item: Row }) => {
@@ -3053,7 +3091,12 @@ export default function ChatScreen() {
       }
       if (item.kind === "pending") {
         return (
-          <PendingRow row={item} onRetry={retry} onJumpToQuote={jumpToQuote} />
+          <PendingRow
+            row={item}
+            startsRun={runStarts.has(rowKey(item))}
+            onRetry={retry}
+            onJumpToQuote={jumpToQuote}
+          />
         );
       }
       return (
@@ -3061,6 +3104,13 @@ export default function ChatScreen() {
           message={item.message}
           userId={userId}
           mine={item.message.senderId === userId}
+          /*
+            Whether this row heads a spell of messages from one person, and therefore whether it
+            draws the face and the name. A boolean rather than the set, so the memo keeps its
+            promise: a row whose answer did not change is handed the same `false` it had last
+            render and re-renders nothing.
+          */
+          startsRun={runStarts.has(rowKey(item))}
           // Marked so a reader can see WHICH message a jump sent them to. Without it the screen
           // has silently scrolled somewhere and the target is indistinguishable from its
           // neighbours, which is most of the value of jumping.
@@ -3079,6 +3129,7 @@ export default function ChatScreen() {
     [
       retry,
       userId,
+      runStarts,
       jumpedTo,
       selectMessage,
       react,
@@ -5486,7 +5537,21 @@ const styles = StyleSheet.create({
    * is `stretch`, which would pull every bubble out to its 82% maximum and make a one-word message
    * as wide as a paragraph.
    */
-  messageRow: { alignItems: "flex-start", marginBottom: space.xs },
+  /*
+   * The gap between two bubbles now depends on whether the same person is still talking.
+   *
+   * > **It did not, and the founder asked for it directly**: "unless it's consecutively from same
+   * > person, can you reduce the gap". Every row carried `marginBottom: space.xs` on top of the
+   * > list's own `gap: space.sm`, so twelve points sat between every pair of bubbles whoever sent
+   * > them - which made a spell of messages from one person read as a list of separate remarks
+   * > rather than as one person still speaking.
+   *
+   * So the base gap is now the list's `gap` alone, and the extra air is spent where it says
+   * something: above a row that STARTS a run. Inside a run, eight points. Between runs, sixteen
+   * plus the face and the name.
+   */
+  messageRow: { alignItems: "flex-start" },
+  messageRowRunStart: { marginTop: space.sm },
   messageRowMine: { alignItems: "flex-end" },
   /*
     A spacer the height of an author line, for a row that has none yet.
@@ -5594,7 +5659,8 @@ const styles = StyleSheet.create({
     needs `flexWrap` to stop the reaction pills becoming a third column. With no avatar there is
     nothing to sit beside, so the pills stack underneath on their own.
   */
-  cardRow: { marginBottom: space.xs },
+  // A card always heads a run, so it takes the run-start separation rather than a gap of its own.
+  cardRow: { marginTop: space.sm },
   /*
     Who posted it, above the card rather than inside it.
 
