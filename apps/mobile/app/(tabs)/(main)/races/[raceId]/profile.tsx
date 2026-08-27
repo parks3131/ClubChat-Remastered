@@ -87,7 +87,7 @@ export default function RaceProfileScreen() {
               ) : (
                 <RemoteImage
                   mediaId={race.image}
-                  variant="display"
+                  variant="bubble"
                   style={styles.avatar}
                   resizeMode="cover"
                 />

@@ -145,7 +145,7 @@ export default function ProfileScreen() {
               ) : (
                 <RemoteImage
                   mediaId={data.profile.image}
-                  variant="display"
+                  variant="bubble"
                   style={styles.avatar}
                   resizeMode="cover"
                   accessibilityLabel="Your picture"

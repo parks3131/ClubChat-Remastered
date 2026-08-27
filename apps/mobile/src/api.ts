@@ -1102,7 +1102,14 @@ const mediaUrlMemo = new Map<
  */
 const mediaUrlInFlight = new Map<string, Promise<ResolvedMedia>>();
 
-export type MediaVariant = 'original' | 'display' | 'thumb';
+/**
+ * A size the server will serve, and the client's copy of `packages/server/src/media/derive.ts`.
+ *
+ * Hand-written rather than imported, like the rest of this file's wire types. `bubble` was added
+ * on 2026-08-27; a name here that the server does not know is a 400 from `/media/urls`, which is
+ * why the two lists are worth reading together when either changes.
+ */
+export type MediaVariant = 'original' | 'thumb' | 'bubble' | 'display';
 
 /**
  * A resolved URL and what is at the end of it.

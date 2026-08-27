@@ -126,7 +126,19 @@ type PhotoProps = {
  * never load looks identical to one still loading, and the difference matters to whoever is
  * waiting.
  */
-export function PhotoBubble({ mediaId, localUri, variant = 'display', mine }: PhotoProps) {
+/*
+ * `bubble`, not `display`.
+ *
+ * > **A conversation was being sent the full-screen photo.** `display` is derived at 1600px wide
+ * > and this component draws at most 240pt, so a 3x screen was decoding roughly five times the
+ * > pixels it could show - about 13MB of memory per picture against 3.4MB, which is why iOS
+ * > evicted them between visits and re-fetched on every re-entry.
+ *
+ * A photo uploaded before the size existed falls back to `display` server-side, so an old
+ * conversation is exactly as it was rather than broken - see `VARIANT_FALLBACKS`. Running
+ * `scripts/backfill-media-variants.mjs` is what makes those lighter too.
+ */
+export function PhotoBubble({ mediaId, localUri, variant = 'bubble', mine }: PhotoProps) {
   // A local uri renders immediately - the optimistic bubble should not wait on a round trip to
   // show a photo the sender just picked off their own device.
   const [uri, setUri] = useState<string | null>(localUri ?? null);

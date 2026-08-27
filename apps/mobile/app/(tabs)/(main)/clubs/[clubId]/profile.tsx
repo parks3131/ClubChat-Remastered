@@ -66,7 +66,7 @@ export default function ClubProfileScreen() {
                   <Text style={styles.avatarInitial}>{club.name.charAt(0).toUpperCase()}</Text>
                 </View>
               ) : (
-                <RemoteImage mediaId={club.image} variant="display" style={styles.avatar} resizeMode="cover" />
+                <RemoteImage mediaId={club.image} variant="bubble" style={styles.avatar} resizeMode="cover" />
               )}
               {/* Admin tier only: a member cannot change the club's face. */}
               {viewer.isAdmin && (

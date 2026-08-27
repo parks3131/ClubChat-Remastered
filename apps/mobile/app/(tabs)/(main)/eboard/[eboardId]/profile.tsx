@@ -80,7 +80,7 @@ export default function EboardProfileScreen() {
               ) : (
                 <RemoteImage
                   mediaId={eboard.image}
-                  variant="display"
+                  variant="bubble"
                   style={styles.avatar}
                   resizeMode="cover"
                 />
