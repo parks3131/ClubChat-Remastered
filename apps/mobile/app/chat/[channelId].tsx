@@ -875,7 +875,16 @@ function QuotedMessage({
  * are both light, so every piece of text in either one is dark. A branch here is the only place
  * that stays true. See `color.bubbleSent`.
  *
- * The asymmetric corners are v1's: each bubble has one small corner where its tail would be.
+ * **Each bubble has one small corner, and it is a tail: it points at the face that sent it.** A
+ * received bubble's is top left, under the avatar hanging in the left gutter; your own is top
+ * right, under yours. See `styles.sent` and `styles.received`, which are mirror images.
+ *
+ * > **Your own used to be at the bottom left**, which is v1's, and it was coherent there: v1 put
+ * > the avatar in a column to the LEFT of every bubble on both sides, so no tail on either side
+ * > pointed anywhere in particular. The author line moved above the bubble and mirrored earlier on
+ * > 2026-08-27, and that is what made the two sides disagree - the received tail now pointed at
+ * > the face above it and the sent one pointed away from its own. The founder read it off his
+ * > phone the same afternoon: the grey bubble points at Sean, mine should point at me.
  */
 function BubbleContainer({
   mine,
@@ -5614,12 +5623,15 @@ const styles = StyleSheet.create({
     The received bubble drops the hairline border it had over near-white. `bubbleReceived` is
     translucent grey on `appBackground`, which separates it from the page on its own; a border on
     top of a fill that already reads is a second edge doing the first one's job.
+
+    The one small corner in each is the tail, and it points at the face above it: top LEFT on a
+    received bubble, top RIGHT on your own. The two are mirror images, which is the whole rule.
   */
   sent: {
     backgroundColor: color.bubbleSent,
     borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    borderBottomLeftRadius: radius.xs,
+    borderTopRightRadius: radius.xs,
+    borderBottomLeftRadius: radius.lg,
     borderBottomRightRadius: radius.lg,
   },
   received: {

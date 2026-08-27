@@ -74,6 +74,16 @@ its first bubble was not padding - it was the empty half of a 40pt avatar sittin
 name. Taking the padding from 8 to 6 barely showed, which was the tell, and the answer was the
 face.
 
+**And then the same day's own change left one half of itself behind.** The author line moved above
+the bubble and mirrored in the morning: a received message's face in the left gutter, your own in
+the right. The small corner each bubble carries did not follow. It stayed where v1 put it, bottom
+left on a sent bubble, which was coherent while v1 kept the avatar in a column to the left of both
+sides and no corner pointed at anybody. Moving the face is what turned that corner into a tail,
+and turned the sent one into a tail aimed away from its own sender. The founder read it off his
+phone the same afternoon and sent a photograph with the bubble circled and arrows drawn at it.
+`styles.sent` is now the mirror of `styles.received`. **The lesson is not about corners:** a
+change that mirrors one thing has to be asked what else was pointing at it.
+
 ### What is still not true
 
 No update has been rolled back or republished over a bad one, so the recall path in ADR-0048 is
