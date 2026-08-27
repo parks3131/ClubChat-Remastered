@@ -43,11 +43,11 @@ is "what is broken".
       It becomes checkable the first time an over-the-air update ships, because from then on the
       installed base is something EAS can answer. Until then both keys stay.
 
-- [ ] **Over-the-air updates are wired in the repo and MUST NOT be published yet.** `expo-updates`
-      57.0.17 is installed, `app.json` carries the `updates` block and a fingerprint runtime
-      version, and `eas.json` has `preview` and `production` channels. **None of that reaches the
-      build in TestFlight**, which was made from `73a8172` before any of it existed, so the app
-      people hold cannot take an update and every fix to it is still a full rebuild.
+- [ ] **The update path has a receiver and has never carried anything.** Build **1.0.0 (5)**,
+      runtime `7d3ffda1f1f71a38b15e0d92511d40e6eb3f1c7c`, channel `production`, built from
+      `65e0835`, was installed from TestFlight on the founder's iPhone on 2026-08-27. It is the
+      first build that can accept an over-the-air update at all. **Nothing has been published to
+      either channel**, so the next `eas update` is the first real test of the pipeline.
 
       **The environment-variable blocker is CLOSED as of 2026-08-27.** `eas update` does not read
       the `env` blocks in `eas.json` build profiles, so a bundle published before this would have
@@ -105,6 +105,25 @@ is "what is broken".
       carries `ios.ascAppId` and nothing else - no `appleId`, no `ascApiKeyPath` - so a
       `--non-interactive` submit fails unless a key is already stored on EAS. Fine interactively;
       it matters the first time this runs from CI.
+
+- [ ] **The app displays no version anywhere, and over-the-air updates make that a real gap.**
+      Nothing in `apps/mobile` renders an app version, a build number or an update id - checked by
+      grep on 2026-08-27. So no one holding a phone can say which build it is running, and once
+      updates start publishing, **"did the update land?" has no answer from the device**. That is
+      the exact question [`TECH/14`](SPEC/TECH/14-engineering-pitfalls.md) pitfall 42 says you
+      cannot answer any other way, because a mismatched update fails silently everywhere else too.
+
+      **It is JavaScript only, which makes it the right first thing to publish.** A version line on
+      the Profile screen - `expo-application` for the native version and build number,
+      `Updates.updateId` for which bundle is running - ships down the new channel, proves the
+      pipeline end to end on a change where nothing breaks if it fails, and hands over the tool for
+      checking every update after it. Note `fallbackToCacheTimeout` is `0`, so testing it takes two
+      relaunches: the check happens on launch, the swap on the next one.
+
+- [ ] **Request Beta App Review, because it is a queue and not a step.** Internal TestFlight works -
+      the founder installed 1.0.0 (5) on 2026-08-27. External testers need Apple's review at one to
+      two days, and it is the only item on the road to the first club that cannot be shortened by
+      doing it more carefully, so it starts early rather than when the roster is ready.
 
 - [ ] **Something is escaping the pinned strip's notice cards.** An accent-tinted rounded shape
       sits below the front card, offset right, cut off where the next card overlaps it. Found on

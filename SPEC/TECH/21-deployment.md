@@ -57,14 +57,23 @@ commit carries a deploy. It was verified from outside on 2026-08-27 by fetching 
 parked Android app-link decision showing through rather than a fault: a 200 there does not mean an
 Android invite link opens the app, and nothing will make it until a fingerprint is published.
 
-The web client has never been deployed to Vercel. **The EAS Update row moved and is still not
-live.** `apps/mobile/app.json` gained an `updates` block and a fingerprint `runtimeVersion` on
-2026-08-25 and `eas.json` carries `preview` and `production` channels, so the repo half exists;
-nothing has been published to either channel, none of it reaches the build people are holding -
-made from `73a8172`, before any of it existed - and nothing may be published until the EAS
-server-side environment variables exist. `TODO.md` carries
-that condition and why publishing before it is worse than not publishing. Both rows are milestone 5
-work rather than rows this table got wrong.
+The web client has never been deployed to Vercel.
+
+**The EAS Update row has a receiver for the first time, and has still never carried anything.**
+Build **1.0.0 (5)**, runtime version `7d3ffda1f1f71a38b15e0d92511d40e6eb3f1c7c`, channel
+`production`, built from `65e0835` on 2026-08-27, went through App Store Connect and was installed
+from TestFlight on the founder's iPhone the same night. It is **the first build in this project's
+history that can accept an over-the-air update**, because the code that checks for one has to be
+inside the binary and every earlier build predates it - build 1, from `73a8172`, reports its
+runtime and channel as `None` in the EAS build list, which is that fact visible from outside.
+
+**Nothing has been published to either channel.** The blocker that used to sit here is closed: all
+four `EXPO_PUBLIC_*` values now exist in both the `production` and `preview` EAS environments, set
+on 2026-08-27 and read back with `eas env:list` rather than trusted from a success line. What
+replaces it is quieter and lives in [`TECH/14`](14-engineering-pitfalls.md) pitfall 42: the
+fingerprint must be checked before every publish, because an update that does not match reaches no
+phone and reports nothing. Both rows remain milestone 5 work rather than rows this table got
+wrong.
 
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because

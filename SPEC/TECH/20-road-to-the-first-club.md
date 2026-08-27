@@ -289,9 +289,12 @@ Policy must state that message content is readable by the service.
   a Sentry DSN that had been invented since the first deploy, so until that day this criterion was
   not unmet, it was unreachable - Sentry had received no production error of any kind because it
   refused all of them with a 403. **The parked outbox half is still open.**
-- *A stranger can install through TestFlight and sign up unassisted.* **Open.** A production EAS
-  build is being started; nothing is submitted and nobody has installed anything. External
-  TestFlight also needs Apple's Beta App Review, which is a queue rather than a step.
+- *A stranger can install through TestFlight and sign up unassisted.* **Still open, and closer.**
+  Build 1.0.0 (5) was submitted to App Store Connect on 2026-08-27, processed by Apple, and
+  installed from TestFlight - but by the founder, on the founder's own phone, through internal
+  distribution. **No stranger has installed anything**, which is the whole of this criterion.
+  External TestFlight additionally needs Apple's Beta App Review, which is a queue rather than a
+  step and is the one item on this road that care cannot shorten.
 - *Mail arrives from the product's own domain, the old key is dead, and DMARC verifies.* **One of
   three met 2026-08-23.** Mail arrives from `noreply@clubchatapp.com`, which is also what verified
   the Resend domain. The old Full-access key is not dead, and `_dmarc` publishes `p=none`, which is
@@ -334,7 +337,7 @@ Against this milestone's exit criteria as of 2026-08-25, after the P1 and P2 pas
 | Full stack serves from production, founder's phone runs a normal day against it | **Done 2026-08-23.** Signup, chat, photo upload, push to a real iPhone, and password-reset mail all proved with server-side evidence |
 | A database restore from a real backup performed once | **Done 2026-08-25.** This row said "Not done ... it has never been run" until 2026-08-27, while the exit-criteria list above it and the branch-state table below it both said done: it was written before the run and never revisited. **The evidence, and its limit, stated rather than implied.** `scripts/drills/restore-proof.mjs` records at its own call site that the first real run reported production's four direct-message channels as orphans, and that excluding `scope = 'dm'` was the fix - a fact about real production rows that a dry run or a fixture could not have produced. But the file has exactly one commit, so the version that lacked the scope never existed in history and the note is a self-report by the session that ran it, not an independent artifact. Nothing in this repo, and no log outside it, records the run itself. **What would settle it is one line: run the drill again with `--keep` and leave the Neon branch standing.** Until somebody does, this row rests on a specific and hard-to-invent report rather than on proof |
 | A parked outbox event and a raised 5xx each reached a human, forced not assumed | **The 5xx half is DONE, 2026-08-25.** A real error raised inside the api machine, tagged `production`, matched a Sentry rule filtered to `environment: production` and arrived as mail two minutes later with nobody watching for it (issue `021d94c07bb3425e8e0855d42390de21`). Getting there required fixing a DSN that had been invented since launch, so before that day this criterion was not merely unmet, it was unreachable. **The parked outbox half is still open**: run `scripts/drills/outbox-park.mjs` against production. Note the rule fires on "a new issue is created", so a drill repeating an existing message adds an event to the existing issue and sends no mail - vary the message, or a working alert reads as a broken one. |
-| A stranger installs through TestFlight and signs up unassisted | **Not done.** Internal distribution only |
+| A stranger installs through TestFlight and signs up unassisted | **Not done, and the build now exists.** 1.0.0 (5) was submitted, processed and installed from TestFlight on 2026-08-27 - by the founder, internally. No stranger has installed anything and Beta App Review has not been requested |
 | Mail arrives from the product's own domain, old key dead, DMARC verifies | **Half done, and the DMARC half moved on 2026-08-25.** Mail is proved. `_dmarc` now publishes `v=DMARC1; p=none; rua=mailto:dmarc@clubchatapp.com; fo=1` - verified by `dig` on 2026-08-27 - so aggregate reports are being generated at last. The policy is still `p=none`, and the path to `p=quarantine` wants about two weeks of those reports read first. This row claimed there was no `rua=` until 2026-08-27, one row below another that had just been corrected in the same table |
 | Privacy Policy and Terms reviewed, state the ADR-0005 obligation, reachable from sign-up | **Written, not reviewed.** `docs/legal/` holds both, written from the code rather than from a template, and they discharge the ADR-0005 obligation in plain language. They link from sign-up and from Profile. Legal review by a lawyer is untouched, and both documents say so |
 | Media served in `cdn` mode, `/__parity` agrees, a signed URL survives an hour boundary | **Done 2026-08-23** |
@@ -431,6 +434,15 @@ lost if it goes badly. This is the milestone 5 criterion whose entire point is t
 has restored is a hope, and the cost of testing a hope only ever moves in one direction.
 
 ### 3. Wire over-the-air updates
+
+**Done 2026-08-27**, and the repo half had been done since 08-25 - what was missing was that
+nobody had run any of it. `eas.json` had been failing schema validation since 08-23, which made
+every `eas` command refuse to run, including the `eas env:set` this phase names below. Four
+`EXPO_PUBLIC_*` values now exist in both EAS environments. Build 1.0.0 (5) carries channel
+`production` and runtime `7d3ffda1`, and is installed on a phone. Nothing has been published yet.
+Three separate failures were needed to get there, all recorded as
+[`TECH/14`](14-engineering-pitfalls.md) pitfalls 42, 43 and 44. The reasoning below is kept because
+it is why this phase sat where it did.
 
 `expo-updates`, a `runtimeVersion`, and a channel in `apps/mobile/app.json`.
 

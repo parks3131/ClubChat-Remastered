@@ -19,6 +19,66 @@ Newest first.
 
 ---
 
+## 2026-08-27 - The update path, and the four days nobody ran anything
+
+**A build that can accept an over-the-air update is on a phone for the first time.** 1.0.0 (5),
+runtime `7d3ffda1`, channel `production`, submitted to App Store Connect and installed from
+TestFlight the same night. Nothing has been published to that channel yet, so the payoff is
+available rather than taken.
+
+**The work itself was four commands. Getting to run them took the night.** The repo half had been
+finished on 2026-08-25: `expo-updates` installed, the `updates` block written, channels declared,
+ADR-0048 reasoned out at length. Every bit of it was correct. **None of it had been executed**, and
+three separate things were broken in the gap between writing and running:
+
+- **`eas.json` had failed schema validation since 2026-08-23.** `ascAppId` sat at
+  `submit.production` where it belongs at `submit.production.ios`. `eas` validates the whole file
+  before doing anything, so `build`, `update`, `submit` and `env:set` were all refusing to run.
+  The documents naming `eas env:set` as the next step were naming a command that could not run.
+- **The fingerprint had drifted by one byte.** `runtimeVersion` is a hash over everything affecting
+  the native runtime, `node_modules` included, and a local `pod install` on 2026-08-17 had rewritten
+  `react-native-maps/ios/AirMaps/RNMapsDefines.h` from `HAVE_GOOGLE_MAPS 1` to `0`. EAS refused the
+  build at `CONFIGURE_EXPO_UPDATES` after 86 seconds, and printed the diff naming the package.
+- **The Apple provisioning profile predated a capability the app declares.**
+  `ios.associatedDomains` gained `applinks:clubchatapp.com` on 2026-08-25; the profile was issued
+  on 08-23. Two builds died in Xcode over it. It took an interactive Apple login for EAS to reissue
+  the profile with the capability, which is the one step in the night a person had to perform.
+
+Five builds, three of them failures, to produce one installable app. All three failures are written
+up as [`TECH/14`](SPEC/TECH/14-engineering-pitfalls.md) pitfalls 42, 43 and 44.
+
+### The half of the fingerprint pitfall that matters
+
+The build failure was loud and cost twenty minutes. **`eas update` has the same defect and does not
+fail.** It publishes against a runtime version no installed build carries, the phone finds nothing
+compatible, and the update never arrives - no error on the laptop, in Sentry, or on the device. A
+fix you believe you shipped and did not. `npx expo-updates fingerprint:generate --platform ios`
+before every publish is the whole defence, and it is now written at every place that names the
+publish command.
+
+### Fourteen documented facts were wrong before any of that started
+
+The night began with a plain question about project status, answered by fetching the endpoints and
+running `fly releases` rather than by reading `TODO.md`. Six claims across four documents were
+false, and eight more in a guide written from them the same hour. Every one had been true when
+written and stopped being true within hours, and nobody went back: `SPEC/TECH/20` asserted that the
+restore drill was both done and never run, in two places in one file, and `TODO.md` claimed a rule
+lived in `TECH/21` that had never been written there.
+
+Three agents then re-checked the corrections and found six more of exactly the same shape - a fact
+fixed in one place and left standing in another, inside the same file. `TECH/21`'s drill-2 section
+still carried "It is not runnable yet" in full while its Open section 250 lines below said the
+opposite.
+
+### What is not true at the end of this
+
+**No update has been published**, so the path is proved as far as a receiver and no further. **No
+stranger has installed anything** - the TestFlight install was the founder's own, internally
+distributed, and Beta App Review has not been requested. **The app displays no version anywhere**,
+so there is no way to tell from a device which build or which update it is running, which is the
+one tool the silent-failure mode above actually needs. And the machine rollback drill, runnable
+since 2026-08-25, has still never been run.
+
 ## 2026-08-25 - Milestone 5's remainder: the things that had been described but never done
 
 Six items off `TODO.md` in one pass, chosen because each was a promise the repo had made and not
