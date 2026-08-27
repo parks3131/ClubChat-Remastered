@@ -65,14 +65,6 @@ is "what is broken".
       "a new issue is created" - a repeat of an existing drill message adds an event to the
       existing issue and sends no mail, which reads as a failure and is not one.
 
-- [ ] **`clubchatapp.com` answers 522 and the app already links to it.** `packages/site-worker` is
-      built, tested and never deployed. The mobile app deleted its in-app legal screens, so Privacy
-      Policy and Terms now open on the apex and nowhere else, and every invite link and QR code the
-      app hands out points at `https://clubchatapp.com/join/<token>`. Nothing is broken today
-      because the change has not reached a build. **The ordering rule is now in
-      [`TECH/21`](SPEC/TECH/21-deployment.md): the Worker deploys before any build that links to
-      it.**
-
 - [ ] **Tracing is live on two of four surfaces, and the configuration reads as done on all four.**
       The mobile app produces no traces because nothing starts a root span: it needs
       `Sentry.reactNavigationIntegration()` wired to the expo-router container ref, which can only
@@ -80,16 +72,22 @@ is "what is broken".
       unit of work is a real decision rather than a wiring job - a span per drain tick on a poll
       loop is a bill for mostly-empty spans. Both were left deliberately rather than guessed at.
 
-- [ ] **There is nothing to roll a deploy back to.** Found by running the new rollback drill in dry
-      run against the real Fly apps on 2026-08-25: all five releases across `clubchat-api`,
-      `clubchat-gateway` and `clubchat-worker` carry one identical image digest. The next deploy
-      creates the second image and the drill becomes runnable. Until then the rollback lever
-      described in `TECH/21` does not exist.
+- [ ] **The rollback drill is runnable now, and has still never been run.** The item this replaces
+      said there was nothing to roll back to, which was true when it was written on 2026-08-25 and
+      stopped being true the same evening. `fly releases` on 2026-08-27 shows **four distinct
+      images**, not one: `9f9e58a2` from the 08-23 cutover, then `7979ea67` at 19:08, `e316267b`
+      at 19:28, and the current one at 20:37. Every one of the three apps carries at least three
+      releases across at least three images, so the previous image the drill needs exists on all
+      of them. Run `scripts/drills/rollback-drill.sh` for real.
 
-- [ ] **`apps/mobile/app.json` declares no `android.package`.** So the Android application id has
-      no source of truth in the repo, while the site Worker has to name one in
-      `/.well-known/assetlinks.json`. Android app links are parked by decision, but the missing
-      package name is a real gap that will bite the moment they are not.
+      **One thing to look at while running it.** The 08-23 releases name their image by
+      `sha256:` digest, which is what the cutover procedure in
+      [`TECH/21`](SPEC/TECH/21-deployment.md) specifies. The most recent one on all three apps
+      names it `registry.fly.io/clubchat-api:deployment-01M0XA7STTQZNY018R2V70YY7P` instead: a
+      **tag**, which is mutable, where a digest is not. The build-once property still held - all
+      three apps took the same ref - but a rollback target addressed by a tag is a weaker
+      guarantee than one addressed by a digest, and it is worth deciding whether that is
+      acceptable or whether the deploy path should go back to digests.
 
 - [ ] **Something is escaping the pinned strip's notice cards.** An accent-tinted rounded shape
       sits below the front card, offset right, cut off where the next card overlaps it. Found on

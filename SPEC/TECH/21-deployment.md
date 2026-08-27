@@ -43,14 +43,27 @@ supposed to protect a live system and had never once been performed.
 | Redis | Upstash | api, gateway, worker |
 | Identity and content buckets | Cloudflare R2 | The client for presigned `PUT`, the CDN for reads |
 | `cdn-worker` (`packages/cdn-worker`) | Cloudflare Workers, paid plan | The client, over HTTPS, for media bytes |
+| `site-worker` (`packages/site-worker`) | Cloudflare Workers, paid plan | Anyone, over HTTPS, at the apex: the landing page, the legal texts, invite links, and the app-link files |
 | Web client | Vercel | Browsers |
 | JavaScript bundles | EAS Update | Phones |
 
-**Seven of those nine rows are live as of 2026-08-23; the last two have never run.** The three Fly
-apps, Neon, Upstash, both R2 buckets and the Worker all serve today. The web client has never been
-deployed to Vercel, and `apps/mobile/app.json` declares no `updates` block and no
-`runtimeVersion`, so there is no EAS Update channel for a bundle to reach a phone through. Both are
-milestone 5 work rather than rows this table got wrong.
+**Eight of those ten rows are live as of 2026-08-27; the last two have never run.** The three Fly
+apps, Neon, Upstash, both R2 buckets and **both** Workers serve today. `site-worker` went live on
+the apex between 2026-08-25 and 2026-08-27, which is as precisely as this repo can date it: no
+commit carries a deploy. It was verified from outside on 2026-08-27 by fetching the landing page,
+`/privacy`, `/terms`, an invalid `/join/` token (a correct 404), both app-link files and
+`/__parity`. **`/.well-known/assetlinks.json` answers 200 with zero fingerprints**, which is the
+parked Android app-link decision showing through rather than a fault: a 200 there does not mean an
+Android invite link opens the app, and nothing will make it until a fingerprint is published.
+
+The web client has never been deployed to Vercel. **The EAS Update row moved and is still not
+live.** `apps/mobile/app.json` gained an `updates` block and a fingerprint `runtimeVersion` on
+2026-08-25 and `eas.json` carries `preview` and `production` channels, so the repo half exists;
+nothing has been published to either channel, none of it reaches the build people are holding -
+made from `73a8172`, before any of it existed - and nothing may be published until the EAS
+server-side environment variables exist. `TODO.md` carries
+that condition and why publishing before it is worse than not publishing. Both rows are milestone 5
+work rather than rows this table got wrong.
 
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because
@@ -195,6 +208,13 @@ Numbered so they can be cited from a commit, an ADR or a review.
 **1. A deploy runs in one order: schema, then server, then client.** The column exists before code
 selects it, and the endpoint exists before the app calls it. Reversed, the gap between two steps is
 served to live users as errors, and it is a gap that was chosen rather than suffered.
+
+**The apex Worker is "server" for this purpose.** A build that opens `clubchatapp.com/privacy` or
+hands out `https://clubchatapp.com/join/<token>` is calling `site-worker` exactly as it calls the
+api, so the Worker deploys before any build that links to it. That ordering held by luck rather
+than by process: the apex was still answering 522 on 2026-08-25 and the build linking to it was
+unshipped, so nobody was served the gap - and a `TODO.md` item claimed this rule already lived here
+when it did not.
 
 **2. Removal runs in the reverse order, and it is a separate release.** Stop reading the thing, ship
 that, wait for old builds to drain, then drop it. Rule 4 is why.
@@ -643,10 +663,12 @@ is as of 2026-08-23, the day the cutover ran.**
 
 ## The drills
 
-Three things are supposed to protect this deployment, and as of 2026-08-25 not one of them had
-ever been performed: **no backup had ever been restored**, **no machine had ever been rolled
-back**, and the sending domain published `v=DMARC1; p=none`, which is the policy that explicitly
-tells receivers to do nothing. Each is a [milestone 5](20-road-to-the-first-club.md) exit
+Three things are supposed to protect this deployment, and on the morning of 2026-08-25 not one of
+them had ever been performed: **no backup had ever been restored**, **no machine had ever been
+rolled back**, and the sending domain published `v=DMARC1; p=none`, which is the policy that
+explicitly tells receivers to do nothing. **Two of the three moved that day**: the restore drill
+ran for real (drill 1 below), and `_dmarc` gained a `rua=` so that reports would start being
+generated at all. The machine rollback has still never been performed. Each is a [milestone 5](20-road-to-the-first-club.md) exit
 criterion. Each has the same shape of failure, which is why none of them got done: from every
 angle except the one that matters they look finished, and the angle that matters is only visible
 by performing them.
@@ -703,6 +725,20 @@ node scripts/drills/restore-drill.mjs --target restore-drill-2026-08-25 --execut
 `--target` is required, must start with `restore-drill-`, and a production identifier is refused
 before a single HTTP call is made. `--at <RFC3339>` picks the moment to restore to and defaults to
 one hour ago. `--keep` leaves the branch behind.
+
+#### It has been run for real, once
+
+**2026-08-25, against production history, and it passed.** That is the whole point of this drill
+and the reason milestone 5's criterion is worded as a performance rather than as a script.
+
+The run is worth trusting for a reason better than a line in a document: it **found a defect in
+itself**. The first version of the referential-integrity check omitted channel scope and reported
+production's four direct-message channels as orphans, which a DM channel is by design and the
+schema enforces. That is a fact about real production rows, not something a dry run or a fixture
+could have produced, and the fix (`AND ch.scope <> 'dm'`) is in `scripts/drills/restore-proof.mjs`
+with the incident written above it. **A drill that cries wolf on healthy data is a drill nobody
+believes**, so finding that on the first run rather than the first emergency was the run paying
+for itself.
 
 #### What the dry run prints
 
@@ -1069,39 +1105,33 @@ Recorded so that silence is not read as a decision.
   digest. See [ADR-0043](../decisions/0043-the-three-roles-deploy-as-three-fly-apps.md), which also
   records the argument that was *refuted* rather than accepted: the gateway does not need an L4 path
   on Fly, because Fly's HTTP handler proxies a WebSocket upgrade.
-- The rollback procedure. **Half of it is now decided**: a schema change is never rolled back, only
-  followed forward, which is what rules 4 to 7 already make safe by keeping every migration
-  additive. Migrations run as the api app's `release_command`, on a temporary machine using the
-  newly built image, before any machine is updated, and a failure there stops the deploy. That
-  gives forward safety only: `fly deploy` rolls machines back and cannot un-apply a migration, and
-  it does not need to, because the previous image still runs against the new schema. What remains
-  open is the *machine* rollback drill, which has never been performed. **Still true after
-  2026-08-23**: the first cutover went forward three times and was never rolled back, so there is a
-  deployment to drill against now and the drill is exactly as unperformed as it was when there was
-  nothing to roll back.
 - **Whether Workers Caching is turned on.** Only the measurement was blocking this, and the
   measurement has been taken: nothing is cached at the edge today. The remaining question is a
   choice rather than a fact, it belongs to the founder, and ADR-0044 records what it costs to answer
   yes. Recorded here because the switch being absent from `wrangler.jsonc` is indistinguishable
   from nobody having considered it.
-- Backup restore and monitoring. These are [milestone 5](20-road-to-the-first-club.md) exit criteria
-  rather than open choices, and the deploy did not move either: no backup has been restored, and no
-  alert has been forced to reach a human. **The mail domain came off this line on 2026-08-23**, when
-  reset mail arrived from the product's own domain; what is left of it is the DMARC tightening in
-  obligation 3 above.
 - ~~The rollback procedure.~~ **Closed 2026-08-25.** The schema half was already decided: a schema
   change is never rolled back, only followed forward, which is what rules 4 to 7 make safe by
   keeping every migration additive. Migrations run as the api app's `release_command`, on a
   temporary machine using the newly built image, before any machine is updated, and a failure there
   stops the deploy. The machine half is now [drill 2](#drill-2-roll-a-machine-back), written and
-  refusing correctly. **It has still never been performed, and right now it cannot be**: all five
-  releases across the three apps carry one image digest, so no previous image exists to roll back
-  to. That becomes possible at the next deploy.
+  refusing correctly. **It has still never been performed, and as of 2026-08-27 nothing stops it.**
+  The line this replaces said all five releases carried one image digest and that a second image
+  would arrive at the next deploy; that deploy happened the same evening. `fly releases` now shows
+  four distinct images across the three apps, and every app has a previous one to roll back to.
+  Note that the most recent release on all three names its image by mutable **tag**
+  (`registry.fly.io/clubchat-api:deployment-...`) rather than by the `sha256:` digest the cutover
+  procedure above specifies.
 - Backup restore and the mail domain are now [drill 1](#drill-1-restore-the-database) and
-  [drill 3](#drill-3-tighten-dmarc). Both are built, and neither has been executed against
-  production: drill 1 needs a Neon API key, drill 3 needs two weeks of aggregate reports that are
-  not being collected yet because the DMARC record has no `rua=`. Monitoring remains a
-  [milestone 5](20-road-to-the-first-club.md) exit criterion rather than an open choice.
+  [drill 3](#drill-3-tighten-dmarc). **Drill 1 has been executed against production data and is
+  closed**, on 2026-08-25: it restored Neon history onto a throwaway branch and proved it with
+  queries rather than with the API's success code. This bullet said the opposite until 2026-08-27,
+  and so did the drills preamble. Drill 3 is still waiting, but on a shorter clock than it was:
+  `_dmarc` gained `rua=mailto:dmarc@clubchatapp.com` on 2026-08-25 - verified still published on
+  2026-08-27 - so aggregate reports are being generated now and the fortnight of them the drill
+  needs is running rather than not yet started. Monitoring remains a
+  [milestone 5](20-road-to-the-first-club.md) exit criterion rather than an open choice, and the
+  5xx half of it closed on 2026-08-25.
 - Kafka still has no hosted provider ([Stack and hosting](15-stack-and-hosting.md)). Managed Kafka
   is the largest single line item in any hosting estimate at this scale, so the provider choice is
   as much a cost decision as a technical one.

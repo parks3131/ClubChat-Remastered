@@ -91,6 +91,31 @@ documents and every invite. That ordering is now a rule in `SPEC/TECH/21`. Traci
 of four surfaces: the mobile navigation integration and a worker root span are deliberately not
 guessed at, because the first needs a device to verify and the second is a volume decision worth
 making on purpose.
+
+#### Overtaken, and left standing for two days
+
+**The section above was written mid-day on 2026-08-25 and most of it was false by that evening.**
+It is corrected here rather than rewritten, because what a milestone believed about itself at the
+time is the thing this file is for. Three of its claims:
+
+- *"No drill has been fired at production, so it is still true that no production error has ever
+  reached a human."* **Both halves stopped being true that day.** A deliberately raised 5xx reached
+  the founder's phone by itself (issue `021d94c07bb3425e8e0855d42390de21`), which first required
+  fixing a Sentry DSN that had been invented since launch, and the restore drill ran against real
+  production history. The parked outbox event is the half that is still open.
+- *"The apex Worker has never been deployed and `clubchatapp.com` still answers 522."* **It was
+  deployed between 2026-08-25 and 2026-08-27** and serves the landing page, the legal texts, invite
+  links and the app-link files.
+- *"That ordering is now a rule in `SPEC/TECH/21`."* **It was not.** All twelve rules were checked
+  on 2026-08-27 and none of them said it. The rule exists now, under rule 1.
+
+**The pattern is worth more than the three corrections.** Every one of these was written as settled
+by the session that did the work, in the hour before the thing it described changed, and none was
+revisited - including a claim that a rule had been written down, by the session that did not write
+it. `TODO.md` and `SPEC/TECH/20` and `SPEC/TECH/21` all carried a version of the same drift, found
+on 2026-08-27 by fetching the endpoints and running `fly releases` rather than by reading any of
+them.
+
 ## 2026-08-23 - The first deployment, and the nine defects the audit found first
 
 ClubChat runs in production. Three Fly apps in `iad`, one machine each from one image; Neon migrated
