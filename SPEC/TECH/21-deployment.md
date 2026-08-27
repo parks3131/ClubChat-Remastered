@@ -100,6 +100,13 @@ against the *previous* commit, which is the wrong answer to "which code is on th
 first update was published this way and the mapping is written down in
 [`HISTORY.md`](../../HISTORY.md) instead; that is a repair, not a pattern.
 
+**The second update, the same day, followed it.** Update group
+`256f6676-7920-4f61-bc6b-6788c7b09d28`, iOS update `01a04390-979a-71ce-88b9-46e5f27d130b`, carrying
+the chat send-scroll fix ([`BUGS.md`](../../BUGS.md), 2026-08-27), recorded against
+`d5ac28e1dd0e24711adb1bfd85a8b0094421b4e7` with no asterisk. So "which code is on that phone" has an
+exact answer for every update after the first, and the rule above is demonstrated rather than merely
+written.
+
 The fingerprint check in front of it is [`TECH/14`](14-engineering-pitfalls.md) pitfall 42, and it
 is the one that fails silently: an update that does not match the target build's runtime version
 reaches no phone and reports success.
