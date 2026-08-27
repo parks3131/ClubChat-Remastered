@@ -3,6 +3,11 @@
 **2026-08-27.** Reported from the founder's iPhone with two screen recordings, one of ClubChat and
 one of GroupMe beside it. Reproduced on the iOS Simulator before the fix and re-run on it after.
 
+**Fixed and confirmed on the reporting device the same morning**, over the air as update
+`01a04390-979a-71ce-88b9-46e5f27d130b` - which is also the first time in this project's history that
+a defect went from report to confirmed fix on a phone without a build, a submission or Apple. The
+version line published two hours earlier is what let him confirm which bundle he was looking at.
+
 ## What was seen
 
 Send a message in a club chat and nothing arrives on screen. The list jumps once, the pinned notice

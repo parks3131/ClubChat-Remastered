@@ -107,6 +107,11 @@ the chat send-scroll fix ([`BUGS.md`](../../BUGS.md), 2026-08-27), recorded agai
 exact answer for every update after the first, and the rule above is demonstrated rather than merely
 written.
 
+**It arrived and was confirmed on the founder's iPhone within the hour**, which closes the loop this
+path was built for: a defect reported from a device at 09:27, reproduced, fixed, published and
+confirmed fixed on that same device by 10:18, with no build, no submission and no Apple review in
+between. Before 2026-08-27 that round trip was days.
+
 The fingerprint check in front of it is [`TECH/14`](14-engineering-pitfalls.md) pitfall 42, and it
 is the one that fails silently: an update that does not match the target build's runtime version
 reaches no phone and reports success.
