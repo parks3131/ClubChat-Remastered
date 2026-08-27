@@ -136,14 +136,19 @@ export function buildChatRows(
 /**
  * How long a silence has to be before the same person is introduced again.
  *
- * **An hour, and the number came off a photograph rather than off a convention.** The founder
- * circled a repeated face and name in a direct message on 2026-08-27; the two messages under it
- * were 19 minutes apart. Five minutes is what GroupMe, WhatsApp and iMessage roughly use, and it
- * would have drawn the header exactly where he circled it. An hour groups his case and still
- * re-introduces somebody who wrote in the morning and again after lunch, which is a different
- * moment and should read as one.
+ * **Five minutes, and it is the run header's clock that sets it rather than taste.** Once the time
+ * lives in the header instead of in every bubble - which is where it moved on 2026-08-27 - the
+ * header IS the timestamp for everything under it, so a run can only be as long as that one time
+ * is allowed to be wrong by. An hour would let the header say 12:12 over a bubble sent at 13:05,
+ * which is not a rounding error, it is a lie.
+ *
+ * > **This was an hour for the first few hours of its life, and the founder shortened it himself,
+ * > knowing the cost.** The photograph that started this work circled a repeated name over two
+ * > messages 19 minutes apart, and five minutes puts a header back exactly there. He was shown
+ * > that in as many words and chose it anyway: a header that repeats is a smaller price than a
+ * > time that is not true.
  */
-export const RUN_GAP_MS = 60 * 60 * 1000;
+export const RUN_GAP_MS = 5 * 60 * 1000;
 
 /**
  * What the list calls this row.
@@ -220,7 +225,10 @@ function drawOf(message: MessageEnvelope): Draw {
  *     a system line, a tombstone, an announcement, or a poll, event or meeting card. After any of
  *     those the next bubble has to say who is speaking again, and a card additionally heads a run
  *     of its own - it carries its own attribution and is not part of anybody's spell of talking.
- *  3. **An hour passes.** See `RUN_GAP_MS` for why an hour and not five minutes.
+ *  3. **The run has been going five minutes.** Measured from the run's FIRST message, not from
+ *     the previous one - see `RUN_GAP_MS`. Measuring from the previous one would let a chain of
+ *     four-minute messages run for an hour under a header that still says the hour's first
+ *     minute, which is the exact staleness five minutes exists to prevent.
  *  4. **Nothing else.** In particular a message that draws nothing - a deleted card - is
  *     transparent: the bubbles either side of it are visually adjacent, so putting a face between
  *     them would introduce somebody in the middle of their own sentence.
@@ -236,12 +244,17 @@ export function decideRunStarts(
   const gapMs = options.gapMs ?? RUN_GAP_MS;
   const nowMs = (options.now ?? new Date()).getTime();
   const starts = new Set<string>();
-  /** The last row that could be spoken over, or null when something has broken the spell. */
-  let previous: { sender: string; at: number } | null = null;
+  /**
+   * The run in progress: who is speaking and when they STARTED, or null when something broke it.
+   *
+   * The start rather than the last message, because the header's clock is the start's clock and
+   * everything under it inherits that claim. See rule 3 above.
+   */
+  let run: { sender: string; startedAt: number } | null = null;
 
   for (const row of [...displayed].reverse()) {
     if (row.kind === 'day' || row.kind === 'lastRead') {
-      previous = null;
+      run = null;
       continue;
     }
 
@@ -252,35 +265,36 @@ export function decideRunStarts(
      */
     if (row.kind === 'pending') {
       const sender = options.viewerId;
-      const continues =
+      const continues: boolean =
         sender !== null &&
-        previous !== null &&
-        previous.sender === sender &&
-        nowMs - previous.at <= gapMs;
+        run !== null &&
+        run.sender === sender &&
+        nowMs - run.startedAt <= gapMs;
       if (!continues) starts.add(rowKey(row));
       // Nothing to compare the next row against when the session has not resolved yet.
-      previous = sender === null ? null : { sender, at: nowMs };
+      run = sender === null ? null : continues ? run : { sender, startedAt: nowMs };
       continue;
     }
 
     const draw = drawOf(row.message);
     if (draw === 'invisible') continue;
     if (draw === 'interrupting') {
-      previous = null;
+      run = null;
       continue;
     }
 
     if (isCard(row.message)) {
       starts.add(rowKey(row));
-      previous = null;
+      run = null;
       continue;
     }
 
     const sender = row.message.senderId;
     const at = Date.parse(row.message.createdAt);
-    const continues = previous !== null && previous.sender === sender && at - previous.at <= gapMs;
+    const continues: boolean =
+      run !== null && run.sender === sender && at - run.startedAt <= gapMs;
     if (!continues) starts.add(rowKey(row));
-    previous = { sender, at };
+    run = continues ? run : { sender, startedAt: at };
   }
 
   return starts;

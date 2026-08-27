@@ -41,7 +41,7 @@ import {
   rowKey,
   type Row,
 } from "../../src/chat-rows.ts";
-import { formatDaySeparator } from "../../src/dates.ts";
+import { formatDaySeparator, formatTimeOfDay } from "../../src/dates.ts";
 import { channelApi, dmApi, pollApi, type ChannelMeta } from "../../src/api.ts";
 import { DocumentBubble, PhotoBubble, RemoteImage } from "../../src/media-bubble.tsx";
 import { openDocument } from "../../src/open-document.ts";
@@ -1276,11 +1276,20 @@ function messageAt(rows: readonly Row[], seq: number | null): MessageEnvelope | 
 function AuthorLine({
   name,
   image,
+  time,
   mine = false,
   onPress,
 }: {
   name: string;
   image: string | null;
+  /**
+   * When the run under this line started.
+   *
+   * > **The clock used to sit in the corner of every bubble.** It moved here on 2026-08-27, at the
+   * > founder's request, and it is why `RUN_GAP_MS` is five minutes: this one time now speaks for
+   * > every bubble under it, so a run may only last as long as that claim can stay true.
+   */
+  time: string;
   mine?: boolean;
   onPress: () => void;
 }) {
@@ -1290,10 +1299,15 @@ function AuthorLine({
       onPress={onPress}
       hitSlop={space.xs}
       accessibilityRole="button"
-      accessibilityLabel={`Open ${name}'s profile`}
+      accessibilityLabel={`Open ${name}'s profile. Sent ${time}`}
     >
       <Avatar name={name} image={image} size={AVATAR_SIZE} />
       <Text style={styles.authorName}>{name}</Text>
+      {/*
+        Third child, so `row-reverse` mirrors it for the reader's own side without a second style:
+        face, name, time on the left, and time, name, face on the right.
+      */}
+      <Text style={styles.authorTime}>{time}</Text>
     </Pressable>
   );
 }
@@ -1638,6 +1652,7 @@ const MessageRow = memo(function MessageRow({
           <AuthorLine
             name={message.senderName}
             image={message.senderImage}
+            time={formatTimeOfDay(message.createdAt)}
             onPress={() => onOpenProfile(message.senderId)}
           />
         )}
@@ -1731,6 +1746,7 @@ const MessageRow = memo(function MessageRow({
         <AuthorLine
           name={message.senderName}
           image={message.senderImage}
+          time={formatTimeOfDay(message.createdAt)}
           mine={mine}
           onPress={() => onOpenProfile(message.senderId)}
         />
@@ -1887,13 +1903,7 @@ const MessageRow = memo(function MessageRow({
             and a second one invites the reader to work out a difference that means nothing to
             them. What they need to know is that the words moved.
           */}
-          <Text style={styles.bubbleTime}>
-            {message.editedAt !== null ? "Edited  " : ""}
-            {new Date(message.createdAt).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </Text>
+          {message.editedAt !== null && <Text style={styles.bubbleTime}>Edited</Text>}
         </BubbleContainer>
       </Pressable>
 
@@ -5695,6 +5705,13 @@ const styles = StyleSheet.create({
   */
   authorIndent: { marginLeft: AVATAR_SIZE + space.sm },
   authorIndentMine: { marginRight: AVATAR_SIZE + space.sm },
+  /*
+    The run's clock, beside the name.
+
+    `type.label` in the secondary colour, which is what the bubble's corner used - the value moved
+    but its weight did not, so a conversation does not suddenly read louder.
+  */
+  authorTime: { ...type.label, color: color.textSecondary, textTransform: "none" },
   authorName: {
     ...type.bodySmallStrong,
     /*

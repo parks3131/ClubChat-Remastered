@@ -91,12 +91,24 @@ second is a feature the whole product would have to bend around. Threads remain 
    the date, with the year only when it is not this one. Quieter than the rule above, and the
    contrast is deliberate - a date says where you are, the rule says where to start reading.
 
-3e. **A spell of messages from one person is introduced once.** The face and the name sit over the
-   first of them; the rest are bubbles under it. A run ends when somebody else speaks, when an hour
-   of silence passes, or when anything full width sits between two messages - a date heading, the
-   "Last read" rule, a system line, a tombstone, an announcement, or a poll, event or meeting card.
-   A card always heads a run of its own: it carries a whole object rather than a turn in somebody's
-   talking.
+3e. **A spell of messages from one person is introduced once, and the time is part of the
+   introduction.** The face, the name and the clock sit over the first of them; the rest are
+   bubbles under it, carrying no time of their own. A run ends when somebody else speaks, when the
+   run has been going five minutes, or when anything full width sits between two messages - a date
+   heading, the "Last read" rule, a system line, a tombstone, an announcement, or a poll, event or
+   meeting card. A card always heads a run of its own: it carries a whole object rather than a turn
+   in somebody's talking.
+
+   **Five minutes, measured from the run's first message rather than from the last one.** The
+   header's clock speaks for every bubble under it, so a run may only last as long as that one
+   claim can stay true - and measuring from the last message would let a chain of four-minute
+   messages run for an hour under a header still showing the hour's first minute. Every bubble is
+   within five minutes of the time above it, and that is the guarantee the number exists to keep.
+
+   **The clock is a clock, never "just now".** A relative label goes stale sitting on screen unless
+   something re-renders every row on a timer, and it means nothing at all when the reader scrolls
+   back through last month. A corrected message still says "Edited" in its own bubble (rule 9a);
+   that is a fact about the words rather than about when they were sent.
 
    **One rule, with no branch on who is reading.** The same in a direct message as in a club chat,
    and the same for your own messages as for anybody else's. All three of those were offered as
@@ -109,11 +121,14 @@ second is a feature the whole product would have to bend around. Threads remain 
    person speaking rather than as a column of separate remarks - and the measurements belong to
    `theme.ts`.
 
-   *(Before this, every message carried the face and the name, and every pair of bubbles sat the
-   same distance apart whoever sent them. Reported from a photograph of a DM: a conversation with
-   two people in it, naming both of them on every line, with a repeated name circled. The pair
-   under the circle were nineteen minutes apart, which is why the silence that ends a run is an
-   hour and not the five minutes most chat apps use.)*
+   *(Before this, every message carried the face, the name and a clock line of its own, and every
+   pair of bubbles sat the same distance apart whoever sent them - so a three-word message was two
+   lines tall. Reported from a photograph of a DM: a conversation with two people in it, naming
+   both of them on every line, with a repeated name circled. The pair under that circle were
+   nineteen minutes apart and DO now get two headers, which is a decision rather than a
+   regression: the founder moved the clock into the header hours later, was told in as many words
+   that five minutes puts a header back exactly where he had circled one, and chose it. A header
+   that repeats is a smaller price than a header whose time is not true.)*
 
 4. **Opening a chat marks it read**, which clears its unread count everywhere. Nothing else
    clears it.

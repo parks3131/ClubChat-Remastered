@@ -184,7 +184,14 @@ export function formatConversationTimestamp(iso: string, now: Date = new Date())
   });
 }
 
-/** "5:00 PM". The time of day alone, for an item already filed under its date. */
+/**
+ * "5:00 PM". The time of day alone, for an item already filed under its date.
+ *
+ * **This is the one a chat bubble's run header wants**, and it is worth saying because there are
+ * three near-neighbours in this file and a fourth was very nearly added on 2026-08-27 by somebody
+ * who did not read far enough down. `formatClock` below is the 24-hour spelling for a list row;
+ * `formatInstant` carries the weekday and the date as well.
+ */
 export function formatTimeOfDay(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }

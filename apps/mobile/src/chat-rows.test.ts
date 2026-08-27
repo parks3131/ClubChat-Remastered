@@ -191,19 +191,44 @@ describe('runs of consecutive messages', () => {
   };
 
   it('draws the header once for a spell from one person', () => {
-    expect(starters([from(1, BOB, 0), from(2, BOB, 3), from(3, BOB, 10)])).toEqual(['m-1']);
+    expect(starters([from(1, BOB, 0), from(2, BOB, 2), from(3, BOB, 4)])).toEqual(['m-1']);
   });
 
   /*
-   * The pair from the photograph. 12:12 and 12:31 are 19 minutes apart and he circled the second
-   * header as the thing to remove, which is why the gap below is an hour and not five minutes.
+   * The five minutes are measured from the run's FIRST message, not from the previous one.
+   *
+   * Measured from the previous one, a chain of four-minute messages would run for an hour under a
+   * header still claiming the hour's first minute - which is precisely the staleness that moving
+   * the clock into the header was supposed to end. Every bubble under a header is within five
+   * minutes of what that header says, and this is the test that keeps it true.
    */
-  it('keeps nineteen minutes inside one run, which is the case that was reported', () => {
-    expect(starters([from(1, BOB, 12), from(2, BOB, 31)])).toEqual(['m-1']);
+  it('measures the five minutes from the start of the run, not from the last message', () => {
+    expect(starters([from(1, BOB, 0), from(2, BOB, 4), from(3, BOB, 8)])).toEqual(['m-1', 'm-3']);
   });
 
-  it('starts a new run after an hour of silence', () => {
-    expect(starters([from(1, BOB, 0), from(2, BOB, 61)])).toEqual(['m-1', 'm-2']);
+  it('keeps four minutes inside one run', () => {
+    expect(starters([from(1, BOB, 0), from(2, BOB, 4)])).toEqual(['m-1']);
+  });
+
+  it('starts a new run after five minutes of silence', () => {
+    expect(starters([from(1, BOB, 0), from(2, BOB, 6)])).toEqual(['m-1', 'm-2']);
+  });
+
+  /*
+   * **The pair from the photograph, and it SPLITS.** 12:12 and 12:31 are 19 minutes apart, and the
+   * second header is the one he circled in yellow as the thing to remove.
+   *
+   * It is asserted here rather than left implicit because it is the one case where the shipped
+   * behaviour disagrees with the report that started the work, and that disagreement is a decision
+   * rather than a regression: the founder moved the clock into the run header on 2026-08-27, was
+   * told in as many words that five minutes puts a header back exactly where he circled one, and
+   * chose it. A header that repeats is a smaller price than a header whose time is not true.
+   *
+   * So if this test ever fails, the question to ask is not "did grouping break" but "did somebody
+   * lengthen `RUN_GAP_MS` without moving the clock back into the bubbles".
+   */
+  it('splits the nineteen minutes from the photograph, which is deliberate', () => {
+    expect(starters([from(1, BOB, 12), from(2, BOB, 31)])).toEqual(['m-1', 'm-2']);
   });
 
   it('starts a new run whenever the speaker changes', () => {
@@ -289,12 +314,12 @@ describe('runs of consecutive messages', () => {
    * A send is happening NOW, so it is compared against the clock rather than against a timestamp
    * it does not have yet. An hour-old message of your own does not adopt it.
    */
-  it('does not group a send with an hour-old message of the reader own', () => {
+  it('does not group a send with a message of the reader own from ten minutes ago', () => {
     const rows = [from(1, ALICE, 0), pending('c1')];
-    const built = buildChatRows(rows, { lastReadAnchor: null, now: new Date(NOON + 61 * 60_000) });
+    const built = buildChatRows(rows, { lastReadAnchor: null, now: new Date(NOON + 10 * 60_000) });
     const set = decideRunStarts(built, {
       viewerId: ALICE,
-      now: new Date(NOON + 61 * 60_000),
+      now: new Date(NOON + 10 * 60_000),
     });
     expect(set.has('p-c1')).toBe(true);
   });
