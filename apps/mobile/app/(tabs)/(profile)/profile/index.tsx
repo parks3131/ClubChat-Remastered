@@ -23,8 +23,12 @@ import {
   View,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import * as Application from 'expo-application';
+import * as Clipboard from 'expo-clipboard';
 import { Link, Redirect, useRouter } from 'expo-router';
+import * as Updates from 'expo-updates';
 import { accountApi, ApiError, clubApi } from '../../../../src/api.ts';
+import { describeBuild } from '../../../../src/build-identity.ts';
 import { useSession } from '../../../../src/chat-provider.tsx';
 import { formatDateOfBirth } from '../../../../src/dates.ts';
 import { PRIVACY_URL, TERMS_URL } from '../../../../src/legal.ts';
@@ -44,6 +48,7 @@ import {
   SectionHeader,
 } from '../../../../src/ui.tsx';
 import { useLoad, useRefreshOnReturn } from '../../../../src/use-load.ts';
+import { useNotice } from '../../../../src/use-notice.ts';
 
 export default function ProfileScreen() {
   const { authState, userId, signOut } = useSession();
@@ -311,6 +316,8 @@ export default function ProfileScreen() {
 
             <DeleteAccount ownedClubs={allClubs.filter((c) => c.role === 'owner')} />
 
+            <VersionLine />
+
             {clubsOpen && (
               <ClubsSheet
                 clubs={allClubs}
@@ -539,6 +546,74 @@ function DeleteAccount({ ownedClubs }: { ownedClubs: Array<{ id: string; name: s
   );
 }
 
+/**
+ * Which build this is, and which JavaScript bundle it is running.
+ *
+ * **The last thing on the screen, and the only diagnostic in the product.** Nothing in the app
+ * showed a version until now, which was untidy while every change arrived through TestFlight and
+ * became a hole the moment over-the-air updates started publishing: a bundle now changes by
+ * itself, in the background, and *did it land?* had no answer from the device. It has no answer
+ * anywhere else either - `SPEC/TECH/14` pitfall 42 records that an update published against the
+ * wrong runtime version uploads, reports success, reaches no phone, and says so nowhere.
+ *
+ * Two lines, because two different things can change. `expo-application` reads the binary's own
+ * `Info.plist`, so the version and build number are facts about the installed app that an update
+ * cannot move; `expo-updates` reports which bundle that binary chose to run, which is precisely
+ * what an update does move. See `build-identity.ts` for why `expo-constants` is the wrong source
+ * for the first of those even though it is the obvious one.
+ *
+ * **Tapping copies the long form**, because the two values that settle an argument - the full
+ * update id and the runtime version - are a uuid and a forty-character hash, and neither can be
+ * read off a phone screen or repeated down a telephone. The short id on screen is for recognising
+ * that something changed; the clipboard is for matching it against what `eas update` printed.
+ */
+function VersionLine() {
+  const [notice, showNotice] = useNotice();
+  /*
+   * Read at render from module-scope constants, not held in state. Every one of these is fixed for
+   * the life of the process - the binary cannot change under a running app, and `expo-updates`
+   * applies a downloaded bundle at the NEXT launch rather than this one (ADR-0048). A value that
+   * cannot change while it is on screen has nothing to subscribe to.
+   */
+  const identity = describeBuild({
+    nativeVersion: Application.nativeApplicationVersion,
+    nativeBuild: Application.nativeBuildVersion,
+    updateId: Updates.updateId,
+    isEmbeddedLaunch: Updates.isEmbeddedLaunch,
+    publishedAt: Updates.createdAt?.toISOString() ?? null,
+    channel: Updates.channel,
+    runtimeVersion: Updates.runtimeVersion,
+    isEmergencyLaunch: Updates.isEmergencyLaunch,
+    emergencyLaunchReason: Updates.emergencyLaunchReason,
+  });
+
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.version, pressed && styles.versionPressed]}
+      onPress={() => {
+        /*
+          A copy that fails says so, the same rule the invite link's Copy follows: a clipboard
+          cannot be read back from inside the app, so the confirmation is the only evidence there
+          is that anything happened.
+        */
+        void Clipboard.setStringAsync(identity.report)
+          .then(() => showNotice('Build details copied.'))
+          .catch(() => showNotice("Couldn't copy the build details."));
+      }}
+      accessibilityRole="button"
+      accessibilityLabel={`${identity.version}. ${identity.bundle} Copy the build details.`}
+    >
+      <Text style={styles.versionApp}>{identity.version}</Text>
+      <Text style={styles.versionBundle}>{identity.bundle}</Text>
+      {notice !== null && (
+        <Text style={styles.versionNotice} accessibilityLiveRegion="polite">
+          {notice}
+        </Text>
+      )}
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.appBackground },
   body: {
@@ -710,6 +785,16 @@ const styles = StyleSheet.create({
   },
   sheetRowName: { ...type.body, color: color.textPrimary },
   sheetRowRole: { ...type.label, color: color.textSecondary, textTransform: 'none' },
+
+  /*
+   * The quietest thing on the screen. It is furniture until the one day somebody needs it, so it
+   * reads as a footer rather than as a row: centred, secondary, and below the last control.
+   */
+  version: { alignItems: 'center', marginTop: space.xl, paddingHorizontal: space.md },
+  versionPressed: { opacity: 0.6 },
+  versionApp: { ...type.bodySmallStrong, color: color.textSecondary, textAlign: 'center' },
+  versionBundle: { ...type.bodySmall, color: color.textSecondary, textAlign: 'center' },
+  versionNotice: { ...type.bodySmall, color: color.accent, marginTop: space.xs },
 
   // Kept for the edit form and the delete-account flow below.
   error: { ...type.bodySmall, color: color.error },

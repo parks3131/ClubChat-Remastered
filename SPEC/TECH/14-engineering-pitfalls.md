@@ -268,7 +268,17 @@ they cost.
     ```
 
     It must equal the Runtime Version on the build the update is aimed at, and `npm ci` restores
-    the file. **The dependency itself is settled and is not the thing to change here**:
+    the file. **Do not run `expo run:ios` in a tree you intend to publish from** - it runs
+    `pod install`, which is what moves the byte.
+
+    **Since 2026-08-27 there is a second half to the check, on the device.** The Profile screen's
+    last two lines report the running bundle's update id and, on tap, its runtime version
+    ([`PRD/03`](../PRD/03-accounts-and-profile.md) rule 17). That is the only place in the system
+    where the phone's own runtime version can be read, so "did this publish reach anything" stopped
+    being unanswerable. It is a diagnostic against exactly this pitfall and was the first thing
+    published over the air, deliberately: nothing breaks if it fails to arrive.
+
+    **The dependency itself is settled and is not the thing to change here**:
     `apps/mobile/src/meetup-map.tsx` records why it stays installed, and ADR-0037 and ADR-0049
     carry the reasoning. This pitfall is about running the check, not about the package.
 

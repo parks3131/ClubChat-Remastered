@@ -19,6 +19,95 @@ Newest first.
 
 ---
 
+## 2026-08-27 - The first over-the-air update, which was a version line
+
+**The pipeline built the night before carried something, and what it carried was the tool for
+telling whether it had.** Update group `d5777e6f-cc75-49d9-af2b-ab4f20c0d2a5`, iOS update
+`01a0433e-9f9c-7505-b4c1-d4f5caa3f27b`, channel `production`, runtime version
+`7d3ffda1f1f71a38b15e0d92511d40e6eb3f1c7c`. It adds two lines to the bottom of the Profile screen
+and changes nothing else.
+
+**The choice of payload was the point.** The app had displayed no version anywhere - no version
+string, no build number, no update id, confirmed by grep. That was untidy while every change
+arrived through TestFlight and became load-bearing the moment a bundle could change on its own: the
+question that follows every publish, *did it land?*, had no answer from the device, and it has no
+answer anywhere else either. `TECH/14` pitfall 42 is the reason - an update published against the
+wrong runtime version uploads, reports success, is offered to no phone in existence, and says so
+nowhere. So the first thing down a pipe whose failure mode is silence was the instrument for
+hearing it, on a change where nothing breaks if it never arrives.
+
+### Two values, because two different things move
+
+`expo-application` reads the binary's own `Info.plist` at runtime, so the version and build number
+are facts about the installed app that an update cannot change. `expo-updates` reports which bundle
+that binary chose to run, which is exactly what an update does change. Showing one without the
+other is how somebody concludes an update landed because the version string looks new.
+
+`expo-constants` was the obvious source for a version and is the wrong one: `Constants.expoConfig`
+is read from the manifest of the *running update*, so after an update it reports the version in the
+bundle's copy of `app.json` rather than the binary's - and `appVersionSource` is `remote`, so
+nothing maintains that field by hand in the first place.
+
+Tapping the two lines copies the long form: the full update id, the publish time, the channel and
+the runtime version. Those are the four values that settle a "did it arrive" argument and not one
+of them can be read aloud off a phone screen. **The runtime version is the one that matters most** -
+it is the only place in the system where a phone's own fingerprint can be read, which is what makes
+pitfall 42 checkable from the device rather than only from the laptop that published.
+
+### The dependency that was already in the binary
+
+`expo-application` is a native module, and a native module added to a JavaScript-only change is not
+a JavaScript-only change: it moves the fingerprint, and an update published against a moved
+fingerprint reaches nothing. It turned out to be installed already, as a transitive dependency of
+`expo-notifications`, and autolinked into build 5 - `expo-application/ios` is one of the 39 directories
+the fingerprint hashes. Declaring it in `apps/mobile/package.json` was still right, because
+depending on a package another package happens to pull in is a build that breaks the day that
+package drops it, and it cost nothing: `@expo/fingerprint` hashes `packageJson:scripts` and the
+resolved autolinking config, neither of which a new `dependencies` entry touches.
+
+**Proved rather than reasoned about.** The fingerprint was generated before the change and after
+it, and both times came back `7d3ffda1f1f71a38b15e0d92511d40e6eb3f1c7c` - which is build 1.0.0
+(5)'s runtime version exactly. The publish was gated on that string matching, in the same command,
+so a mismatch would have aborted it rather than produced a silent no-op.
+
+### Two things found while doing it
+
+**`eas update` requires `--environment` from Expo SDK 55 onwards, and this project is on 57.** The
+existing note said only that the `EXPO_PUBLIC_*` values had to exist in the EAS environments
+because `eas update` does not read `eas.json`'s build profiles. Both halves are needed: the values
+exist, and the command has to be told which environment to load them from. Without the flag the
+bundle carries no api URL at all, over a correctly built app, silently - the same defect the note
+was written to prevent, one layer along.
+
+**`eas update` records the commit it was published from, and marks a dirty tree with `*`.** This
+one was published before its own commit, so it is recorded against `2fbe0a8*` - the commit *before*
+the code it contains. Harmless once written down and a bad habit to keep, so `TECH/21` now says to
+commit first.
+
+### What was verified, and what was not
+
+The formatter is a pure module with twelve tests covering every state a real phone reaches: a
+downloaded update, the embedded bundle a fresh install runs, a development build with updates
+disabled, web with no binary to read a version out of, and an emergency launch - which is
+`expo-updates` falling back to the embedded bundle after a downloaded update fails to start, and is
+otherwise indistinguishable from an update that never arrived. The tests were run against a stubbed
+implementation first and ten of the twelve failed, which is the only evidence that an assertion is
+load-bearing.
+
+The screen itself was smoke tested on web: the bundle loads with the two new native imports (both
+have web implementations, so this is not `AGENTS.md` failure mode 9 waiting to happen), the line
+renders below the delete control, the copy confirms, and both fallbacks read correctly - "Version
+unavailable" and "Development bundle. Over-the-air updates are off in this build.", which is the
+truth on a browser.
+
+**The iOS Simulator was deliberately not used.** Building for it runs `pod install`, which is the
+exact byte that moves the fingerprint (pitfall 42), and doing that would have made the tree
+unpublishable until `npm ci` - which cannot run while the founder's api is up under `node --watch`.
+
+**Arrival on the phone is not proved.** The update is on the server and no device has been seen
+taking it. That takes two relaunches, because `fallbackToCacheTimeout` is `0`: launch one downloads
+in the background, launch two applies. It is the open item in `TODO.md`.
+
 ## 2026-08-27 - The update path, and the four days nobody ran anything
 
 **A build that can accept an over-the-air update is on a phone for the first time.** 1.0.0 (5),

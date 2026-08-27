@@ -43,30 +43,25 @@ is "what is broken".
       It becomes checkable the first time an over-the-air update ships, because from then on the
       installed base is something EAS can answer. Until then both keys stay.
 
-- [ ] **The update path has a receiver and has never carried anything.** Build **1.0.0 (5)**,
-      runtime `7d3ffda1f1f71a38b15e0d92511d40e6eb3f1c7c`, channel `production`, built from
-      `65e0835`, was installed from TestFlight on the founder's iPhone on 2026-08-27. It is the
-      first build that can accept an over-the-air update at all. **Nothing has been published to
-      either channel**, so the next `eas update` is the first real test of the pipeline.
+- [ ] **The first update is published and has not been seen to arrive.** Update group
+      `d5777e6f-cc75-49d9-af2b-ab4f20c0d2a5`, iOS update `01a0433e-9f9c-7505-b4c1-d4f5caa3f27b`,
+      channel `production`, runtime `7d3ffda1f1f71a38b15e0d92511d40e6eb3f1c7c` - which is build
+      **1.0.0 (5)**'s runtime exactly, checked with `expo-updates fingerprint:generate` before
+      publishing rather than after. It carries the Profile screen's version line and nothing else.
 
-      **The environment-variable blocker is CLOSED as of 2026-08-27.** `eas update` does not read
-      the `env` blocks in `eas.json` build profiles, so a bundle published before this would have
-      carried no `EXPO_PUBLIC_API_URL` at all. All four values now exist in **both** the
-      `production` and `preview` EAS environments, set with `eas env:set` and read back with
-      `eas env:list` rather than trusted from the success line. **Four, not the three this item
-      used to say** - the fourth is `EXPO_PUBLIC_SENTRY_ENVIRONMENT`, and it is the one that
-      differs between the two environments, which is exactly the one a copy-paste gets wrong.
+      **What is proved is the publish, not the delivery.** EAS accepted it and reports it on the
+      `production` branch; no phone has been observed taking it. **The check is on the founder's
+      iPhone and takes two relaunches**: `fallbackToCacheTimeout` is `0`, so launch one downloads
+      in the background and launch two applies it. Open Profile and read the bottom two lines.
 
-      **What still blocks a publish is the fingerprint, and it fails silently.** See
-      [`TECH/14`](SPEC/TECH/14-engineering-pitfalls.md) pitfall 42: a local `pod install` rewrites
-      a header inside `node_modules/react-native-maps`, which moves the runtime version. A build
-      refuses loudly; an `eas update` published from the same tree lands on a runtime version no
-      phone carries and simply never arrives. Run `npx expo-updates fingerprint:generate
-      --platform ios` and match it against the build's Runtime Version before publishing anything.
+      - Before it lands: nothing at all at the bottom of Profile - build 5 shipped without the
+        line, which is the whole reason this was the first thing sent.
+      - After it lands: `Version 1.0.0 (5)`, and `Update 01a0433e, published <time>`.
+      - If it says `No update yet` after two relaunches, the update did not arrive. That is
+        [`TECH/14`](SPEC/TECH/14-engineering-pitfalls.md) pitfall 42 and nothing else reports it.
 
-      **And one thing to know before testing the first update:** `fallbackToCacheTimeout` is `0`,
-      so an update downloads in the background and applies on the *next* launch. Two relaunches to
-      see it, not one. `ADR-0048` documents the publish command.
+      Tapping the two lines copies the full update id, publish time, channel and runtime version,
+      which is what to paste when it does not match.
 
 - [ ] **A deliberately parked outbox event has still never reached a human.** The 5xx half of this
       is DONE and proved on 2026-08-25: a real error raised inside the production api reached
@@ -105,20 +100,6 @@ is "what is broken".
       carries `ios.ascAppId` and nothing else - no `appleId`, no `ascApiKeyPath` - so a
       `--non-interactive` submit fails unless a key is already stored on EAS. Fine interactively;
       it matters the first time this runs from CI.
-
-- [ ] **The app displays no version anywhere, and over-the-air updates make that a real gap.**
-      Nothing in `apps/mobile` renders an app version, a build number or an update id - checked by
-      grep on 2026-08-27. So no one holding a phone can say which build it is running, and once
-      updates start publishing, **"did the update land?" has no answer from the device**. That is
-      the exact question [`TECH/14`](SPEC/TECH/14-engineering-pitfalls.md) pitfall 42 says you
-      cannot answer any other way, because a mismatched update fails silently everywhere else too.
-
-      **It is JavaScript only, which makes it the right first thing to publish.** A version line on
-      the Profile screen - `expo-application` for the native version and build number,
-      `Updates.updateId` for which bundle is running - ships down the new channel, proves the
-      pipeline end to end on a change where nothing breaks if it fails, and hands over the tool for
-      checking every update after it. Note `fallbackToCacheTimeout` is `0`, so testing it takes two
-      relaunches: the check happens on launch, the swap on the next one.
 
 - [ ] **Request Beta App Review, because it is a queue and not a step.** Internal TestFlight works -
       the founder installed 1.0.0 (5) on 2026-08-27. External testers need Apple's review at one to

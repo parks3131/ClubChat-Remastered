@@ -101,6 +101,23 @@ never shown to other members.
 16. **Setting a new password lands on sign-in, not in the app.** Rule 15 revoked the sessions,
     so there is nothing to land in; signing in once with the new password is also the only
     confirmation that it is really set.
+17. **The Profile screen ends with which build the phone is holding, and which bundle it is
+    running.** Two lines, quiet, below every control: the app version and build number, and then
+    one sentence naming the update. Tapping them copies the long form - the full update id, the
+    publish time, the channel and the runtime version - because those are the values that settle
+    an argument and none of them can be read aloud off a screen.
+
+    **Two lines rather than one, because two different things change.** The version and build
+    number come from the installed binary and only a store release moves them. The update line
+    comes from the JavaScript, which now arrives on its own in the background. Showing one without
+    the other is how somebody concludes an update landed because the version looks new.
+
+    *(Added 2026-08-27, and it is a diagnostic rather than a decoration. Nothing in the app showed
+    a version until then, which was untidy while every change arrived through TestFlight and became
+    a hole the day over-the-air updates started publishing: "did the update land?" had no answer
+    from the device, and it has none anywhere else either - a publish aimed at the wrong runtime
+    version reaches no phone and reports success. This line is the only place that question is
+    answerable.)*
 
 **Edge cases**
 

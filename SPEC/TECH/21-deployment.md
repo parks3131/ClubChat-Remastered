@@ -48,7 +48,7 @@ performed. Two of the three have moved since; the preamble to that section carri
 | Web client | Vercel | Browsers |
 | JavaScript bundles | EAS Update | Phones |
 
-**Eight of those ten rows are live as of 2026-08-27; the last two have never run.** The three Fly
+**Nine of those ten rows are live as of 2026-08-27; one has never run.** The three Fly
 apps, Neon, Upstash, both R2 buckets and **both** Workers serve today. `site-worker` went live on
 the apex between 2026-08-25 and 2026-08-27, which is as precisely as this repo can date it: no
 commit carries a deploy. It was verified from outside on 2026-08-27 by fetching the landing page,
@@ -57,23 +57,46 @@ commit carries a deploy. It was verified from outside on 2026-08-27 by fetching 
 parked Android app-link decision showing through rather than a fault: a 200 there does not mean an
 Android invite link opens the app, and nothing will make it until a fingerprint is published.
 
-The web client has never been deployed to Vercel.
+**The EAS Update row carried its first payload on 2026-08-27.** Build **1.0.0 (5)**, runtime
+version `7d3ffda1f1f71a38b15e0d92511d40e6eb3f1c7c`, channel `production`, built from `65e0835`,
+went through App Store Connect and was installed from TestFlight on the founder's iPhone that
+morning. It is **the first build in this project's history that can accept an over-the-air
+update**, because the code that checks for one has to be inside the binary and every earlier build
+predates it - build 1, from `73a8172`, reports its runtime and channel as `None` in the EAS build
+list, which is that fact visible from outside.
 
-**The EAS Update row has a receiver for the first time, and has still never carried anything.**
-Build **1.0.0 (5)**, runtime version `7d3ffda1f1f71a38b15e0d92511d40e6eb3f1c7c`, channel
-`production`, built from `65e0835` on 2026-08-27, went through App Store Connect and was installed
-from TestFlight on the founder's iPhone the same night. It is **the first build in this project's
-history that can accept an over-the-air update**, because the code that checks for one has to be
-inside the binary and every earlier build predates it - build 1, from `73a8172`, reports its
-runtime and channel as `None` in the EAS build list, which is that fact visible from outside.
+The first update published to the `production` channel the same day: update group
+`d5777e6f-cc75-49d9-af2b-ab4f20c0d2a5`, iOS update `01a0433e-9f9c-7505-b4c1-d4f5caa3f27b`, runtime
+version `7d3ffda1f1f71a38b15e0d92511d40e6eb3f1c7c`, carrying the version line described in
+[`PRD/03`](../PRD/03-accounts-and-profile.md) rule 17 and nothing else. **What that proves is the
+publish, not the delivery.** EAS accepted it; no phone has been observed taking it, and the only
+place that fact is visible is the line the update itself carries. `fallbackToCacheTimeout` is `0`,
+so the check happens on one launch and the swap on the next: two relaunches, not one.
 
-**Nothing has been published to either channel.** The blocker that used to sit here is closed: all
-four `EXPO_PUBLIC_*` values now exist in both the `production` and `preview` EAS environments, set
-on 2026-08-27 and read back with `eas env:list` rather than trusted from a success line. What
-replaces it is quieter and lives in [`TECH/14`](14-engineering-pitfalls.md) pitfall 42: the
-fingerprint must be checked before every publish, because an update that does not match reaches no
-phone and reports nothing. Both rows remain milestone 5 work rather than rows this table got
-wrong.
+**The web client row has never run.** Nothing has been deployed to Vercel.
+
+**The publish command takes an environment, and the flag is not optional.** `eas update` does not
+read a build profile's `env` block from `eas.json` - only `eas build` does - so the four
+`EXPO_PUBLIC_*` values live in the EAS `production` and `preview` environments as well, set on
+2026-08-27 and read back with `eas env:list` rather than trusted from a success line. From Expo SDK
+55 onwards `--environment` is **required**, and omitting it does not fall back to the values that
+exist: it publishes a bundle with no api URL inlined at all, over a correctly built app, silently.
+The whole command is:
+
+```
+npx expo-updates fingerprint:generate --platform ios     # must equal the target build's runtime version
+npx eas-cli update --channel production --environment production --platform ios -m "<what changed>"
+```
+
+**Commit before publishing.** `eas update` records the git commit it was published from, and marks
+it with `*` when the tree is dirty - so a bundle published from uncommitted work is recorded
+against the *previous* commit, which is the wrong answer to "which code is on that phone". The
+first update was published this way and the mapping is written down in
+[`HISTORY.md`](../../HISTORY.md) instead; that is a repair, not a pattern.
+
+The fingerprint check in front of it is [`TECH/14`](14-engineering-pitfalls.md) pitfall 42, and it
+is the one that fails silently: an update that does not match the target build's runtime version
+reaches no phone and reports success.
 
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because
