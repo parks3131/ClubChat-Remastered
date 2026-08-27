@@ -109,6 +109,17 @@ time is the thing this file is for. Three of its claims:
 - *"That ordering is now a rule in `SPEC/TECH/21`."* **It was not.** All twelve rules were checked
   on 2026-08-27 and none of them said it. The rule exists now, under rule 1.
 
+Two of the three findings in the section above it went the same way, within hours of being
+written, and both are worth reading as the entry's own thesis turned on itself:
+
+- *"There is nothing to roll back to."* True at the dry run that morning. The deploys that evening
+  created three more image references on every app, so the safety net started existing at 19:08
+  the same day - which is exactly what the entry predicted would happen "at the next deploy",
+  written as though that were far off.
+- *"DMARC generates no reports."* `rua=mailto:dmarc@clubchatapp.com` was added later on 2026-08-25
+  and `dig` still showed it on 2026-08-27, so the fortnight of reports the entry called for
+  started running that day rather than not at all.
+
 **The pattern is worth more than the three corrections.** Every one of these was written as settled
 by the session that did the work, in the hour before the thing it described changed, and none was
 revisited - including a claim that a rule had been written down, by the session that did not write

@@ -244,3 +244,38 @@ they cost.
     a confident, correct, useless answer. Derived, renamed and multi-column fields all have this
     shape, and the search that would have found it is the one nobody ran.
 
+### The mobile release path
+
+42. **A local `pod install` edits `node_modules`, and the fingerprint notices.** `runtimeVersion`
+    is `{ "policy": "fingerprint" }` ([ADR-0048](../decisions/0048-updates-are-keyed-to-a-fingerprint.md)),
+    a hash over everything affecting the native runtime - `node_modules` included. Running the app
+    locally rewrites `node_modules/react-native-maps/ios/AirMaps/RNMapsDefines.h` in place: npm
+    ships `#define HAVE_GOOGLE_MAPS 1` and a local pod install sets it to `0`. One byte, and the
+    fingerprint moves.
+
+    **It fails twice, and only the first time is loud.** `eas build` refuses at the
+    `CONFIGURE_EXPO_UPDATES` phase with a runtime-version mismatch and prints the diff naming the
+    package, which is how this was found on 2026-08-27 after an 86-second failure. `eas update`
+    does not refuse. It publishes against a runtime version no installed build carries, the phone
+    finds nothing compatible, and the update never arrives - no error on the laptop, in Sentry, or
+    on the device. **A silent no-op is the worse half of this pitfall.**
+
+    Check before every build and every publish, and treat a mismatch as a dirty tree rather than a
+    puzzle:
+
+    ```
+    npx expo-updates fingerprint:generate --platform ios
+    ```
+
+    It must equal the Runtime Version on the build the update is aimed at. `npm ci` restores the
+    file. Note that `react-native-maps` is imported nowhere - `apps/mobile/src/meetup-map.tsx`
+    keeps it deliberately so the map can come back without a native build - so the cheapest durable
+    fix is a decision about that dependency rather than a check somebody has to remember.
+
+43. **A malformed `eas.json` disables every `eas` command, not the one it belongs to.** `eas`
+    validates the whole file before doing anything, so an `ascAppId` sitting at
+    `submit.production` instead of `submit.production.ios` made `eas build`, `eas update`,
+    `eas env:set` and `eas whoami --json` all fail with a schema error. It was added on 2026-08-23
+    and found on 2026-08-27, because in between nobody ran an `eas` command - and the documents
+    that named `eas env:set` as the next step were naming a command that could not run. **A config
+    file nothing has executed since it changed is untested, whatever it looks like.**

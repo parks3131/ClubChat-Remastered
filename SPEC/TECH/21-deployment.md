@@ -25,7 +25,8 @@ Most of this document was written *before* that first deploy, on purpose. Every 
 to follow from the first deploy and expensive to retrofit: once a few hundred people hold a build
 of the app, a compatibility mistake cannot be un-shipped, only followed by another release.
 [The drills](#the-drills) is the part written after, and it covers the three things that are
-supposed to protect a live system and had never once been performed.
+supposed to protect a live system and, on the morning of 2026-08-25, had never once been
+performed. Two of the three have moved since; the preamble to that section carries which.
 
 [Stack and hosting](15-stack-and-hosting.md) owns **which** technology and why. This document owns
 **how a change reaches a person**, and does not restate it.
@@ -856,30 +857,35 @@ apps.
 Giving `--app` twice is refused. An app with more than one machine is refused, because that shape
 needs a decision rather than a default. `--to <image>` overrides the image to roll back to.
 
-#### It is not runnable yet, and that is the current answer
+#### It is runnable now, and it has still never been run
 
-Measured on 2026-08-25, read-only, against all three apps:
+**This section said the opposite until 2026-08-27**, and the reason is worth keeping: it was
+measured on the morning of 2026-08-25, and the deploys that evening invalidated it within hours.
+What it used to say, correctly at the time, was that all five releases across the three apps
+carried one image digest and there was therefore nothing to roll back to.
 
-```
-Every one of this app's 3 releases carries the SAME image digest:
-  registry.fly.io/clubchat-api@sha256:9f9e58a2c4f1d0aab06847023567503bc9f1af410f6bed84707c1333b3faef0d
+Measured again on 2026-08-27 with `fly releases -a <app> --json`:
 
-A release is created by a secret or config change as well as by a deploy, so several
-releases of one image is normal. It also means this app has never run a second image,
-and there is therefore nothing to roll back TO.
+| App | Releases | Distinct image refs | Newest release |
+|---|---|---|---|
+| `clubchat-api` | 7 | 4 | 2026-08-25T21:00:22Z |
+| `clubchat-gateway` | 4 | 4 | 2026-08-25T20:38:11Z |
+| `clubchat-worker` | 4 | 4 | 2026-08-25T20:37:54Z |
 
-REFUSED: no previous image exists.
-```
+Every app now has a previous image, so the drill's refusal no longer fires and there is a target
+to roll back to. Run it, and run it while the previous image is still known good.
 
-`clubchat-api` has three releases, `clubchat-gateway` and `clubchat-worker` one each, and every
-one of the five carries that same digest. The cutover built one image and deployed it to all
-three, exactly as [the first cutover](#the-first-cutover) describes, and the api's two extra
-releases are secret and config changes, which create a release without creating an image.
-
-So **rollback is untested because it is not yet possible**, which is a different statement from
-"untested" and worth recording as such. The drill becomes runnable at the next real deploy, which
-is the moment a second digest exists. Run it that same day, while the previous image is known
-good.
+**Two details that shape how you read that table.** A release is created by a secret or config
+change as well as by a deploy, so a count of releases is not a count of images - which is why the
+middle column is the one that matters. And the four refs are **three `sha256:` digests plus one
+mutable tag**: the 08-23 cutover images are addressed by digest, exactly as
+[the first cutover](#the-first-cutover) specifies, while the newest release on all three apps is
+`registry.fly.io/clubchat-api:deployment-01M0XA7STTQZNY018R2V70YY7P`. `fly` does not print that
+tag's digest, so "four distinct images" is an inference from four distinct refs rather than
+something the command proves. The build-once property held either way - all three apps took the
+same ref - but a rollback target named by a mutable tag is a weaker guarantee than one named by a
+digest, and whether the deploy path should go back to digests is an open question rather than a
+settled one.
 
 #### What the plan prints
 
@@ -1068,7 +1074,7 @@ is that, not a misconfiguration.
 |---|---|
 | `FAIL  spf` or `FAIL  dkim` | Stop. A policy published now is an instruction to reject your own mail |
 | `FAIL  propagation` | The origin and `8.8.8.8` disagree. Wait out the TTL and re-run before doing anything else |
-| `FAIL  aggregate reports` | No `rua=`. This is today's state, and step 1 above is the fix |
+| `FAIL  aggregate reports` | No `rua=`. **No longer today's state**: it was added on 2026-08-25 and `dig` still showed it on 2026-08-27. This row now describes a regression rather than the starting position |
 | `FAIL  rua mailbox` | The reporting address is on a domain with no MX. Reports would go nowhere |
 | `DKIM: PASS` with a `d=` that is not `clubchatapp.com` | Alignment is resting on SPF alone. Do not tighten |
 

@@ -49,13 +49,24 @@ is "what is broken".
       build in TestFlight**, which was made from `73a8172` before any of it existed, so the app
       people hold cannot take an update and every fix to it is still a full rebuild.
 
-      **Publishing before the EAS server-side environment variables exist would be worse than not
-      publishing.** `eas update` does not read the `env` blocks in `eas.json` build profiles, so a
-      bundle published today carries no `EXPO_PUBLIC_API_URL` at all. `endpoint.ts` now makes that
-      fatal rather than silently pointing at localhost, which is the recoverable failure - a bundle
-      that refuses to start is rolled back by `expo-updates` per device - but it is still every
-      phone on the channel failing to launch once. Run `eas env:set --environment production` for
-      the three `EXPO_PUBLIC_*` values first. `ADR-0048` documents the publish command.
+      **The environment-variable blocker is CLOSED as of 2026-08-27.** `eas update` does not read
+      the `env` blocks in `eas.json` build profiles, so a bundle published before this would have
+      carried no `EXPO_PUBLIC_API_URL` at all. All four values now exist in **both** the
+      `production` and `preview` EAS environments, set with `eas env:set` and read back with
+      `eas env:list` rather than trusted from the success line. **Four, not the three this item
+      used to say** - the fourth is `EXPO_PUBLIC_SENTRY_ENVIRONMENT`, and it is the one that
+      differs between the two environments, which is exactly the one a copy-paste gets wrong.
+
+      **What still blocks a publish is the fingerprint, and it fails silently.** See
+      [`TECH/14`](SPEC/TECH/14-engineering-pitfalls.md) pitfall 42: a local `pod install` rewrites
+      a header inside `node_modules/react-native-maps`, which moves the runtime version. A build
+      refuses loudly; an `eas update` published from the same tree lands on a runtime version no
+      phone carries and simply never arrives. Run `npx expo-updates fingerprint:generate
+      --platform ios` and match it against the build's Runtime Version before publishing anything.
+
+      **And one thing to know before testing the first update:** `fallbackToCacheTimeout` is `0`,
+      so an update downloads in the background and applies on the *next* launch. Two relaunches to
+      see it, not one. `ADR-0048` documents the publish command.
 
 - [ ] **A deliberately parked outbox event has still never reached a human.** The 5xx half of this
       is DONE and proved on 2026-08-25: a real error raised inside the production api reached
@@ -75,10 +86,11 @@ is "what is broken".
 - [ ] **The rollback drill is runnable now, and has still never been run.** The item this replaces
       said there was nothing to roll back to, which was true when it was written on 2026-08-25 and
       stopped being true the same evening. `fly releases` on 2026-08-27 shows **four distinct
-      images**, not one: `9f9e58a2` from the 08-23 cutover, then `7979ea67` at 19:08, `e316267b`
-      at 19:28, and the current one at 20:37. Every one of the three apps carries at least three
-      releases across at least three images, so the previous image the drill needs exists on all
-      of them. Run `scripts/drills/rollback-drill.sh` for real.
+      image references** on every one of the three apps, not one: `9f9e58a2` from the 08-23
+      cutover, then `7979ea67`, `e316267b`, and the current one. Note the precision - that is
+      three `sha256:` digests plus one mutable tag whose digest `fly` does not print, so four
+      distinct *images* is an inference rather than a proof. Either way each app has a previous
+      one, which is all the drill needs. Run `scripts/drills/rollback-drill.sh` for real.
 
       **One thing to look at while running it.** The 08-23 releases name their image by
       `sha256:` digest, which is what the cutover procedure in
@@ -88,6 +100,22 @@ is "what is broken".
       three apps took the same ref - but a rollback target addressed by a tag is a weaker
       guarantee than one addressed by a digest, and it is worth deciding whether that is
       acceptable or whether the deploy path should go back to digests.
+
+- [ ] **Decide what `react-native-maps` is for, because it now costs something.** It is imported
+      nowhere. `apps/mobile/src/meetup-map.tsx` keeps it deliberately, so a map can come back
+      without a native build, and [ADR-0049](SPEC/decisions/0049-a-meetup-says-where-with-a-link-and-nothing-else.md)
+      is why there is no map today. That was free until the fingerprint runtime version made
+      `node_modules` part of the app's identity: the package holds the one file a local
+      `pod install` rewrites, so an unused dependency is now the thing that breaks builds and
+      silently swallows over-the-air updates ([`TECH/14`](SPEC/TECH/14-engineering-pitfalls.md)
+      pitfall 42). Two honest options - drop it and reinstate it the day a map is wanted, or keep
+      it and put the fingerprint check in front of every build and publish. Right now it is neither,
+      which is the only answer that is definitely wrong.
+
+- [ ] **`eas submit` may need an App Store Connect API key.** The `production` submit profile
+      carries `ios.ascAppId` and nothing else - no `appleId`, no `ascApiKeyPath` - so a
+      `--non-interactive` submit fails unless a key is already stored on EAS. Fine interactively;
+      it matters the first time this runs from CI.
 
 - [ ] **Something is escaping the pinned strip's notice cards.** An accent-tinted rounded shape
       sits below the front card, offset right, cut off where the next card overlaps it. Found on
