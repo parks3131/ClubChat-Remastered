@@ -90,7 +90,8 @@
           "cameraPermission": "Allow ClubChat to use the camera to scan a club QR code.",
           "recordAudioAndVideo": false
         }
-      ]
+      ],
+      "expo-image"
     ],
     "scheme": "clubchat",
     "extra": {

@@ -21,7 +21,7 @@
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Image,
+  Image as RNImage,
   StyleSheet,
   Text,
   View,
@@ -29,6 +29,24 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+/**
+ * Every REMOTE picture in the product is drawn by this file, and since 2026-08-27 it draws them
+ * with `expo-image` rather than React Native's own `Image`.
+ *
+ * > **The reason is a cache that survives leaving a screen.** React Native's `Image` leans on
+ * > iOS's shared `NSURLCache`, whose budget is small next to photographs, so a picture was
+ * > evicted between visits and fetched again - which is what "why do images reload every time I
+ * > come back" was. `expo-image` keeps its own memory AND disk cache, so a photo seen once is
+ * > read off the device rather than off the network, and `cachePolicy` below is what asks for it.
+ *
+ * `RNImage` stays imported for `getSize` alone. That is a static measurement call rather than a
+ * component, `expo-image` has no equivalent, and the note above the call site explains why the
+ * `onLoad` route was already tried and abandoned.
+ *
+ * **This is a native module**, so it is the first change in this file that cannot reach a phone
+ * over the air: it moves the fingerprint and therefore needs a build. See `TECH/14` pitfall 42.
+ */
+import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
 import { resolveMedia, resolveMediaUrl, type MediaVariant } from './api.ts';
 import { documentDetail } from './document-name.ts';
@@ -103,7 +121,19 @@ export function RemoteImage({
     <Image
       source={{ uri }}
       style={style}
-      resizeMode={resizeMode}
+      contentFit={resizeMode}
+      /*
+        Memory AND disk. The disk half is the entire point of this dependency: it is what makes a
+        photo you have already seen cost nothing the second time, which `NSURLCache` could not
+        promise for anything the size of a photograph.
+      */
+      cachePolicy="memory-disk"
+      /*
+        No fade. `expo-image` transitions by default in some configurations, and a fade on a
+        picture that is already on the device is delay added to the one case this dependency
+        exists to make instant.
+      */
+      transition={0}
       onError={() => setFailed(true)}
       accessibilityLabel={accessibilityLabel}
       accessibilityIgnoresInvertColors
@@ -201,7 +231,7 @@ export function PhotoBubble({ mediaId, localUri, variant = 'bubble', mine }: Pho
   useEffect(() => {
     if (uri === null || ratio !== null) return;
     let cancelled = false;
-    Image.getSize(
+    RNImage.getSize(
       uri,
       (width, height) => {
         if (width <= 0 || height <= 0) return;
@@ -270,12 +300,14 @@ export function PhotoBubble({ mediaId, localUri, variant = 'bubble', mine }: Pho
     <Image
       source={{ uri }}
       style={[styles.photo, size]}
+      cachePolicy="memory-disk"
+      transition={0}
       /*
         `cover` once the box IS the image's own ratio - there is nothing left to crop. Until then
         `contain`, so an unmeasured photo is letterboxed against a transparent background rather
         than having its edges taken off to fill a square it never matched.
       */
-      resizeMode={ratio === null ? 'contain' : 'cover'}
+      contentFit={ratio === null ? 'contain' : 'cover'}
       onError={() => setFailed(true)}
       accessibilityLabel={mine ? 'Photo you sent' : 'Photo'}
       accessibilityIgnoresInvertColors
