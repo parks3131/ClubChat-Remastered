@@ -112,6 +112,13 @@ path was built for: a defect reported from a device at 09:27, reproduced, fixed,
 confirmed fixed on that same device by 10:18, with no build, no submission and no Apple review in
 between. Before 2026-08-27 that round trip was days.
 
+**A third update the same day, and by then it was a working loop rather than an event.** Update
+group `1d4ea79f-bec3-46c5-aa35-d04ff1acbe89`, iOS update `01a043cb-8e5d-7ca0-81d1-d367c29606de`,
+commit `14025613882a57157d4062eaba578caa5725c088`, carrying the chat message grouping in
+[`PRD/05`](../PRD/05-chat.md) rule 3e. Confirmed on the device. **Three updates, three clean
+commits, one runtime version, no builds** - which is the answer to "how fast can a change reach a
+person" that this document's table has claimed since before any of it ran.
+
 The fingerprint check in front of it is [`TECH/14`](14-engineering-pitfalls.md) pitfall 42, and it
 is the one that fails silently: an update that does not match the target build's runtime version
 reaches no phone and reports success.

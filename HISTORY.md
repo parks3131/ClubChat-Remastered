@@ -19,6 +19,58 @@ Newest first.
 
 ---
 
+## 2026-08-27 - Three updates in one day, and the chat surface they carried
+
+**The over-the-air path stopped being a milestone and became how work reaches the phone.** Three
+updates published to `production`, all against runtime `7d3ffda1`, all confirmed on the founder's
+iPhone: the version line, the chat send-scroll fix, and message grouping. No builds, no
+submissions, no Apple.
+
+The shape of the day is the point. A defect was reported from a device at 09:27 with two screen
+recordings, reproduced on the Simulator, fixed, published and confirmed fixed on that same device
+by 10:18. Fifty one minutes, and before this morning the same round trip was days.
+
+### What the chat surface gained
+
+**A send takes you to your own message.** `send()` called `scrollToNewest()` one line before
+`sendWithRetry` created the row, so it scrolled to the message BEFORE yours and
+`maintainVisibleContentPosition` then held the viewport there while yours was inserted below the
+fold. Written up in [`bugs/`](bugs/2026-08-27-the-send-scrolled-before-the-message-existed.md).
+Chat also opens at the newest message now rather than travelling up to the first unread one.
+
+**A spell of messages from one person is introduced once**, with the clock in that introduction
+rather than in every bubble. `PRD/05` rule 3e carries the rule; `decideRunStarts` in
+`chat-rows.ts` carries the arithmetic, with 19 tests written before it existed.
+
+### Four things worth keeping from how it was done
+
+**The reproduction could not have happened in a browser.** `maintainVisibleContentPosition` does
+not exist in react-native-web and was half the cause, so a web check would have shown a different
+bug and passed. Failure mode 28, and it was read before the work rather than after.
+
+**The Simulator build had to happen somewhere else.** `expo run:ios` runs `pod install`, which
+rewrites a header in `node_modules/react-native-maps` and moves the fingerprint (pitfall 42) - so
+building in the tree we publish from would have blocked publishing until a full reinstall, which
+cannot run while the founder's api is up under `node --watch`. Both fixes were built in worktrees
+of their own for that reason alone.
+
+**The first diagnosis of the scroll bug was wrong in the flattering direction.** It said the list
+settled to the bottom on its own after the acknowledgement; it never moved at all, and what looked
+like a settle was his finger. He corrected it in one line. The corrected version is worse and
+simpler, which is the usual direction.
+
+**Three requests to close one gap moved the wrong number twice.** The distance between a name and
+its first bubble was not padding - it was the empty half of a 40pt avatar sitting under a 16pt
+name. Taking the padding from 8 to 6 barely showed, which was the tell, and the answer was the
+face.
+
+### What is still not true
+
+No update has been rolled back or republished over a bad one, so the recall path in ADR-0048 is
+described and untested. The `preview` channel has no build listening to it. And nothing has yet
+asked EAS what the installed base looks like, which the two always-null compatibility keys in
+`readMeetup` are waiting on.
+
 ## 2026-08-27 - The first over-the-air update, which was a version line
 
 **The pipeline built the night before carried something, and what it carried was the tool for
