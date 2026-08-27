@@ -216,7 +216,18 @@ const REACTION_BAR_HEIGHT = 44 + space.sm * 2;
  * > bubble's edge rather than the avatar's. Changing the size in one place and not the others is a
  * > misalignment that only shows up on a message that has reactions.
  */
-const AVATAR_SIZE = 40;
+/**
+ * The face over a run of messages.
+ *
+ * **32 rather than 40, since 2026-08-27.** Two things pushed it down together. A run header repeats
+ * every five minutes now rather than sitting over every message, so it is drawn often enough that
+ * its weight is felt; and the gap the founder kept asking to close between a name and its first
+ * bubble was never padding, it was the empty half of a 40pt face sitting under a 16pt name. Eight
+ * points off the face is eight points off that gap, four of them under the name.
+ *
+ * `avatarSpacer` and the two indents are derived from it, so they all move together.
+ */
+const AVATAR_SIZE = 32;
 
 /**
  * How far from the bottom still counts as being AT the bottom, in pixels.
@@ -5700,13 +5711,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: space.sm,
     /*
-      Between the two gaps either side of it, deliberately. The founder asked for this one to close
-      "a little distance" and said in the same breath that it need not be as thin as the gap between
-      two bubbles - so it sits above that and below what it was. A run reads as a heading with its
-      messages under it; too far and the heading floats free of them, too near and it stops being a
-      heading at all.
+      Almost nothing, and the reason is that this is not where the gap the eye sees comes from.
+
+      > **The perceived distance is empty AVATAR, not padding.** The row is `alignItems: center`
+      > around a 40pt face while the name beside it is about 16pt tall, so twelve of those points
+      > sit under the name before this padding even begins. Taking this from 8 to 6 was asked for
+      > and barely showed; it is at 2 now, which is the whole of what this style can give.
+      > Anything further has to come off the face - see `AVATAR_SIZE`.
     */
-    paddingBottom: space.xs + 2,
+    paddingBottom: space.xs - 2,
     alignSelf: "flex-start",
   },
   /*
