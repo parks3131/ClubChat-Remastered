@@ -40,28 +40,11 @@ is "what is broken".
 
       **The removal condition is a fact about which builds are installed on phones**, which is not
       queryable from this repo and is why it is written at the return site rather than remembered.
-      It becomes checkable the first time an over-the-air update ships, because from then on the
-      installed base is something EAS can answer. Until then both keys stay.
-
-- [ ] **The first update is published and has not been seen to arrive.** Update group
-      `d5777e6f-cc75-49d9-af2b-ab4f20c0d2a5`, iOS update `01a0433e-9f9c-7505-b4c1-d4f5caa3f27b`,
-      channel `production`, runtime `7d3ffda1f1f71a38b15e0d92511d40e6eb3f1c7c` - which is build
-      **1.0.0 (5)**'s runtime exactly, checked with `expo-updates fingerprint:generate` before
-      publishing rather than after. It carries the Profile screen's version line and nothing else.
-
-      **What is proved is the publish, not the delivery.** EAS accepted it and reports it on the
-      `production` branch; no phone has been observed taking it. **The check is on the founder's
-      iPhone and takes two relaunches**: `fallbackToCacheTimeout` is `0`, so launch one downloads
-      in the background and launch two applies it. Open Profile and read the bottom two lines.
-
-      - Before it lands: nothing at all at the bottom of Profile - build 5 shipped without the
-        line, which is the whole reason this was the first thing sent.
-      - After it lands: `Version 1.0.0 (5)`, and `Update 01a0433e, published <time>`.
-      - If it says `No update yet` after two relaunches, the update did not arrive. That is
-        [`TECH/14`](SPEC/TECH/14-engineering-pitfalls.md) pitfall 42 and nothing else reports it.
-
-      Tapping the two lines copies the full update id, publish time, channel and runtime version,
-      which is what to paste when it does not match.
+      **The trigger this item named has fired**: the first over-the-air update shipped and arrived
+      on 2026-08-27, so the installed base is now something EAS reports on rather than something
+      nobody can see. Nothing has been asked of it yet - that is the next step here, not the
+      removal. Both keys stay until somebody reads what EAS says about which builds are requesting
+      updates, and only builds shipped after ADR-0049 are left.
 
 - [ ] **A deliberately parked outbox event has still never reached a human.** The 5xx half of this
       is DONE and proved on 2026-08-25: a real error raised inside the production api reached

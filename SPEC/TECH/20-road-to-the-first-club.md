@@ -439,7 +439,10 @@ has restored is a hope, and the cost of testing a hope only ever moves in one di
 nobody had run any of it. `eas.json` had been failing schema validation since 08-23, which made
 every `eas` command refuse to run, including the `eas env:set` this phase names below. Four
 `EXPO_PUBLIC_*` values now exist in both EAS environments. Build 1.0.0 (5) carries channel
-`production` and runtime `7d3ffda1`, and is installed on a phone. Nothing has been published yet.
+`production` and runtime `7d3ffda1`, and is installed on a phone. **The first update published to
+that channel the same day and was seen on the phone**, which closes this phase end to end rather
+than as far as a receiver: update `01a0433e-9f9c-7505-b4c1-d4f5caa3f27b`, carrying the Profile
+screen's version line, read back off the device after two relaunches.
 Three separate failures were needed to get there, all recorded as
 [`TECH/14`](14-engineering-pitfalls.md) pitfalls 42, 43 and 44. The reasoning below is kept because
 it is why this phase sat where it did.
@@ -453,11 +456,14 @@ member reports costs twenty minutes rather than days. [Deployment](21-deployment
 a change reaches a person is that argument in full; this phase is what makes its third row real.
 
 **One trap, already established and not yet written into a rule.** `eas update` does **not** read a
-build profile's `env` block from `eas.json`; only `eas build` does. So the three public values
-those profiles gained on 2026-08-23 - the api URL, the WebSocket URL and the mobile Sentry DSN -
-must **also** exist in the EAS dashboard's `production` environment, or the first over-the-air
-publish inlines `localhost` over a correctly built app, silently, and every install that takes the
-update points at a laptop. It is the same defect those profiles were added to fix, one layer along,
+build profile's `env` block from `eas.json`; only `eas build` does. So the four public values
+those profiles gained on 2026-08-23 - the api URL, the WebSocket URL, the mobile Sentry DSN and the
+Sentry environment - must **also** exist in the EAS dashboard's `production` environment, or the
+first over-the-air publish inlines `localhost` over a correctly built app, silently, and every
+install that takes the update points at a laptop. **Both halves are needed**: from Expo SDK 55
+onwards `eas update` also has to be *told* which environment with `--environment`, and the flag is
+required rather than defaulted - the full command is in
+[`TECH/21`](21-deployment.md). It is the same defect those profiles were added to fix, one layer along,
 which is why it is worth naming before the work rather than after it.
 
 ### 4. Write the legal texts

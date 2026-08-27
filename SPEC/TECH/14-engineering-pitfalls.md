@@ -276,7 +276,8 @@ they cost.
     ([`PRD/03`](../PRD/03-accounts-and-profile.md) rule 17). That is the only place in the system
     where the phone's own runtime version can be read, so "did this publish reach anything" stopped
     being unanswerable. It is a diagnostic against exactly this pitfall and was the first thing
-    published over the air, deliberately: nothing breaks if it fails to arrive.
+    published over the air, deliberately: nothing breaks if it fails to arrive. It did arrive, on
+    the same day, which is how this pitfall stopped being the only unfalsifiable one in the list.
 
     **The dependency itself is settled and is not the thing to change here**:
     `apps/mobile/src/meetup-map.tsx` records why it stays installed, and ADR-0037 and ADR-0049

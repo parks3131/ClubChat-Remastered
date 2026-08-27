@@ -104,9 +104,22 @@ truth on a browser.
 exact byte that moves the fingerprint (pitfall 42), and doing that would have made the tree
 unpublishable until `npm ci` - which cannot run while the founder's api is up under `node --watch`.
 
-**Arrival on the phone is not proved.** The update is on the server and no device has been seen
-taking it. That takes two relaunches, because `fallbackToCacheTimeout` is `0`: launch one downloads
-in the background, launch two applies. It is the open item in `TODO.md`.
+**Arrival on the phone was proved the same morning.** Two relaunches - `fallbackToCacheTimeout` is
+`0`, so launch one downloads in the background and launch two applies - and the bottom of Profile
+read `Version 1.0.0 (5)` and `Update 01a0433e, published Thu, Aug 27 at 8:42 AM`. `01a0433e` is the
+short form of `01a0433e-9f9c-7505-b4c1-d4f5caa3f27b`, the id EAS printed at publish, which is what
+makes this a match rather than a screen that merely looks plausible.
+
+**The thing that proved delivery was the thing delivered**, which is the whole shape of this
+milestone: a pipeline whose failure mode is silence, and the first payload down it is the
+instrument for hearing that silence. Before this update the phone showed nothing at the bottom of
+Profile at all, because build 5 shipped without the line - so the presence of the line *is* the
+evidence, and no separate check was needed or possible.
+
+**What is still not true.** No update has been rolled back or republished over a bad one, so the
+recall path in ADR-0048 is described and untested. The `preview` channel has no build listening to
+it and no update on it. And nothing has yet asked EAS what the installed base looks like, which is
+the question the two always-null compatibility keys in `readMeetup` are waiting on.
 
 ## 2026-08-27 - The update path, and the four days nobody ran anything
 

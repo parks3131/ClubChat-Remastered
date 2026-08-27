@@ -68,10 +68,16 @@ list, which is that fact visible from outside.
 The first update published to the `production` channel the same day: update group
 `d5777e6f-cc75-49d9-af2b-ab4f20c0d2a5`, iOS update `01a0433e-9f9c-7505-b4c1-d4f5caa3f27b`, runtime
 version `7d3ffda1f1f71a38b15e0d92511d40e6eb3f1c7c`, carrying the version line described in
-[`PRD/03`](../PRD/03-accounts-and-profile.md) rule 17 and nothing else. **What that proves is the
-publish, not the delivery.** EAS accepted it; no phone has been observed taking it, and the only
-place that fact is visible is the line the update itself carries. `fallbackToCacheTimeout` is `0`,
-so the check happens on one launch and the swap on the next: two relaunches, not one.
+[`PRD/03`](../PRD/03-accounts-and-profile.md) rule 17 and nothing else. **It arrived, and the row is
+proved end to end for the first time.** The founder's iPhone showed `Version 1.0.0 (5)` and
+`Update 01a0433e, published Thu, Aug 27 at 8:42 AM` at the bottom of Profile after two relaunches -
+`01a0433e` being the short form of the published update id, which is the match that makes this a
+delivery rather than a guess. `fallbackToCacheTimeout` is `0`, so the check happens on one launch
+and the swap on the next: two relaunches, not one, and one is the mistake that reads as a broken
+pipeline.
+
+**The thing that proved delivery is the thing that was delivered**, which was the point of choosing
+it. Nothing else in the system reports whether an update arrived.
 
 **The web client row has never run.** Nothing has been deployed to Vercel.
 

@@ -540,4 +540,6 @@ What that means concretely, as of today:
 [Roadmap and open questions](../PRD/17-roadmap-and-open-questions.md) rather than here: legal
 review of the Privacy Policy and Terms (**with the obligation ADR-0005 adds - without E2E, the
 policy must state that message content is readable by the service**), paid iOS developer-program
-enrolment, and over-the-air updates so a fix does not need a store release.
+enrolment, and over-the-air updates so a fix does not need a store release - **the last of those is
+done as of 2026-08-27**, wired and then proved by publishing an update and watching it arrive on a
+phone, which [`TECH/21`](21-deployment.md) records in full.
