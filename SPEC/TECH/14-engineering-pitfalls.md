@@ -291,6 +291,43 @@ they cost.
     that named `eas env:set` as the next step were naming a command that could not run. **A config
     file nothing has executed since it changed is untested, whatever it looks like.**
 
+45. **A native package at a patch version can demand the whole SDK move, and it says so as a `dyld`
+    crash rather than as a version error.** Adding `expo-image@57.0.3` to a project on
+    `expo-modules-core@57.0.8` built cleanly, installed cleanly, and killed the app before a line of
+    JavaScript ran:
+
+    ```
+    Symbol not found: _$s15ExpoModulesCore10BaseModuleC11willDestroyyyFTj
+      Referenced from: ExpoImage.framework
+      Expected in:     ExpoModulesCore.framework
+    ```
+
+    The symbol simply is not in that core. **Nothing in npm's resolution has an opinion about
+    this**: the version ranges are all satisfied, `npm install` is happy, `tsc` is happy, and the
+    tests are happy, because every one of them reasons about JavaScript and the contract that broke
+    is a Swift ABI.
+
+    `npx expo install --check` is the tool that knows, and asking it turned up **sixteen** packages
+    behind the versions SDK 57 expects, `react-native` and `expo-updates` among them. **Being behind
+    is the riskier state, not the safer one**: the aligned set is what Expo tests together, and one
+    package forced forward against fourteen built on the old core is the same mismatch as above,
+    only quieter, because it crashes later instead of at launch.
+
+    Two consequences worth knowing before you start:
+
+    - **`pod install` refuses across a move that size**, and in a CNG project the answer is to
+      delete the generated `ios/` and let prebuild write it again. That is free here and would be
+      alarming in a project where that directory is source.
+    - **A native dependency cannot reach a phone over the air, ever.** It moves the fingerprint, so
+      the build people are holding stops being reachable the moment it merges - see pitfall 42 and
+      [ADR-0048](../decisions/0048-updates-are-keyed-to-a-fingerprint.md). Ship everything that
+      CAN go over the air first, then the native change, or the JavaScript fixes are stranded
+      behind a store release.
+
+    **How to recognise the class:** the build succeeds, the install succeeds, and the app dies
+    instantly with a `Symbol not found` naming two frameworks. The one on the right is the version
+    that is too old.
+
 44. **A capability added to `app.json` does not reach the provisioning profile that already
     exists.** `ios.associatedDomains` gained `applinks:clubchatapp.com` on 2026-08-25, for the
     invite links the site Worker serves. The App Store profile was issued on 2026-08-23. EAS

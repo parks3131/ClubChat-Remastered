@@ -107,6 +107,15 @@ the chat send-scroll fix ([`BUGS.md`](../../BUGS.md), 2026-08-27), recorded agai
 exact answer for every update after the first, and the rule above is demonstrated rather than merely
 written.
 
+**Build 1.0.0 (6) ends that run, and it is worth knowing why.** Runtime version
+`bfe9e13f237478450cf6a5383915466e1e15d392`, built 2026-08-27 from `4d7daf4`. It carries `expo-image`
+and, because that package would not run against the module core this project had, the SDK-wide
+alignment [`TECH/14`](14-engineering-pitfalls.md) pitfall 45 describes. **A native change moves the
+runtime version, so build 5 stops being reachable over the air the moment build 6 exists** - four
+updates reached it, all four confirmed, and the fifth would have reached nothing. That is the
+protection working rather than a fault, and it is the reason the two JavaScript-only halves of the
+photo work were deployed and published BEFORE this one rather than bundled with it.
+
 **It arrived and was confirmed on the founder's iPhone within the hour**, which closes the loop this
 path was built for: a defect reported from a device at 09:27, reproduced, fixed, published and
 confirmed fixed on that same device by 10:18, with no build, no submission and no Apple review in
