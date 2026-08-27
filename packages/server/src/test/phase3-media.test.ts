@@ -19,7 +19,13 @@ import { getChannelRef, readHistory, syncSince } from '../domain/reads.ts';
 import { loadAccessContext } from '../policy/context.ts';
 import { drainOnce } from '../worker/drain.ts';
 import { RecordingPushSender } from '../push/sender.ts';
-import { FakeMediaStore, IMAGE_MIME_ALLOWLIST, MAX_IMAGE_BYTES } from '../media/store.ts';
+import {
+  FakeMediaStore,
+  IMAGE_MIME_ALLOWLIST,
+  MAX_IMAGE_BYTES,
+  MediaStoreError,
+} from '../media/store.ts';
+import { backfillVariant, CONSECUTIVE_FAILURE_LIMIT } from '../media/backfill-variants.ts';
 import {
   completeUpload,
   createUploadIntent,
@@ -143,6 +149,26 @@ async function orientedImage(orientation?: number): Promise<Buffer> {
   return withTag.jpeg().toBuffer();
 }
 
+/**
+ * An image WIDER than the widest variant, so every resize is a real resize.
+ *
+ * The shared 64x64 helper is smaller than all three widths, so `withoutEnlargement` makes every
+ * derivation a no-op against it - which is exactly the shape that would let a wrong width ship
+ * unnoticed. 2000 pixels is above `display`'s 1600, so each variant has to come down to its own
+ * number and the test can assert what that number is.
+ */
+let wideImageBytes: Buffer | null = null;
+async function wideImage(): Promise<Buffer> {
+  if (wideImageBytes) return wideImageBytes;
+  const sharp = (await import('sharp')).default;
+  wideImageBytes = await sharp({
+    create: { width: 2000, height: 1000, channels: 3, background: '#3355aa' },
+  })
+    .jpeg()
+    .toBuffer();
+  return wideImageBytes;
+}
+
 /** The whole upload flow: intent, the client's direct PUT, then complete. */
 async function uploadPhoto(
   userId: string,
@@ -171,6 +197,22 @@ async function uploadPhoto(
   const completed = await completeUpload(h.db, store, await ctxFor(userId), intent.mediaId);
   expect(completed.ok, 'complete failed').toBe(true);
   return { intent, media: intent.mediaId };
+}
+
+/**
+ * A media row exactly as a worker that predates `bubble` left it: `thumb` and `display`, and no
+ * third key.
+ *
+ * Written by removing the key rather than by deriving under an older `VARIANTS`, because the
+ * shape that matters is what is in the database TODAY and no version of the current code can
+ * produce it. Returns the aged variant map, so a caller can assert against the keys that remain.
+ */
+async function ageBeforeBubble(mediaId: string): Promise<Record<string, string>> {
+  const rows = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, mediaId));
+  const aged = { ...(rows[0]!.variants as Record<string, string>) };
+  delete aged['bubble'];
+  await h.db.update(mediaObjects).set({ variants: aged }).where(eq(mediaObjects.id, mediaId));
+  return aged;
 }
 
 // ===========================================================================
@@ -997,6 +1039,105 @@ describe('thumbnail derivation', () => {
     expect(result.mime).toBe('image/jpeg');
   });
 
+  /**
+   * The size a chat bubble actually shows, which is a fifth of what `display` carries.
+   *
+   * `apps/mobile/src/photo-size.ts` draws a chat photo at most 240pt wide, so a 3x screen wants
+   * 720 device pixels and never more. Asserted with a real number rather than by reading
+   * `VARIANTS`, because a test that computes its expectation from the value under test cannot
+   * fail: the whole point of the variant is that this number is small.
+   */
+  it('derives a bubble at 800 pixels, between the 400 thumb and the 1600 display', async () => {
+    const f = await setup();
+    const { media } = await uploadPhoto(f.ownerId, f.mainChannelId, { bytes: await wideImage() });
+
+    const result = await deriveVariants(h.db, store, media!);
+    expect(result.derived).toContain('bubble');
+
+    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, media!));
+    const variants = row[0]!.variants as Record<string, string>;
+    expect(variants['bubble']).toBe(`${row[0]!.objectKey}.bubble.webp`);
+
+    const sharp = (await import('sharp')).default;
+    const widthOf = async (key: string) =>
+      (await sharp(await store.get({ bucket: row[0]!.bucket, objectKey: key })).metadata()).width;
+
+    expect(await widthOf(variants['thumb']!)).toBe(400);
+    expect(await widthOf(variants['bubble']!)).toBe(800);
+    expect(await widthOf(variants['display']!)).toBe(1600);
+  });
+
+  /**
+   * **Every photo already in the database predates every variant added after it**, because
+   * derivation happens once, at upload. So the interesting case is not a worker that has not run
+   * yet - it is a row that was derived completely, correctly, by an older worker.
+   *
+   * It must not fail and it must not answer a URL for an object that is not there: the CDN would
+   * refuse a key it has no bytes for and the member would see a broken picture rather than a
+   * heavy one. `display` rather than the original, because the original is a multi-megabyte
+   * camera file - falling back to it would be worse than what the photo rendered as yesterday.
+   */
+  it('falls back to display for a photo derived before the bubble variant existed', async () => {
+    const f = await setup();
+    const { media } = await uploadPhoto(f.ownerId, f.mainChannelId);
+    await deriveVariants(h.db, store, media!);
+
+    const aged = await ageBeforeBubble(media!);
+    expect(Object.keys(aged).sort()).toEqual(['display', 'thumb']);
+
+    const result = await resolveMediaRedirect(h.db, store, config, await ctxFor(f.ownerId), media!, {
+      variant: 'bubble',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.url).toContain(aged['display']!);
+    expect(result.url).not.toContain('.bubble.webp');
+    // And the type still follows the bytes it fell back TO.
+    expect(result.mime).toBe('image/webp');
+  });
+
+  /**
+   * With nothing derived at all there is no `display` to fall back to either, so the chain has to
+   * end at the original rather than at the last variant in it.
+   */
+  it('falls back to the original when a photo has no variants at all', async () => {
+    const f = await setup();
+    const { media } = await uploadPhoto(f.ownerId, f.mainChannelId);
+
+    const result = await resolveMediaRedirect(h.db, store, config, await ctxFor(f.ownerId), media!, {
+      variant: 'bubble',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, media!));
+    expect(result.url).toContain(row[0]!.objectKey);
+    expect(result.mime).toBe('image/jpeg');
+  });
+
+  /**
+   * The backfill path, which is `deriveVariants` called a second time and nothing else.
+   *
+   * It has to add the missing variant WITHOUT re-encoding the two that are already there - that
+   * is what makes running the backfill twice cost a read rather than a re-encode of every photo
+   * the project has ever stored.
+   */
+  it('adds only the variant an older photo is missing, and skips a complete one', async () => {
+    const f = await setup();
+    const { media } = await uploadPhoto(f.ownerId, f.mainChannelId);
+    await deriveVariants(h.db, store, media!);
+
+    await ageBeforeBubble(media!);
+
+    const again = await deriveVariants(h.db, store, media!);
+    expect(again.skipped).toBe(false);
+    expect(again.derived).toEqual(['bubble']);
+
+    // ...and a row that now has everything is skipped, so a second run of the backfill is free.
+    const third = await deriveVariants(h.db, store, media!);
+    expect(third.skipped).toBe(true);
+    expect(third.derived).toEqual([]);
+  });
+
   it('says what the bytes are, because the object key has no extension to read', async () => {
     /*
      * The viewer's Download saves a file, and iOS decides what it is being handed from the
@@ -1022,6 +1163,137 @@ describe('thumbnail derivation', () => {
     });
     if (!display.ok) return;
     expect(display.mime).toBe('image/webp');
+  });
+});
+
+/**
+ * The backfill: what `scripts/backfill-media-variants.mjs` does, tested as code.
+ *
+ * > **A backfill nobody has run is a paragraph in a document**, and one that has been run and got
+ * > it wrong is worse: it writes objects into a real bucket. So the selection, the counting and
+ * > the failure handling are here, and the script is argument parsing and printing around them.
+ *
+ * The properties an operator is relying on when they type the command, in the order they would
+ * care about them: it derives the missing size, running it twice costs nothing, `--limit` leaves
+ * the rest for the next run, one unreadable object does not end the run, and a store that is down
+ * stops it rather than producing one identical error per row for the whole table.
+ */
+describe('backfilling a variant onto photos that predate it', () => {
+  /** `n` completed photos, each derived and then aged back to before `bubble` existed. */
+  async function agedPhotos(f: Awaited<ReturnType<typeof setup>>, n: number): Promise<string[]> {
+    const ids: string[] = [];
+    for (let i = 0; i < n; i += 1) {
+      const { media } = await uploadPhoto(f.ownerId, f.mainChannelId);
+      await deriveVariants(h.db, store, media!);
+      await ageBeforeBubble(media!);
+      ids.push(media!);
+    }
+    return ids;
+  }
+
+  it('derives the missing variant on every old photo, and a second run costs nothing', async () => {
+    const f = await setup();
+    const ids = await agedPhotos(f, 3);
+
+    const result = await backfillVariant(h.db, store, { variant: 'bubble' });
+    expect(result.missingAtStart).toBe(3);
+    expect(result.visited).toBe(3);
+    expect(result.derived).toBe(3);
+    expect(result.failed).toBe(0);
+    expect(result.undecodable).toBe(0);
+    expect(result.abandoned).toBe(false);
+
+    // The bytes exist, not merely the key. A row pointing at an object nobody wrote is the one
+    // outcome that is worse than the row having no key at all: the CDN answers 404 for it.
+    for (const id of ids) {
+      const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, id));
+      const key = `${row[0]!.objectKey}.bubble.webp`;
+      expect((row[0]!.variants as Record<string, string>)['bubble']).toBe(key);
+      expect(store.objects.has(`${row[0]!.bucket}/${key}`)).toBe(true);
+    }
+
+    const second = await backfillVariant(h.db, store, { variant: 'bubble' });
+    expect(second.missingAtStart).toBe(0);
+    expect(second.visited).toBe(0);
+    expect(second.derived).toBe(0);
+  });
+
+  it('stops at the limit, and the next run resumes rather than repeating', async () => {
+    const f = await setup();
+    await agedPhotos(f, 3);
+
+    const first = await backfillVariant(h.db, store, { variant: 'bubble', limit: 2 });
+    expect(first.visited).toBe(2);
+    expect(first.derived).toBe(2);
+
+    const second = await backfillVariant(h.db, store, { variant: 'bubble' });
+    expect(second.missingAtStart).toBe(1);
+    expect(second.derived).toBe(1);
+  });
+
+  it('never re-reads bytes already known not to decode', async () => {
+    // The object key is immutable, so the bytes behind it cannot have improved. A backfill that
+    // selected these would download and fail on every corrupt upload ever made, every run.
+    const f = await setup();
+    const { media } = await uploadPhoto(f.ownerId, f.mainChannelId);
+    await h.db
+      .update(mediaObjects)
+      .set({ deriveError: 'vipspng: libpng read error' })
+      .where(eq(mediaObjects.id, media!));
+
+    const result = await backfillVariant(h.db, store, { variant: 'bubble' });
+    expect(result.missingAtStart).toBe(0);
+    expect(result.visited).toBe(0);
+  });
+
+  it('lets one unreadable object fail alone rather than ending the run', async () => {
+    const f = await setup();
+    const ids = await agedPhotos(f, 3);
+
+    // The original bytes are gone from storage. That is a fault about this one object, not a
+    // fact about the picture, so it must not stop the other two being derived.
+    const gone = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, ids[0]!));
+    store.objects.delete(`${gone[0]!.bucket}/${gone[0]!.objectKey}`);
+
+    const result = await backfillVariant(h.db, store, { variant: 'bubble' });
+    expect(result.failed).toBe(1);
+    expect(result.derived).toBe(2);
+    expect(result.abandoned).toBe(false);
+
+    // And it is reported by id, so an operator can go and look at that one row.
+    const failures: string[] = [];
+    store.objects.delete(`${gone[0]!.bucket}/${gone[0]!.objectKey}`);
+    await backfillVariant(h.db, store, {
+      variant: 'bubble',
+      onEvent: (event) => {
+        if (event.kind === 'failed') failures.push(event.mediaId);
+      },
+    });
+    expect(failures).toEqual([ids[0]!]);
+  });
+
+  it('abandons the run when the store is down, rather than one identical error per row', async () => {
+    /*
+     * The difference between one odd photo and an outage is the RUN of failures, and it matters
+     * because the second shape is unbounded: without this the backfill grinds through every
+     * photo the project has ever stored, printing the same error, and finishes reporting a
+     * failure count that looks like a data problem.
+     */
+    const f = await setup();
+    for (let i = 0; i < CONSECUTIVE_FAILURE_LIMIT + 3; i += 1) {
+      await uploadPhoto(f.ownerId, f.mainChannelId);
+    }
+    store.failWith = new MediaStoreError(
+      'get',
+      { bucket: 'content', objectKey: 'whatever' },
+      new Error('the store did not answer'),
+    );
+
+    const result = await backfillVariant(h.db, store, { variant: 'bubble' });
+    expect(result.abandoned).toBe(true);
+    expect(result.visited).toBe(CONSECUTIVE_FAILURE_LIMIT);
+    expect(result.failed).toBe(CONSECUTIVE_FAILURE_LIMIT);
+    expect(result.derived).toBe(0);
   });
 });
 

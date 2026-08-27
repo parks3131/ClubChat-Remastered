@@ -46,7 +46,7 @@ import {
 import { parkedEventCount } from '../../packages/server/src/worker/retention.ts';
 
 const { target, has } = parseDrillArgs(process.argv, {
-  script: 'outbox-park.mjs',
+  script: 'scripts/drills/outbox-park.mjs',
   targets: [
     'production   the live database the worker is draining. The real alarm fires.',
     'local        a development database, for checking this script itself.',

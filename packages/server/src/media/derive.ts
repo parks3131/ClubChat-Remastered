@@ -13,17 +13,104 @@ import { DECODE_OPTIONS } from './probe.ts';
 import type { MediaStore } from './store.ts';
 
 /**
- * The two derived sizes.
+ * The three derived sizes.
  *
- * `display` is what chat renders and `thumb` is what a gallery grid renders. v1 served
- * full-resolution originals to both, which is roadmap debt: a phone camera photo is several
- * megabytes and a grid of forty of them is a hundred megabytes of transfer to draw postage
- * stamps.
+ * `display` is what the full-screen photo viewer renders, `bubble` is what a photo in a
+ * conversation renders, and `thumb` is what a gallery grid renders. v1 served full-resolution
+ * originals to all of them, which is roadmap debt: a phone camera photo is several megabytes and
+ * a grid of forty of them is a hundred megabytes of transfer to draw postage stamps.
+ *
+ * **`bubble` exists because `display` is about five times bigger than a chat bubble can show.**
+ * `apps/mobile/src/photo-size.ts` draws a photo in a conversation at most 240pt wide and 320pt
+ * tall, so the most a bubble can ever use on a 3x screen is 720x960 device pixels. Chat asks for
+ * `display`, and a 1600x2105 image costs roughly 13MB of memory once decoded against roughly
+ * 3.4MB at 800 - which is why iOS evicts these between visits and fetches them again. The client
+ * still asks for `display` as of 2026-08-27: this half derives and serves the smaller size, and
+ * `apps/mobile` asking for it is a separate change.
+ *
+ * 800 rather than the 720 strictly needed, because a width is baked into stored objects
+ * and re-deriving is a decision with a cost: the headroom covers a wider bubble later without a
+ * second backfill. `thumb` at 400 cannot serve the slot instead; it is visibly soft at 720.
+ *
+ * **`display` stays at 1600 and must.** It is the full-screen viewer's size, and the viewer is
+ * the surface where the extra pixels are the point rather than waste.
  */
 export const VARIANTS = {
   thumb: 400,
+  bubble: 800,
   display: 1600,
 } as const;
+
+/** A size the worker derives and stores as an object of its own. */
+export type DerivedVariant = keyof typeof VARIANTS;
+
+/**
+ * What a caller may ask `GET /media/:id`, `/media/:id/url` and `/media/urls` for.
+ *
+ * `original` is not derived: it is the bytes the member uploaded. The photo viewer's
+ * save-to-Photos is its one caller, because a derived variant is WebP and Photos will not take
+ * one - see `apps/mobile/src/photo-viewer.tsx`.
+ */
+export type RequestedVariant = 'original' | DerivedVariant;
+
+/**
+ * What to serve when the variant asked for was never derived, in order of preference.
+ *
+ * **Derivation happens once, at upload, so every photo already stored predates every variant
+ * added after it.** That is not the "the worker has not run yet" case, which lasts seconds - it
+ * is permanent until somebody backfills, and it covers every row in the database on the day a
+ * size is added. A request for one of those must not fail and must not hand back a URL for an
+ * object that is not there: the CDN would refuse a key it has no bytes for, and the member would
+ * see a broken picture rather than a heavy one.
+ *
+ * So every chain ends by falling through to the original, which always exists, and `bubble`
+ * prefers `display` on the way there for the same reason `bubble` exists at all. An original is
+ * a multi-megabyte camera file; a 1600px WebP is merely larger than it needs to be. A photo
+ * uploaded before `bubble` existed therefore degrades to exactly what it rendered as the day
+ * before, rather than to something worse.
+ *
+ * **This table is the vocabulary, not a copy of it.** `REQUESTABLE_VARIANTS` below is its keys,
+ * so a size added to `VARIANTS` without an entry here is a type error rather than a variant that
+ * quietly cannot be asked for.
+ */
+export const VARIANT_FALLBACKS: Record<RequestedVariant, readonly DerivedVariant[]> = {
+  original: [],
+  thumb: ['thumb'],
+  bubble: ['bubble', 'display'],
+  display: ['display'],
+};
+
+/**
+ * The same list as a value, for the route's query validator.
+ *
+ * Derived from the table above rather than written out a second time. `Object.keys` answers
+ * `string[]`, so the assertion is what carries the literal types across - and it is safe in the
+ * one direction that matters, because `Record<RequestedVariant, ...>` already refuses both a
+ * missing key and an unknown one.
+ */
+export const REQUESTABLE_VARIANTS = Object.keys(VARIANT_FALLBACKS) as [
+  RequestedVariant,
+  ...RequestedVariant[],
+];
+
+/**
+ * Which stored object a request for `requested` should actually read.
+ *
+ * Lives here beside the table rather than at the call site in `media/pipeline.ts`, so the read
+ * side and the write side of the variant vocabulary cannot drift apart - the single most reliable
+ * way to end up signing a URL for bytes nobody ever wrote.
+ */
+export function variantObjectKey(
+  media: { objectKey: string; variants: unknown },
+  requested: RequestedVariant,
+): string {
+  const variants = (media.variants ?? {}) as Record<string, string>;
+  for (const candidate of VARIANT_FALLBACKS[requested]) {
+    const key = variants[candidate];
+    if (key) return key;
+  }
+  return media.objectKey;
+}
 
 export type DeriveResult = {
   derived: string[];
@@ -61,8 +148,18 @@ export async function deriveVariants(
   if (!media) return { derived: [], skipped: true, undecodable: false };
   if (!media.mime.startsWith('image/')) return { derived: [], skipped: true, undecodable: false };
 
+  /*
+   * Skipped only when EVERY variant is present, asked of `VARIANTS` rather than of two names
+   * written out here.
+   *
+   * That is what makes adding a size a backfill rather than a migration: a row derived by an
+   * older worker is missing exactly the new key, so it stops being skipped, the loop below
+   * derives the one it lacks, and the two it already has cost nothing. The version this replaces
+   * named `thumb` and `display` literally, so a third size would have been skipped on every row
+   * ever stored and the backfill would have reported success having done nothing.
+   */
   const existing = (media.variants ?? {}) as Record<string, string>;
-  if (existing['thumb'] && existing['display']) {
+  if (Object.keys(VARIANTS).every((name) => existing[name])) {
     return { derived: [], skipped: true, undecodable: false };
   }
   // Already known not to decode. The object key is immutable, so the bytes behind it cannot
@@ -98,6 +195,9 @@ export async function deriveVariants(
         // `withoutEnlargement` so a small original is not upscaled into a larger file than it
         // started as, which would make the "thumbnail" bigger than the photo.
         .resize({ width, withoutEnlargement: true })
+        // 70 for a `thumb`, which is a postage stamp in a grid, and 82 for anything drawn at
+        // something like its real size. `bubble` is drawn at its real size, so it takes 82 with
+        // `display` rather than the grid's number.
         .webp({ quality: name === 'thumb' ? 70 : 82 })
         .toBuffer();
     } catch (error) {

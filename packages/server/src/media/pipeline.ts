@@ -31,6 +31,7 @@ import { canPostInChannel, isChannelMember, type ChannelRef } from '../policy/pr
 import { getChannelRef } from '../domain/reads.ts';
 import sharp from 'sharp';
 import { DECODE_OPTIONS, probeImage } from './probe.ts';
+import { variantObjectKey, type RequestedVariant } from './derive.ts';
 import {
   DOCUMENT_MIME_ALLOWLIST,
   IMAGE_MIME_ALLOWLIST,
@@ -506,7 +507,7 @@ export async function resolveMediaRedirects(
   config: MediaConfig,
   ctx: AccessContext,
   mediaIds: string[],
-  opts: { variant?: 'original' | 'display' | 'thumb' | undefined; nowMs?: number } = {},
+  opts: { variant?: RequestedVariant | undefined; nowMs?: number } = {},
 ): Promise<Map<string, MediaRedirect>> {
   const resolved = new Map<string, MediaRedirect>();
   if (mediaIds.length === 0) return resolved;
@@ -558,11 +559,17 @@ export async function resolveMediaRedirects(
     }
     // An avatar has no channel and is public content; being signed in is the whole check.
 
-    const variants = (media.variants ?? {}) as Record<string, string>;
-    // Fall back to the original when a derived variant does not exist yet - the worker may not
-    // have run, and a missing thumbnail must degrade to a slower image rather than a broken one.
-    const objectKey =
-      requested === 'original' ? media.objectKey : (variants[requested] ?? media.objectKey);
+    /*
+     * Which stored object this request actually reads, decided by `VARIANT_FALLBACKS`.
+     *
+     * A derived variant may simply not exist. The worker may not have run yet, which lasts
+     * seconds - or, far more often, the photo was uploaded before that size was ever derived,
+     * which lasts until somebody runs `scripts/backfill-media-variants.mjs`. Either way a
+     * missing variant must degrade to a heavier image rather than to a broken one, and the table
+     * says which heavier image: `bubble` falls to `display` before it falls to the original,
+     * because the original is a multi-megabyte camera file.
+     */
+    const objectKey = variantObjectKey(media, requested);
     // Derived variants are WebP (see `derive.ts`); the original is whatever was uploaded. Read off
     // the SAME branch the key was, so the two can never describe different bytes.
     const mime = objectKey === media.objectKey ? media.mime : 'image/webp';
@@ -620,7 +627,7 @@ export async function resolveMediaRedirect(
   config: MediaConfig,
   ctx: AccessContext,
   mediaId: string,
-  opts: { variant?: 'original' | 'display' | 'thumb' | undefined; nowMs?: number } = {},
+  opts: { variant?: RequestedVariant | undefined; nowMs?: number } = {},
 ): Promise<Result<MediaRedirect>> {
   const resolved = await resolveMediaRedirects(db, store, config, ctx, [mediaId], opts);
   const one = resolved.get(mediaId);

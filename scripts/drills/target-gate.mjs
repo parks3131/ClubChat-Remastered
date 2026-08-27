@@ -1,10 +1,13 @@
 //
-// The one gate both drills share: you have to say what you are pointing at.
+// The one gate every operational script shares: you have to say what you are pointing at.
 //
-// Every drill in this directory does something an operator would not want to do by accident, in a
-// place they might not have meant. One posts a fake incident into a live Sentry project and wakes
-// whoever the alert rule names; the other writes to whatever database DATABASE_URL happens to be
-// pointing at, which on a laptop with a stale shell is not always the one you think.
+// Each of them does something an operator would not want to do by accident, in a place they might
+// not have meant. One posts a fake incident into a live Sentry project and wakes whoever the alert
+// rule names; the other two write to whatever database DATABASE_URL happens to be pointing at,
+// which on a laptop with a stale shell is not always the one you think.
+//
+// `script` is the path a caller should type, repo-relative, because the callers no longer all live
+// in this directory: `scripts/backfill-media-variants.mjs` uses this gate too.
 //
 // So there is no default target and there never will be one. `--target production` is four extra
 // words and it is the entire protection, in the same spirit as `scripts/surface-gate.sh` taking
@@ -52,7 +55,7 @@ export function parseDrillArgs(argv, { script, targets, flags = [] }) {
 
 function usage(script, targets, flags) {
   const lines = [
-    `usage: node scripts/drills/${script} --target <name>${flags.map((f) => ` [${f}]`).join('')}`,
+    `usage: node ${script} --target <name>${flags.map((f) => ` [${f}]`).join('')}`,
     '',
     'The target is required and has no default. It names what this run is pointed at:',
     ...targets.map((line) => `  ${line}`),

@@ -16,6 +16,7 @@ import {
   resolveMediaRedirect,
   resolveMediaRedirects,
 } from '../../media/pipeline.ts';
+import { REQUESTABLE_VARIANTS } from '../../media/derive.ts';
 import { MediaStoreError } from '../../media/store.ts';
 import { mediaConfigOf, parseIdList, type AppDeps } from '../plumbing.ts';
 
@@ -128,8 +129,16 @@ export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
     return result;
   });
 
+  /**
+   * The one variant validator, shared by all three read routes.
+   *
+   * The list comes from `REQUESTABLE_VARIANTS`, which is the keys of the fallback table in
+   * `media/derive.ts`, so a size added there is askable here without a second edit. The batch
+   * route had its own identical copy of this until 2026-08-27, which is exactly the shape that
+   * lets one route learn a variant name and the other keep refusing it with a 400.
+   */
   const VariantQuery = z.object({
-    variant: z.enum(['original', 'display', 'thumb']).optional(),
+    variant: z.enum(REQUESTABLE_VARIANTS).optional(),
   });
 
   /**
@@ -221,10 +230,6 @@ export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
     });
   });
 
-  const BatchQuery = z.object({
-    variant: z.enum(['original', 'display', 'thumb']).optional(),
-  });
-
   /**
    * Many signed URLs, in one request.
    *
@@ -253,7 +258,7 @@ export function registerMediaRoutes(app: FastifyInstance, deps: AppDeps): void {
    * let a member who lost access keep resolving successfully.
    */
   app.get('/media/urls', async (request, reply) => {
-    const query = BatchQuery.safeParse(request.query);
+    const query = VariantQuery.safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
 
     const parsed = parseIdList((request.query as { ids?: unknown }).ids);

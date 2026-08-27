@@ -256,7 +256,8 @@ GET    /calendar/markers?club=:id&year=&month=     ← the month grid; days insi
                                                      disagree with it about what is on a day
 
 POST   /media/upload-intent · POST /media/:id/complete
-GET    /media/:id[?variant=thumb|display]   ← authorized redirect, hour-aligned signature
+GET    /media/:id[?variant=thumb|bubble|display|original]
+                                            ← authorized redirect, hour-aligned signature
 GET    /channels/:id/gallery?before={seq}   ← paginated; inherits the chat's access rules
 GET    /notifications?cursor=                · POST /notifications/read
 POST   /devices                              ← register push token

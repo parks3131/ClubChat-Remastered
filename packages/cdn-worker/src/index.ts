@@ -16,7 +16,10 @@
  * **The signature is checked over `url.pathname`, which is the SAME string used as the R2 key, and
  * that identity is the whole defence.** `signedMediaUrl` joins the base URL to the object key
  * without encoding it, and every key this project issues is `[a-z]+/\d{4}-\d{2}/<uuid>` with an
- * optional `.thumb.webp` or `.display.webp`, so nothing in one ever needs escaping.
+ * optional `.<variant>.webp` suffix (`.thumb.webp`, `.bubble.webp`, `.display.webp`), so nothing
+ * in one ever needs escaping. **Adding a variant changes nothing here**: the suffix is appended to
+ * a key whose first path segment already decided the bucket, and the signature is computed over
+ * the whole string either way.
  *
  * Traversal is disposed of by normalisation happening BEFORE the HMAC, on one string used for both
  * purposes. It is emphatically NOT disposed of by the escape failing to match, and an earlier

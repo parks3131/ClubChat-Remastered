@@ -164,7 +164,7 @@ GET /media/:id                     ← authenticated, authorized (same membershi
 |---|---|
 | Debt 8 - nothing ever deleted from storage | `media_objects` has an owner reference; deleting the owner enqueues `media.orphaned`; nightly GC job |
 | Debt 9 - no size or MIME limits | Enforced at upload-intent *and* re-verified at complete |
-| No image resizing; full-resolution originals served | Worker derives `thumb` (400px) and `display` (1600px) variants; chat renders `display`, gallery grid renders `thumb` |
+| No image resizing; full-resolution originals served | Worker derives `thumb` (400px), `bubble` (800px) and `display` (1600px) variants; the gallery grid renders `thumb` and the full-screen viewer renders `display`. See "Three sizes" below for `bubble`, which the server derives and the client does not yet ask for |
 | Gallery signs an entire photo history in one unpaginated call | Gallery pages like anything else; URLs are stable so there is nothing to "sign in batches" |
 
 ### Which way up, and how big
@@ -204,6 +204,61 @@ a sideways face is the only symptom and there is no wrong-shaped box to notice.
 **Existing objects were not backfilled.** Anything already derived keeps its variants, so a photo
 uploaded before this stays as it was - sideways if its camera said so - rather than silently
 changing under people. Re-deriving is a decision with a cost, not a migration.
+
+### Three sizes, and what happens to a photo that predates one
+
+`VARIANTS` in `media/derive.ts` is the whole vocabulary: `thumb` at 400px, `bubble` at 800px,
+`display` at 1600px, plus `original`, which is not derived at all.
+
+**`bubble` was added on 2026-08-27 because `display` is about five times bigger than a chat bubble
+can show.** A photo in a conversation is drawn at most 240pt wide and 320pt tall, so the most a
+bubble can ever use on a 3x screen is 720x960 device pixels - against the 1600x2105 a `display`
+variant carries, which is roughly 13MB of memory once decoded where 800px is roughly 3.4MB. That
+is the size iOS was evicting between visits and fetching again. 800 rather than the 720 strictly
+needed, because a width is baked into stored objects and re-deriving is a decision with a cost;
+the headroom covers a wider bubble later without a second backfill. `thumb` cannot serve the slot
+instead - it is visibly soft at 720 - and **`display` stays at 1600 and must**, because the
+full-screen viewer is the surface where those pixels are the point rather than waste.
+
+**Derivation happens once, at upload, so adding a size leaves every photo already stored without
+it - permanently, until it is backfilled.** That is a different fact from "the worker has not run
+yet", which lasts seconds, and it is why the read path never assumes a key is there.
+`VARIANT_FALLBACKS` says what to serve instead, and every chain ends at the original, which always
+exists:
+
+| Asked for | Served, in order |
+|---|---|
+| `original` | the uploaded bytes |
+| `thumb` | `thumb`, else the original |
+| `bubble` | `bubble`, else `display`, else the original |
+| `display` | `display`, else the original |
+
+`bubble` prefers `display` over the original for the same reason `bubble` exists: an original is a
+multi-megabyte camera file, where a 1600px WebP is merely larger than it needs to be. So a photo
+uploaded before `bubble` existed degrades to exactly what it rendered as the day before, rather
+than to something worse. The mime travels with the URL down the same branch the key came from, so
+a fallback can never describe bytes it did not choose.
+
+**The backfill is a script, not a migration**: `scripts/backfill-media-variants.mjs`. It calls
+`deriveVariants` - the same function the worker calls, unchanged - once per photo missing the
+size, and it deliberately does not enqueue `media.uploaded` events, which would queue in the
+outbox in front of somebody's notifications. It names its target like the drills do, it is safe to
+re-run (a completed row is not selected and would be skipped anyway), and it resumes rather than
+repeats when interrupted.
+
+```
+node --env-file=.env scripts/backfill-media-variants.mjs --target local --dry-run
+node --env-file=.env scripts/backfill-media-variants.mjs --target production
+```
+
+**Adding a variant does not touch signing or bucket routing, and that is a property worth stating
+rather than rediscovering.** A derived key is the original key with `.<variant>.webp` appended, so
+its first path segment - the thing [ADR-0044](../decisions/0044-the-cdn-is-a-worker-that-validates-before-it-reads.md)'s
+Worker routes on - is unchanged, and the signature is an HMAC over the whole key string either
+way. The Worker needs no new configuration and no redeploy for a new size.
+
+**The client does not ask for `bubble` yet.** The server derives it and will serve it; chat still
+requests `display`, so nothing on a phone gets smaller until `apps/mobile` asks for the new name.
 
 ---
 

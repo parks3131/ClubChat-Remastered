@@ -53,7 +53,7 @@ import { initMonitoring } from '../../packages/server/src/monitoring.ts';
 import { forceFiveHundred } from '../../packages/server/src/drills/forced-5xx.ts';
 
 const { target } = parseDrillArgs(process.argv, {
-  script: 'forced-5xx.mjs',
+  script: 'scripts/drills/forced-5xx.mjs',
   targets: [
     'production   the live Sentry project. Somebody gets paged. That is the point.',
     'development  a throwaway environment tag, for checking this script itself.',

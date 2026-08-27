@@ -347,6 +347,51 @@ describe('GET /media/urls?ids=', () => {
     expect(byId.get(second)).toBe(singles[1]!.body.url);
   });
 
+  /**
+   * The `bubble` variant, and the photo that predates it.
+   *
+   * Two things at once, because they are the same request. The route has to ACCEPT the name at
+   * all - an unknown variant is a 400 from the query validator, which would blank every photo in
+   * chat the moment a client started asking for it - and it has to answer something renderable
+   * for a row derived before the variant existed, which is every row already in the database.
+   *
+   * The aged row is written here rather than derived, deliberately: the interesting shape is one
+   * an OLD worker left behind, and no version of the current worker can produce it.
+   */
+  it('serves the bubble variant, falling back for a photo derived before it existed', async () => {
+    const owner = await signUp('BatchMediaBubble');
+    const { mainChannelId } = await createClubAs(owner);
+    const id = await makePhoto(owner, mainChannelId);
+
+    const row = await h.db.select().from(mediaObjects).where(eq(mediaObjects.id, id)).limit(1);
+    const displayKey = `${row[0]!.objectKey}.display.webp`;
+    await h.db
+      .update(mediaObjects)
+      .set({ variants: { thumb: `${row[0]!.objectKey}.thumb.webp`, display: displayKey } })
+      .where(eq(mediaObjects.id, id));
+
+    const batch = await as(owner, 'GET', `/media/urls?ids=${id}&variant=bubble`);
+    expect(batch.status).toBe(200);
+    expect(batch.body.urls).toHaveLength(1);
+    expect(batch.body.urls[0].url).toContain(displayKey);
+    expect(batch.body.urls[0].url).not.toContain('.bubble.webp');
+
+    // And the same answer as the single route, which is the property this whole file guards.
+    const single = await as(owner, 'GET', `/media/${id}/url?variant=bubble`);
+    expect(single.status).toBe(200);
+    expect(single.body.url).toBe(batch.body.urls[0].url);
+  });
+
+  it('refuses a variant nobody derives, rather than signing a key with no bytes behind it', async () => {
+    const owner = await signUp('BatchMediaBadVariant');
+    const { mainChannelId } = await createClubAs(owner);
+    const id = await makePhoto(owner, mainChannelId);
+
+    const batch = await as(owner, 'GET', `/media/urls?ids=${id}&variant=enormous`);
+    expect(batch.status).toBe(400);
+    expect(batch.body.error).toBe('invalid_query');
+  });
+
   it('omits a picture from a club the caller is not in, exactly as the single route refuses it', async () => {
     const owner = await signUp('BatchMediaOwner2');
     const outsider = await signUp('BatchMediaOutsider');

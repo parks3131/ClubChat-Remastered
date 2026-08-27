@@ -2094,7 +2094,13 @@ export const mediaObjects = pgTable(
     width: integer('width'),
     height: integer('height'),
     status: text('status').notNull().default('pending'),
-    /** Derived sizes: { thumb: key, display: key }. Empty until the worker derives them. */
+    /**
+     * Derived sizes: `{ thumb: key, bubble: key, display: key }`. Empty until the worker
+     * derives them, and **missing whichever sizes did not exist when this row was uploaded** -
+     * derivation runs once, so a variant added later is absent until it is backfilled. The read
+     * path falls through `VARIANT_FALLBACKS` in `media/derive.ts` rather than trusting a key to
+     * be here.
+     */
     variants: jsonb('variants').notNull().default({}),
     /**
      * Why derivation gave up, when it did. NULL is the normal case.
