@@ -11,13 +11,18 @@
  *    from the list whose entire job is to keep it findable.
  *  - **A DM has no Reports tab**, because there is no admin of the conversation to read it. A DM
  *    report goes to a platform moderator through a separate queue instead.
- *  - **A pinned CARD row opens its poll, event or meeting; every other row is view-only.** This
- *    read "jumping to the message in chat is the pinned strip's job" until 2026-08-11, which was
- *    true while the strip jumped into the conversation and stopped being true when it started
- *    opening the object instead. The strip is capped at four and this list is not, so a fifth
- *    pinned poll is reachable from here and nowhere else. Ordinary messages still go nowhere,
- *    because this screen is where the strip sends them - it is the destination, not a waypoint.
- *    The avatar goes to the person, as it always did.
+ *  - **A pinned CARD row opens its poll, event or meeting, and a pinned PHOTO opens the photo.**
+ *    Every other row is view-only. This read "jumping to the message in chat is the pinned
+ *    strip's job" until 2026-08-11, which was true while the strip jumped into the conversation
+ *    and stopped being true when it started opening the object instead. The strip is capped at
+ *    four and this list is not, so a fifth pinned poll is reachable from here and nowhere else.
+ *    Ordinary messages still go nowhere, because this screen is where the strip sends them - it
+ *    is the destination, not a waypoint. The avatar goes to the person, as it always did.
+ *  - **The photo opens OVER this list rather than navigating anywhere**, which is the difference
+ *    between it and a card. A card is a reference to something with a screen of its own; a
+ *    photograph has no screen to go to, and a list this long should not lose its place to show
+ *    you one picture. Nothing here jumps back into the conversation, which stays true: the
+ *    viewer's menu offers it as a deliberate second step, exactly as the gallery's does.
  *
  * It carries chat's glass header rather than the native one, because it hangs off chat and a
  * different header treatment one tap away reads as a different app.
@@ -32,10 +37,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { MessageEnvelope } from '@clubchat/shared';
 import { channelApi } from '../../../../../src/api.ts';
 import type { ReportRow } from '../../../../../src/api-types.ts';
+import { useSession } from '../../../../../src/chat-provider.tsx';
 import { formatClock } from '../../../../../src/dates.ts';
+import { highlightAction } from '../../../../../src/highlight-action.ts';
+import { RemoteImage } from '../../../../../src/media-bubble.tsx';
+import { PhotoViewer } from '../../../../../src/photo-viewer.tsx';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import { useGoBack } from '../../../../../src/nav.tsx';
-import { hrefForCard } from '../../../../../src/notification-href.ts';
 import { Avatar, DataScreen, EmptyState, Tabs } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
 
@@ -59,7 +67,20 @@ export default function HighlightsScreen() {
    * screen ignoring you.
    */
   const [tab, setTab] = useState<Tab>(requestedTab === 'reports' ? 'reports' : 'pinned');
+  /**
+   * The pinned photograph being looked at full screen, or null.
+   *
+   * The whole envelope rather than the media id, for chat's reason: the viewer's header draws the
+   * sender and the date, and Show in chat and Report both need the `seq`.
+   *
+   * Held here rather than inside the row so the viewer renders as a SIBLING of the list, over the
+   * top of it. Returning it in place of the screen - as the gallery does - would unmount the
+   * `ScrollView` and lose the scroll position, which matters far more here: the gallery grid is
+   * one list, and this is the third tab of a screen whose Pinned list has no cap on its length.
+   */
+  const [viewingPhoto, setViewingPhoto] = useState<MessageEnvelope | null>(null);
   const router = useRouter();
+  const { userId } = useSession();
   const insets = useSafeAreaInsets();
   // Highlights is a view over a conversation, so back always returns to that chat.
   const goBack = useGoBack(`/chat/${channelId}`);
@@ -143,7 +164,12 @@ export default function HighlightsScreen() {
             {(data) => (
               <View style={styles.list}>
                 {data.messages.map((message) => (
-                  <HighlightRow key={message.seq} message={message} pinned />
+                  <HighlightRow
+                    key={message.seq}
+                    message={message}
+                    pinned
+                    onOpenPhoto={setViewingPhoto}
+                  />
                 ))}
               </View>
             )}
@@ -164,7 +190,12 @@ export default function HighlightsScreen() {
             {(data) => (
               <View style={styles.list}>
                 {data.messages.map((message) => (
-                  <HighlightRow key={message.seq} message={message} pinned={false} />
+                  <HighlightRow
+                    key={message.seq}
+                    message={message}
+                    pinned={false}
+                    onOpenPhoto={setViewingPhoto}
+                  />
                 ))}
               </View>
             )}
@@ -194,6 +225,67 @@ export default function HighlightsScreen() {
           </DataScreen>
         )}
       </ScrollView>
+
+      {/*
+        The full-screen photograph, drawn over the list rather than in place of it.
+
+        A sibling of the header and the scroller, and it covers both: `PhotoViewer` is absolutely
+        positioned at `zIndex: 200` against the glass header's 50, so paint order is decided by
+        the tokens rather than by where this sits in the tree.
+
+        **The same viewer chat and the gallery use, and the only thing that differs is the first
+        item in its menu** - `Reply` from chat, `Show in chat` from both surfaces that have lifted
+        the photograph out of the conversation it was said in. A second treatment for a full-screen
+        picture is what `DESIGN` rule 5 exists to prevent, and it would be the copy that drifts.
+
+        The `mediaId !== null` half of the guard is what narrows `string | null` to the `string`
+        the viewer demands. `highlightAction` has already refused a null one, so this cannot fail
+        in practice - it is the type system being told what the rule already guarantees.
+      */}
+      {viewingPhoto !== null && viewingPhoto.mediaId !== null && (
+        <PhotoViewer
+          mediaId={viewingPhoto.mediaId}
+          senderName={viewingPhoto.senderName}
+          senderImage={viewingPhoto.senderImage}
+          takenAt={viewingPhoto.createdAt}
+          /*
+            "Show in chat" rather than "Reply", matching the gallery: a pin has been lifted out of
+            the conversation it was said in, and what was being talked about is the question
+            somebody actually has here. It is a menu item and not the row's tap, which is what
+            keeps `PRD/05`'s "nothing jumps back into the conversation from this list" true.
+          */
+          contextAction={{
+            label: 'Show in chat',
+            icon: 'chat-bubble-outline',
+            onPress: () => router.push(`/chat/${channelId}?around=${viewingPhoto.seq}`),
+          }}
+          /*
+            Spread rather than a ternary into the prop, because `report` is optional under
+            `exactOptionalPropertyTypes` and `report={undefined}` is not the same as absent.
+
+            The two conditions are the server's answer and "not your own photo", exactly as in
+            chat and the gallery. `canReport` is false for the whole Eboard scope, where reporting
+            does not exist - never derived from the scope here, so this screen cannot drift from
+            the policy module.
+          */
+          {...(viewingPhoto.senderId !== userId && meta.data?.canReport === true
+            ? {
+                report: {
+                  body: isDm
+                    ? 'This photo goes to ClubChat moderators, who can read the messages around it. The other person is not told.'
+                    : 'This photo goes to the admins of this space, who can read the messages around it. The sender is not told.',
+                  run: async () => {
+                    const result = await channelApi.report(channelId, viewingPhoto.seq);
+                    return result.alreadyReported
+                      ? 'You already reported this photo.'
+                      : 'Reported. The sender is not told.';
+                  },
+                },
+              }
+            : {})}
+          onClose={() => setViewingPhoto(null)}
+        />
+      )}
     </View>
   );
 }
@@ -201,7 +293,8 @@ export default function HighlightsScreen() {
 /**
  * One pinned or announced message.
  *
- * Text rows stay view-only, and a CARD row opens the thing it stands for.
+ * Text rows stay view-only. A CARD row opens the thing it stands for, and a PHOTO row opens the
+ * photograph itself, full screen, over this list.
  *
  * > **The old rule here was "jumping to the message in chat is the pinned strip's job".** That was
  * > written when the strip jumped into the conversation. It no longer does - it opens the poll,
@@ -213,32 +306,71 @@ export default function HighlightsScreen() {
  * the row inert did not make it a record, it made it the only surface that could show somebody a
  * poll while giving them no way to reach it.
  *
+ * > **That argument was written about cards and applies harder to a photograph, which is why the
+ * > photo case was added on 2026-08-29.** A poll card at least NAMES a poll somebody could go and
+ * > find. A row reading "Photo" names nothing: it is the one pin whose content is the thing
+ * > pinned, and it was drawn as four inert letters while `mediaId` sat unread on the envelope.
+ *
  * An ordinary pinned message still goes nowhere, and that is not an omission: Highlights is where
  * the strip sends it, so this screen IS its destination. There is nothing further to open.
  *
  * **Two sibling pressables inside a `View`, never one wrapping the other.** A pressable containing
  * a pressable is failure mode 17, it swallows the outer gesture on native, and it has shipped in
- * this repo once already.
+ * this repo once already. The thumbnail added with the photo case is deliberately NOT pressable
+ * for that reason - it sits inside the body pressable and the whole row takes the tap, which is
+ * also the bigger target.
  */
-function HighlightRow({ message, pinned }: { message: MessageEnvelope; pinned: boolean }) {
+function HighlightRow({
+  message,
+  pinned,
+  onOpenPhoto,
+}: {
+  message: MessageEnvelope;
+  pinned: boolean;
+  /** Handed the whole envelope, because the viewer's header and its menu both need more than an id. */
+  onOpenPhoto: (message: MessageEnvelope) => void;
+}) {
   const router = useRouter();
   const name = message.senderName ?? 'Deleted member';
-  // A tombstone links nowhere even if the row still remembers what it once pointed at.
-  const card = message.deletedAt === null ? hrefForCard(message) : null;
+  // One rule, shared with the pinned strip in chat. It refuses a tombstone itself.
+  const action = highlightAction(message);
 
   const body = (
-    <>
-      <View style={styles.rowHead}>
-        <Text style={styles.sender}>{name}</Text>
-        {pinned && <MaterialIcons name="push-pin" size={12} color={color.accent} />}
-        <Text style={styles.time}>{formatClock(message.createdAt)}</Text>
+    /*
+      A row rather than the column it used to be, so a photograph can show itself on the right.
+      `rowText` takes the flex, so a long line wraps against the thumbnail instead of pushing it
+      off the card.
+    */
+    <View style={styles.rowInner}>
+      <View style={styles.rowText}>
+        <View style={styles.rowHead}>
+          <Text style={styles.sender}>{name}</Text>
+          {pinned && <MaterialIcons name="push-pin" size={12} color={color.accent} />}
+          <Text style={styles.time}>{formatClock(message.createdAt)}</Text>
+        </View>
+        <Text style={message.deletedAt !== null ? styles.deleted : styles.body}>
+          {message.deletedAt !== null
+            ? 'This message was deleted'
+            : (message.body ?? preview(message))}
+        </Text>
       </View>
-      <Text style={message.deletedAt !== null ? styles.deleted : styles.body}>
-        {message.deletedAt !== null
-          ? 'This message was deleted'
-          : (message.body ?? preview(message))}
-      </Text>
-    </>
+      {/*
+        The picture itself, at the `thumb` variant - the same one the gallery grid and the reply
+        quote ask for, so a photograph already seen anywhere in the app costs nothing here.
+
+        Keyed off `action` rather than off `message.type`, so the row can never show a thumbnail
+        it would refuse to open: a pin whose upload never finished has no `mediaId`, and the one
+        check answers both questions at once.
+      */}
+      {action?.kind === 'photo' && (
+        <RemoteImage
+          mediaId={action.mediaId}
+          variant="thumb"
+          style={styles.thumb}
+          resizeMode="cover"
+        />
+      )}
+    </View>
   );
 
   return (
@@ -251,7 +383,7 @@ function HighlightRow({ message, pinned }: { message: MessageEnvelope; pinned: b
       >
         <Avatar name={name} image={message.senderImage} size={36} />
       </Pressable>
-      {card === null ? (
+      {action === null ? (
         <View style={styles.rowBody}>{body}</View>
       ) : (
         /*
@@ -261,9 +393,15 @@ function HighlightRow({ message, pinned }: { message: MessageEnvelope; pinned: b
         */
         <Pressable
           style={({ pressed }) => [styles.rowBody, pressed && styles.rowBodyPressed]}
-          onPress={() => router.push(card)}
+          onPress={() =>
+            action.kind === 'photo' ? onOpenPhoto(message) : router.push(action.href)
+          }
           accessibilityRole="button"
-          accessibilityLabel={`Open the pinned ${message.type}`}
+          accessibilityLabel={
+            action.kind === 'photo'
+              ? `Open this photo from ${name}, full screen`
+              : `Open the pinned ${message.type}`
+          }
         >
           {body}
         </Pressable>
@@ -456,7 +594,25 @@ const styles = StyleSheet.create({
     borderColor: color.hairline,
     padding: space.md,
   },
-  rowBody: { flex: 1, gap: space.xs },
+  rowBody: { flex: 1 },
+  /** The pressable's contents: the words, and a photograph's thumbnail beside them. */
+  rowInner: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  rowText: { flex: 1, gap: space.xs },
+  /*
+   * Square, at the 44pt an iOS touch target is - small enough to stay a label for the row rather
+   * than becoming the row's content, which is the gallery's job and not this list's.
+   *
+   * The sunken fill is what `RemoteImage` draws its spinner and its "Photo unavailable" against.
+   * That fill is the load-bearing part: the box is reserved at its final size before any bytes
+   * arrive, so the row does not reflow when they land. A photo bubble in the conversation had
+   * exactly that defect on 2026-08-27, waiting in a hardcoded square and then arriving portrait.
+   */
+  thumb: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.sm,
+    backgroundColor: color.cardSunken,
+  },
   /*
    * Only a card row is pressable, so this is the one place the wash appears.
    *

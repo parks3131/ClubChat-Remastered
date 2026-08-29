@@ -9,7 +9,7 @@ post is a publication.** The two surfaces coexist deliberately.
 | Content | Standalone posts authored for the feed | Messages already sent in chat |
 | Author | Any club admin | Whoever sent the message |
 | Reached from | The club hub (it is the **first row**) | The chat header |
-| Tapping a row | Opens the post | Nothing - view-only |
+| Tapping a row | Opens the post | Opens what the pin is *about* - a poll, event or meeting card opens that object, a photograph opens full screen in place, anything else is view-only. See [Chat](05-chat.md) rule 7 |
 | Scope | Club only | Club, race, and Eboard each have their own |
 
 ## What a post carries

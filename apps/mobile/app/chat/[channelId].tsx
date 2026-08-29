@@ -87,7 +87,7 @@ import { spaceProfileHref, useGoBack } from "../../src/nav.tsx";
 import { useLoad, useRefreshOnReturn } from "../../src/use-load.ts";
 import { useNotice } from "../../src/use-notice.ts";
 import { KeyboardAvoider } from "../../src/keyboard-avoider.tsx";
-import { hrefForCard } from "../../src/notification-href.ts";
+import { highlightAction } from "../../src/highlight-action.ts";
 import { color, fontFamily, radius, space, type } from "../../src/theme.ts";
 
 /**
@@ -765,6 +765,24 @@ function pinnedPreview(message: MessageEnvelope): string {
   if (message.type === "photo") return "Photo";
   if (message.type === "document") return message.documentName ?? "Document";
   return message.body ?? "";
+}
+
+/**
+ * What a screen reader is told a pinned notice will do, which now differs three ways.
+ *
+ * Announcing "in Highlights" on a poll card would describe the old behaviour to the one person
+ * who cannot see where they landed, and announcing it on a photograph would be wrong in a second
+ * way: the photo opens over this conversation without going anywhere at all.
+ *
+ * Derived from `highlightAction` rather than from `message.type`, so the words and the tap can
+ * never disagree - including the case where a photo has no bytes and the notice really does fall
+ * through to Highlights.
+ */
+function pinnedActionLabel(message: MessageEnvelope): string {
+  const action = highlightAction(message);
+  if (action === null) return "Open this pinned message in Highlights";
+  if (action.kind === "photo") return "Open this pinned photo, full screen";
+  return `Open the pinned ${message.type}`;
 }
 
 /**
@@ -3416,16 +3434,39 @@ export default function ChatScreen() {
    * card leaves them to find the poll themselves - the dead end this strip exists to prevent.
    * So a card opens the thing it stands for and everything else opens Highlights.
    *
-   * The route comes from `hrefForCard`, which builds the same target a notification about that
-   * poll would carry, so tapping the pin and tapping the notification land in the same place by
-   * construction rather than by two lists of routes agreeing.
+   * > **A pinned PHOTOGRAPH was the case that argument did not cover, and it went nowhere until
+   * > 2026-08-29.** It is not a reference to something with a screen of its own, so it fell into
+   * > "everything else" and landed on Highlights - which drew the word "Photo" and offered
+   * > nothing further. The one pin whose content IS the thing pinned was the one you could not
+   * > look at, on either surface, while `mediaId` sat unread on the envelope.
+   *
+   * A photo therefore opens the full-screen viewer **in place**, over this conversation. That is
+   * not a third destination and it does not break the rule above: nothing is jumped to, the
+   * conversation is not scrolled, and closing the viewer leaves the reader exactly where they
+   * were. It is the same viewer a photo bubble opens, so a photograph looks the same wherever it
+   * is tapped.
+   *
+   * The decision comes from `highlightAction`, shared with the Highlights list, because
+   * `DESIGN/03` requires the two surfaces that show pins to send one to the same destination -
+   * and the route half of it still comes from `hrefForCard`, which builds the same target a
+   * notification about that poll would carry. So the pin, the list and the notification agree by
+   * construction rather than by three lists of routes happening to match.
    *
    * A card whose object was deleted cannot reach here: the cascade soft-deletes the card and
    * clears its pin in one statement, and `pinnedRows` drops both tombstones and unpinned rows.
    */
   const openPinned = (message: MessageEnvelope) => {
-    const card = hrefForCard(message);
-    router.push(card ?? `/channels/${channelId}/highlights`);
+    const action = highlightAction(message);
+    // The fallback, and the honest destination for a photo whose upload never finished.
+    if (action === null) {
+      router.push(`/channels/${channelId}/highlights`);
+      return;
+    }
+    if (action.kind === "photo") {
+      openPhoto(message);
+      return;
+    }
+    router.push(action.href);
   };
 
   const setPinned = async (seq: number, pinned: boolean) => {
@@ -4043,11 +4084,7 @@ export default function ChatScreen() {
                   reader announcing "in Highlights" on a poll card would be describing the old
                   behaviour to the one person who cannot see where they landed.
                 */
-                accessibilityLabel={
-                  hrefForCard(message) === null
-                    ? 'Open this pinned message in Highlights'
-                    : `Open the pinned ${message.type}`
-                }
+                accessibilityLabel={pinnedActionLabel(message)}
               >
                 <View style={styles.pinnedIcon}>
                   <MaterialIcons

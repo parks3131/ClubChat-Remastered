@@ -144,9 +144,10 @@ second is a feature the whole product would have to bend around. Threads remain 
    does not unpin for anyone.
 
    **Tapping a pinned notice opens what the pin is about, and that is not always the message.**
-   A poll, event or meeting card opens that poll, event or meeting; anything else opens
-   Highlights. It never jumps back into the conversation. **The same rule governs a row in
-   Highlights**, which is the other surface that lists pins - see the Highlights section.
+   A poll, event or meeting card opens that poll, event or meeting; **a photograph opens full
+   screen where you are**; anything else opens Highlights. It never jumps back into the
+   conversation. **The same rule governs a row in Highlights**, which is the other surface that
+   lists pins - see the Highlights section.
 
    *Corrected 2026-08-11, in two steps.* This rule used to say a tap jumps the conversation to
    that message and briefly highlights it. It stopped describing the app some time before that
@@ -158,6 +159,22 @@ second is a feature the whole product would have to bend around. Threads remain 
    The card half is a real behaviour change and the reason worth keeping: a poll is pinned
    *because somebody should vote in it*, so sending them to a record of the card leaves them to
    go and find the poll themselves. A pin that is about an object should reach the object.
+
+   *Extended 2026-08-29, to the photograph.* The sentence above says a pin should reach the thing
+   it is about, and a photograph was the case it did not cover: it is not a reference to something
+   with a screen of its own, so it fell into "anything else" and landed on Highlights, which
+   printed the word **Photo** and offered nothing further. **The one kind of pin whose content is
+   the thing pinned was the one kind nobody could look at**, on either surface.
+
+   A photograph therefore opens **in place** - the same full-screen viewer a photo in the
+   conversation opens, drawn over whatever surface you tapped from. That is not a third
+   destination and it does not weaken "never jumps back into the conversation": nothing is
+   navigated to, nothing is scrolled, and closing it leaves you exactly where you were. Getting
+   back to what was being said about the picture stays available as a deliberate menu step inside
+   the viewer, as it already is from the Gallery.
+
+   A pinned **document** is not covered and still opens Highlights. That is a known gap rather
+   than a rule.
 
    Two consequences that are not optional:
 
@@ -407,16 +424,24 @@ second is a feature the whole product would have to bend around. Threads remain 
 A view of chat, not a feed of its own. Tabs: **Pinned**, **Announcements**, and (admins only)
 **Reports**.
 
-**A row for a poll, event or meeting card opens that object; every other row is view-only**, and
-the avatar opens the sender. This is rule 7's destination rule applied to the second surface that
-shows pins, and it has to be, for a reason stronger than consistency: **the strip shows only the
-four most recent pins and this list shows all of them**, so a fifth pinned poll is reachable here
-and nowhere else. A row that displayed it without opening it would be the one surface that could
-show somebody a poll while giving them no way to reach it.
+**A row for a poll, event or meeting card opens that object, a row for a photograph opens the
+photograph, and every other row is view-only**, and the avatar opens the sender. This is rule 7's
+destination rule applied to the second surface that shows pins, and it has to be, for a reason
+stronger than consistency: **the strip shows only the four most recent pins and this list shows
+all of them**, so a fifth pinned poll is reachable here and nowhere else. A row that displayed it
+without opening it would be the one surface that could show somebody a poll while giving them no
+way to reach it.
+
+That argument was written about cards and applies harder to a photograph. A poll card at least
+*names* a poll somebody could go and find; a row reading "Photo" names nothing at all. **A pinned
+photograph also draws its own thumbnail here**, so the list says what it is holding rather than
+describing it in a word, and the picture opens full screen over the list rather than navigating
+anywhere - a list with no cap on its length should not lose your place to show you one picture.
 
 An ordinary pinned message still goes nowhere from here, and that is not an omission - Highlights
 is where rule 7 sends it, so this screen is its destination rather than a waypoint. Nothing jumps
-back into the conversation from this list.
+back into the conversation from this list: the viewer's own menu offers that as a separate,
+deliberate step, exactly as the Gallery's does.
 
 In a DM the Reports tab does not appear at all: there is no admin of the conversation to read
 it, and the reports it would contain belong to the platform moderation queue.
@@ -468,8 +493,13 @@ it, and the reports it would contain belong to the platform moderation queue.
 - [ ] The pinned strip appears when a message is pinned and can be dismissed without unpinning.
 - [ ] Tapping a pinned ordinary message opens Highlights; tapping a pinned poll, event or meeting
       card opens that poll, event or meeting.
+- [ ] Tapping a pinned **photograph** opens it full screen without leaving the surface it was
+      tapped from - from the strip the conversation is still behind it, and from Highlights the
+      list is, at the same scroll position.
 - [ ] The same card row in **Highlights** opens the same object, including a pin old enough to
       have fallen out of the four-item strip.
+- [ ] A pinned photograph in **Highlights** shows its own thumbnail rather than the word "Photo"
+      alone, and a pin whose upload never finished shows neither and stays view-only.
 - [ ] Deleting a poll removes its pinned notice, **including on a device that was offline when it
       was deleted** - the case that only appears after a reconnect.
 - [ ] Highlights lists pinned and announcement messages.

@@ -19,6 +19,58 @@ Newest first.
 
 ---
 
+## 2026-08-29 - The one pin whose content was the thing pinned, and could not be looked at
+
+**A pinned photograph went nowhere from either surface that shows pins.** The strip floating over
+chat sent it to Highlights, which is the right fallback for a pin that is only a message.
+Highlights then drew the word **Photo** as inert text and offered nothing further. So a poll card
+opened its poll, an event card opened its event, an ordinary message correctly stopped at
+Highlights - and a photograph, the one kind of pin whose content *is* the thing pinned, was the
+one kind nobody could see. `mediaId` had been on the envelope the whole time and neither surface
+read it.
+
+**The argument for fixing it was already written down, about something else.** `PRD/05` says a
+list that shows somebody a pin while giving them no way to reach what it is a pin *of* is worse
+than a list that does not show it - written on 2026-08-11 about a fifth pinned poll falling out of
+the four-item strip and being reachable from Highlights and nowhere else. A poll card at least
+*names* a poll somebody could go and find. A row reading "Photo" names nothing at all, so the same
+argument lands harder on the case it did not cover.
+
+**A photograph opens in place rather than navigating.** The same full-screen viewer a photo bubble
+opens, drawn over whatever surface was tapped - the conversation stays behind it in chat, and in
+Highlights the list keeps its scroll position. That is not a third destination and it does not
+weaken rule 7's "never jumps back into the conversation": nothing is navigated to, and closing
+leaves you where you were. Getting back to what was being said stays available as a deliberate
+menu step inside the viewer, as it already was from the Gallery.
+
+**Both surfaces move together, and that is the structural half of the change.**
+`DESIGN/03` requires the strip and the Highlights list to send a pin to the same destination, and
+they had two copies of the decision - one in `openPinned`, one in the Highlights row. A third
+behaviour written twice is how the two would have drifted, which this area has already paid for
+once: the strip's ordering and `readHighlights` answered "which pin is most recent" differently
+for a month because they were never made to share the rule. So the decision is now one function,
+`highlight-action.ts`, and the route half of it still goes through `hrefForCard` - the pin, the
+list and a notification about the same object cannot disagree.
+
+**Client only.** No route, no migration, no server change: `readHighlights` selects the whole
+message row and has been putting `mediaId` on the wire since the field existed.
+
+**What it cost, and what was proved.** Eleven unit tests over the decision function, written
+first and watched fail on exactly the two photo cases while the other nine passed - which is what
+made them worth having, since they state today's behaviour for everything else. Then the whole
+thing driven in a running app on an agent stack: a photo posted, pinned, and opened from the strip
+with the URL unchanged; opened from the Highlights row with the URL unchanged; the row drawing its
+own thumbnail; and a text pin alongside it staying inert, which is the regression that mattered.
+The full gate green at 2,182 tests.
+
+**Still not true at the end of it.** A pinned **document** remains inert on both surfaces - chat
+hands one to the share sheet and neither pin surface does. That is recorded as a gap rather than a
+rule, in `PRD/05` and as an expectation in the test file, so the day it closes the test is what
+asks to be rewritten. And this was verified in a web build, not on the phone: `PhotoViewer`'s
+Download path is the one branch web cannot exercise, and it is untouched by this change.
+
+---
+
 ## 2026-08-29 - The tombstone gets its face back, and the run it sits in survives
 
 **A deleted message stopped being anonymous.** It kept the sender's face, name and side; only the
@@ -99,6 +151,8 @@ was asked for and both are somebody's decision rather than a mechanical fix.
 question in `PRD/17`. Nothing distinguishes a sender taking a message back from an admin removing
 it - same handler, same single `deleted_at`, same frame - so it needs a column, a migration and a
 server release before any app change, and it would stay blank for everything deleted before that.
+
+---
 
 ## 2026-08-27 - Five updates, one build, and the chat surface they carried
 
