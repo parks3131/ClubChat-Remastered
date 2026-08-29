@@ -11,9 +11,14 @@
  * from any roster, where there may be no conversation at all - offering "Delete chat" there
  * would be a control over nothing. This screen exists only where a thread does.
  *
- * The three-dot menu is exactly Pin, Block and Delete chat. **Not** Archive, not Clear history,
- * not Remove contact, not Report a concern: reporting is per message and already lives on the
- * message, and the rest are features this product does not have.
+ * The three-dot menu is exactly Pin, Mute, Block and Delete chat. **Not** Archive, not Clear
+ * history, not Remove contact, not Report a concern: reporting is per message and already lives
+ * on the message, and the rest are features this product does not have.
+ *
+ * Mute joined the four on 2026-08-29, asked for from the phone. It is the one control the list
+ * was missing rather than a new idea: `PRD/14` rule 8 has had muting since before this screen
+ * existed, the chat header and the member card both offer it on the same conversation, and
+ * `channelApi.meta` was already handing this screen the flag.
  */
 
 import { useCallback, useState } from 'react';
@@ -174,6 +179,35 @@ export default function DmProfileScreen() {
                       void act(
                         () => channelApi.pin(channelId, !pinned),
                         pinned ? 'Unpinned.' : 'Pinned to the top of your chats.',
+                      ),
+                  },
+                  /*
+                    Between Pin and Block, which is the order every other menu in the app puts
+                    these in: the two that change nothing but your own view first, then the ones
+                    that act on the relationship or the history. The chat header's own DM menu
+                    runs Mute then Block, and the race menu runs Pin then Mute then the
+                    destructive pair.
+
+                    **`meta.muted` was already on the wire.** `channelApi.meta` has carried it
+                    since chat's header needed it, so this control cost a read of a field this
+                    screen was already loading and throwing away.
+
+                    > **One word in the confirmation, and the SAME word the other two mute
+                    > controls use.** The member card said "Muted. The unread count still counts."
+                    > until 2026-08-17 and had it taken out: the distinction is true and belongs
+                    > in `PRD/12`, not in a line read once in the half-second after a tap somebody
+                    > already meant. Three mute controls saying three different sentences about
+                    > one action is the worse problem. So this one does not gain the full stop the
+                    > notices around it carry - matching the other mute controls beats matching
+                    > its own neighbours.
+                  */
+                  {
+                    label: data.meta.muted ? 'Unmute' : 'Mute',
+                    onPress: () =>
+                      void act(
+                        () =>
+                          data.meta.muted ? dmApi.unmute(channelId) : dmApi.mute(channelId),
+                        data.meta.muted ? 'Unmuted' : 'Muted',
                       ),
                   },
                   ...(peer === null

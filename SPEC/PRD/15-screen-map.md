@@ -231,7 +231,7 @@ New message             (search over people the viewer shares a club with; no gl
          ├─ Chat info   ← the header NAME opens this
          │  ├─ Shared clubs      (listed, each opening that club)
          │  ├─ Gallery           (this conversation's photos)
-         │  └─ ⋯ menu: Pin · Block / Unblock · Delete chat
+         │  └─ ⋯ menu: Pin · Mute · Block / Unblock · Delete chat
          ├─ Member profile card
          └─ header options: Mute · Block / Unblock
 ```

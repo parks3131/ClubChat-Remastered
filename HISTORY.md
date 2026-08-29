@@ -84,6 +84,25 @@ panel closed. Full suite green at 2,188 tests either side.
 Left behind on the dev database: six `Proof Club N`, seven `Proof Race N` and two
 `sheetproof-*@proof.test` accounts, which were the fixture.
 
+**Then Mute joined that menu, asked for once the menu was reachable.** It is the one control the
+list was missing rather than a new feature: `PRD/14` rule 8 has had muting since before this screen
+existed, the chat header and the member card both already offer it on the same conversation, and
+`channelApi.meta` was already handing this screen the `muted` flag it needed. So the whole change is
+one item in an array, placed between Pin and Block - the order every other menu in the app uses, the
+two that change only your own view first and the ones that touch the relationship or the history
+after.
+
+**Its confirmation is one word, and the same word the other two mute controls say.** The member card
+said "Muted. The unread count still counts." until 2026-08-17 and had it taken out for a reason that
+applies here unchanged: a confirmation is read once, in the half-second after a tap somebody already
+meant, and three mute controls saying three different sentences about one action is worse than the
+distinction going unstated at the tap. So this one does not take the full stop its neighbours on
+this screen carry.
+
+Proved on the Simulator in both directions rather than in one: Mute wrote a row to `channel_mutes`
+and the label flipped to Unmute on the reload, then Unmute removed the row and the screen said
+"Unmuted".
+
 ---
 
 ## 2026-08-29 - The same argument, finished: the document, and a clock that stopped lining up
