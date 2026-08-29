@@ -30,7 +30,7 @@ import { bucketByDay, dayInView, type DayChoice } from '../../src/calendar-days.
 import { useSession } from '../../src/chat-provider.tsx';
 import { formatDayTitle, formatMonthTitle, formatTimeOfDay, toDateKey } from '../../src/dates.ts';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { color, radius, space, tabBarSpace, type } from '../../src/theme.ts';
+import { color, opacity, radius, space, tabBarSpace, type } from '../../src/theme.ts';
 import {
   WEEKDAYS,
   monthCells,
@@ -270,7 +270,20 @@ function targetFor(item: FeedItem): string {
         : `/events/${item.id}`;
 }
 
-/** One item under the selected day. */
+/**
+ * One item under the selected day.
+ *
+ * **A row that has already happened is faded**, exactly as the club's Past list fades one, from
+ * the same token so the two cannot drift apart.
+ *
+ * > **It reads `upcoming`, which the server decided, rather than comparing the tapped day to
+ * > today.** Those are not the same question and the difference is visible: an all-day race or
+ * > meetup is current for the whole of its day, while an event at 08:00 is done by lunchtime.
+ * > Restating the rule here would be a second definition of "past" that disagrees with the list
+ * > one tab over, which is the failure this codebase has written down more than once.
+ *
+ * See [`PRD/07`](../../../../SPEC/PRD/07-calendar-and-events.md) rules 1 and 4.
+ */
 function DayRow({ item, showClub }: { item: FeedItem; showClub: boolean }) {
   const router = useRouter();
   const tint = badgeTint(item.kind);
@@ -303,10 +316,11 @@ function DayRow({ item, showClub }: { item: FeedItem; showClub: boolean }) {
 
   return (
     <Pressable
-      style={styles.dayRow}
+      style={[styles.dayRow, !item.upcoming && styles.dayRowPast]}
       onPress={() => router.push(target)}
       accessibilityRole="button"
-      accessibilityLabel={`${item.title}, ${item.kind}`}
+      // The fade is the only thing saying this already happened, and a fade announces nothing.
+      accessibilityLabel={`${item.title}, ${item.kind}${item.upcoming ? '' : ', past'}`}
     >
       {body}
     </Pressable>
@@ -750,6 +764,7 @@ const styles = StyleSheet.create({
     padding: space.md,
     gap: space.xs,
   },
+  dayRowPast: { opacity: opacity.past },
   dayRowHead: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   dayRowTitle: { ...type.headline, color: color.textPrimary },
   badge: {

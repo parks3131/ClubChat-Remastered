@@ -23,7 +23,7 @@ import { calendarApi, clubApi, contentApi } from '../../../../../src/api.ts';
 import type { EventDetail, FeedItem } from '../../../../../src/api-types.ts';
 import { bibParts, formatDateOnly, formatInstant } from '../../../../../src/dates.ts';
 import { goBackOr, useReturnTo } from '../../../../../src/nav.tsx';
-import { color, radius, space, type } from '../../../../../src/theme.ts';
+import { color, opacity, radius, space, type } from '../../../../../src/theme.ts';
 import {
   Action,
   Body,
@@ -608,7 +608,7 @@ const styles = StyleSheet.create({
     borderColor: color.hairline,
     padding: space.md,
   },
-  rowFaded: { opacity: 0.6 },
+  rowFaded: { opacity: opacity.past },
   bib: {
     width: 52,
     height: 60,

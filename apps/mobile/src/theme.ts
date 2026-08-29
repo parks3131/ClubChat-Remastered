@@ -216,6 +216,21 @@ export const space = {
 } as const;
 
 /**
+ * How far something is drawn down from full strength, and why.
+ *
+ * **`past` is the whole of it today: a thing that has already happened is drawn at this opacity
+ * and stays perfectly readable.** It is a token rather than a number inside a screen because two
+ * surfaces make the same statement about the same rows - the club's Upcoming/Past list and the
+ * day opened on the calendar - and a feed row that reads as done in one of them and current in
+ * the other is exactly the drift a shared value exists to prevent.
+ * [`PRD/07`](../../../SPEC/PRD/07-calendar-and-events.md) rules 1 and 4 are the rule; this is its
+ * value.
+ */
+export const opacity = {
+  past: 0.6,
+} as const;
+
+/**
  * The floating tab bar's footprint.
  *
  * > **A shared token because two files have to agree about it and cannot see each other.** The bar

@@ -6,8 +6,11 @@ Two views over **one merged feed**: a month grid for "what is happening when", a
 **Behaviour rules**
 
 1. **The month grid marks any day carrying a calendar event, a race, an Eboard meeting, or a
-   meetup.** Tapping a marked day opens a popup listing that day's items; tapping an item opens
-   it.
+   meetup.** Tapping a marked day lists that day's items beneath the grid; tapping an item opens
+   it. **An item in that list that has already happened is faded**, by the same rule and the same
+   treatment rule 4 gives the Upcoming/Past list, so a thing that is done looks done wherever it
+   is read. Whether a day is in the past is not the question asked: the item is, because an
+   all-day race or meetup runs until its day is over while an event at 08:00 is done by lunchtime.
 
    > **Meetups joined on 2026-08-15**, reversing [`08`](08-weekly-meetups.md) rule 12, which had
    > kept them off on the grounds that a club meeting three times a week would drown the grid.
@@ -97,7 +100,7 @@ Two views over **one merged feed**: a month grid for "what is happening when", a
 12. **Creating an event from chat's "+" returns to chat afterwards**, not to the new event's
     detail screen - the chat card already confirms it.
 13. **An event has a detail screen of its own**, and all four routes to it lead there: the
-    Upcoming/Past list, the calendar's day popup, the chat card, and the notification. It shows
+    Upcoming/Past list, the calendar's day list, the chat card, and the notification. It shows
     the title, when it runs, the location, the description, and **who added it - with their
     face - and who last changed it when that is somebody else.**
 

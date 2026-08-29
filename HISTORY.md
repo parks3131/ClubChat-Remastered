@@ -19,6 +19,47 @@ Newest first.
 
 ---
 
+## 2026-08-29 (later) - A day that has gone by says so
+
+Asked from the phone: in the calendar, tap a date that has already passed and the things listed
+under it should carry the same shade the club's Past events carry. One sentence, and the whole
+change is in what "already passed" is allowed to mean.
+
+**The club's Upcoming/Past list has faded a past row since it was built** - `PRD/07` rule 4, one
+line of style at 60% opacity. The calendar's open day had nothing of the kind: tap 25 August or
+tap next March and the cards were drawn identically.
+
+**The decision worth recording is not the opacity, it is which question gets asked.** The obvious
+implementation compares the tapped day against today, which is what the request literally says.
+That would be a second definition of "past" living on the client, and it disagrees with the one
+already shipped: the server sends `upcoming` on every feed row and computes it as
+`all_day ? at >= today : at >= now`, so an all-day race or meetup is current for the whole of its
+day while an event at 08:00 is done by lunchtime. The list one tab over fades on that fact. The
+calendar now fades on the same fact, so no row can read as done in one place and current in the
+other. This repo has written down what restating a predicate costs - section 4, and failure mode
+10 - and here getting it right cost nothing at all.
+
+**The value moved into a token in the same change**, for the same reason one layer down: two
+surfaces now make one statement, so `opacity.past` is the only place `0.6` is written.
+`saveButtonOff` in the same stylesheet is also `0.6` and was deliberately left alone. A disabled
+button is not a past event, and folding the two together because the numbers match is the alias
+mistake failure mode 11 describes.
+
+One thing was added that nobody asked for: a faded row now announces ", past". The fade is the
+only thing on that screen saying the event has already happened, and a fade says nothing at all
+to somebody who cannot see it.
+
+**Verified on the Simulator as a red step and then a green one**, which needed a fixture first.
+The account signed in there belongs to no club with anything dated on it, and the event form
+refuses a past start by design, so two rows went into the development database directly and were
+deleted again afterwards. With the shipped file restored, 25 August drew "Past Session" at full
+strength - the defect, photographed. With the fix back in, the same card on the same screen went
+grey. Then 31 August, an upcoming day, left "Season Opener" at full strength, which is the control
+that proves the fade follows the item and not the screen. Type check clean, 2,188 tests green.
+
+The club-scoped calendar needed no check of its own. `clubs/[clubId]/calendar.tsx` renders the
+same `CalendarView` this screen does, which is design-system rule 5 paying for itself.
+
 ## 2026-08-29 - A sheet that was placed by whoever rendered it
 
 **One report, one screen, three screens fixed - and a correction in the middle about how much to
