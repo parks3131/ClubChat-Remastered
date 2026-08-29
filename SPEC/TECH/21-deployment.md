@@ -211,6 +211,23 @@ was offered.
 phone is `Update 01a04ec6` at the bottom of Profile after two relaunches, and nobody has looked yet.
 This row stays weak until somebody does.
 
+**The eighth update, the same day and an hour behind the seventh.** Update group
+`7f88fac3-a5bd-4888-a608-15b50814cebd`, iOS update `01a04eea-c5f1-71ed-9dd4-cab4c745d2a8`, commit
+`2ee5a79eaabd70373addc7f2e4d95dcd23e5632f` with no asterisk, runtime version
+`bfe9e13f237478450cf6a5383915466e1e15d392` generated and compared before publishing. It carries
+Mute on the conversation's own menu, asked for once the seventh update had made that menu reachable.
+
+**The bundle search gained a second question worth asking, and the first attempt at it answered
+wrongly.** Alongside the two endpoint URLs, the export was searched for `Unmute` - the one string
+that distinguishes this bundle from the one an hour before it, and therefore the only direct
+evidence that what was published is what was just written rather than a rebuild of the same code.
+It reported **absent**, which reads as a serious finding and was not one: the search used `grep -w`,
+and Hermes packs its string table contiguously with no separators, so a word-boundary match fails on
+every short UI string in the file. `Delete chat` and `1 club in common` were absent by the same
+measure. Without the flag all of them are present. **The lesson is the calibration, not the flag**:
+a search of a binary that returns nothing should be re-run against a string known to be there before
+the absence is believed.
+
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because
 `cdn.<domain>` has to validate the `exp`/`sig` pair that [Media pipeline](07-media-pipeline.md)
