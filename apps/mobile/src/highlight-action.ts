@@ -27,7 +27,8 @@ import { hrefForCard } from './notification-href.ts';
  */
 export type HighlightAction =
   | { kind: 'route'; href: string }
-  | { kind: 'photo'; mediaId: string };
+  | { kind: 'photo'; mediaId: string }
+  | { kind: 'document'; mediaId: string; name: string | null };
 
 export function highlightAction(message: MessageEnvelope): HighlightAction | null {
   // A tombstone links nowhere even if the row still remembers what it once pointed at.
@@ -50,6 +51,23 @@ export function highlightAction(message: MessageEnvelope): HighlightAction | nul
    */
   if (message.type === 'photo' && message.mediaId !== null) {
     return { kind: 'photo', mediaId: message.mediaId };
+  }
+
+  /*
+   * A document, which is the same argument as the photograph one line up.
+   *
+   * > **Left out on 2026-08-29 and closed the same day**, once the photo case made the asymmetry
+   * > obvious: a pinned file said `route.pdf` and did nothing, while the identical bubble three
+   * > taps away in the conversation opened it. A pin is a reference to something, and a file is
+   * > the clearest case of a thing a reference should reach.
+   *
+   * The name rides along because iOS reads a file's type from its extension alone, so it decides
+   * whether a `.pdf` opens as a PDF. Null is carried through rather than replaced: `openDocument`
+   * already falls back to a generated name with the right extension for the mime, and inventing
+   * one here would be a second answer to a question that is answered once.
+   */
+  if (message.type === 'document' && message.mediaId !== null) {
+    return { kind: 'document', mediaId: message.mediaId, name: message.documentName };
   }
 
   return null;

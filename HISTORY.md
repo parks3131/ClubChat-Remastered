@@ -19,6 +19,40 @@ Newest first.
 
 ---
 
+## 2026-08-29 - The same argument, finished: the document, and a clock that stopped lining up
+
+**Two things came back off the phone within the hour.**
+
+**The attachment was drawn beside the clock instead of under it**, which shortened the header line
+on a photo row only - so that row's time sat a thumbnail's width inside every other row's, and a
+column that had been straight was ragged by one row in three. Reported as a screenshot with the
+misalignment drawn on it. The head now spans the whole card and the attachment hangs below, so
+nothing a pin happens to carry can move the clock again. The body text moved to `flex-start` in the
+same change, for the same reason one axis over: a 44pt tile was pushing a one-line body down, so
+text rows and attachment rows read as though they had been set differently.
+
+**And a pinned DOCUMENT still went nowhere**, which was recorded as a known gap that morning and
+did not survive being looked at: a pinned file printed its own name and did nothing, while the
+identical message a scroll away opened it. It now opens from both pin surfaces, through the
+`openDocument` that the chat bubble already calls - so it is the second caller of one
+implementation rather than a second copy, which matters because the rule that iOS reads a file's
+type from its extension alone is subtle enough that a reimplementation would get it wrong and
+produce a file that opens as nothing. The Highlights row draws a file tile, and the strip's
+accessibility label says the filename rather than "document", because that is what somebody is
+looking for when several are pinned.
+
+**The test that closed the gap was the one written to fail.** The photo change left an
+expectation asserting a document goes nowhere, with a note saying the day the gap closed this test
+would be what failed and asked to be rewritten. That is exactly what happened, hours later, which
+is the argument for writing that kind of note at all.
+
+Proved in a running app on an agent stack: three pins of different kinds in one list, all three
+clocks measured to the same pixel, the document opened from the strip and from Highlights with
+neither surface navigating away, and the photograph and the inert text pin re-checked alongside
+them. Full gate green at 2,188 tests.
+
+---
+
 ## 2026-08-29 - The one pin whose content was the thing pinned, and could not be looked at
 
 **A pinned photograph went nowhere from either surface that shows pins.** The strip floating over

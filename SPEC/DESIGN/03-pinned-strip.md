@@ -90,9 +90,11 @@ screen that is *entirely* notices would be describing itself.
 
 Each card is a button whose label **names its actual destination**, which differs by what is
 pinned - a card announcing "in Highlights" when it opens a poll describes the old behaviour to the
-one person who cannot see where they landed. A photograph is a third case and needs a third label:
-it opens full screen without going anywhere, so a label naming a destination would be wrong about
-that too. The dismiss control is a separate button and says so.
+one person who cannot see where they landed. A photograph and a document are the third and fourth
+cases and each needs its own: both open where you already are rather than going anywhere, so a
+label naming a destination would be wrong about them too, and a document's says the **filename**,
+which is the thing somebody is looking for when several are pinned. The dismiss control is a
+separate button and says so.
 
 Hidden, the strip must not intercept touches meant for the conversation behind it. The guard sits
 on the clip rather than the scroller, so a half-collapsed strip is untappable for the whole

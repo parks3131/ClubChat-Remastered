@@ -117,14 +117,46 @@ describe('everything else stays view-only', () => {
     expect(highlightAction(message({ type: 'announcement' }))).toBeNull();
   });
 
+});
+
+describe('a pinned document opens the document', () => {
   /*
-   * A document is not covered yet. Chat hands one to the share sheet; neither pin surface does,
-   * and that is a known gap rather than a decision - recorded here so the day it is closed, this
-   * expectation is the thing that fails and asks to be rewritten.
+   * Closed on 2026-08-29. The expectation that stood here said a document goes nowhere, and it
+   * carried a note that the day the gap closed, this test would be what failed and asked to be
+   * rewritten. That is what happened, which is the whole reason the note was worth writing.
    */
-  it('does nothing for a document, which is a gap and not a rule', () => {
+  it('answers with the media id and the name, which iOS reads the type from', () => {
     expect(
       highlightAction(message({ type: 'document', mediaId: MEDIA, documentName: 'route.pdf' })),
+    ).toEqual({ kind: 'document', mediaId: MEDIA, name: 'route.pdf' });
+  });
+
+  /*
+   * A name is nullable on the envelope, and `openDocument` already answers for that - it falls
+   * back to a generated filename with the right extension for the mime. So the action carries
+   * null through rather than inventing a name here, which would be a second answer to a question
+   * `cacheFileName` already answers once.
+   */
+  it('carries a null name through rather than inventing one', () => {
+    expect(
+      highlightAction(message({ type: 'document', mediaId: MEDIA, documentName: null })),
+    ).toEqual({ kind: 'document', mediaId: MEDIA, name: null });
+  });
+
+  it('does nothing when there are no bytes, exactly as for a photo', () => {
+    expect(highlightAction(message({ type: 'document', mediaId: null }))).toBeNull();
+  });
+
+  it('refuses a deleted document, whose bytes are gone', () => {
+    expect(
+      highlightAction(
+        message({
+          type: 'document',
+          mediaId: MEDIA,
+          documentName: 'route.pdf',
+          deletedAt: '2026-08-29T10:00:00.000Z',
+        }),
+      ),
     ).toBeNull();
   });
 });

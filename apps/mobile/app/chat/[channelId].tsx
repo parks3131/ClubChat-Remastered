@@ -782,6 +782,7 @@ function pinnedActionLabel(message: MessageEnvelope): string {
   const action = highlightAction(message);
   if (action === null) return "Open this pinned message in Highlights";
   if (action.kind === "photo") return "Open this pinned photo, full screen";
+  if (action.kind === "document") return `Open ${action.name ?? "this pinned document"}`;
   return `Open the pinned ${message.type}`;
 }
 
@@ -3446,6 +3447,12 @@ export default function ChatScreen() {
    * were. It is the same viewer a photo bubble opens, so a photograph looks the same wherever it
    * is tapped.
    *
+   * **A DOCUMENT followed the same day, for the same reason and with the same shape.** It was
+   * left out of the photo change, and the asymmetry did not survive contact with the phone: a
+   * pinned file printed its own name and did nothing, while the identical bubble a scroll away
+   * opened it. It goes through this screen's `openDocumentMessage`, so the tile spinner and the
+   * failure notice are the ones a document bubble already has rather than a second pair.
+   *
    * The decision comes from `highlightAction`, shared with the Highlights list, because
    * `DESIGN/03` requires the two surfaces that show pins to send one to the same destination -
    * and the route half of it still comes from `hrefForCard`, which builds the same target a
@@ -3457,13 +3464,23 @@ export default function ChatScreen() {
    */
   const openPinned = (message: MessageEnvelope) => {
     const action = highlightAction(message);
-    // The fallback, and the honest destination for a photo whose upload never finished.
+    // The fallback, and the honest destination for an attachment whose upload never finished.
     if (action === null) {
       router.push(`/channels/${channelId}/highlights`);
       return;
     }
     if (action.kind === "photo") {
       openPhoto(message);
+      return;
+    }
+    /*
+     * A file, handed to the same opener the bubble uses - full screen inside the app where the
+     * native previewer exists, the share sheet where it does not, and a download on the web. The
+     * spinner and the failure notice belong to `openDocumentMessage`, which already owns both, so
+     * the strip inherits them by calling it rather than by repeating them here.
+     */
+    if (action.kind === "document") {
+      void openDocumentMessage(message);
       return;
     }
     router.push(action.href);

@@ -28,8 +28,15 @@
  * different header treatment one tap away reads as a different app.
  */
 
-import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -41,11 +48,13 @@ import { useSession } from '../../../../../src/chat-provider.tsx';
 import { formatClock } from '../../../../../src/dates.ts';
 import { highlightAction } from '../../../../../src/highlight-action.ts';
 import { RemoteImage } from '../../../../../src/media-bubble.tsx';
+import { openDocument } from '../../../../../src/open-document.ts';
 import { PhotoViewer } from '../../../../../src/photo-viewer.tsx';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import { useGoBack } from '../../../../../src/nav.tsx';
 import { Avatar, DataScreen, EmptyState, Tabs } from '../../../../../src/ui.tsx';
 import { useLoad } from '../../../../../src/use-load.ts';
+import { useNotice } from '../../../../../src/use-notice.ts';
 
 type Tab = 'pinned' | 'announcements' | 'reports';
 
@@ -79,9 +88,47 @@ export default function HighlightsScreen() {
    * one list, and this is the third tab of a screen whose Pinned list has no cap on its length.
    */
   const [viewingPhoto, setViewingPhoto] = useState<MessageEnvelope | null>(null);
+  /**
+   * The document being staged, by `seq`, or null.
+   *
+   * A `seq` rather than a boolean, because the spinner belongs on the tile that was tapped. A
+   * screen-wide busy flag would put one on every document in the list, which says the app is
+   * working on all of them.
+   */
+  const [openingSeq, setOpeningSeq] = useState<number | null>(null);
+  /** Kept out of state: a second tap while the first download runs must not start a second one. */
+  const openingDocument = useRef(false);
+  /** What the last action said back. Clears itself; see `useNotice`. */
+  const [notice, setNotice] = useNotice();
   const router = useRouter();
   const { userId } = useSession();
   const insets = useSafeAreaInsets();
+
+  /**
+   * Open a pinned document.
+   *
+   * The staging, the preview and the web download all live in `openDocument`, which chat already
+   * calls - so this is the second caller of one implementation rather than a second copy of it.
+   * That matters more here than it looks: the rule about iOS reading a file's type from its
+   * extension is subtle enough that a reimplementation would get it wrong and produce a file that
+   * opens as nothing.
+   */
+  const openDocumentMessage = async (message: MessageEnvelope) => {
+    if (message.mediaId === null || openingDocument.current) return;
+    openingDocument.current = true;
+    setOpeningSeq(message.seq);
+    try {
+      const said = await openDocument(message.mediaId, message.documentName);
+      if (said.length > 0) setNotice(said);
+    } catch {
+      // Losing access to the conversation is a legitimate reason for this to fail, so it is not
+      // necessarily an error - but somebody tapped a file and is waiting, so it is never silent.
+      setNotice('That document could not be opened. Try again.');
+    } finally {
+      openingDocument.current = false;
+      setOpeningSeq(null);
+    }
+  };
   // Highlights is a view over a conversation, so back always returns to that chat.
   const goBack = useGoBack(`/chat/${channelId}`);
 
@@ -155,6 +202,16 @@ export default function HighlightsScreen() {
       >
         <Tabs tabs={tabs} active={tab} onChange={setTab} variant="pill" />
 
+        {/*
+          The one thing a tile cannot say: a refusal, or a failure. The wait itself is reported on
+          the tapped tile instead, which is chat's rule for the same action.
+        */}
+        {notice !== null && (
+          <Text style={styles.notice} accessibilityLiveRegion="polite">
+            {notice}
+          </Text>
+        )}
+
         {tab === 'pinned' && (
           <DataScreen
             load={pinned}
@@ -168,7 +225,9 @@ export default function HighlightsScreen() {
                     key={message.seq}
                     message={message}
                     pinned
+                    opening={openingSeq === message.seq}
                     onOpenPhoto={setViewingPhoto}
+                    onOpenDocument={(m) => void openDocumentMessage(m)}
                   />
                 ))}
               </View>
@@ -194,7 +253,9 @@ export default function HighlightsScreen() {
                     key={message.seq}
                     message={message}
                     pinned={false}
+                    opening={openingSeq === message.seq}
                     onOpenPhoto={setViewingPhoto}
+                    onOpenDocument={(m) => void openDocumentMessage(m)}
                   />
                 ))}
               </View>
@@ -323,12 +384,17 @@ export default function HighlightsScreen() {
 function HighlightRow({
   message,
   pinned,
+  opening,
   onOpenPhoto,
+  onOpenDocument,
 }: {
   message: MessageEnvelope;
   pinned: boolean;
+  /** This row's document is being staged. At most one row is ever true. */
+  opening: boolean;
   /** Handed the whole envelope, because the viewer's header and its menu both need more than an id. */
   onOpenPhoto: (message: MessageEnvelope) => void;
+  onOpenDocument: (message: MessageEnvelope) => void;
 }) {
   const router = useRouter();
   const name = message.senderName ?? 'Deleted member';
@@ -336,41 +402,61 @@ function HighlightRow({
   const action = highlightAction(message);
 
   const body = (
-    /*
-      A row rather than the column it used to be, so a photograph can show itself on the right.
-      `rowText` takes the flex, so a long line wraps against the thumbnail instead of pushing it
-      off the card.
-    */
-    <View style={styles.rowInner}>
-      <View style={styles.rowText}>
-        <View style={styles.rowHead}>
-          <Text style={styles.sender}>{name}</Text>
-          {pinned && <MaterialIcons name="push-pin" size={12} color={color.accent} />}
-          <Text style={styles.time}>{formatClock(message.createdAt)}</Text>
-        </View>
+    <>
+      {/*
+        **The head spans the whole card, so the clock lands on the same edge in every row.**
+
+        > It did not, briefly. The thumbnail was added as a sibling of this block on 2026-08-29,
+        > which shortened it - so a photo row's time sat a thumbnail's width to the left of every
+        > other row's, and a column that had been straight was suddenly ragged by one row in
+        > three. Reported off the phone the same day with the misalignment drawn on it.
+
+        The attachment moved down into the body line instead. Nothing here is allowed to shorten
+        this row again: whatever a pin turns out to carry, the clock keeps the edge.
+      */}
+      <View style={styles.rowHead}>
+        <Text style={styles.sender}>{name}</Text>
+        {pinned && <MaterialIcons name="push-pin" size={12} color={color.accent} />}
+        <Text style={styles.time}>{formatClock(message.createdAt)}</Text>
+      </View>
+
+      <View style={styles.rowBottom}>
         <Text style={message.deletedAt !== null ? styles.deleted : styles.body}>
           {message.deletedAt !== null
             ? 'This message was deleted'
             : (message.body ?? preview(message))}
         </Text>
-      </View>
-      {/*
-        The picture itself, at the `thumb` variant - the same one the gallery grid and the reply
-        quote ask for, so a photograph already seen anywhere in the app costs nothing here.
+        {/*
+          What the pin is carrying, under its own clock rather than beside it.
 
-        Keyed off `action` rather than off `message.type`, so the row can never show a thumbnail
-        it would refuse to open: a pin whose upload never finished has no `mediaId`, and the one
-        check answers both questions at once.
-      */}
-      {action?.kind === 'photo' && (
-        <RemoteImage
-          mediaId={action.mediaId}
-          variant="thumb"
-          style={styles.thumb}
-          resizeMode="cover"
-        />
-      )}
-    </View>
+          Keyed off `action` rather than off `message.type`, so the row can never show an
+          attachment it would refuse to open: a pin whose upload never finished has no `mediaId`,
+          and the one check answers both questions at once.
+        */}
+        {action?.kind === 'photo' && (
+          <RemoteImage
+            mediaId={action.mediaId}
+            variant="thumb"
+            style={styles.tile}
+            resizeMode="cover"
+          />
+        )}
+        {action?.kind === 'document' && (
+          <View style={styles.tile}>
+            {/*
+              A spinner where the icon was, because staging a file is a download and the person
+              who tapped it is waiting. Chat answers on the tapped tile for the same reason: a
+              banner at the top of a list is not the thing you touched replying to you.
+            */}
+            {opening ? (
+              <ActivityIndicator color={color.accent} />
+            ) : (
+              <MaterialIcons name="description" size={22} color={color.textSecondary} />
+            )}
+          </View>
+        )}
+      </View>
+    </>
   );
 
   return (
@@ -393,14 +479,18 @@ function HighlightRow({
         */
         <Pressable
           style={({ pressed }) => [styles.rowBody, pressed && styles.rowBodyPressed]}
-          onPress={() =>
-            action.kind === 'photo' ? onOpenPhoto(message) : router.push(action.href)
-          }
+          onPress={() => {
+            if (action.kind === 'photo') return onOpenPhoto(message);
+            if (action.kind === 'document') return onOpenDocument(message);
+            return router.push(action.href);
+          }}
           accessibilityRole="button"
           accessibilityLabel={
             action.kind === 'photo'
               ? `Open this photo from ${name}, full screen`
-              : `Open the pinned ${message.type}`
+              : action.kind === 'document'
+                ? `Open ${action.name ?? 'this document'}`
+                : `Open the pinned ${message.type}`
           }
         >
           {body}
@@ -594,10 +684,17 @@ const styles = StyleSheet.create({
     borderColor: color.hairline,
     padding: space.md,
   },
-  rowBody: { flex: 1 },
-  /** The pressable's contents: the words, and a photograph's thumbnail beside them. */
-  rowInner: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  rowText: { flex: 1, gap: space.xs },
+  rowBody: { flex: 1, gap: space.xs },
+  /*
+   * The body line: the words, and whatever the pin is carrying, at the trailing edge.
+   *
+   * **`flex-start`, so the words begin at the same height in every row.** Centre or `flex-end`
+   * both let the 44pt tile push a one-line body down, and a Pinned list mixing kinds then reads
+   * as though the text rows and the attachment rows were set differently - which is the same
+   * complaint, one axis over, as the clock that started this. The tile hangs below the line
+   * instead; it is the thing that varies, so it is the thing that should move.
+   */
+  rowBottom: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm },
   /*
    * Square, at the 44pt an iOS touch target is - small enough to stay a label for the row rather
    * than becoming the row's content, which is the gallery's job and not this list's.
@@ -607,12 +704,15 @@ const styles = StyleSheet.create({
    * arrive, so the row does not reflow when they land. A photo bubble in the conversation had
    * exactly that defect on 2026-08-27, waiting in a hardcoded square and then arriving portrait.
    */
-  thumb: {
+  tile: {
     width: 44,
     height: 44,
     borderRadius: radius.sm,
     backgroundColor: color.cardSunken,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  notice: { ...type.bodySmall, color: color.textSecondary, textAlign: 'center', marginTop: space.sm },
   /*
    * Only a card row is pressable, so this is the one place the wash appears.
    *
@@ -631,8 +731,8 @@ const styles = StyleSheet.create({
   sender: { ...type.headline, fontSize: 14, color: color.textPrimary },
   reportedBy: { ...type.label, color: color.error, textTransform: 'none' },
   time: { ...type.label, color: color.textSecondary, marginLeft: 'auto', textTransform: 'none' },
-  body: { ...type.body, color: color.textPrimary },
-  deleted: { ...type.body, color: color.textSecondary, fontStyle: 'italic' },
+  body: { ...type.body, color: color.textPrimary, flex: 1 },
+  deleted: { ...type.body, color: color.textSecondary, fontStyle: 'italic', flex: 1 },
 
   reportActions: { flexDirection: 'row', alignItems: 'center', gap: space.md, flexWrap: 'wrap' },
   confirm: { ...type.bodySmall, color: color.textPrimary, flex: 1 },

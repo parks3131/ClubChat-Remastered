@@ -152,7 +152,8 @@ second is a feature the whole product would have to bend around. Threads remain 
 
    **Tapping a pinned notice opens what the pin is about, and that is not always the message.**
    A poll, event or meeting card opens that poll, event or meeting; **a photograph opens full
-   screen where you are**; anything else opens Highlights. It never jumps back into the
+   screen where you are, and a document opens in the phone's own file viewer**; anything else
+   opens Highlights. It never jumps back into the
    conversation. **The same rule governs a row in Highlights**, which is the other surface that
    lists pins - see the Highlights section.
 
@@ -180,8 +181,11 @@ second is a feature the whole product would have to bend around. Threads remain 
    back to what was being said about the picture stays available as a deliberate menu step inside
    the viewer, as it already is from the Gallery.
 
-   A pinned **document** is not covered and still opens Highlights. That is a known gap rather
-   than a rule.
+   *Extended again the same day, to the document.* It was left out of the photograph change and
+   the omission did not survive contact with a phone: a pinned file printed its own name and did
+   nothing, while the identical message a scroll away in the conversation opened it. A document
+   now opens the same way it does from a chat bubble - full screen in the phone's own file viewer,
+   which renders every accepted type without this app knowing anything about any of them.
 
    Two consequences that are not optional:
 
@@ -432,18 +436,25 @@ A view of chat, not a feed of its own. Tabs: **Pinned**, **Announcements**, and 
 **Reports**.
 
 **A row for a poll, event or meeting card opens that object, a row for a photograph opens the
-photograph, and every other row is view-only**, and the avatar opens the sender. This is rule 7's
+photograph, a row for a document opens the document, and every other row is view-only**, and the
+avatar opens the sender. This is rule 7's
 destination rule applied to the second surface that shows pins, and it has to be, for a reason
 stronger than consistency: **the strip shows only the four most recent pins and this list shows
 all of them**, so a fifth pinned poll is reachable here and nowhere else. A row that displayed it
 without opening it would be the one surface that could show somebody a poll while giving them no
 way to reach it.
 
-That argument was written about cards and applies harder to a photograph. A poll card at least
+That argument was written about cards and applies harder to an attachment. A poll card at least
 *names* a poll somebody could go and find; a row reading "Photo" names nothing at all. **A pinned
-photograph also draws its own thumbnail here**, so the list says what it is holding rather than
-describing it in a word, and the picture opens full screen over the list rather than navigating
-anywhere - a list with no cap on its length should not lose your place to show you one picture.
+photograph draws its own thumbnail here and a pinned document draws a file tile**, so the list
+says what it is holding rather than describing it in a word. Neither navigates: the picture opens
+full screen over the list and the file opens in the phone's own viewer, because a list with no cap
+on its length should not lose your place to show you one thing.
+
+**Every row's clock sits on the same right-hand edge**, whatever the row is carrying. The
+attachment hangs below the clock rather than beside it. *(For one afternoon on 2026-08-29 it sat
+beside it, which pushed a photo row's time inward and left a column that had been straight ragged
+by one row in three. Reported off the phone with the misalignment drawn on the screenshot.)*
 
 An ordinary pinned message still goes nowhere from here, and that is not an omission - Highlights
 is where rule 7 sends it, so this screen is its destination rather than a waypoint. Nothing jumps
@@ -507,6 +518,10 @@ it, and the reports it would contain belong to the platform moderation queue.
       have fallen out of the four-item strip.
 - [ ] A pinned photograph in **Highlights** shows its own thumbnail rather than the word "Photo"
       alone, and a pin whose upload never finished shows neither and stays view-only.
+- [ ] Tapping a pinned **document** opens it, from the strip and from Highlights, without leaving
+      the surface it was tapped from.
+- [ ] Every row in the Pinned list ends its clock on the same edge, whether it carries a
+      photograph, a document or only words.
 - [ ] Deleting a poll removes its pinned notice, **including on a device that was offline when it
       was deleted** - the case that only appears after a reconnect.
 - [ ] Highlights lists pinned and announcement messages.
