@@ -994,9 +994,23 @@ export const channelApi = {
       body: {},
     }),
 
-  /** Highlights: over the whole channel, so a pin past the loaded page is still found. */
-  pinned: (channelId: string, before?: number) =>
-    apiFetch<HighlightPage>(`/channels/${channelId}/pinned${query({ before })}`),
+  /**
+   * Highlights: over the whole channel, so a pin past the loaded page is still found.
+   *
+   * > **This took a `before?: number` and sent `?before=<seq>` until 2026-08-29, which the server
+   * > answers with a 400.** `PinnedQuery` is `.strict()` and knows only `beforePinnedAt` and
+   * > `limit`. It never fired because the one caller passes no cursor - a dead parameter that was
+   * > a broken request the first time anybody used it as documented.
+   *
+   * **The two lines below are deliberately not symmetric, and that is the whole trap.** Pins are
+   * ordered by when they were PINNED and announcements by when they were SAID, so a `seq` cursor
+   * cannot name a position in the pinned list at all - it would return a page from somewhere else
+   * in the ordering, which looks like data loss rather than like a bug. `announcements` keeps its
+   * `before` because `seq` is the currency it actually orders by.
+   *
+   * Paging the pinned list means adding `beforePinnedAt` here and a caller for it, together.
+   */
+  pinned: (channelId: string) => apiFetch<HighlightPage>(`/channels/${channelId}/pinned`),
 
   announcements: (channelId: string, before?: number) =>
     apiFetch<HighlightPage>(`/channels/${channelId}/announcements${query({ before })}`),
