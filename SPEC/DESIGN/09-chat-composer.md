@@ -66,6 +66,20 @@ bottom of the screen is made of.
    Promoted to [Engineering pitfalls](../TECH/14-engineering-pitfalls.md) entry 23, because it
    binds anything that moves with the keyboard rather than this bar alone.
 
+9. **Dragging the conversation down INTO the keyboard takes the keyboard with it** *(2026-08-29)*.
+   The keyboard follows the finger and is gone when it is released; a drag that stays above the
+   keyboard's top edge just scrolls and leaves it up. Asked for against WhatsApp, and described
+   from the phone as the two halves it is: "if we drag down near the keyboard the keyboard goes
+   down, and if we drag down but above [that line] the keyboard will be there."
+
+   **The threshold is UIKit's, not ours** - `keyboardDismissMode="interactive"` on the message
+   list, where the keyboard's own top edge is the line and the touch position decides. Explicitly
+   **not** `on-drag`, which dismisses on any drag at all and so takes the keyboard away from
+   somebody who only wanted to look back two messages while composing.
+
+   Chat alone. The search screens scroll under a keyboard too, and were deliberately left out:
+   this is the one surface where somebody reads and types in the same breath.
+
 ## States
 
 | State | Treatment |

@@ -167,6 +167,27 @@ removed, a menu moved to the bottom edge, Mute added to it, swiping between phot
 regression found by the founder and fixed inside the hour. Every one reported from a phone and
 returned to that phone the same afternoon.
 
+**A sixth change closed the day: drag the conversation down into the keyboard and the keyboard goes
+with it.** Asked for against WhatsApp, with a screenshot of its chat and a line drawn across it, and
+described precisely enough to implement from: near the keyboard it dismisses, above that line it
+just scrolls. That is `keyboardDismissMode="interactive"` and specifically not `on-drag`, which
+would take the keyboard away from somebody who only wanted to look back two messages mid-sentence.
+Chat alone, by his answer to the scope question; the search screens scroll under a keyboard too and
+were left out.
+
+**The `inverted` list was the risk worth naming before promising it**, and it turned out not to
+bite: an inverted list is a `scaleY(-1)` transform over a real scroll view, so a downward finger is
+an upward scroll underneath, and it works because UIKit keys dismissal off where the TOUCH is
+rather than which way the content moves. Proved both halves on the Simulator - dragged from high in
+the conversation and watched the keyboard stay, dragged into it and watched it leave.
+
+**Two things about driving the Simulator came out of that hour and are worth the next agent's
+time.** The software keyboard does not appear at all while the hardware keyboard is connected, so
+the first attempt looked like a tap that missed. And a slow synthetic drag is a LONG PRESS: the
+14-step version opened a message menu and left the app on a club hub, which is the hazard already
+recorded against scrolling and now recorded against this too. The messages were checked in the
+database afterwards - seven rows, none deleted - because that menu has Delete in it.
+
 ---
 
 ## 2026-08-29 - The same argument, finished: the document, and a clock that stopped lining up

@@ -4313,6 +4313,30 @@ export default function ChatScreen() {
           keyExtractor={keyExtractor}
           contentContainerStyle={styles.list}
           /*
+            Drag the conversation down INTO the keyboard and the keyboard goes with your finger.
+
+            Asked for from the phone on 2026-08-29 against WhatsApp, and described exactly:
+            "if we drag down near the keyboard the keyboard goes down, and if we drag down but
+            above [that line] the keyboard will be there." That is `interactive` and specifically
+            **not** `on-drag`: the latter dismisses on any drag at all, which takes the keyboard
+            away from somebody who only wanted to look up two messages while typing. The line the
+            founder drew on the screenshot is the top of the keyboard, and it is UIKit's own
+            threshold rather than anything this app has to compute - the keyboard follows the
+            touch once the touch reaches it.
+
+            Chat only, by his answer, and the reason it is worth the whole gesture here and not on
+            the search screens is that this is the one place somebody types and reads in the same
+            breath.
+
+            **The `inverted` above is the thing to watch if this ever stops working.** An inverted
+            list is a `scaleY(-1)` transform over a real scroll view, so a downward finger is an
+            upward scroll underneath - it works because UIKit keys dismissal off where the TOUCH
+            is rather than which way the content is moving. Proved on the Simulator both ways
+            before it shipped: dragged from just above the keyboard and watched it leave, then
+            dragged from high in the conversation and watched it stay.
+          */
+          keyboardDismissMode="interactive"
+          /*
             **Suspended while a jump is in flight**, because the two want opposite things.
 
             > **This broke tapping a reply's photo to reach the original**, reported the same
