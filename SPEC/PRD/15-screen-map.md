@@ -230,7 +230,7 @@ New message             (search over people the viewer shares a club with; no gl
       └─ DM chat        ← the same chat screen, not a fork
          ├─ Chat info   ← the header NAME opens this
          │  ├─ Shared clubs      (listed, each opening that club)
-         │  ├─ Gallery           (this conversation's photos)
+         │  ├─ Gallery           (this conversation's photos, swipe between them full screen)
          │  └─ ⋯ menu: Pin · Mute · Block / Unblock · Delete chat
          ├─ Member profile card
          └─ header options: Mute · Block / Unblock

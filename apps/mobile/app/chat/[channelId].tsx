@@ -3054,6 +3054,46 @@ export default function ChatScreen() {
   const editing = useMemo(() => messageAt(rows, editingSeq), [rows, editingSeq]);
   const editingIsLive = editing !== null && editing.deletedAt === null;
 
+  /**
+   * Every photograph in the conversation as it is currently loaded, for the viewer to swipe.
+   *
+   * **`rows`, not `invertedRows`, and the direction is the whole reason.** The viewer pages left
+   * to right, so it has to be handed the order the reader was just looking at: here that is the
+   * conversation itself, oldest at the top, which makes a swipe rightwards move DOWN the thread
+   * towards newer photos. The gallery hands over its own grid order for the same reason and gets
+   * the opposite direction out of it, which is correct in both places - "the next one" means the
+   * next one in the list you came from.
+   *
+   * **The list is what chat has loaded, and it grows by scrolling the conversation rather than by
+   * paging here.** Chat's window is a window on purpose; a viewer that quietly fetched the rest of
+   * the channel's history to fill itself would be a second, competing pagination over the same
+   * log. Somebody who wants every photograph at once has the Gallery, one tap up.
+   *
+   * Tombstones and documents are excluded rather than skipped past: `type === 'photo'` is the same
+   * test the bubble draws from, so this cannot drift into offering a document as a picture.
+   */
+  const conversationPhotos = useMemo(
+    () =>
+      rows.flatMap((row) =>
+        row.kind === "message" &&
+        row.message.type === "photo" &&
+        row.message.mediaId !== null &&
+        row.message.deletedAt === null
+          ? [
+              {
+                mediaId: row.message.mediaId,
+                seq: row.message.seq,
+                senderId: row.message.senderId,
+                senderName: row.message.senderName,
+                senderImage: row.message.senderImage,
+                createdAt: row.message.createdAt,
+              },
+            ]
+          : [],
+      ),
+    [rows],
+  );
+
   /*
    * The `@` list's contents, derived from the draft and the caret rather than held in state.
    *
@@ -4779,35 +4819,57 @@ export default function ChatScreen() {
       */}
       {viewingPhoto !== null && viewingPhoto.mediaId !== null && (
         <PhotoViewer
-          mediaId={viewingPhoto.mediaId}
-          senderName={viewingPhoto.senderName}
-          senderImage={viewingPhoto.senderImage}
-          takenAt={viewingPhoto.createdAt}
-          contextAction={{
+          /*
+            The conversation's photographs, with the tapped one as the starting page.
+
+            `photoIndexOf` falls back to a list of just this photo when the tapped one is not in
+            the derived list. That should not happen - you tapped it, so it is loaded - but the two
+            are derived separately and a viewer opening on the WRONG picture is a far worse failure
+            than one that simply does not swipe.
+          */
+          {...(() => {
+            const at = conversationPhotos.findIndex((p) => p.seq === viewingPhoto.seq);
+            return at >= 0
+              ? { photos: conversationPhotos, initialIndex: at }
+              : {
+                  photos: [
+                    {
+                      mediaId: viewingPhoto.mediaId,
+                      seq: viewingPhoto.seq,
+                      senderId: viewingPhoto.senderId,
+                      senderName: viewingPhoto.senderName,
+                      senderImage: viewingPhoto.senderImage,
+                      createdAt: viewingPhoto.createdAt,
+                    },
+                  ],
+                  initialIndex: 0,
+                };
+          })()}
+          contextAction={(photo) => ({
             label: "Reply",
             icon: "reply",
             onPress: () => {
-              setReplyingToSeq(viewingPhoto.seq);
+              setReplyingToSeq(photo.seq);
               setViewingPhoto(null);
             },
-          }}
-          {...(viewingPhoto.senderId !== userId && meta?.canReport === true
-            ? {
-                report: {
+          })}
+          report={(photo) =>
+            photo.senderId !== userId && meta?.canReport === true
+              ? {
                   body:
                     meta?.scope === "dm"
                       ? // No club admin ever sees the contents of a DM, so say where it goes.
                         "This photo goes to ClubChat moderators, who can read the messages around it. The other person is not told."
                       : "This photo goes to the admins of this space, who can read the messages around it. The sender is not told.",
                   run: async () => {
-                    const result = await channelApi.report(channelId!, viewingPhoto.seq);
+                    const result = await channelApi.report(channelId!, photo.seq);
                     return result.alreadyReported
                       ? "You already reported this photo."
                       : "Reported. The sender is not told.";
                   },
-                },
-              }
-            : {})}
+                }
+              : null
+          }
           onClose={() => setViewingPhoto(null)}
         />
       )}

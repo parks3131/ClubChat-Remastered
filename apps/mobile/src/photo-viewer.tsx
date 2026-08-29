@@ -9,6 +9,31 @@
  *
  * ---
  *
+ * **It shows a LIST and an index into it, not one photograph, and that is the whole shape of the
+ * component.** Asked for from the phone on 2026-08-29: "we should be able to swipe and slide those
+ * pictures, we don't wanna go back and click the other one to see it." Every caller already had a
+ * list in its hand - the gallery its grid, chat its loaded conversation - and was throwing all but
+ * one entry away at the moment of opening.
+ *
+ * Two consequences the callers have to honour, and both are ways this goes subtly wrong:
+ *
+ *  - **Everything in the chrome belongs to the photo you are ON, not the one you opened.** The
+ *    face, the name and the date are read from the current entry, and `contextAction` and `report`
+ *    are FUNCTIONS OF IT rather than fixed objects. A "Show in chat" that still pointed at the
+ *    photo you opened three swipes ago would be the exact bug this shape exists to prevent, and it
+ *    is the kind that looks fine until somebody swipes.
+ *  - **A one-entry list is the old behaviour**, with nothing to swipe to. That is what Highlights
+ *    passes: its strip is a mix of photographs, documents and text, so paging within it would
+ *    either skip the non-photos or stop dead at them.
+ *
+ * **A `FlatList` rather than the `ScrollView` the news carousel uses**, which is the one place this
+ * deliberately does not mirror the closest existing feature. That carousel holds three photos at a
+ * post's width; a gallery holds sixty at `display` size, and a `ScrollView` mounts every child at
+ * once. Windowed to the neighbours, so swiping is instant in both directions and the other
+ * fifty-seven are never decoded.
+ *
+ * ---
+ *
  * **Saving downloads the `original`, never the `display` variant, and that is not a quality
  * preference.** `derive.ts` writes the derived variants as WebP, and iOS decides what it is being
  * handed from the file extension alone: `createAsset` throws `EmptyFileExtensionException` for a
@@ -21,9 +46,10 @@
  * rather than two, and a second look at the same photo re-uses what is already on disk.
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   Platform,
   Pressable,
   ScrollView,
@@ -31,6 +57,8 @@ import {
   Text,
   View,
   useWindowDimensions,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { File, Paths } from 'expo-file-system';
@@ -43,6 +71,24 @@ import { Avatar, ConfirmDialog } from './ui.tsx';
 import { useNotice } from './use-notice.ts';
 
 type MaterialIconName = React.ComponentProps<typeof MaterialIcons>['name'];
+
+/**
+ * One photograph in the viewer's list.
+ *
+ * Deliberately the intersection of what a `GalleryEntry` and a `MessageEnvelope` both already
+ * carry, so neither caller has to invent a field or reshape a read. `seq` is here because both
+ * `contextAction` and `report` are about the MESSAGE the photo arrived in rather than the media.
+ */
+export type PhotoViewerPhoto = {
+  mediaId: string;
+  seq: number;
+  senderId: string;
+  /** Null for a deleted account, which the header says rather than inventing a name. */
+  senderName: string | null;
+  senderImage: string | null;
+  /** ISO. Drawn as a date, not a time: a photo is remembered by the day it was taken. */
+  createdAt: string;
+};
 
 /** The one action that differs by where the viewer was opened from. */
 export type PhotoViewerContextAction = {
@@ -91,23 +137,33 @@ function extensionFor(mime: string): string {
 }
 
 export function PhotoViewer({
-  mediaId,
-  senderName,
-  senderImage,
-  takenAt,
+  photos,
+  initialIndex,
   contextAction,
   report,
+  onEndReached,
   onClose,
 }: {
-  mediaId: string;
-  /** Null for a deleted account, which the header says rather than inventing a name. */
-  senderName: string | null;
-  senderImage: string | null;
-  /** ISO. Drawn as a date, not a time: a photo is remembered by the day it was taken. */
-  takenAt: string;
-  contextAction: PhotoViewerContextAction;
-  /** Absent on your own photo, and in Eboard chat, where reporting does not exist at all. */
-  report?: PhotoViewerReport | undefined;
+  /** Newest first, in whatever order the caller draws them. Never empty. */
+  photos: readonly PhotoViewerPhoto[];
+  /** Which one was tapped. Clamped, because a caller can hand a stale index across a reload. */
+  initialIndex: number;
+  /** Read for the photo currently on screen, never for the one that was opened. */
+  contextAction: (photo: PhotoViewerPhoto) => PhotoViewerContextAction;
+  /**
+   * Absent on your own photo, and in Eboard chat, where reporting does not exist at all.
+   *
+   * A function returning null rather than an optional object, because reportability is per photo:
+   * swiping from somebody else's picture onto your own has to take the item away.
+   */
+  report?: ((photo: PhotoViewerPhoto) => PhotoViewerReport | null) | undefined;
+  /**
+   * Reached the last photo in the list, so the caller may append more.
+   *
+   * Optional, and a caller with everything already loaded simply omits it. Chat does: its list is
+   * the conversation it has loaded, which grows by scrolling the conversation rather than here.
+   */
+  onEndReached?: (() => void) | undefined;
   onClose: () => void;
 }) {
   const insets = useSafeAreaInsets();
@@ -120,6 +176,71 @@ export function PhotoViewer({
   /** Set once Report is tapped, so it takes a second deliberate step - as it does in chat. */
   const [confirmingReport, setConfirmingReport] = useState(false);
 
+  const clamp = (i: number) => Math.max(0, Math.min(i, photos.length - 1));
+  const [index, setIndex] = useState(() => clamp(initialIndex));
+
+  /*
+   * The viewer's OWN box, measured, rather than the window's.
+   *
+   * > **A page sized to the window hangs off the bottom of the screen, and the photograph inside it
+   * > is centred on the part you cannot see.** This viewer is drawn inside a navigator screen, so
+   * > it starts below the navigation bar and has that much less height than the window - and a
+   * > `contain` fit centred in a box an inch taller than its container sits an inch too low, with a
+   * > dead band above it. Reported from the phone on 2026-08-29 as "lift it a bit up".
+   *
+   * Measured rather than derived from `useSafeAreaInsets` plus a guess at the header: the box knows
+   * its own size, and a screen that later gets a taller header or none at all keeps working.
+   */
+  const [frame, setFrame] = useState<{ width: number; height: number } | null>(null);
+  const pageWidth = frame?.width ?? width;
+  const pageHeight = frame?.height ?? height;
+
+  /*
+   * The photo the chrome is about.
+   *
+   * Falls back to the first entry rather than going undefined: `photos` can shrink under this
+   * component - the gallery reloads after a report - and a header that renders nothing for a
+   * frame is worse than one showing a neighbour.
+   */
+  const photo = photos[clamp(index)] ?? photos[0];
+
+  /*
+   * Swiping is a change of subject, so the chrome that belonged to the last photo goes.
+   *
+   * The menu, because it lists actions for a photo that is no longer on screen; the notice,
+   * because "Saved to your photos." floating over the NEXT picture is a claim about the wrong
+   * one. Keyed on the index rather than done in the scroll handler so it also covers a caller
+   * that moves the index itself.
+   */
+  useEffect(() => {
+    setMenuOpen(false);
+    setNotice(null);
+    // `setNotice` is stable; see `useNotice`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [index]);
+
+  const onMomentumEnd = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (pageWidth <= 0) return;
+      const next = Math.round(event.nativeEvent.contentOffset.x / pageWidth);
+      setIndex((current) => (current === next ? current : clamp(next)));
+      // `clamp` closes over `photos.length`, which is why this is not a bare setState.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [pageWidth, photos.length],
+  );
+
+  /*
+   * The type-level floor under "never empty", placed after the last hook so the early return
+   * cannot change the hook order.
+   *
+   * Every caller guards this already - the gallery on `entries.length`, chat and Highlights by
+   * only rendering the viewer when they hold a photo. Drawing nothing is the right answer to a
+   * list that should not exist: the alternative under `noUncheckedIndexedAccess` is a non-null
+   * assertion, which is the same promise made where nothing can check it.
+   */
+  if (photo === undefined) return null;
+
   /**
    * The photo on disk, downloaded once.
    *
@@ -127,8 +248,8 @@ export function PhotoViewer({
    * because both callers need to tell iOS what they are handing it.
    */
   const localCopy = async (): Promise<{ file: File; mime: string }> => {
-    const resolved = await resolveMedia(mediaId, 'original');
-    const target = new File(Paths.cache, `clubchat-${mediaId}${extensionFor(resolved.mime)}`);
+    const resolved = await resolveMedia(photo.mediaId, 'original');
+    const target = new File(Paths.cache, `clubchat-${photo.mediaId}${extensionFor(resolved.mime)}`);
     if (target.exists) return { file: target, mime: resolved.mime };
     const downloaded = await File.downloadFileAsync(resolved.url, target);
     return { file: downloaded, mime: resolved.mime };
@@ -185,12 +306,16 @@ export function PhotoViewer({
       return 'Saved to your photos.';
     });
 
+  // Read for THIS photo, every render, which is what keeps the menu honest across a swipe.
+  const action = contextAction(photo);
+  const reportable = report?.(photo) ?? null;
+
   const items: Array<{ label: string; icon: MaterialIconName; onPress: () => void }> = [
-    { label: contextAction.label, icon: contextAction.icon, onPress: contextAction.onPress },
+    { label: action.label, icon: action.icon, onPress: action.onPress },
     { label: 'Share Image', icon: 'ios-share', onPress: () => void share() },
     { label: 'Download', icon: 'file-download', onPress: () => void download() },
   ];
-  if (report !== undefined) {
+  if (reportable !== null) {
     items.push({
       label: 'Report',
       icon: 'flag',
@@ -202,37 +327,74 @@ export function PhotoViewer({
   }
 
   return (
-    <View style={styles.viewer}>
+    <View
+      style={styles.viewer}
+      onLayout={(event) => {
+        const { width: w, height: h } = event.nativeEvent.layout;
+        // Compared before setting, or every layout pass is a re-render and the pager resets.
+        setFrame((current) =>
+          current !== null && current.width === w && current.height === h
+            ? current
+            : { width: w, height: h },
+        );
+      }}
+    >
       {/*
-        Pinch to zoom, which on iOS is what a `ScrollView` with a zoom range gives for free. A
-        photograph opened full screen is opened to look closely at, and the alternative is a
-        gesture library for one screen.
+        One page per photograph, each page its own zoom surface.
+
+        `pagingEnabled` rather than a gesture library: the swipe wanted here is a page turn, which
+        is what a paging scroll view already is on both platforms. The zoom below is the same
+        `ScrollView` trick it has always been, now one per page - which also means the zoom on a
+        photo you have swiped away from is discarded with its page rather than following you.
+
+        `getItemLayout` is not an optimisation here, it is what makes `initialScrollIndex` work:
+        without it the list cannot know where page seventeen starts, and opening the seventeenth
+        photo lands on the first.
       */}
-      <ScrollView
-        style={styles.zoom}
-        contentContainerStyle={{ width, height }}
-        maximumZoomScale={4}
-        minimumZoomScale={1}
-        centerContent
+      <FlatList
+        data={photos}
+        keyExtractor={(item) => item.mediaId}
+        horizontal
+        pagingEnabled
         showsHorizontalScrollIndicator={false}
-        showsVerticalScrollIndicator={false}
-      >
-        {/*
-          `RemoteImage` rather than a bare `Image`: it owns the resolve, the spinner and the
-          honest "Photo unavailable", and it is the same component the bubble and the grid use -
-          so a member who loses access sees the same truthful thing in all three places.
-        */}
-        <RemoteImage
-          mediaId={mediaId}
-          variant="display"
-          style={styles.photo}
-          // Never crop: the viewer exists to show the whole photograph.
-          resizeMode="contain"
-          accessibilityLabel={
-            senderName === null ? 'Photo, full screen' : `Photo from ${senderName}, full screen`
-          }
-        />
-      </ScrollView>
+        initialScrollIndex={clamp(initialIndex)}
+        getItemLayout={(_, i) => ({ length: pageWidth, offset: pageWidth * i, index: i })}
+        onMomentumScrollEnd={onMomentumEnd}
+        // The neighbours, so a swipe in either direction is instant and nothing else is decoded.
+        windowSize={3}
+        initialNumToRender={1}
+        maxToRenderPerBatch={2}
+        {...(onEndReached ? { onEndReached, onEndReachedThreshold: 0.5 } : {})}
+        renderItem={({ item }) => (
+          <ScrollView
+            style={{ width: pageWidth, height: pageHeight }}
+            contentContainerStyle={{ width: pageWidth, height: pageHeight }}
+            maximumZoomScale={4}
+            minimumZoomScale={1}
+            centerContent
+            showsHorizontalScrollIndicator={false}
+            showsVerticalScrollIndicator={false}
+          >
+            {/*
+              `RemoteImage` rather than a bare `Image`: it owns the resolve, the spinner and the
+              honest "Photo unavailable", and it is the same component the bubble and the grid use -
+              so a member who loses access sees the same truthful thing in all three places.
+            */}
+            <RemoteImage
+              mediaId={item.mediaId}
+              variant="display"
+              style={styles.photo}
+              // Never crop: the viewer exists to show the whole photograph.
+              resizeMode="contain"
+              accessibilityLabel={
+                item.senderName === null
+                  ? 'Photo, full screen'
+                  : `Photo from ${item.senderName}, full screen`
+              }
+            />
+          </ScrollView>
+        )}
+      />
 
       {/*
         The header floats over the photograph rather than sitting in a bar above it, so nothing
@@ -248,16 +410,23 @@ export function PhotoViewer({
           <MaterialIcons name="close" size={22} color={color.onInverseSurface} />
         </Pressable>
 
-        <Avatar name={senderName ?? '?'} image={senderImage} size={36} />
+        <Avatar name={photo.senderName ?? '?'} image={photo.senderImage} size={36} />
         <View style={styles.who}>
           <Text style={styles.name} numberOfLines={1}>
-            {senderName ?? 'Deleted member'}
+            {photo.senderName ?? 'Deleted member'}
           </Text>
           <Text style={styles.date}>
-            {new Date(takenAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+            {new Date(photo.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
           </Text>
         </View>
 
+        {/*
+          **No "3 / 24" counter.** One was built and taken straight back out on 2026-08-29: "i
+          dont want the numbers the 1/6". The reference the founder sent is GroupMe's viewer,
+          which carries a face, a name and a date and nothing else - a running total is a fact
+          about the list rather than about the photograph you are looking at, and this header is
+          about the photograph.
+        */}
         <Pressable
           style={styles.circle}
           onPress={() => setMenuOpen((open) => !open)}
@@ -298,15 +467,15 @@ export function PhotoViewer({
         </>
       )}
 
-      {confirmingReport && report !== undefined && (
+      {confirmingReport && reportable !== null && (
         <ConfirmDialog
           title="Report a concern"
-          body={report.body}
+          body={reportable.body}
           confirmLabel="Report"
           onCancel={() => setConfirmingReport(false)}
           onConfirm={() => {
             setConfirmingReport(false);
-            void run('report this photo', report.run);
+            void run('report this photo', reportable.run);
           }}
         />
       )}
@@ -331,7 +500,6 @@ const styles = StyleSheet.create({
     backgroundColor: color.inverseSurface,
     zIndex: 200,
   },
-  zoom: { flex: 1 },
   photo: { width: '100%', height: '100%' },
 
   header: {

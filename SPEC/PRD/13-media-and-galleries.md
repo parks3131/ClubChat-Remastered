@@ -15,7 +15,7 @@
 2. **Avatar paths are stable and upserted** ("one avatar per owner"), so no old-file cleanup
    is needed. The stored URL is cache-busted, since the path never changes.
 3. **Every chat has a Gallery**: every photo ever posted in that conversation, newest first,
-   as a grid, tap-to-view full screen. It is read-only and adds no new authorization - it
+   as a grid, tap-to-view full screen and swipe between them. It is read-only and adds no new authorization - it
    inherits the chat's own access rules. Club, race, and Eboard each have their own, reached
    from that space's profile screen.
 4. **A photo enters a gallery only by being posted in chat.** There is no separate upload.
@@ -63,6 +63,20 @@ The viewer carries the sender's face, name and date over the photograph, and a m
 from chat, **Show in chat** from the gallery, then Share Image, Download and Report. Only the
 first item differs between the two, and it differs because a photograph reached from the gallery
 has been lifted out of the conversation it was said in.
+
+**A photograph is opened into a RUN of photographs, not on its own, and you move between them by
+swiping** *(2026-08-29)*. Every caller already had a list in its hand and was keeping one entry:
+the gallery pages through its grid, and chat through the conversation it has loaded. The direction
+follows the list you came from, so a swipe forwards is the next tile in the gallery and the next
+photograph down the conversation in chat. **Everything in the chrome belongs to the photograph you
+are on** - the face, the name, the date, and whether Report is offered at all, which changes the
+moment you swipe from somebody else's picture onto your own.
+
+Two deliberate absences. **Highlights does not swipe**: the pinned strip mixes photographs,
+documents and text, so paging it would either skip the things that are not pictures or stop dead at
+them. And **there is no counter**: one was built and taken straight back out the day it shipped, at
+the founder's request. A running total is a fact about the list, and this header is about the
+photograph.
 
 **Saving downloads the `original`, never a derived variant**, and that is a correctness rule
 rather than a quality preference: derived variants are WebP, Photos will not accept WebP, and iOS

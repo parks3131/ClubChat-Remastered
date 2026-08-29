@@ -103,6 +103,49 @@ Proved on the Simulator in both directions rather than in one: Mute wrote a row 
 and the label flipped to Unmute on the reload, then Unmute removed the row and the screen said
 "Unmuted".
 
+**And then the photo viewer learned to swipe, which is the first change today that was designed
+rather than repaired.** "We should be able to swipe and slide those pictures to see the pictures.
+We don't wanna go back and click the other one to see it." Asked as a question first, with the
+scope put back as a multiple choice - gallery only, gallery and chat, or all three - and the answer
+was gallery and chat.
+
+**The viewer took a list and an index where it had taken one photograph**, which is the whole
+change. Every caller already held a list and was throwing all but one entry away at the moment of
+opening. The consequence that needed designing rather than typing is that the chrome belongs to the
+photograph you are ON: `contextAction` and `report` became functions of the current photo rather
+than fixed objects, because a "Show in chat" still pointing at the picture you opened three swipes
+ago is the exact bug this shape exists to prevent, and it looks fine until somebody swipes.
+
+**A `FlatList` rather than the `ScrollView` the news carousel uses**, which is the one place this
+does not mirror the closest existing feature. That carousel pages three photos at a post's width; a
+gallery pages sixty at full size, and a `ScrollView` mounts every child. Windowed to the
+neighbours, so a swipe is instant either way and the rest are never decoded.
+
+**Highlights was left alone deliberately** - a mix of photographs, documents and text pages badly -
+and gets a list of one, which is the old behaviour exactly.
+
+**Two corrections arrived from the phone while it was being built, and both were right.** A "3 / 24"
+counter had been added on the way past: "i dont want the numbers the 1/6". It came straight back
+out, along with its style. Then "lift it a bit up", with a GroupMe screenshot as the reference -
+and the cause was not the padding it looked like. The gallery returns the viewer INSTEAD of the
+grid rather than drawing over it, so the navigator's "Gallery" bar stayed above it: the viewer began
+an inch down the screen and then padded by the top inset again, because it expects to own the status
+bar. Hiding the header while a photograph is open is the fix, and it makes the three call sites one
+surface rather than two that agree and one that does not. Each page is also sized from the viewer's
+own measured box now rather than the window's, so a `contain` fit is centred on the part you can
+actually see.
+
+**One thing was fixed that nobody asked about, and it is worth naming.** The grid has said "Older
+photos load as you scroll." since the gallery shipped, describing a loader that did not exist - the
+read asked for the first page and nothing ever asked for a second. Swiping needed that loader, so
+wiring the grid to the same six lines makes an existing claim true rather than adding a feature.
+
+Proved on the Simulator with a fixture built for it: six visibly different photographs sent through
+the real upload handshake and the real gateway, plus a seventh from the other account. Swiped
+forwards and backwards in both the gallery and chat; the header changed from "Luke Belardo" to
+"Sheet Proof" across the sender boundary, and the menu offered Report on their photograph and not on
+mine. Full suite green.
+
 ---
 
 ## 2026-08-29 - The same argument, finished: the document, and a clock that stopped lining up

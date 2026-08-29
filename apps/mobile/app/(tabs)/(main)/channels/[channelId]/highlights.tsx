@@ -305,45 +305,56 @@ export default function HighlightsScreen() {
       */}
       {viewingPhoto !== null && viewingPhoto.mediaId !== null && (
         <PhotoViewer
-          mediaId={viewingPhoto.mediaId}
-          senderName={viewingPhoto.senderName}
-          senderImage={viewingPhoto.senderImage}
-          takenAt={viewingPhoto.createdAt}
+          /*
+            **A list of one, so this viewer does not swipe, and that is the decision rather than
+            an oversight.** The pinned strip is a mix of photographs, documents and text: paging
+            through it would have to either skip the things that are not pictures or stop dead at
+            them, and both are worse than the tap that already works. The gallery is where a run
+            of photographs lives, and it is one tap away.
+          */
+          photos={[
+            {
+              mediaId: viewingPhoto.mediaId,
+              seq: viewingPhoto.seq,
+              senderId: viewingPhoto.senderId,
+              senderName: viewingPhoto.senderName,
+              senderImage: viewingPhoto.senderImage,
+              createdAt: viewingPhoto.createdAt,
+            },
+          ]}
+          initialIndex={0}
           /*
             "Show in chat" rather than "Reply", matching the gallery: a pin has been lifted out of
             the conversation it was said in, and what was being talked about is the question
             somebody actually has here. It is a menu item and not the row's tap, which is what
             keeps `PRD/05`'s "nothing jumps back into the conversation from this list" true.
           */
-          contextAction={{
+          contextAction={(photo) => ({
             label: 'Show in chat',
             icon: 'chat-bubble-outline',
-            onPress: () => router.push(`/chat/${channelId}?around=${viewingPhoto.seq}`),
-          }}
+            onPress: () => router.push(`/chat/${channelId}?around=${photo.seq}`),
+          })}
           /*
-            Spread rather than a ternary into the prop, because `report` is optional under
-            `exactOptionalPropertyTypes` and `report={undefined}` is not the same as absent.
-
             The two conditions are the server's answer and "not your own photo", exactly as in
             chat and the gallery. `canReport` is false for the whole Eboard scope, where reporting
             does not exist - never derived from the scope here, so this screen cannot drift from
             the policy module.
           */
-          {...(viewingPhoto.senderId !== userId && meta.data?.canReport === true
-            ? {
-                report: {
+          report={(photo) =>
+            photo.senderId !== userId && meta.data?.canReport === true
+              ? {
                   body: isDm
                     ? 'This photo goes to ClubChat moderators, who can read the messages around it. The other person is not told.'
                     : 'This photo goes to the admins of this space, who can read the messages around it. The sender is not told.',
                   run: async () => {
-                    const result = await channelApi.report(channelId, viewingPhoto.seq);
+                    const result = await channelApi.report(channelId, photo.seq);
                     return result.alreadyReported
                       ? 'You already reported this photo.'
                       : 'Reported. The sender is not told.';
                   },
-                },
-              }
-            : {})}
+                }
+              : null
+          }
           onClose={() => setViewingPhoto(null)}
         />
       )}
