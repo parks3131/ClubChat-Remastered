@@ -241,9 +241,10 @@ request, absent. A positive says the new code shipped; the negative says the cor
 it, which is the half a rebuild of the previous commit would also satisfy. Both run without `grep
 -w`, for the reason the eighth update's entry gives.
 
-**Arrival is not yet proved** for either this or the seventh and eighth: `Update 01a04f06` at the
-bottom of Profile after two relaunches is the test, and nobody has looked. These rows stay weak
-until somebody does.
+**Arrival was confirmed on the founder's iPhone**, by the behaviour rather than by the id: he swiped
+between photographs in a club's gallery and reported back, which is a thing the previous bundle
+could not have done. See the note under the tenth update for why that closes the seventh and eighth
+as well.
 
 **The tenth update, forty minutes later, carrying a fix for the ninth.** Update group
 `6d8958fc-b9bf-4530-8af7-37eb81905104`, iOS update `01a04f0f-9b18-7804-8971-e96848fe0667`, commit
@@ -264,6 +265,22 @@ exact commit with a clean tree, and `git log -1` on the same machine says the sa
 exported bundle's content hash also differs from the ninth update's, so it is not a re-publish of
 identical code. **Prefer the commit line.** The string search is a second opinion for the specific
 question "did this particular string ship", not a general proof of what is in a bundle.
+
+**Confirmed on the founder's iPhone: "it looks good now."** He opened a photograph from a club's
+gallery and closed it, and the header was there.
+
+**That one confirmation closes the seventh, eighth and ninth as well, and the reason is worth
+stating rather than assumed.** Updates are whole bundles, not patches: the tenth contains every
+commit before it, so a device running it is running all of them. Proving the newest arrived proves
+the rest did.
+
+**It was proved by BEHAVIOUR rather than by the id at the bottom of Profile**, which is a weaker
+instrument used where it happens to be sufficient. The fifth update was deliberately empty - build 6
+already embedded its code - so an id was the only thing that could possibly have moved, and that is
+the case the Profile line exists for. These four each changed something visible, and the founder
+reported seeing the new behaviour: a menu at the bottom edge, Mute in it, swiping between
+photographs, and a header returning. **Where a change is visible, seeing it is the better proof**;
+the id is the fallback for a change that is not.
 
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because

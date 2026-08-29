@@ -155,6 +155,18 @@ now state what they want. Logged in [`BUGS.md`](BUGS.md) with the part worth kee
 verified by opening a photograph, which is the half that worked, and the return journey was never
 tried because it was not what had changed.
 
+**Confirmed on the founder's iPhone the same afternoon: "it looks good now."** That one report
+closes all four of the day's updates rather than the last of them, because an update is a whole
+bundle and not a patch - a device running the tenth is running every commit before it. And it was
+proved by the behaviour rather than by the update id at the bottom of Profile, which is the right
+way round: every one of these changed something visible, so seeing it is the stronger evidence. The
+id exists for the case the fifth update was, where nothing on screen could move.
+
+**The day in total: five changes, four updates, no build and no Apple review.** A "Chat info" title
+removed, a menu moved to the bottom edge, Mute added to it, swiping between photographs, and one
+regression found by the founder and fixed inside the hour. Every one reported from a phone and
+returned to that phone the same afternoon.
+
 ---
 
 ## 2026-08-29 - The same argument, finished: the document, and a clock that stopped lining up
