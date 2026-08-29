@@ -95,9 +95,16 @@ second is a feature the whole product would have to bend around. Threads remain 
    introduction.** The face, the name and the clock sit over the first of them; the rest are
    bubbles under it, carrying no time of their own. A run ends when somebody else speaks, when the
    run has been going five minutes, or when anything full width sits between two messages - a date
-   heading, the "Last read" rule, a system line, a tombstone, an announcement, or a poll, event or
-   meeting card. A card always heads a run of its own: it carries a whole object rather than a turn
-   in somebody's talking.
+   heading, the "Last read" rule, a system line, an announcement, or a poll, event or meeting
+   card. A card always heads a run of its own: it carries a whole object rather than a turn in
+   somebody's talking.
+
+   **A tombstone is not one of those, since 2026-08-29.** It was until then, and it was the same
+   sentence twice: this rule listed it as full width while rule 9 described a centred line. Both
+   stopped being true when a deleted message kept its sender's face and became a sided bubble the
+   width of what it replaced. It now groups like any other message, so deleting the third of six
+   leaves one introduction over all six rather than three over one spell. Rule 9 owns the
+   behaviour; this rule owns the grouping, and they have to be read as one.
 
    **Five minutes, measured from the run's first message rather than from the last one.** The
    header's clock speaks for every bubble under it, so a run may only last as long as that one
