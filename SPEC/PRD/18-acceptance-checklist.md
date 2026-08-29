@@ -107,7 +107,10 @@ A remaster is at parity when every line below passes on **iOS, Android, and web*
 - [ ] Tapping the heading picks any month and year; **This month** returns to today.
 - [ ] The list merges events, races, meetings **and meetups** into Upcoming/Past, and every row
       carries a date.
-- [ ] **No poll appears in either view**, with or without a deadline - grid, day popup, or list.
+- [ ] **An item that has already happened is faded in the calendar's day list**, exactly as in the
+      Past half of the merged list. An all-day race or meetup is **not** faded until its own day is
+      over, while a timed event fades once its start has gone by - including one earlier today.
+- [ ] **No poll appears in either view**, with or without a deadline - grid, day list, or list.
 - [ ] Eboard meetings are absent from a non-member's calendar; races are visible to everyone.
 - [ ] The merged cross-club feed tags each row with its club and offers no create action.
 - [ ] The meetups week shows **all seven** days Monday-Sunday, including the ones that have gone,

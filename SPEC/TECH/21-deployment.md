@@ -207,9 +207,10 @@ naming all four - `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_SENTRY_DSN`, `EXPO_PUBLIC_
 bundle search is the stronger of the two anyway: it reads what was actually inlined rather than what
 was offered.
 
-**Arrival is not yet proved.** Published, matched and inlined correctly; whether it reached the
-phone is `Update 01a04ec6` at the bottom of Profile after two relaunches, and nobody has looked yet.
-This row stays weak until somebody does.
+**Arrival was unproved when this row was written and is now proved**, though not by anything
+done here: the tenth update's confirmation closed it, because a bundle carries every commit before
+it. The paragraph under the tenth has that argument in full. This row read "stays weak until
+somebody looks" until 2026-08-29, and the somebody looked three updates later.
 
 **The eighth update, the same day and an hour behind the seventh.** Update group
 `7f88fac3-a5bd-4888-a608-15b50814cebd`, iOS update `01a04eea-c5f1-71ed-9dd4-cab4c745d2a8`, commit
@@ -316,11 +317,17 @@ search is a second opinion, worth running only when the change happens to leave 
 string behind. Three of the last five did not, and saying so each time is what keeps the check from
 becoming a ritual that always passes.
 
-**Arrival is not yet proved.** Published, matched and inlined correctly; whether it reached the
-phone is a past date on the calendar drawing its items grey, or `Update 01a04f3d` at the bottom of
-Profile after two relaunches. The behaviour is the better instrument here, for the reason the tenth
-update's entry gives: this change is visible, so seeing it beats reading an id. This row stays weak
-until somebody looks.
+**Confirmed on the founder's iPhone: "yeah its working."** He opened the calendar, tapped a
+date that had gone by, and its items were grey. Proved by the behaviour rather than by the id at
+the bottom of Profile, which the tenth update's entry argues is the better instrument wherever the
+change is something a person can see.
+
+**That closes the eleventh as well, which was the only other row still standing weak**, by the
+tenth's argument - with one qualification worth stating precisely rather than glossing. What is
+proved is that the CODE the eleventh carried is on the phone, because this bundle contains every
+commit before it. Whether that particular bundle was ever the one the device downloaded is not
+proved, and does not matter to anybody. **Every update published to this channel is now known to
+have arrived.**
 
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because

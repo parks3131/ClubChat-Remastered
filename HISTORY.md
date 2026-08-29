@@ -60,6 +60,12 @@ that proves the fade follows the item and not the screen. Type check clean, 2,18
 The club-scoped calendar needed no check of its own. `clubs/[clubId]/calendar.tsx` renders the
 same `CalendarView` this screen does, which is design-system rule 5 paying for itself.
 
+**Published as the twelfth over-the-air update and confirmed on the founder's iPhone the same
+evening**: "yeah its working", against a past date drawing its items grey. That also closes the
+eleventh, which had never been confirmed - a bundle carries every commit before it, so the
+drag-to-dismiss keyboard is on that phone too. Every update published to the production channel is
+now known to have arrived.
+
 ## 2026-08-29 - A sheet that was placed by whoever rendered it
 
 **One report, one screen, three screens fixed - and a correction in the middle about how much to
