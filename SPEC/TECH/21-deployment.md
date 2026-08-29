@@ -245,6 +245,26 @@ it, which is the half a rebuild of the previous commit would also satisfy. Both 
 bottom of Profile after two relaunches is the test, and nobody has looked. These rows stay weak
 until somebody does.
 
+**The tenth update, forty minutes later, carrying a fix for the ninth.** Update group
+`6d8958fc-b9bf-4530-8af7-37eb81905104`, iOS update `01a04f0f-9b18-7804-8971-e96848fe0667`, commit
+`563fd676219cb57a8d4292cd4e112d0d55d8b446` with no asterisk, runtime version
+`bfe9e13f237478450cf6a5383915466e1e15d392` generated and compared before publishing. It restores the
+Gallery's header on closing a photograph - see [`BUGS.md`](../../BUGS.md), 2026-08-29.
+
+**And the string search does not work on this one, which is worth writing down before somebody
+trusts it again.** The natural check was that `headerShown` should now appear twice rather than
+once. It appears once, and the code is correct: **Hermes interns its string table**, so a name used
+in twenty places is one entry. The search can prove a *distinct* string present or absent - which is
+what the eighth and ninth updates used it for, and those remain valid - and can say nothing at all
+about how many times one is used.
+
+What stands in its place here is stronger anyway and was always available: the publish records
+`Commit 563fd676` **with no asterisk**, which is EAS asserting the bundle was exported from that
+exact commit with a clean tree, and `git log -1` on the same machine says the same hash. The
+exported bundle's content hash also differs from the ninth update's, so it is not a re-publish of
+identical code. **Prefer the commit line.** The string search is a second opinion for the specific
+question "did this particular string ship", not a general proof of what is in a bundle.
+
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because
 `cdn.<domain>` has to validate the `exp`/`sig` pair that [Media pipeline](07-media-pipeline.md)
