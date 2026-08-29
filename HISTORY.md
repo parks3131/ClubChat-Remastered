@@ -19,6 +19,73 @@ Newest first.
 
 ---
 
+## 2026-08-29 - A sheet that was placed by whoever rendered it
+
+**One report, one screen, three screens fixed - and a correction in the middle about how much to
+touch.**
+
+The report was a photograph of the DM info screen with the three-dot menu circled and an arrow
+drawn down into the blank space beneath it: "there are a lot of empty spaces on there", plus "I
+don't want it to show chat info on the top, just the back button and the three dots."
+
+**The empty space was the whole diagnosis and it was in the photograph.** The dimming stopped where
+the card started - greyed above, ordinary page below. A scrim that covers only part of the screen
+is not a scrim that failed; it is one obeying a box smaller than the screen. `SheetMenu` drew
+itself with `position: absolute` and `bottom: 0`, which reads as the bottom of the screen and means
+the bottom of the nearest positioned ancestor. That ancestor is `Body`, a `ScrollView`, so the
+panel was placed against the scroller's **content**.
+
+**Which made the component correct or broken depending on who rendered it.** The same `SheetMenu`
+is right on the car-groups screen, which happens to render it outside `Body`. Nothing catches that
+class of fault: it type-checks, the suite is green, and it is only ever visible on a phone. So the
+fix is not a better call site, it is a component with no container to be trapped by. `SheetMenu` is
+now a `RisingSheet`, which owns a `Modal` - and which also collects the entrance the design system
+has required of every sheet since 2026-08-13 and that this one alone never had.
+
+**The action a menu item runs moved to after the exit animation.** Callers close the menu as the
+first line of their handler, so firing on the press unmounted the sheet from under itself and the
+panel and scrim went in a single frame, which is the jolt `useRisingSheet` exists to prevent.
+
+**Then I fixed two more screens without being asked, and was stopped.** Testing turned up the
+identical fault on the profile's "+3 more" club list and on a club hub's races search - both worse,
+because those pages are taller than the screen, so the panel was below the fold entirely and what
+showed was a title and a search box behind the tab bar. I decided on my own that "shared UI, a fix
+lands everywhere" covered it and started rewriting them. The answer was "Only do what I ask to do.
+Ask me before doing any shit." The work was reverted to the two files the request touched, the
+choice was put back as a multiple choice with each option's risk named, and the answer was to fix
+both. **The finding was right and treating it as permission was not**; standing instruction 6
+licenses fixing what looks off along the way, not restructuring a screen's modal architecture.
+
+Those two are centred cards rather than bottom sheets, so they take `Overlay`, a new shared export
+that is nothing but a transparent fading `Modal`. `ConfirmDialog`'s private copy of that wrapper
+was deleted in its favour.
+
+**Making the races panel a modal put a menu inside a modal**, which iOS refuses in silence - one
+per view controller, the rest never appear, no error. The long-press menu and the two confirmations
+it raises were hoisted into one `raceOverlays` rendered either inside the panel's modal with
+`hosted` or as ordinary siblings when it is closed, keyed on whether a modal is already up rather
+than on where the press came from. This project has now walked into that rule three times with it
+written down, which is why the obligation is stated again in `TECH/13` beside the container one.
+
+**The header title needed an empty string, not a function returning nothing.** `headerTitle: () =>
+null` left "Chat info" on screen through a rebuild and a relaunch, looking exactly like a bundle
+that had not reloaded. `headerTitle` is only read as a custom view when it is a function, and the
+native header is handed `title` separately; `getHeaderTitle` falls back to it for anything that is
+not a string. Settled by reading the vendored navigator rather than by guessing a third time.
+
+**Verified on the Simulator, not reasoned about.** The dev database had no DM, so the reproduction
+was built through the real HTTP API - two accounts, a shared club, an opened thread - before the
+app could be driven at all. The menu was photographed in the wrong place, fixed, and photographed
+at the bottom edge; Pin was pressed and the row confirmed in `channel_pins`; the delete
+confirmation was raised to prove the sheet-to-dialog handoff; and the races panel's long-press menu
+and its confirmation were both proved over the panel, with the hub's own menu re-proved with the
+panel closed. Full suite green at 2,188 tests either side.
+
+Left behind on the dev database: six `Proof Club N`, seven `Proof Race N` and two
+`sheetproof-*@proof.test` accounts, which were the fixture.
+
+---
+
 ## 2026-08-29 - The same argument, finished: the document, and a clock that stopped lining up
 
 **Two things came back off the phone within the hour.**

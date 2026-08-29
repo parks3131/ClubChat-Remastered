@@ -120,6 +120,27 @@ The **"Kinetic Performance System"**, extracted verbatim from the Stitch export'
   entrance, the exit and the measurement, and every sheet in the app takes its motion from it.
   A new sheet that writes its own `Animated.timing` is the thing to catch in review.
 
+- **Anything that draws over the whole screen is a `Modal`, never an absolutely-positioned view.**
+  `position: absolute` with `bottom: 0` reads as "the bottom of the screen" and means "the bottom
+  of my container". Almost every screen's body is `Body`, which is a `ScrollView`, so such a panel
+  comes to rest at the end of the page **content**: mid-screen with an undimmed half below it on a
+  short page, and entirely off the bottom edge behind the tab bar on a long one. The caller is what
+  decides, which means the same component is correct on one screen and broken on the next, and
+  nothing catches it - it type-checks, it tests green, and it is only ever found by somebody
+  looking at a phone.
+
+  **Four surfaces shipped this way and each cost its own device report**: the profile photo viewer
+  (2026-08-13), the club hub's menu under the tab bar (2026-08-14), and on 2026-08-29 both the DM
+  three-dot menu ("there are a lot of empty spaces on there") and the profile's club list, which
+  was pushed so far down that only its title and search field showed above the tab bar. `Overlay`
+  in `ui.tsx` is the shared answer, and `SheetMenu` reaches it through `RisingSheet`. A panel that
+  covers the screen and is not inside one of those two is the thing to catch in review.
+
+  **A panel inside a modal cannot open a second one.** iOS presents one per view controller and
+  refuses the rest in silence, so a menu or confirmation raised from a row inside such a panel goes
+  *inside that panel's* modal, through the `overlay` prop and the `hosted` flag the components
+  already take. Getting this wrong is invisible on web and total on a phone.
+
 - **On the way out, the shade is the last thing to leave.** The panel gets the shorter duration
   and the gentler curve; the dimming gets the longer and the steeper one. Reversed, the scrim
   lifts while the panel is still mid-screen and what is left is a panel hanging over an ordinary

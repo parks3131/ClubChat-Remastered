@@ -298,7 +298,7 @@ export function ConfirmDialog({
    */
   hosted?: boolean;
 }) {
-  const Host = hosted ? HostedOverlay : ConfirmDialogModal;
+  const Host = hosted ? HostedOverlay : Overlay;
 
   return (
     <Host onDismiss={onCancel}>
@@ -332,8 +332,29 @@ export function ConfirmDialog({
   );
 }
 
-/** The dialog's own modal, for the ordinary case where nothing else is presented. */
-function ConfirmDialogModal({
+/**
+ * A full-screen layer for a panel that must cover the screen rather than sit inside a page.
+ *
+ * **A `Modal` is the only thing a caller cannot position wrongly, which is why this is shared
+ * rather than written once per panel.** `position: absolute` with `bottom: 0` reads as "the
+ * bottom of the screen" and means "the bottom of my container": render such a panel inside
+ * `Body` - a `ScrollView` - and it comes to rest at the end of the page CONTENT. On a short page
+ * that is a card floating mid-screen over an undimmed lower half; on a long one it is a card
+ * pushed off the bottom edge entirely, behind the tab bar. Four surfaces shipped that way and
+ * each was found the same slow manual way, one device report at a time: the profile photo viewer
+ * (2026-08-13), the club hub's menu under the tab bar (2026-08-14), and the DM menu and the
+ * profile's club list on 2026-08-29. The container is the bug, so the fix is to have none.
+ *
+ * `fade`, because this hosts a panel that appears where it is rather than travelling. Anything
+ * arriving from the bottom edge wants `RisingSheet`, which owns its own modal and animates the
+ * panel and the scrim on separate clocks.
+ *
+ * **A panel inside this cannot open a second `Modal` over itself.** iOS presents one per view
+ * controller and refuses the second in silence. A menu or confirmation that must draw over the
+ * panel goes INSIDE this same layer, with `hosted` on the component that draws it - the pattern
+ * `RisingSheet`'s `overlay` prop documents at length.
+ */
+export function Overlay({
   children,
   onDismiss,
 }: {
@@ -1339,12 +1360,26 @@ export function useRisingSheet(onDismiss: () => void) {
 }
 
 /**
- * A bottom sheet of choices, and its scrim.
+ * A bottom sheet of choices.
  *
  * **An in-app sheet rather than a platform `Alert`.** A confirmation dialog can report success,
  * log nothing and do nothing where a platform stubs out the dialog API - and react-native-web is
  * exactly such a platform, which is the surface this project develops and tests on. Chat reached
  * the same conclusion independently; this is that decision made once.
+ *
+ * **`RisingSheet` rather than a bare absolutely-positioned `View`, and that is a correctness fix
+ * rather than a finish.** This drew its own scrim and its own panel with `position: absolute` and
+ * `bottom: 0`, which sounds like the bottom of the screen and is not: it is the bottom of
+ * whatever container the CALLER happened to render it inside. On the DM profile screen that
+ * container is `Body`'s `ScrollView`, so the panel came to rest at the end of the page content -
+ * a card floating in the upper half with the scrim dimming only the strip above it and untouched
+ * page below. Reported from the phone on 2026-08-29 as "there are a lot of empty spaces on
+ * there". A `Modal` has no container to be trapped by, which is why every other sheet in the app
+ * was already immune, and it is now impossible for a caller to place this one wrongly.
+ *
+ * It also settles the obligation in [`TECH/13`](../../../SPEC/TECH/13-design-system.md) that
+ * every sheet take its motion from `useRisingSheet`: this was the one that never did, so it
+ * appeared in a single frame with a scrim that arrived at full strength.
  */
 export function SheetMenu({
   title,
@@ -1355,39 +1390,60 @@ export function SheetMenu({
   items: ReadonlyArray<{ label: string; onPress: () => void; destructive?: boolean }>;
   onDismiss: () => void;
 }) {
+  /*
+   * The chosen action runs AFTER the exit animation, never on the press.
+   *
+   * Calling it on the press unmounts the sheet from under itself - most callers close the menu as
+   * their handler's first line - so the panel and its scrim vanish in one frame, which is exactly
+   * the jolt `useRisingSheet` exists to prevent. Held in a ref rather than state because storing
+   * it must not re-render the sheet mid-exit.
+   */
+  const chosen = useRef<(() => void) | null>(null);
+  const finish = useCallback(() => {
+    const run = chosen.current;
+    chosen.current = null;
+    onDismiss();
+    run?.();
+  }, [onDismiss]);
+
   return (
-    <View style={styles.sheetBackdrop}>
-      <Pressable
-        style={styles.sheetScrim}
-        onPress={onDismiss}
-        accessibilityRole="button"
-        accessibilityLabel="Dismiss"
-      />
-      <View style={styles.sheet}>
-        <Text style={styles.sheetTitle}>{title}</Text>
-        {items.map((item) => (
+    <RisingSheet onDismiss={finish} label="Dismiss">
+      {(close) => (
+        <>
+          <Text style={styles.sheetTitle}>{title}</Text>
+          {items.map((item) => (
+            <Pressable
+              key={item.label}
+              style={styles.sheetRow}
+              onPress={() => {
+                chosen.current = item.onPress;
+                close();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={item.label}
+            >
+              <Text
+                style={[styles.sheetLabel, item.destructive === true && styles.sheetDestructive]}
+              >
+                {item.label}
+              </Text>
+            </Pressable>
+          ))}
+          {/*
+            Kept, where `ContextMenu` has none. A sheet that fills the bottom edge has no obvious
+            outside to tap, and this is the row the founder reads as the way out.
+          */}
           <Pressable
-            key={item.label}
             style={styles.sheetRow}
-            onPress={item.onPress}
+            onPress={close}
             accessibilityRole="button"
-            accessibilityLabel={item.label}
+            accessibilityLabel="Cancel"
           >
-            <Text style={[styles.sheetLabel, item.destructive === true && styles.sheetDestructive]}>
-              {item.label}
-            </Text>
+            <Text style={styles.sheetLabel}>Cancel</Text>
           </Pressable>
-        ))}
-        <Pressable
-          style={styles.sheetRow}
-          onPress={onDismiss}
-          accessibilityRole="button"
-          accessibilityLabel="Cancel"
-        >
-          <Text style={styles.sheetLabel}>Cancel</Text>
-        </Pressable>
-      </View>
-    </View>
+        </>
+      )}
+    </RisingSheet>
   );
 }
 
@@ -2253,30 +2309,10 @@ const styles = StyleSheet.create({
     backgroundColor: color.fallback,
   },
 
-  sheetBackdrop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'flex-end',
-    zIndex: 100,
-  },
-  sheetScrim: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  sheet: {
-    backgroundColor: color.card,
-    borderTopLeftRadius: radius.xl,
-    borderTopRightRadius: radius.xl,
-    paddingTop: space.md,
-    paddingBottom: space.xl,
-  },
+  /*
+    No backdrop, scrim or panel of its own any more: `SheetMenu` is a `RisingSheet`, which owns
+    all three. What is left here is what goes INSIDE that panel.
+  */
   sheetTitle: {
     ...type.label,
     color: color.textSecondary,

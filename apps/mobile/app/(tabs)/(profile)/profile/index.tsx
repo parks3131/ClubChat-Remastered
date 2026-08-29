@@ -43,6 +43,7 @@ import {
   DataScreen,
   DestinationHeader,
   Field,
+  Overlay,
   Row,
   SearchField,
   SectionHeader,
@@ -421,7 +422,19 @@ function ClubsSheet({
   const needle = query.trim().toLowerCase();
   const shown = needle.length === 0 ? clubs : clubs.filter((c) => c.name.toLowerCase().includes(needle));
 
+  /*
+   * `Overlay`, because this screen's body is a `ScrollView` and this panel renders inside it.
+   *
+   * > It drew itself with `position: absolute` and `bottom: 0`, which sounds like the bottom of
+   * > the screen and is the bottom of the SCROLLER'S CONTENT. The profile page is taller than the
+   * > screen, so the panel came to rest below the fold: what you actually saw was its title and
+   * > search field poking up from behind the tab bar with every club off screen, and a scrim that
+   * > stopped at the header. Found on 2026-08-29 while proving the same fault on the DM menu.
+   *
+   * The backdrop below still centres and dims; it simply does it against the window now.
+   */
   return (
+    <Overlay onDismiss={onDismiss}>
     <View style={styles.sheetBackdrop}>
       <Pressable
         style={styles.sheetScrim}
@@ -464,6 +477,7 @@ function ClubsSheet({
         </ScrollView>
       </View>
     </View>
+    </Overlay>
   );
 }
 

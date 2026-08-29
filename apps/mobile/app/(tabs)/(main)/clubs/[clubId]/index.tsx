@@ -13,6 +13,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Link, Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { BackAlwaysTo } from '../../../../../src/nav.tsx';
 import { unreadCount } from '@clubchat/shared';
@@ -27,6 +28,7 @@ import {
   ConfirmDialog,
   ContextMenu,
   DataScreen,
+  Overlay,
   SearchField,
   measureRow,
   type PressAnchor,
@@ -204,6 +206,149 @@ export default function ClubHubScreen() {
         const previewed = (races.data?.races ?? []).slice(0, RACE_PREVIEW);
         const total = races.data?.races.length ?? 0;
         const unread = unreadFor(data.club.channelId);
+
+        /*
+          Everything that draws OVER the races sheet, hoisted so it can be rendered in EITHER
+          place: inside the sheet's own modal while the sheet is open, and as an ordinary sibling
+          of the hub when it is not.
+
+          > **A second `Modal` presented over the first never appears on iOS**, silently - one is
+          > presented per view controller and the rest are refused. The sheet became a modal on
+          > 2026-08-29 to stop it landing at the bottom of the scroller's content, which put the
+          > menu a long press raises from one of its rows, and the two confirmations that menu
+          > raises, on the wrong side of that rule. `hosted` skips their own modal so they draw
+          > inside the sheet's, which is the pattern `RisingSheet`'s `overlay` documents.
+
+          `racesOpen` rather than `menuFor.from`, because the question is not where the press came
+          from - it is whether a modal is already up.
+        */
+        const raceOverlays = (
+          <>
+          {/*
+            The race long-press menu, the same one the Chats list uses.
+
+            **Pin is the only item a locked race gets.** The other three all act on the race's
+            CHAT, and a race with no roster row has no chat to mute, clear or leave - which is
+            exactly why `channelId` is null there. Pinning is the one act that was never gated
+            on access, so somebody waiting on a request can still keep the race at the top.
+          */}
+          {menuFor !== null && (
+            <ContextMenu
+              hosted={racesOpen}
+              anchor={menuFor.anchor}
+              preview={
+                menuFor.from === 'sheet' ? (
+                  <SheetRaceRow race={menuFor.race} />
+                ) : (
+                  <RaceRow race={menuFor.race} unread={unreadForScope('race', menuFor.race.id)} />
+                )
+              }
+              onDismiss={() => setMenuFor(null)}
+              items={[
+                {
+                  label: menuFor.race.pinned ? 'Unpin' : 'Pin',
+                  icon: 'push-pin',
+                  onPress: () => {
+                    const race = menuFor.race;
+                    void act(() => raceApi.setPin(race.id, !race.pinned));
+                  },
+                },
+                ...(menuFor.race.channelId !== null
+                  ? [
+                      {
+                        label: menuFor.race.muted ? 'Unmute' : 'Mute',
+                        icon: menuFor.race.muted
+                          ? ('notifications-active' as const)
+                          : ('notifications-off' as const),
+                        onPress: () => {
+                          const race = menuFor.race;
+                          const channelId = race.channelId;
+                          if (channelId === null) return;
+                          void act(() =>
+                            race.muted ? dmApi.unmute(channelId) : dmApi.mute(channelId),
+                          );
+                        },
+                      },
+                      {
+                        label: 'Delete chat',
+                        icon: 'delete-outline' as const,
+                        onPress: () => {
+                          const race = menuFor.race;
+                          setMenuFor(null);
+                          setConfirmClear(race);
+                        },
+                      },
+                      {
+                        label: 'Leave group',
+                        icon: 'logout' as const,
+                        destructive: true,
+                        onPress: () => {
+                          const race = menuFor.race;
+                          setMenuFor(null);
+                          setConfirmLeave(race);
+                        },
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+          )}
+
+          {confirmClear !== null && (
+            <ConfirmDialog
+              hosted={racesOpen}
+              title="Delete this chat?"
+              body={`This clears ${confirmClear.name} for you only. Everybody else on the roster keeps every message, and nobody is told.`}
+              confirmLabel="Delete chat"
+              dismissLabel="Keep it"
+              onCancel={() => setConfirmClear(null)}
+              onConfirm={() => {
+                const race = confirmClear;
+                const channelId = race.channelId;
+                setConfirmClear(null);
+                if (channelId === null) return;
+                void act(async () => {
+                  await channelApi.clear(channelId);
+                  // The device holds exactly the messages the clear was meant to hide, and
+                  // renders from that cache before any network call resolves.
+                  await client?.forgetChannel(channelId);
+                });
+              }}
+            />
+          )}
+
+          {/*
+            Leaving a race takes the car group with it - `removeRaceMember` shares
+            `departCarGroup` with the explicit car-group commands rather than reimplementing
+            it - so the dialog says so. Somebody who has been assigned a car is the person most
+            likely to be surprised, and the Incharge rule bites hardest there.
+          */}
+          {confirmLeave !== null && (
+            <ConfirmDialog
+              hosted={racesOpen}
+              title={`Leave ${confirmLeave.name}?`}
+              body="You will lose its chat and your car group place. Your club membership is not affected, and you can ask to join again."
+              confirmLabel="Leave group"
+              dismissLabel="Stay"
+              onCancel={() => setConfirmLeave(null)}
+              onConfirm={() => {
+                const race = confirmLeave;
+                const channelId = race.channelId;
+                setConfirmLeave(null);
+                if (userId === null) return;
+                void act(async () => {
+                  // Removing yourself IS leaving: `removeRaceMember` reads the self case and
+                  // emits `actorId: null`, which is what makes race chat say "left the race"
+                  // rather than "was removed by".
+                  await raceApi.removeMember(race.id, userId);
+                  if (channelId !== null) await client?.forgetChannel(channelId);
+                });
+              }}
+            />
+          )}
+          </>
+        );
+
 
         return (
           <ScrollView
@@ -424,128 +569,11 @@ export default function ClubHubScreen() {
                   longPressFeedback();
                   setMenuFor({ race, anchor, from: 'sheet' });
                 }}
+                overlay={raceOverlays}
               />
             )}
 
-            {/*
-              The race long-press menu, the same one the Chats list uses.
-
-              **Pin is the only item a locked race gets.** The other three all act on the race's
-              CHAT, and a race with no roster row has no chat to mute, clear or leave - which is
-              exactly why `channelId` is null there. Pinning is the one act that was never gated
-              on access, so somebody waiting on a request can still keep the race at the top.
-            */}
-            {menuFor !== null && (
-              <ContextMenu
-                anchor={menuFor.anchor}
-                preview={
-                  menuFor.from === 'sheet' ? (
-                    <SheetRaceRow race={menuFor.race} />
-                  ) : (
-                    <RaceRow race={menuFor.race} unread={unreadForScope('race', menuFor.race.id)} />
-                  )
-                }
-                onDismiss={() => setMenuFor(null)}
-                items={[
-                  {
-                    label: menuFor.race.pinned ? 'Unpin' : 'Pin',
-                    icon: 'push-pin',
-                    onPress: () => {
-                      const race = menuFor.race;
-                      void act(() => raceApi.setPin(race.id, !race.pinned));
-                    },
-                  },
-                  ...(menuFor.race.channelId !== null
-                    ? [
-                        {
-                          label: menuFor.race.muted ? 'Unmute' : 'Mute',
-                          icon: menuFor.race.muted
-                            ? ('notifications-active' as const)
-                            : ('notifications-off' as const),
-                          onPress: () => {
-                            const race = menuFor.race;
-                            const channelId = race.channelId;
-                            if (channelId === null) return;
-                            void act(() =>
-                              race.muted ? dmApi.unmute(channelId) : dmApi.mute(channelId),
-                            );
-                          },
-                        },
-                        {
-                          label: 'Delete chat',
-                          icon: 'delete-outline' as const,
-                          onPress: () => {
-                            const race = menuFor.race;
-                            setMenuFor(null);
-                            setConfirmClear(race);
-                          },
-                        },
-                        {
-                          label: 'Leave group',
-                          icon: 'logout' as const,
-                          destructive: true,
-                          onPress: () => {
-                            const race = menuFor.race;
-                            setMenuFor(null);
-                            setConfirmLeave(race);
-                          },
-                        },
-                      ]
-                    : []),
-                ]}
-              />
-            )}
-
-            {confirmClear !== null && (
-              <ConfirmDialog
-                title="Delete this chat?"
-                body={`This clears ${confirmClear.name} for you only. Everybody else on the roster keeps every message, and nobody is told.`}
-                confirmLabel="Delete chat"
-                dismissLabel="Keep it"
-                onCancel={() => setConfirmClear(null)}
-                onConfirm={() => {
-                  const race = confirmClear;
-                  const channelId = race.channelId;
-                  setConfirmClear(null);
-                  if (channelId === null) return;
-                  void act(async () => {
-                    await channelApi.clear(channelId);
-                    // The device holds exactly the messages the clear was meant to hide, and
-                    // renders from that cache before any network call resolves.
-                    await client?.forgetChannel(channelId);
-                  });
-                }}
-              />
-            )}
-
-            {/*
-              Leaving a race takes the car group with it - `removeRaceMember` shares
-              `departCarGroup` with the explicit car-group commands rather than reimplementing
-              it - so the dialog says so. Somebody who has been assigned a car is the person most
-              likely to be surprised, and the Incharge rule bites hardest there.
-            */}
-            {confirmLeave !== null && (
-              <ConfirmDialog
-                title={`Leave ${confirmLeave.name}?`}
-                body="You will lose its chat and your car group place. Your club membership is not affected, and you can ask to join again."
-                confirmLabel="Leave group"
-                dismissLabel="Stay"
-                onCancel={() => setConfirmLeave(null)}
-                onConfirm={() => {
-                  const race = confirmLeave;
-                  const channelId = race.channelId;
-                  setConfirmLeave(null);
-                  if (userId === null) return;
-                  void act(async () => {
-                    // Removing yourself IS leaving: `removeRaceMember` reads the self case and
-                    // emits `actorId: null`, which is what makes race chat say "left the race"
-                    // rather than "was removed by".
-                    await raceApi.removeMember(race.id, userId);
-                    if (channelId !== null) await client?.forgetChannel(channelId);
-                  });
-                }}
-              />
-            )}
+            {racesOpen ? null : raceOverlays}
 
             {/*
               The full-width "Add Group" button used to sit here, and it moved into the "Races
@@ -574,6 +602,7 @@ function RacesSheet({
   onDismiss,
   onPick,
   onLongPin,
+  overlay,
 }: {
   races: ReadonlyArray<RaceListItem>;
   query: string;
@@ -582,11 +611,30 @@ function RacesSheet({
   onPick: (raceId: string) => void;
   /** Long press on a row, to open the menu over this sheet at the row. */
   onLongPin: (race: RaceListItem, anchor: PressAnchor) => void;
+  /**
+   * Anything that has to draw OVER this panel: the race menu, and the two confirmations it
+   * raises. Rendered inside this panel's own modal, as a sibling of it.
+   *
+   * > **Not a sibling of this component, which is how it was written.** iOS presents one modal
+   * > per view controller and refuses the second in silence, so a menu opened from a row in here
+   * > would simply never appear once this became a modal - the identical failure `RisingSheet`'s
+   * > own `overlay` prop was added for, after it shipped as a card whose "..." did nothing.
+   *
+   * The components that draw it take `hosted` to skip their own `Modal`. Window coordinates
+   * still line up, because this modal fills the screen.
+   */
+  overlay?: ReactNode;
 }) {
   const needle = query.trim().toLowerCase();
   const shown = needle.length === 0 ? races : races.filter((r) => r.name.toLowerCase().includes(needle));
 
+  /*
+   * `Overlay`, because this panel renders inside the hub's `ScrollView`. Absolute positioning
+   * resolved against the scroller's content rather than the window, so it landed at the end of
+   * the page instead of centred on the screen. See `Overlay`'s own note.
+   */
   return (
+    <Overlay onDismiss={onDismiss}>
     <View style={styles.sheetBackdrop}>
       <Pressable
         style={styles.sheetScrim}
@@ -624,7 +672,10 @@ function RacesSheet({
           )}
         </ScrollView>
       </View>
+      {/* Last in the tree, so it draws over the panel rather than inside it. */}
+      {overlay}
     </View>
+    </Overlay>
   );
 }
 

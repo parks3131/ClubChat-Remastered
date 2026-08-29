@@ -59,6 +59,10 @@ should be refused on those grounds.
     The clubs listed are only ones **the viewer is already in**. A DM must not become a window
     onto somebody's whole membership.
 
+    **Its header carries the back arrow and the three-dot menu and no title** *(2026-08-29)*.
+    The page opens on the person's picture and name, so a worded title above that named the
+    category where the page already named the person.
+
 11. **A conversation can be pinned to the top of your own chat list.** Personal and
     unobservable: the other participant cannot tell, and pinning needs no permission beyond
     being able to read the conversation. Pinned conversations sort above every unpinned one

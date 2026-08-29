@@ -226,6 +226,24 @@ export default function MainStackLayout() {
         A conversation's own profile. Its back target is the conversation rather than the chat
         list, because that is one meaningful level up - it is reached from the DM's header.
       */}
+      {/*
+        **No drawn title, so the bar carries the back arrow and the three dots and nothing else.**
+        The screen's first element is the person's face at 96pt with their name under it, so a
+        "Chat info" above that is a second heading for the same thing and the weaker of the two -
+        it names the category where the page already names the person. Asked for from the phone on
+        2026-08-29: "I don't want it to show chat info on the top, just the back button and the
+        three dots."
+
+        > **An empty STRING, not a function returning null**, and the difference is not style.
+        > `headerTitle` is only consulted as a custom view when it is a function; the native
+        > header is handed `title` separately, and `getHeaderTitle` falls back to it for anything
+        > that is not a string. So `() => null` renders no custom view AND leaves the native title
+        > to draw "Chat info" - which is exactly what it did on the Simulator, looking for all the
+        > world like the change had not reloaded.
+
+        `title` stays for the route's own identity - the navigator's name for this screen, and the
+        document title on web - where a word beats an empty string.
+      */}
       <Stack.Screen
         name="dm/[channelId]/profile"
         options={({ route }) => {
@@ -233,6 +251,7 @@ export default function MainStackLayout() {
           const channelId = params['channelId'] ?? '';
           return {
             title: 'Chat info',
+            headerTitle: '',
             headerLeft: () => (
               <BackTo href={`/chat/${channelId}`} label="Chat" variant="icon" />
             ),
