@@ -228,6 +228,23 @@ measure. Without the flag all of them are present. **The lesson is the calibrati
 a search of a binary that returns nothing should be re-run against a string known to be there before
 the absence is believed.
 
+**The ninth update, and the bundle search grew a negative.** Update group
+`4629b4a1-11d3-48ee-bb1e-d69aef10ecc2`, iOS update `01a04f06-cf2d-76bd-9218-89ac279eba47`, commit
+`6662ba4184e195c652e2a992e30d37d9dbe0f44c` with no asterisk, runtime version
+`bfe9e13f237478450cf6a5383915466e1e15d392` generated and compared before publishing. It carries the
+swipeable photo viewer.
+
+The export was searched for the two endpoint URLs as always, and then for two strings that exist
+only in the new code - `onMomentumScrollEnd` and `initialScrollIndex`, both present - **and for one
+that must NOT be there**: `1 / `, the counter built and removed the same hour at the founder's
+request, absent. A positive says the new code shipped; the negative says the correction shipped with
+it, which is the half a rebuild of the previous commit would also satisfy. Both run without `grep
+-w`, for the reason the eighth update's entry gives.
+
+**Arrival is not yet proved** for either this or the seventh and eighth: `Update 01a04f06` at the
+bottom of Profile after two relaunches is the test, and nobody has looked. These rows stay weak
+until somebody does.
+
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because
 `cdn.<domain>` has to validate the `exp`/`sig` pair that [Media pipeline](07-media-pipeline.md)
