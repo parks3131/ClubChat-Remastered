@@ -146,6 +146,15 @@ forwards and backwards in both the gallery and chat; the header changed from "Lu
 "Sheet Proof" across the sender boundary, and the menu offered Report on their photograph and not on
 mine. Full suite green.
 
+**And then the fix for "lift it a bit up" turned out to have a second half, which the founder found
+in one try.** Hiding the navigator's header while a photograph is open put the viewer under the
+status bar correctly; closing it left the grid with no bar at all - no title, no back arrow, no way
+off the screen. Screen options reach the navigator through `setOptions`, which merges and persists,
+so unmounting the element that hid the header was never an instruction to restore it. Both branches
+now state what they want. Logged in [`BUGS.md`](BUGS.md) with the part worth keeping: the change was
+verified by opening a photograph, which is the half that worked, and the return journey was never
+tried because it was not what had changed.
+
 ---
 
 ## 2026-08-29 - The same argument, finished: the document, and a clock that stopped lining up

@@ -94,6 +94,13 @@ export default function GalleryScreen() {
         Chat and Highlights never had this: both draw the viewer as an absolutely positioned
         sibling over a screen with no header at all. Hiding it here is what makes the three the
         same surface rather than two that agree and one that does not.
+
+        > **Both branches say what the header should be, and the OTHER branch is the bug.** Options
+        > reach the navigator through `setOptions`, which MERGES and persists: unmounting the
+        > element that hid the header does not put it back. Shipped that way for an hour on
+        > 2026-08-29 - closing a photograph returned you to a grid with no bar, no title and no
+        > back arrow, which is a screen with no way out of it. So the grid states `true` rather
+        > than relying on absence to mean anything.
       */}
       <Stack.Screen options={{ headerShown: false }} />
       <PhotoViewer
@@ -138,6 +145,9 @@ export default function GalleryScreen() {
   }
 
   return (
+    <>
+    {/* Put back explicitly. See the note in the viewer branch for why absence is not enough. */}
+    <Stack.Screen options={{ headerShown: true }} />
     <DataScreen
       load={load}
       isEmpty={(data) => data.entries.length === 0}
@@ -195,6 +205,7 @@ export default function GalleryScreen() {
         </ScrollView>
       )}
     </DataScreen>
+    </>
   );
 }
 
