@@ -282,6 +282,20 @@ reported seeing the new behaviour: a menu at the bottom edge, Mute in it, swipin
 photographs, and a header returning. **Where a change is visible, seeing it is the better proof**;
 the id is the fallback for a change that is not.
 
+**The eleventh update, the same evening.** Update group
+`bfd20862-e86c-4d47-ba6c-a5d4c40ce7c5`, iOS update `01a04f20-e1c8-76b3-83ee-f2f543f1903b`, commit
+`111535656d05d65f8fea9edd23f36d3b7f71d195` with no asterisk, runtime version
+`bfe9e13f237478450cf6a5383915466e1e15d392` generated and compared before publishing. It carries
+drag-to-dismiss on the chat keyboard - [`DESIGN/09`](../DESIGN/09-chat-composer.md) rule 9.
+
+The two endpoint URLs are in the bundle. `interactive` is there too, eight times, which is worth
+naming as the weak check it is: the word is common enough in a React Native bundle that its presence
+proves nothing about this change - it would have been there before. **The commit line is the
+evidence**, as the tenth update's entry argued: EAS stamps `111535656d` on the publish, `git log -1`
+here says the same hash, and the absence of an asterisk says the tree was clean. Not every change
+has a distinctive string to look for, and reaching for a common one is how a check turns into a
+ritual.
+
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because
 `cdn.<domain>` has to validate the `exp`/`sig` pair that [Media pipeline](07-media-pipeline.md)
