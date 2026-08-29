@@ -189,6 +189,28 @@ deliberately empty: build 6 already embedded its code, so nothing on the device 
 and the proof had to be an id at the bottom of Profile. This one changed something the person who
 reported it was looking at, which is the other half of the same claim.
 
+**The seventh update, 2026-08-29.** Update group `94b03b5d-0dcb-454c-82dd-8f25e1660b8b`, iOS update
+`01a04ec6-cca3-777d-9baa-60c071fe718c`, commit `f217a4376ce1cea6344ff099cf7600b3efd41ed1` with no
+asterisk, runtime version `bfe9e13f237478450cf6a5383915466e1e15d392`. It carries the sheet
+positioning fix in [`BUGS.md`](../../BUGS.md), 2026-08-29: the DM three-dot menu at the bottom edge
+rather than mid-page, the Chat info header with no title, and the same fault fixed on the profile's
+club list and a club hub's races search.
+
+**Two of the three pre-publish checks ran as written and the third had to be substituted.**
+`fingerprint:generate` returned `bfe9e13f...` and was compared against build 6's runtime version
+before publishing, not after. The exported bundle was searched and holds `https://api.clubchatapp.com`
+and `wss://ws.clubchatapp.com`, with `http://localhost:3000` present as the `developmentFallback`
+argument for the reason the fifth update's entry gives. **`eas env:list` could not be run**, so the
+evidence that `--environment production` selected the right values is the publish command's own line
+naming all four - `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_SENTRY_DSN`, `EXPO_PUBLIC_SENTRY_ENVIRONMENT`,
+`EXPO_PUBLIC_WS_URL` - loaded from the `production` environment, plus the bundle search above. The
+bundle search is the stronger of the two anyway: it reads what was actually inlined rather than what
+was offered.
+
+**Arrival is not yet proved.** Published, matched and inlined correctly; whether it reached the
+phone is `Update 01a04ec6` at the bottom of Profile after two relaunches, and nobody has looked yet.
+This row stays weak until somebody does.
+
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because
 `cdn.<domain>` has to validate the `exp`/`sig` pair that [Media pipeline](07-media-pipeline.md)
