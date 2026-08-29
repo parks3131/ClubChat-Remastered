@@ -296,6 +296,32 @@ here says the same hash, and the absence of an asterisk says the tree was clean.
 has a distinctive string to look for, and reaching for a common one is how a check turns into a
 ritual.
 
+**The twelfth update, and the first in four where all three checks ran as written.** Update group
+`8ec08733-6765-4d9f-b61b-d089fdcb51ca`, iOS update `01a04f3d-3f24-7c9e-b9f3-ab5b3ce9120f`, commit
+`9b21f1d222bbea4f9dca13811dc698e9087b1495` with no asterisk, runtime version
+`bfe9e13f237478450cf6a5383915466e1e15d392` generated and compared against build 6 before
+publishing. It carries the calendar fading a past day's items, [`PRD/07`](../PRD/07-calendar-and-events.md)
+rule 1.
+
+`eas env:list production` ran and was read back, which the seventh update's entry recorded as
+substituted because it could not be. All four `EXPO_PUBLIC_*` values are present and name the real
+hostnames. The bundle holds both endpoint URLs, and holds `dayRowPast`, a style name that exists
+nowhere but in this change - so unlike the eleventh update's `interactive`, its presence is
+evidence rather than decoration. **The search was calibrated before it was believed**: a short UI
+string known to predate this change was searched for first and found, which is the eighth update's
+lesson applied rather than re-learned.
+
+Note what the last five entries have converged on. The commit line is the proof and the string
+search is a second opinion, worth running only when the change happens to leave a distinctive
+string behind. Three of the last five did not, and saying so each time is what keeps the check from
+becoming a ritual that always passes.
+
+**Arrival is not yet proved.** Published, matched and inlined correctly; whether it reached the
+phone is a past date on the calendar drawing its items grey, or `Update 01a04f3d` at the bottom of
+Profile after two relaunches. The behaviour is the better instrument here, for the reason the tenth
+update's entry gives: this change is visible, so seeing it beats reading an id. This row stays weak
+until somebody looks.
+
 **The CDN row is the one piece here that is not built from the server image**, and it is the only
 part of the system that does not run on Node. It is deployed by `wrangler`, and it exists because
 `cdn.<domain>` has to validate the `exp`/`sig` pair that [Media pipeline](07-media-pipeline.md)
