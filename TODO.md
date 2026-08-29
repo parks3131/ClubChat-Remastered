@@ -207,6 +207,25 @@ is "what is broken".
 
 ## Known broken, or quietly wrong
 
+- [ ] **Deleting a photo message does not take the photo away.** Found 2026-08-29 while reading
+      the delete path for the tombstone work, not by anything failing. `applySoftDelete` nulls the
+      body and leaves `media_id` on the row, and `resolveMediaRedirects` authorizes a media read on
+      channel membership alone with no `deleted_at` check - so anyone in the channel who kept the
+      id can still fetch the bytes after the message is gone. The gallery is the only surface that
+      filters them, so it is invisible from the app.
+
+      **Decide before fixing, because it is not obviously a bug.** A photo deleted from chat may
+      still be wanted in the club's gallery, and the two are the same object today. The narrow
+      answer is to refuse a media read whose only referencing message is deleted; the broader one
+      is to decide whether a deletion is meant to reach the bytes at all. `PRD/13` owns that.
+
+- [ ] **A deleted message that was pinned still reports the moment it was pinned.**
+      `applySoftDelete` sets `pinned = false` and leaves `pinned_at` alone, while `setPinned`
+      clears both. Two of the four envelope builders then hard-code `pinnedAt: null` and the other
+      two emit the stale timestamp, so the same tombstone describes itself differently depending on
+      which route asked. Harmless today - nothing reads `pinnedAt` on an unpinned message - and it
+      is the kind of disagreement that becomes a bug the first time something does.
+
 - [ ] **`BadgedIcon` renders twice, and nobody knows why.** Found 2026-08-18 on the dev trace:
       `GET /notifications/badge` arrived in pairs 20 to 30ms apart, repeating at exactly 60.000s
       on an idle app - two timers, not one firing twice. There is one call site

@@ -323,6 +323,21 @@ this list on 2026-08-14 - it is an open question below, not a settled no.)*
 
 ### Open product questions
 
+- **Should a tombstone say who deleted the message, and not only whose it was?** Raised
+  2026-08-29 while giving the tombstone back its sender's face and name
+  ([`PRD/05`](05-chat.md) rule 9). A sender taking their own message back and an admin removing
+  somebody else's are currently **indistinguishable**: both run the same soft delete, write the
+  same single `deleted_at`, and publish the same update frame, so nothing on the wire or in the
+  row carries the difference. Only a platform moderator's removal is recoverable at all, and only
+  from the moderation audit rows rather than from the message.
+
+  It was offered alongside the attribution work and deliberately not taken, because the cost is a
+  different shape: a new column, a migration and a server release **before** any app change, and
+  it stays blank for every message deleted before the column exists. The product question
+  underneath it is whether a club should see its admins moderating - rule 9 already argues a
+  tombstone is public precisely so removal is not silent, which is an argument for saying so, and
+  against it is that naming the remover invites an argument in the room rather than a quiet word
+  outside it. Not urgent: nothing is wrong today, and a member who wants to know can ask.
 - ~~**Should a meetup notify anybody?**~~ **Settled 2026-08-08: no**, and unchanged by the
   2026-08-14 rename. Raised when the founder expected to tap through to one from a notification and
   found the catalogue has no type for it. He confirmed the silence is intended - it is reference

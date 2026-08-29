@@ -270,8 +270,53 @@ describe('runs of consecutive messages', () => {
     expect(starters([from(1, BOB, 0), shout, from(3, BOB, 2)])).toEqual(['m-1', 'm-3']);
   });
 
-  it('starts a new run under a tombstone', () => {
-    const gone = from(2, BOB, 1, { deletedAt: new Date(NOON).toISOString() });
+  /*
+   * THE CASE THE FOUNDER DESCRIBED, 2026-08-29: six messages inside four minutes, one person
+   * talking, and the third one deleted. His face and his name are already at the top of the spell,
+   * so the tombstone needs neither - and it must not break the spell either, or messages four,
+   * five and six start over under a second copy of the same face a few points lower.
+   *
+   * This replaced `starts a new run under a tombstone`, which asserted the opposite and was
+   * correct while a tombstone was a centred, unattributed line. It stopped being correct the
+   * moment a tombstone became a sided bubble that inherits its attribution.
+   */
+  it('keeps a spell together when one of its messages is deleted', () => {
+    const rows = [
+      from(1, BOB, 0),
+      from(2, BOB, 1),
+      from(3, BOB, 2, { deletedAt: new Date(NOON).toISOString() }),
+      from(4, BOB, 3),
+      from(5, BOB, 3),
+      from(6, BOB, 4),
+    ];
+    expect(starters(rows)).toEqual(['m-1']);
+  });
+
+  /*
+   * The other half of the same rule, and the half the change exists for. A tombstone that OPENS a
+   * spell carries the face and the name, because there is nothing above it to inherit them from -
+   * and "whose message was that" is the entire reason it stopped being anonymous.
+   */
+  it('names a tombstone that opens a spell', () => {
+    const gone = from(2, ALICE, 1, { deletedAt: new Date(NOON).toISOString() });
+    expect(starters([from(1, BOB, 0), gone, from(3, ALICE, 2)])).toEqual(['m-1', 'm-2']);
+  });
+
+  it('starts a run for the next speaker after somebody else tombstone', () => {
+    const gone = from(2, ALICE, 1, { deletedAt: new Date(NOON).toISOString() });
+    expect(starters([from(1, BOB, 0), gone, from(3, BOB, 2)])).toEqual(['m-1', 'm-2', 'm-3']);
+  });
+
+  /*
+   * A deleted SYSTEM message is still drawn as a centred system line, because `MessageRow` checks
+   * the system actor BEFORE it checks deletion. `drawOf` has to ask them in the same order or the
+   * grouping puts a face and a name over a grey line nobody sent.
+   */
+  it('treats a deleted system message as a system line, not as a tombstone', () => {
+    const gone = from(2, SYSTEM_ACTOR_ID, 1, {
+      body: 'Casey joined the club',
+      deletedAt: new Date(NOON).toISOString(),
+    });
     expect(starters([from(1, BOB, 0), gone, from(3, BOB, 2)])).toEqual(['m-1', 'm-3']);
   });
 

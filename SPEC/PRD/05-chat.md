@@ -171,6 +171,23 @@ second is a feature the whole product would have to bend around. Threads remain 
 9. **A message can be deleted by its sender or by an admin of that space.** Deletion leaves a
    "This message was deleted" tombstone rather than removing it from history. Reactions and
    pin state are cleared with it.
+
+   **The tombstone still says whose message it was.** It keeps the sender's face and name and
+   stays on their side of the conversation, exactly as the message did - only the words go. A
+   tombstone that says nothing about its author tells the room that something was removed and
+   not who removed it, which leaves a mystery where the hole already is, and the reply above it
+   still names the person being answered. Highlights had drawn a deleted message this way since
+   it was written; the conversation was the surface that disagreed.
+
+   **The attribution follows the same once-per-spell rule as any other message** (rule 3e). Six
+   messages inside five minutes carry one face, and deleting the third of them does not add a
+   second one in the middle of the spell or break the four below it. So a face appears on a
+   tombstone only where it would have appeared on the message it replaces.
+
+   **What is deliberately not said: who did the deleting.** A sender taking their own message
+   back and an admin removing it are the same tombstone, because nothing records the difference -
+   see the note in [`PRD/17`](17-roadmap-and-open-questions.md). Naming the remover is a
+   different feature with a different cost, not an omission from this one.
 9a. **A sender may correct their own text message for five minutes, and only their own.** Long
     press, then the pencil. The words return to the composer with a bar above it saying so, and
     the send control becomes a check.

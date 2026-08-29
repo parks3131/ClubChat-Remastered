@@ -19,6 +19,87 @@ Newest first.
 
 ---
 
+## 2026-08-29 - The tombstone gets its face back, and the run it sits in survives
+
+**A deleted message stopped being anonymous.** It kept the sender's face, name and side; only the
+words went. Before this, `MessageRow` returned early at the deleted branch and drew a centred
+italic line in the same container a system notice uses - so a message taken back read as something
+the app had said, and the room could not tell whose it was. `PRD/05` rule 9 now carries the
+behaviour.
+
+**The whole change was client-side, and that was worth confirming rather than assuming.** The
+envelope already carries `senderName` and `senderImage`, `applySoftDelete` never touches
+`sender_id`, and the local cache's `patch` deliberately nulls `body` alone - so every piece of
+identity the new row needs was already sitting in the client, unused. Nothing on the server, the
+schema or the wire moved, which is what puts this on the over-the-air path rather than behind a
+build.
+
+**Another surface in the same app had been drawing it this way the whole time.** Highlights renders
+a deleted message with avatar, name, clock and tombstone. So this was not a new idea being
+invented; it was the conversation being the one screen that disagreed, and the fix makes two agree.
+
+### The founder's refinement, which arrived mid-build and was the better rule
+
+The first framing was "put the face and the name on the tombstone". He corrected it while the work
+was open: if somebody sends six messages in four minutes and deletes the third, **his face is
+already at the top of that spell and the tombstone needs neither a copy of it nor to break the
+spell**. That is not a smaller version of the request, it is the correct one - and it turned out to
+be what `decideRunStarts` does for free once a tombstone is `attributed` rather than
+`interrupting`. One classification, both rules.
+
+### The ordering trap the change created
+
+`drawOf` asked about deletion before it asked about the system actor, while `MessageRow` asks the
+other way round. That disagreed harmlessly for the life of the file, because both branches answered
+`interrupting` and the wrong answer equalled the right one. Making a tombstone `attributed` ends
+the coincidence: a deleted system message would have had a face and a name drawn over a centred
+grey line nobody sent. The fix is two lines swapped, and it exists because the module's own doc
+comment says it must keep mirroring that component - the comment was right, and reading it was
+what found this.
+
+Four tests were written before any of it, three of them red on the first run. The one asserting the
+old grouping - `starts a new run under a tombstone` - was correct when written and had to be
+replaced rather than kept, which is the ordinary version of the thing that bit us on 2026-08-25
+when two tests asserted a defect.
+
+### What the smoke test found that was not ours
+
+The delete looked broken. Sending six messages and deleting the third left the words on screen, and
+the obvious reading was that the change had broken rendering. It had not: the api answered `200`
+with `body: null` and `deletedAt` set, and the row in the database was correctly soft-deleted with
+its `rev` bumped. **The outbox had one unprocessed `message.deleted` and six unprocessed
+`message.created`.** Five `worker/main.ts` processes were alive in the founder's tree and none of
+them was draining, so no `msg.update` frame was ever published. A reload took the tombstone through
+`/sync` instead and it rendered correctly on the first try.
+
+Worth recording for the shape rather than the cause: **a stalled worker presents as a client bug**,
+because the surface that fails is the screen and the thing that failed is three processes away. The
+tell was in `.dev-trace/trace.jsonl`, which had the `DELETE` at `200` with the right response body -
+a perfect server answer followed by a screen that did not move, which is the same signature as the
+2026-08-25 meetup crash pointed in the opposite direction. Checking the outbox backlog is what
+settled it, and it is already the standing advice for judging whether a dev stack is alive.
+
+Verified on web in the running app, from both sides: as the sender, with the tombstone mid-spell
+carrying no second face and the four messages below it staying grouped; and from a second account
+in the same club, seeing the other person's face once with two tombstones under it. Not a
+native-only prop anywhere in the change, so web is a real check here rather than failure mode 28
+waiting to happen.
+
+### What is still not true
+
+It has not been on a device or the Simulator, and it has not been published. Two incidental
+findings from reading the delete path went to `TODO.md` rather than being fixed: **a deleted
+photo's bytes are still fetchable** by anyone in the channel holding the id, because
+`resolveMediaRedirects` authorizes on membership alone and never asks whether the message survives;
+and `applySoftDelete` clears `pinned` without clearing `pinned_at`, so two of the four envelope
+builders report a stale pin time on a tombstone and the other two hard-code null. Neither is what
+was asked for and both are somebody's decision rather than a mechanical fix.
+
+**Naming who deleted a message was offered and declined**, and is recorded as an open product
+question in `PRD/17`. Nothing distinguishes a sender taking a message back from an admin removing
+it - same handler, same single `deleted_at`, same frame - so it needs a column, a migration and a
+server release before any app change, and it would stay blank for everything deleted before that.
+
 ## 2026-08-27 - Five updates, one build, and the chat surface they carried
 
 **The over-the-air path stopped being a milestone and became how work reaches the phone.** Four

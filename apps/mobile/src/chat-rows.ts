@@ -173,9 +173,15 @@ export function rowKey(row: Row): string {
 
 /** What a message row puts on screen, which is what decides whether it can be part of a run. */
 type Draw =
-  /** A bubble or a card with a face and a name over it. Only these can start or continue a run. */
+  /**
+   * A bubble or a card with a face and a name over it. Only these can start or continue a run.
+   *
+   * A tombstone is one of these as of 2026-08-29. It is a sided bubble that says the words are
+   * gone, so it belongs to the spell it sits in: it inherits the face already drawn above it, and
+   * it leaves the messages below it inheriting the same one.
+   */
   | 'attributed'
-  /** Something full width and unsided: a system line, a tombstone, an announcement. Breaks a run. */
+  /** Something full width and unsided: a system line or an announcement. Breaks a run. */
   | 'interrupting'
   /** Nothing at all. A deleted CARD draws no tombstone, so it must not break what it sits inside. */
   | 'invisible';
@@ -198,8 +204,16 @@ function isCard(message: MessageEnvelope): boolean {
  * or omit one from something that is.
  */
 function drawOf(message: MessageEnvelope): Draw {
-  if ((message.deletedAt ?? null) !== null) return isCard(message) ? 'invisible' : 'interrupting';
+  /*
+   * The system actor is asked FIRST, because `MessageRow` asks it first.
+   *
+   * While a tombstone was `interrupting` the order did not matter - both answers were the same,
+   * so a deleted system message got the right grouping by coincidence. Making a tombstone
+   * `attributed` ends the coincidence: ask deletion first and a centred grey line nobody sent
+   * gets a face and a name drawn over it.
+   */
   if (message.senderId === SYSTEM_ACTOR_ID) return 'interrupting';
+  if ((message.deletedAt ?? null) !== null) return isCard(message) ? 'invisible' : 'attributed';
   if (message.type === 'announcement') return 'interrupting';
   return 'attributed';
 }
@@ -222,9 +236,13 @@ function drawOf(message: MessageEnvelope): Draw {
  *
  *  1. **A different person speaks.** The obvious one.
  *  2. **Something full width sits between**, because it does: a date heading, the "Last read" rule,
- *     a system line, a tombstone, an announcement, or a poll, event or meeting card. After any of
- *     those the next bubble has to say who is speaking again, and a card additionally heads a run
- *     of its own - it carries its own attribution and is not part of anybody's spell of talking.
+ *     a system line, an announcement, or a poll, event or meeting card. After any of those the
+ *     next bubble has to say who is speaking again, and a card additionally heads a run of its
+ *     own - it carries its own attribution and is not part of anybody's spell of talking.
+ *
+ *     **A tombstone is deliberately not on that list**, since 2026-08-29. It is a sided bubble
+ *     the width of what it replaced, so nothing full width sits between: deleting the third of
+ *     six messages must leave the other five under the one face they were already under.
  *  3. **The run has been going five minutes.** Measured from the run's FIRST message, not from
  *     the previous one - see `RUN_GAP_MS`. Measuring from the previous one would let a chain of
  *     four-minute messages run for an hour under a header that still says the hour's first

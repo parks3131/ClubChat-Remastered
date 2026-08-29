@@ -744,13 +744,24 @@ function MessageActions({
 }
 
 /**
+ * What a deleted message says, everywhere this screen says it.
+ *
+ * It was typed out three times in this file and worded two more ways elsewhere - the chat list
+ * says "Message deleted" and the moderation window adds a full stop. Those two are left alone
+ * deliberately: `conversationSummaryText` lives in `@clubchat/shared` and is read by the server
+ * as well, so changing it would change what a push notification says, which is a different
+ * decision from what a chat row draws.
+ */
+const DELETED_MESSAGE_TEXT = "This message was deleted";
+
+/**
  * One line describing a pinned message, for the notice strip.
  *
  * A pinned photo or document has no body to show, and an empty notice is worse than none: the
  * strip's whole job is to say what is being kept in view.
  */
 function pinnedPreview(message: MessageEnvelope): string {
-  if (message.deletedAt !== null) return "This message was deleted";
+  if (message.deletedAt !== null) return DELETED_MESSAGE_TEXT;
   if (message.type === "photo") return "Photo";
   if (message.type === "document") return message.documentName ?? "Document";
   return message.body ?? "";
@@ -763,7 +774,7 @@ function pinnedPreview(message: MessageEnvelope): string {
  * labelled one: the whole job of the box is to say what is being answered.
  */
 function quoteLabel(quote: MessageReplyRef): string {
-  if (quote.deleted) return "This message was deleted";
+  if (quote.deleted) return DELETED_MESSAGE_TEXT;
   if (quote.preview !== null) return quote.preview;
   if (quote.type === "photo") return "Photo";
   if (quote.type === "document") return quote.documentName ?? "Document";
@@ -1572,9 +1583,56 @@ const MessageRow = memo(function MessageRow({
      * same event twice while claiming somebody deleted a message.
      */
     if (cardId !== null) return null;
+    /*
+     * **A tombstone keeps the face and the name, and sits on its sender's side.** Asked for on
+     * 2026-08-29: a message vanishing anonymously tells the room something was removed and not
+     * who removed it, so a conversation with a hole in it also has a mystery in it.
+     *
+     * It is drawn as an ordinary row on purpose - same wrapper, same author line, same bubble,
+     * same indent - so it inherits every rule those already follow, the mirrored gutters that
+     * landed on 2026-08-27 included. Only what is INSIDE the bubble differs.
+     *
+     * **The attribution is once per spell, not once per tombstone.** `decideRunStarts` treats
+     * this as an ordinary attributed row, so deleting the third of six messages leaves one face
+     * at the top of all six rather than putting a second one in the middle of somebody's
+     * sentence. `startsRun` is the whole of that rule and it is decided elsewhere.
+     *
+     * **No `Pressable`.** There is nothing to react to, nothing to report, nothing to open and
+     * nothing to edit - the server refuses all four on a deleted row - so a hold target here
+     * would be a control that does nothing, which is failure mode 33's lesson pointed at a
+     * gesture instead of at a handle. `isJumpTarget` still applies: a reply quote can jump to a
+     * message that has since been deleted, and the highlight is how the reader knows they
+     * arrived.
+     */
     return (
-      <View style={styles.systemRow}>
-        <Text style={styles.tombstone}>This message was deleted</Text>
+      <View
+        style={[
+          styles.messageRow,
+          startsRun && styles.messageRowRunStart,
+          mine && styles.messageRowMine,
+          isJumpTarget && styles.jumpTarget,
+        ]}
+      >
+        {startsRun && message.senderName !== null && (
+          <AuthorLine
+            name={message.senderName}
+            image={message.senderImage}
+            time={formatTimeOfDay(message.createdAt)}
+            mine={mine}
+            onPress={() => onOpenProfile(message.senderId)}
+          />
+        )}
+        <View
+          style={
+            mine
+              ? [styles.bubbleWrapMine, styles.authorIndentMine]
+              : [styles.bubbleWrapTheirs, styles.authorIndent]
+          }
+        >
+          <BubbleContainer mine={mine}>
+            <Text style={styles.tombstone}>{DELETED_MESSAGE_TEXT}</Text>
+          </BubbleContainer>
+        </View>
       </View>
     );
   }
@@ -5775,11 +5833,22 @@ const styles = StyleSheet.create({
     color: color.textSecondary,
     textAlign: "center",
   },
+  /*
+    What a deleted message says, inside the bubble that message used to be.
+
+    > **It was a centred line and stopped being one on 2026-08-29**, when the tombstone gained the
+    > face and name of whoever wrote it. `textAlign: "center"` went with the centring: the text now
+    > starts at the bubble's own edge like every other message's words do.
+
+    Italic and in the secondary colour, so it reads as a note ABOUT a message rather than as one.
+    That holds on both sides without a `mine` variant, because both fills are light and both text
+    styles already resolve to `textPrimary` - see the block above `sent`. A darker sent fill would
+    break this, and it would break `receivedText` in the same place.
+  */
   tombstone: {
     ...type.bodySmall,
     color: color.textSecondary,
     fontStyle: "italic",
-    textAlign: "center",
   },
   /*
     The composer bar: blurred, with a wash of the accent rather than a flat panel colour.
