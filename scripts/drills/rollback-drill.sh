@@ -78,6 +78,14 @@ READY_INTERVAL=5
 BOOT_LINE='worker started, draining outbox and running the scheduler'
 MACHINES_API='https://api.machines.dev/v1'
 
+# **The Machines API `wait` endpoint caps `timeout` at 60 seconds and answers 400 above it**, with
+# `invalid WaitMachineRequest.Timeout: value must be inside range [1s, 1m0s]`. Asking for 120
+# stranded clubchat-worker on the previous image at step 1 on 2026-08-31 - the exact failure this
+# wait was added to prevent, caused by the wait. So the budget is spent in slices the endpoint
+# will accept, which also lets a slow start outlast the ceiling of any single call.
+WAIT_SLICE=60
+WAIT_BUDGET=180
+
 usage() {
   cat <<'USAGE'
 Machine rollback drill: roll one Fly app's machine back one image and forward again.
@@ -275,7 +283,7 @@ printf '\n'
 # field changed. The note at the top of this file carries the reason; the short version is that
 # flyctl 0.4.95 cannot express a digest-pinned image and every image here is digest-only.
 set_machine_image() {
-  local target=$1 token cfg payload http instance
+  local target=$1 token cfg payload http instance waited
 
   token=$(fly auth token 2>/dev/null) || { printf '  could not obtain a Fly API token\n' >&2; return 1; }
   [[ -n $token ]] || { printf "  'fly auth token' returned nothing\\n" >&2; return 1; }
@@ -322,15 +330,31 @@ set_machine_image() {
     return 1
   fi
 
-  http=$(curl -sS --max-time 180 -o /dev/null -w '%{http_code}' \
-         "$MACHINES_API/apps/$app/machines/$machine_id/wait?instance_id=$instance&state=started&timeout=120" \
-         -H "Authorization: Bearer $token") \
-    || { printf '  the wait request itself failed\n' >&2; return 1; }
+  waited=0
+  while :; do
+    http=$(curl -sS --max-time $((WAIT_SLICE + 30)) -o /tmp/rollback_drill_wait -w '%{http_code}' \
+           "$MACHINES_API/apps/$app/machines/$machine_id/wait?instance_id=$instance&state=started&timeout=$WAIT_SLICE" \
+           -H "Authorization: Bearer $token") \
+      || { printf '  the wait request itself failed\n' >&2; return 1; }
 
-  if [[ $http != 200 ]]; then
-    printf '  instance %s never reached "started" (wait answered %s)\n' "$instance" "$http" >&2
-    return 1
-  fi
+    [[ $http == 200 ]] && break
+
+    # A 400 is a malformed request, and it will be just as malformed a second from now. Only a
+    # timeout earns another slice - retrying a rejection would burn the whole budget restating it.
+    if [[ $http == 400 ]]; then
+      printf '  the wait request was REJECTED, so this is a defect in the drill rather than in the\n' >&2
+      printf '  machine: %s\n' "$(head -c 200 /tmp/rollback_drill_wait 2>/dev/null || true)" >&2
+      return 1
+    fi
+
+    waited=$((waited + WAIT_SLICE))
+    if [[ $waited -ge $WAIT_BUDGET ]]; then
+      printf '  instance %s never reached "started" in %ss (last answer %s: %s)\n' \
+        "$instance" "$waited" "$http" "$(head -c 200 /tmp/rollback_drill_wait 2>/dev/null || true)" >&2
+      return 1
+    fi
+    printf '    still waiting for instance %s (%ss)\n' "$instance" "$waited"
+  done
 
   printf '  instance %s started\n' "$instance"
   return 0
@@ -347,15 +371,29 @@ machine_state_now() {
     | jq -r --arg id "$machine_id" '.[] | select((.id // .ID) == $id) | (.state // .State) // empty'
 }
 
-# How many times the worker has announced a boot inside the log window flyctl will show us.
+# The timestamp of the MOST RECENT boot the worker has announced, as Fly recorded it.
 #
-# The check this replaces grepped for the line with no notion of WHEN, so a boot line from an
-# EARLIER boot - still sitting in the buffer - satisfied it instantly, and the drill would have
-# called a machine ready before it had finished restarting. Requiring the count to RISE ties the
-# signal to this restart. A count that falls because an old line aged out of the window reads as
-# "not ready yet", which is the safe direction to be wrong in.
-boot_count() {
-  fly logs --app "$app" --machine "$machine_id" --no-tail 2>/dev/null | grep -cF "$BOOT_LINE" || true
+# Two wrong versions came before this one, and both are kept here because they are different
+# mistakes and only the second was expensive:
+#
+#   1. Grepping for the line at all, with no notion of WHEN. A line from an EARLIER boot, still in
+#      the buffer, satisfied it instantly, so the drill would call a machine ready before it had
+#      restarted. Caught by reading, and it would have fired on the very next run.
+#   2. Counting the lines and requiring the count to RISE. `fly logs --no-tail` returns a ROLLING
+#      window, so old lines age out and the count falls as readily as it climbs - seen live on
+#      2026-08-31 as `boot lines 4 (was 5)`. After that it could never exceed its own baseline
+#      again, so the drill spent its whole budget on a machine that was already healthy and then
+#      stranded it. A guard that cannot pass is not the safe direction to be wrong in; it is the
+#      same outcome as no guard, reached more slowly.
+#
+# Comparing the LATEST timestamp fixes both. A shifting window drops old lines without changing
+# which line is newest, and both values being compared come from Fly's own clock, so nothing is
+# ever compared against this laptop's idea of the time.
+last_boot_at() {
+  fly logs --app "$app" --machine "$machine_id" --no-tail 2>/dev/null \
+    | grep -F "$BOOT_LINE" \
+    | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' \
+    | tail -1
 }
 
 wait_ready() {
@@ -371,13 +409,16 @@ wait_ready() {
       printf '    attempt %s/%s -> %s %s\n' "$attempt" "$READY_ATTEMPTS" "$code" "$(head -c 80 /tmp/rollback_drill_body 2>/dev/null || true)"
     else
       state=$(machine_state_now)
-      seen=$(boot_count)
-      if [[ $state == started ]] && [[ ${seen:-0} -gt ${boot_before:-0} ]]; then
-        printf '  ready: machine started and logged a NEW boot line after %ss\n' "$(((attempt - 1) * READY_INTERVAL))"
+      seen=$(last_boot_at)
+      # Non-empty AND different. Empty means the boot line has aged out of the window entirely,
+      # which is an absence of evidence and must not read as a fresh boot.
+      if [[ $state == started ]] && [[ -n $seen ]] && [[ $seen != "$boot_before" ]]; then
+        printf '  ready: machine started and logged a NEW boot at %s, after %ss\n' \
+          "$seen" "$(((attempt - 1) * READY_INTERVAL))"
         return 0
       fi
-      printf '    attempt %s/%s -> state=%s, boot lines %s (was %s)\n' \
-        "$attempt" "$READY_ATTEMPTS" "${state:-unknown}" "${seen:-0}" "${boot_before:-0}"
+      printf '    attempt %s/%s -> state=%s, last boot %s (was %s)\n' \
+        "$attempt" "$READY_ATTEMPTS" "${state:-unknown}" "${seen:-none}" "${boot_before:-none}"
     fi
     sleep "$READY_INTERVAL"
   done
@@ -405,7 +446,7 @@ RECOVER
 # Only the worker reads the log, so only the worker pays for a log fetch. `boot_before` is a
 # global on purpose: `wait_ready` compares against the count taken immediately before the update
 # that it is waiting on, and re-taking it inside the loop would compare a number with itself.
-[[ -n $probe ]] || boot_before=$(boot_count)
+[[ -n $probe ]] || boot_before=$(last_boot_at)
 
 printf 'step 1: rolling BACK to %s\n' "$to_image"
 if ! set_machine_image "$to_image"; then
@@ -418,7 +459,7 @@ if ! wait_ready 'on the previous image'; then
   die "$app did not become ready on the previous image. THIS IS THE RESULT THE DRILL EXISTS TO FIND: the image you would roll back to does not serve traffic. Do not treat rollback as available until this is understood."
 fi
 
-[[ -n $probe ]] || boot_before=$(boot_count)
+[[ -n $probe ]] || boot_before=$(last_boot_at)
 
 printf '\nstep 2: rolling FORWARD to %s\n' "$current_image"
 if ! set_machine_image "$current_image"; then

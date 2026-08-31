@@ -106,14 +106,53 @@ new image is healthy", which is the opposite claim. Every first probe on 2026-08
 `000`, so the old process had already gone every time; that is timing, and the next run's timing
 is not this run's. The step now blocks on the Machines API `wait` endpoint for the **new
 `instance_id`**, which changes on every restart while the machine id never does, so what it waits
-for is the process about to serve rather than the one already running. Syntax-checked and dry-run
-only. It wants one `--execute` run to be real, and this paragraph is wrong until it gets one.
+for is the process about to serve rather than the one already running.
+
+**Proved on `clubchat-worker` at 19:17Z, and both guards fired on that single run.** The machine
+reported `state=started` at attempt 1 while the newest boot line was still the previous boot's -
+`last boot 19:17:11Z (was 19:17:11Z)` - and stayed that way for 27 seconds before the worker
+announced itself at `19:17:38Z`. That 27-second window is precisely what the original check passed
+in, twice a run, on three apps.
 
 **The gateway route that was considered and rejected**: gate on `/__parity`'s reported version
 changing. Precise on the api, and impossible on the gateway, which answers 404 there. A guard that
 exists on two of three roles would have left the third quietly weaker than the file claimed.
 
 ## What went wrong while fixing
+
+**I stranded the worker twice more, with the code written to stop it being stranded.** This is the
+worst thing in this file and it happened after the original bug was understood and fixed.
+
+**The first was a number I never checked.** The instance wait asked the Machines API for
+`timeout=120`. The endpoint caps it at 60 and answers `400` with
+`invalid WaitMachineRequest.Timeout: value must be inside range [1s, 1m0s]`. So step 1 swapped the
+image, the wait was rejected before it began, and the drill exited leaving the worker on the
+previous image - the exact outcome the wait exists to prevent, produced by the wait. I had reasoned
+carefully about *which* thing to wait on, which was right, and never checked the range of the
+number I passed it. The budget is now spent in slices the endpoint accepts, which also lets a slow
+start outlast the ceiling of any single call.
+
+**The second was a counter that could go backwards.** The boot-line guard counted occurrences and
+required the count to rise. `fly logs --no-tail` returns a ROLLING window: old lines age out, so
+the count falls as readily as it climbs. Live output read `boot lines 4 (was 5)`, after which the
+condition could never be satisfied again, and the drill spun its full budget on a machine that was
+already healthy and then stranded it. **A guard that cannot pass is not a conservative guard.** It
+is the same outcome as no guard, reached more slowly and with more confidence. Comparing the
+newest boot timestamp fixes it, because a shifting window drops old entries without changing which
+one is last.
+
+**Both shipped because I proved the idea and not the code.** The first version of the wait and the
+counting version of the boot check were each syntax-checked, dry-run, reasoned about at length in
+a comment - and never once executed. The `timeout` range and the rolling window are both facts
+about the outside world that no amount of reading the script could have produced, and one command
+against the live API would have produced either in seconds. That is standing instruction 9 in
+plain terms, and it was broken twice in an afternoon spent fixing a drill whose entire purpose is
+to stop people trusting an untested mechanism.
+
+**And it went to `main` before it had run.** The `timeout=120` version was committed and pushed on
+the strength of a green type check and suite - neither of which can execute a bash script - so for
+about forty minutes `main` carried a drill that would strand a server at step 1. The suite passing
+said nothing about this change and was allowed to feel like it had.
 
 **The drill's loudest output was a false accusation, and it took reading the server's own log to
 find that out.** "THIS IS THE RESULT THE DRILL EXISTS TO FIND" is the sentence a person reads at
