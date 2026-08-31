@@ -339,9 +339,11 @@ platform check - so the commit line is the evidence, as the tenth and eleventh u
 argue. EAS stamps `547e85eb35`, `git rev-parse HEAD` here says the same hash, and there is no
 asterisk.
 
-**Arrival is unproved as this is written.** The change is visible, so the founder seeing centred
-text and an unclipped second line is the proof this row wants, per the tenth update's argument; the
-id at the bottom of Profile reads `01a059c6` and is the fallback.
+**Confirmed on the founder's iPhone: "yeah its done I can see it phone."** Proved by the behaviour
+rather than by the id at the bottom of Profile, which the tenth update's entry argues is the better
+instrument wherever the change is something a person can see. **Every update published to this
+channel is still known to have arrived**, which the twelfth update's entry first made true and this
+one keeps true.
 
 Note what the last five entries have converged on. The commit line is the proof and the string
 search is a second opinion, worth running only when the change happens to leave a distinctive
