@@ -48,6 +48,12 @@ The **"Kinetic Performance System"**, extracted verbatim from the Stitch export'
 | Icons | MaterialIcons from `@expo/vector-icons`. The four destinations are `forum`, `calendar-month`, `notifications`, `person` - the first was v1's `groups` until that destination stopped being a roster of clubs and became the conversation list |
 | Avatar identity | Five placeholder colours for a **group** avatar with no photo, picked by hashing its channel id so a club keeps one forever. Not a second accent: they stand in for a photograph and are never interactive, a state, or a surface |
 
+> **`body` is 16/26, and the 26 is paragraph leading.** Spread it whole into a control that holds
+> one line and iOS puts the surplus above the letters rather than around them, which takes the text
+> off the control's centre. The chat composer and every search field shipped that way until
+> 2026-08-31. A one-line control takes the family and the size only and lets the font's own metrics
+> centre the line; see [Engineering pitfalls](14-engineering-pitfalls.md) 46.
+
 > **`primary` is `#ff4d00`, not DESIGN.md's `#aa3000`** - an explicit founder preference applied
 > app-wide. Every other token is untouched. Worth knowing before somebody "fixes" it back.
 

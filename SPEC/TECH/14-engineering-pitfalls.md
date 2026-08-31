@@ -343,3 +343,59 @@ they cost.
     unmeasured** - and the gap here was four days of a repo that read as finished. A change that
     alters entitlements, native config or a build tool's config file should be followed by running
     the thing it configures, in the same session that made it.
+
+46. **A text style built for reading a paragraph puts its extra leading ABOVE the letters, so
+    reusing it in a one-line control moves the text off centre and nothing can fail.** Reported off
+    the phone on 2026-08-31: the message field's placeholder was "not hanging on the center".
+    `type.body` is `16/26`, and the 26 is leading chosen for a wall of message text; both the chat
+    composer's field and every `SearchField` in the product spread it whole. On iOS
+    `RCTTextAttributes` turns a `lineHeight` into `NSParagraphStyle.minimumLineHeight`, and TextKit
+    reaches that number by growing the line's **ascent** - so the surplus lands entirely above the
+    glyphs and is never split around them. Measured on the Simulator: the composer's placeholder sat
+    2.5pt below the centre of its own 38pt pill, 16.0pt of air above the "M" against 11.0pt below
+    the baseline, and the search field 2.2pt below the centre of its 52pt field. Typed text sits
+    exactly where the placeholder does, so both were wrong together.
+
+    **Rule: a control that holds one line takes the family and the size from the type scale and
+    lets the font's own ascent and descent centre the line.** They do it to within a third of a
+    point, which is what font metrics are for. The padding then carries whatever height the line
+    box has stopped contributing, so the control keeps the size it had.
+
+    **The second half is the one that bit while fixing it, and it reads as fixed.** Dropping the
+    line height alone left the composer's box shorter than the `minHeight` already on it, and **a
+    box taller than its own text is slack that iOS fills from the top**: the letters went from
+    2.5pt low to 0.83pt high. Better, plainly wrong, and easy to ship. The padding has to leave the
+    box taller than any minimum on it, or the minimum quietly takes the sizing back.
+
+    How to recognise the class: `...type.body` spread into a style that also carries a `height`, a
+    `minHeight`, or a radius derived from a control height. Nothing can fail - it typechecks, it
+    renders, every value in it is individually correct - and the symptom is two or three points,
+    which is exactly the size of thing that reads as "off" without reading as broken. **Web cannot
+    show it**: CSS splits leading evenly above and below the line, so the identical style is centred
+    in a browser and low on the device. That is `AGENTS.md` failure mode 28 once more, and the
+    reason this was measured on the Simulator rather than looked at in Chrome.
+
+47. **A comment saying a prop is platform-specific is a claim about a dependency VERSION, and it
+    expires without a sound.** The chat composer passed `numberOfLines={1}` with a comment
+    explaining that it exists for the web `<textarea>`, whose default is two rows, and that it is
+    "Android-only on native, which is to say a no-op on the platform this is drawn for". That was
+    true when it was written. React Native 0.86's `TextInput.js` reads
+    `numberOfLines={props.rows ?? props.numberOfLines}` inside its **iOS** branch and hands it to
+    the native component, where it is not a starting size but a **ceiling**. So the field stopped
+    growing: a message that wrapped to two lines had its first line clipped by the top of the pill,
+    and you could not read what you had just typed. Found on 2026-08-31 while fixing something else
+    on the same bar, and it had shipped to a phone.
+
+    **Rule: a prop whose correctness depends on it being ignored is load-bearing on a version, so
+    scope it to the platform that needs it rather than relying on the others to keep discarding
+    it.** `COMPOSER_ROWS` is `1` on web and `undefined` everywhere else, which is what the comment
+    always meant.
+
+    How to recognise the class, and why it is worse than an ordinary regression: **nothing changed
+    in our code.** No diff, no failing test, no error - an upgrade merely started honouring
+    something that was already being said, and the only artefact recording the old behaviour was a
+    comment that reads as authoritative and is now the reason the bug survived review. This is
+    non-negotiable 1 aimed at a prop rather than at an API: the pinned documentation for the
+    version actually installed is the fact, and a comment is a memory of a different one. Compare
+    entry 46, found in the same hour on the same control: there the platform did something the code
+    did not expect, here it did something the code had explicitly been told it would not.

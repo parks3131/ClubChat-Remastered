@@ -178,6 +178,21 @@ const META_FRESH_FOR_MS = 30_000;
 const CARDS_ARE_LONG_PRESSABLE = Platform.OS !== 'web';
 
 /**
+ * How many rows the composer's field opens at, and it is deliberately web-only.
+ *
+ * The web field is a `<textarea>`, whose default is **two** rows, so an empty composer came up a
+ * whole line taller than the one on the device and took the bar with it. `numberOfLines` is the
+ * lever for that, and it used to be safe to pass everywhere because it was Android-only on native.
+ *
+ * **It stopped being.** React Native 0.86's `TextInput.js` forwards `numberOfLines` to the iOS
+ * native component, where it is not a starting size but a CEILING: the field then refuses to grow
+ * past one line, so a message that wraps has its first line clipped by the top of the pill and you
+ * cannot read what you just typed. Reproduced on the Simulator on 2026-08-31 and fixed by giving
+ * the value to web alone, which is the only platform that ever needed it.
+ */
+const COMPOSER_ROWS = Platform.OS === 'web' ? 1 : undefined;
+
+/**
  * Keep the visible content where it is when something above it resizes.
  *
  * A module constant rather than an inline object because this is a NATIVE prop: a fresh literal
@@ -5106,15 +5121,8 @@ export default function ChatScreen() {
               setCaret(event.nativeEvent.selection.end)
             }
             multiline
-            /*
-              One row until there is more than one row of text.
-
-              This is a `<textarea>` on web, whose default is **two** rows - so the empty field
-              came up a whole line taller than the field it is a copy of on the device, and the
-              bar with it. It is Android-only on native, which is to say a no-op on the platform
-              this is drawn for, and the fix for the one where it is visible.
-            */
-            numberOfLines={1}
+            // One row on web, and no ceiling anywhere else. See `COMPOSER_ROWS`.
+            numberOfLines={COMPOSER_ROWS}
             accessibilityLabel={asAnnouncement ? "Announcement" : "Message"}
             onSubmitEditing={() => void send()}
           />
@@ -6043,10 +6051,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.divider,
     paddingHorizontal: space.md,
-    // Enough to clear one line of `body` and no more: the padding is what decides whether the
-    // field reads as a pill beside the send disc or as a box that dwarfs it.
-    paddingVertical: space.xs + 1,
-    ...type.body,
+    /*
+      The padding, and deliberately NOT `type.body`'s line height.
+
+      A line height taller than the font's own line box is added ABOVE the letters on iOS, never
+      split around them: `RCTTextAttributes` sets `minimumLineHeight` and TextKit grows the line's
+      ascent to reach it. `type.body` carries 26pt of leading because it is built for reading a
+      paragraph, and one line of it in a 38pt pill put the placeholder 2.5pt below the pill's own
+      centre - 16pt of air above the "M" against 11pt below the baseline. That is what was
+      reported off the phone, and it applies to typed text exactly as it does to the placeholder.
+      So this field takes the family and the size and lets the font's own ascent and descent
+      centre the line, which they do to within a third of a point.
+
+      The padding then has a second job beyond looking right: it must leave the box TALLER than
+      `minHeight`. A box taller than its own text is slack, iOS fills slack from the top, and the
+      letters go back off centre - measured 0.83pt high with the padding at 5 and `minHeight`
+      doing the sizing. At 7 the pill is 37.7pt against a 36pt floor, so the floor never binds and
+      the bar keeps the height it has always had.
+    */
+    paddingVertical: 7,
+    fontFamily: type.body.fontFamily,
+    fontSize: type.body.fontSize,
     color: color.textPrimary,
   },
   sendButton: {

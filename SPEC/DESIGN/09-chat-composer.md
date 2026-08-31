@@ -80,6 +80,26 @@ bottom of the screen is made of.
    Chat alone. The search screens scroll under a keyboard too, and were deliberately left out:
    this is the one surface where somebody reads and types in the same breath.
 
+10. **The letters sit on the centre of the field, and the field's own text style is what decides
+    that** *(2026-08-31)*. Reported off the phone as the placeholder not hanging on the centre. A
+    body text style carries the leading a paragraph wants, and iOS adds that leading above the
+    letters rather than around them, so spreading it whole into this one-line pill pushed the text
+    down by two and a half points. The field takes the family and the size only, and the font's own
+    metrics do the centring; the padding carries the height the line box no longer does, and has to
+    keep the box taller than the minimum on it or that minimum takes the sizing back. Promoted to
+    [Engineering pitfalls](../TECH/14-engineering-pitfalls.md) entry 46, because every one-line
+    control in the product has this shape - the search field had the identical defect and was fixed
+    in the same change.
+
+11. **The field grows with the message, and only web is told how many rows to open at**
+    *(2026-08-31)*. A `<textarea>` opens at two rows, so web is pinned to one; every other platform
+    is given nothing. Passing that pin everywhere was safe for as long as iOS ignored it, and React
+    Native 0.86 stopped ignoring it - there it is a ceiling rather than a starting size, so a
+    message that wrapped had its first line cut off by the top of the pill. The field grows to its
+    maximum and then scrolls, keeping the line being typed in view. Promoted to
+    [Engineering pitfalls](../TECH/14-engineering-pitfalls.md) entry 47, because the lesson is about
+    any prop kept correct by another platform discarding it.
+
 ## States
 
 | State | Treatment |
@@ -106,6 +126,7 @@ new message everywhere else in the product.
 | Animate the keyboard's rise, never its fall | Anything that moves with the keyboard | [Engineering pitfalls](../TECH/14-engineering-pitfalls.md) 23 |
 | The list must clear the bar without the bar knowing the list exists | The chat list's content padding | Rule 6 |
 | A keyboard event must not re-render the chat screen | `KeyboardAvoider`, which holds that state itself | HISTORY 2026-08-14 |
+| A one-line control must not inherit paragraph leading | Every field with a fixed height, a minimum height, or a pill radius | [Engineering pitfalls](../TECH/14-engineering-pitfalls.md) 46 |
 
 ## Accessibility
 
@@ -119,7 +140,7 @@ announcement toggle reports its selected state and says, in words, that it notif
 |---|---|
 | iOS | As described. |
 | Android | Unverified - no build exists. |
-| Web | No software keyboard, so the bar simply sits at the bottom. The field is a `<textarea>`, whose default is two rows, so it is pinned to one. |
+| Web | No software keyboard, so the bar simply sits at the bottom. The field is a `<textarea>`, whose default is two rows, so it is pinned to one **there and only there** - see rule 11. |
 
 ## Rejected alternatives
 

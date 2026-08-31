@@ -2269,10 +2269,19 @@ const styles = StyleSheet.create({
     borderColor: color.hairline,
     paddingHorizontal: space.md,
   },
+  /*
+    The family and the size, and deliberately not `type.body`'s line height.
+
+    Same rule and same cause as the chat composer's `input`, which writes it out in full: iOS adds
+    a forced line height above the letters rather than around them, so one line of `body` sat
+    2.2pt below the centre of its own field on every screen that carries a search box. The padding
+    takes on the 4.3pt the line box is no longer contributing, so the field keeps its height.
+  */
   searchInput: {
-    ...type.body,
     flex: 1,
-    paddingVertical: space.sm + 4,
+    paddingVertical: space.sm + 6,
+    fontFamily: type.body.fontFamily,
+    fontSize: type.body.fontSize,
     color: color.textPrimary,
   },
 
