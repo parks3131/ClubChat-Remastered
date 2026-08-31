@@ -312,6 +312,37 @@ evidence rather than decoration. **The search was calibrated before it was belie
 string known to predate this change was searched for first and found, which is the eighth update's
 lesson applied rather than re-learned.
 
+**The thirteenth update, 2026-08-31.** Update group `390065f3-b000-47cc-895c-e5f244f39624`, iOS
+update `01a059c6-0c1a-7bfd-a49d-dae94b325510`, commit `547e85eb354ea8db0252e01b0eddb6be94e4ec3b`
+with no asterisk, runtime version `bfe9e13f237478450cf6a5383915466e1e15d392` generated and compared
+against build 6 before publishing. It carries the composer and search text centred in their own
+fields, and a wrapped message no longer losing its first line behind the top of the pill - both in
+[`BUGS.md`](../../BUGS.md), 2026-08-31.
+
+All three checks ran as written. `fingerprint:generate` returned `bfe9e13f...` and was compared
+first. `eas env:list production` was read back and holds all four `EXPO_PUBLIC_*` values naming the
+real hostnames, which the publish line then confirmed it had loaded. The exported bundle holds both
+endpoint URLs, with `http://localhost:3000` present for the reason the fifth update's entry gives.
+
+**The bundle search needed a third correction, and it failed in the direction that lies.** Plain
+`grep -F` against the `.hbc` reported every string ABSENT, the two endpoint URLs included. That is
+not a finding: `grep` returns nothing at all for this file, apparently because it contains no
+newline-delimited lines it is willing to scan. **`strings -a <bundle> | grep -F` is the search**,
+and with it every string checked was present. The eighth update's lesson is what caught it - a
+calibration string known to predate the change was searched first, came back ABSENT, and so
+condemned the instrument rather than the bundle. Note the shape: the eighth update's failure
+(`grep -w`) and this one both produce a *false absence*, which reads as a serious finding and sends
+you looking for a problem that is not there.
+
+This change left no distinctive string of its own to look for - it is two style properties and a
+platform check - so the commit line is the evidence, as the tenth and eleventh updates' entries
+argue. EAS stamps `547e85eb35`, `git rev-parse HEAD` here says the same hash, and there is no
+asterisk.
+
+**Arrival is unproved as this is written.** The change is visible, so the founder seeing centred
+text and an unclipped second line is the proof this row wants, per the tenth update's argument; the
+id at the bottom of Profile reads `01a059c6` and is the fallback.
+
 Note what the last five entries have converged on. The commit line is the proof and the string
 search is a second opinion, worth running only when the change happens to leave a distinctive
 string behind. Three of the last five did not, and saying so each time is what keeps the check from
