@@ -345,6 +345,46 @@ instrument wherever the change is something a person can see. **Every update pub
 channel is still known to have arrived**, which the twelfth update's entry first made true and this
 one keeps true.
 
+**The fourteenth update, 2026-09-02, and the first that could not have been published at all.**
+Update group `adb14e7d-8190-453c-b378-0d37498ace0f`, iOS update
+`01a06363-67b2-779a-acb2-36cf7e0e265a`, commit `0a309f9398eab5c68ee83e7f46f09ae0a666e2c2`,
+runtime version `bfe9e13f237478450cf6a5383915466e1e15d392`. It carries Weekly Meetups redrawn as a
+spine, the week paged by bare chevrons, and the meetup composer full screen with its fields
+grouped.
+
+**The runtime version is the whole story of this one.** Hours before it was published the
+fingerprint read something else entirely, and the cause was one `&&` added to the `ios` script in
+`apps/mobile/package.json` - which is an input to the fingerprint, so any edit to it, script or
+otherwise, strands every installed build. An update published in that window would have reported
+success and reached nobody. Measured rather than guessed: reverting that one file returned
+`bfe9e13f` exactly, and reverting the workspace root as well changed nothing. `AGENTS.md` failure
+mode 42 carries the recognition rule, and the guard now lives in the root manifest. **The check
+this document has asked for since the fifth update is what caught it**, which is the first time it
+has caught anything.
+
+All three pre-publish checks ran. `fingerprint:generate` was compared against build 6 before
+publishing rather than after. `eas env:list --environment production` was read back and holds all
+four `EXPO_PUBLIC_*` values naming the real hostnames - note it must run from `apps/mobile`, since
+from the repo root EAS answers "project not configured". And the exported bundle was searched with
+`strings -a`, calibrated first against a string known to predate the change so a false absence
+would have condemned the instrument rather than the bundle: both endpoint URLs are present, and so
+are `What the club will be doing` and `The week before this one`, which exist nowhere but in this
+change.
+
+**It carries an asterisk, and the reason is worth recording because it is not what an asterisk
+usually means.** The tree was verified clean before publishing and clean after, yet EAS stamped
+`0a309f9...*`. The dirty file was an untracked `app.json` containing `{"expo": {}}`, scaffolded at
+the repo root by an earlier `eas-cli` invocation run from the wrong directory - EAS writes an empty
+project file when it cannot find one, and says nothing about having done so. So the asterisk was
+real and its cause was inert: the bundle is that commit's code, which the string search above
+proves independently. **Running any `eas` command from the repo root can leave that file behind,
+and the next publish inherits the asterisk.** Delete it and re-check `git status` before publishing.
+
+**Confirmed on the founder's iPhone: `Version 1.0.0 (6)` with `Update 01a06363, published Wed, Sep
+2 at 2:30 PM` at the foot of Profile.** Proved by the id rather than by behaviour, which is the
+weaker of the two instruments and the right one here: the change is a redraw of one screen, and an
+id that matches the published update is unambiguous where "it looks different" is not.
+
 Note what the last five entries have converged on. The commit line is the proof and the string
 search is a second opinion, worth running only when the change happens to leave a distinctive
 string behind. Three of the last five did not, and saying so each time is what keeps the check from
