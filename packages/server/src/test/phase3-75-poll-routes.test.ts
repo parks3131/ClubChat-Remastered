@@ -425,6 +425,53 @@ describe('poll routes: what the list row carries', () => {
     expect(polls.map((poll: { closed: boolean }) => poll.closed)).toEqual([false, false, true]);
   });
 
+  /*
+   * **Deployment rule 5: a response may gain a field and may never lose one.**
+   *
+   * The list row used to be a summary carrying `voteCount` and `votedByMe`, and every build
+   * already on a phone reads them by those names. `eas update` reaches phones over hours to a
+   * day, so between this deploy and the last relaunch an installed build asks this route and
+   * gets whatever it answers - dropping the two would have shown it "undefined VOTES" and an
+   * empty MY VOTES tab for as long as that took.
+   *
+   * They are derived from the options rather than queried again, so they cannot disagree with
+   * the ballot beside them. Removing them is a later release of its own, once old builds have
+   * drained - deployment rule 2.
+   */
+  it('still carries the summary fields older builds read', async () => {
+    const owner = await signUp('ListLegacyOwner');
+    const voter = await signUp('ListLegacyVoter');
+    const { clubId } = await createClubAs(owner);
+    await join(clubId, voter);
+
+    const created = await as(owner, 'POST', `/clubs/${clubId}/polls`, {
+      ...TWO_OPTIONS,
+      allowMultiple: true,
+    });
+    const options = (await as(owner, 'GET', `/polls/${created.body.pollId}`)).body.poll.options;
+
+    const fresh = (await as(owner, 'GET', `/clubs/${clubId}/polls`)).body.polls[0];
+    expect(fresh.voteCount).toBe(0);
+    expect(fresh.votedByMe).toBe(false);
+
+    await as(owner, 'POST', `/poll-options/${options[0].id}/vote`);
+    await as(owner, 'POST', `/poll-options/${options[1].id}/vote`);
+    await as(voter, 'POST', `/poll-options/${options[0].id}/vote`);
+
+    // Votes CAST, not people: one member contributed two of these three.
+    const row = (await as(owner, 'GET', `/clubs/${clubId}/polls`)).body.polls[0];
+    expect(row.voteCount).toBe(3);
+    expect(row.votedByMe).toBe(true);
+    // ...and it agrees with the ballot beside it, because it is derived from it.
+    expect(
+      row.options.reduce((sum: number, option: { voteCount: number }) => sum + option.voteCount, 0),
+    ).toBe(row.voteCount);
+
+    const asVoter = (await as(voter, 'GET', `/clubs/${clubId}/polls`)).body.polls[0];
+    expect(asVoter.voteCount).toBe(3);
+    expect(asVoter.votedByMe).toBe(true);
+  });
+
   it('reports a null deadline for a poll that only closes by hand', async () => {
     const owner = await signUp('OpenEndedOwner');
     const { clubId } = await createClubAs(owner);

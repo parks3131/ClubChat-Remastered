@@ -541,14 +541,32 @@ export async function deletePoll(
  * see them, every voter's name. That is four statements regardless of N - `readPolls` gathers
  * with `= ANY(...)` - but the payload grows with members times options. At club size that is
  * small; if a club ever runs hundreds of polls this is the seam to page.
+ *
+ * > **`voteCount` and `votedByMe` are still on every row, and they are there for builds that are
+ * > already on phones.** Deployment rule 5: a response may gain a field and may never lose one.
+ * > The summary this route used to answer with carried both by those names, `eas update` takes
+ * > hours to a day to reach a handset, and in that window an installed build asks this exact
+ * > route - dropping them would have shown it "undefined VOTES" and an empty MY VOTES tab until
+ * > it relaunched. **Derived from the options rather than queried again**, so the number can
+ * > never disagree with the ballot printed beside it. Removing them is a release of its own once
+ * > old builds have drained, which is deployment rule 2.
  */
+/**
+ * A row of the polls list: a whole poll, plus the two fields the summary before it carried.
+ *
+ * The extra pair is a compatibility surface with builds already installed, not something new code
+ * should read - a client holding a `PollView` derives both from `options` and cannot go stale.
+ * See the note on `listPolls`.
+ */
+export type PollListRow = PollView & { voteCount: number; votedByMe: boolean };
+
 export async function listPolls(
   db: Db,
   ctx: AccessContext,
   // clubId is required, not optional: the club branch of canAccessPoll checks membership
   // against it, so passing a placeholder would deny every club poll silently.
   scope: { scope: 'club' | 'race' | 'eboard'; scopeId: string; clubId: string },
-): Promise<PollView[]> {
+): Promise<PollListRow[]> {
   // Checked ONCE, before the query, because access to a poll depends only on its scope -
   // every poll in one scope is visible to exactly the same people. `readPolls` still runs the
   // same predicate per id; this is the early exit that saves asking for the ids at all.
@@ -574,9 +592,17 @@ export async function listPolls(
               p.id DESC
   `);
 
-  return readPolls(
+  const views = await readPolls(
     db,
     ctx,
     rows.rows.map((row) => row.id),
   );
+
+  return views.map((poll) => ({
+    ...poll,
+    // Votes cast, not people: a multi-select poll counts one member several times, which is what
+    // the old summary meant by "42 VOTES" and what an installed build still renders.
+    voteCount: poll.options.reduce((total, option) => total + option.voteCount, 0),
+    votedByMe: poll.options.some((option) => option.votedByMe),
+  }));
 }

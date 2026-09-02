@@ -527,6 +527,12 @@ export const pollApi = {
    * `PollView`, not a summary: the list draws the ballot and votes in place, so a row carries its
    * options, their counts, the viewer's own vote and the gated voter list. Ordered by the server -
    * open polls first, newest first inside each group - and rendered in the order it arrives.
+   *
+   * > **The wire also still carries `voteCount` and `votedByMe` per row, and they are left out of
+   * > this type on purpose.** They are the shape this route answered with before the ballot moved
+   * > into the list, kept for builds already on phones - deployment rule 5 - and they come out
+   * > once those have drained. Nothing new should start reading them: a screen holding a
+   * > `PollView` derives both from `options` and cannot go stale against the bars beside it.
    */
   list: (scope: PollScope, scopeId: string) =>
     apiFetch<{ polls: PollView[] }>(`/${scope}/${scopeId}/polls`),
