@@ -11,9 +11,20 @@ round trip out of the conversation and back.
 
 ## Where it appears
 
-Chat, in every scope that can hold one, and the top of each object's own detail screen. Six
-places, one shell. The list rows on the Polls and Calendar screens are **not** this surface -
-they are a bib-and-title row built for scanning a column, and they are deliberately different.
+Chat, in every scope that can hold one, and the top of each object's own detail screen. Plus,
+since 2026-09-02, **every row of the polls list**.
+
+> **The polls list used to be excluded here, in as many words.** This section read "the list rows
+> on the Polls and Calendar screens are *not* this surface - they are a bib-and-title row built for
+> scanning a column, and they are deliberately different." That was true of what shipped, and what
+> shipped was six polls over four and a half screens, each row a status pill, a total, a question
+> and a full-width VOTE NOW button that only opened the poll. The founder was shown nine concepts
+> for the screen and chose the one that draws the ballot in the list and votes in place, so the
+> exclusion is gone for polls and the card is now the row.
+
+The calendar's list rows are still **not** this surface, and for the reason the old sentence gave:
+they are a bib-and-title row built for scanning a column. Nothing on an event row is actionable, so
+there is nothing for a card to carry there that a row does not.
 
 ## Anatomy
 
@@ -45,6 +56,16 @@ they are a bib-and-title row built for scanning a column, and they are deliberat
    the poll; closing, reopening and deleting it are about *managing* it, and those live in the hold
    menu with the other management actions a message has. The test is not permission - it is whether
    the control belongs to the thing being shown or to the person who owns it.
+
+   **Where there is no hold menu, the card carries a way to reach one - never the actions.** The
+   polls list has no message under a finger and so no hold gesture to borrow, which left the
+   creator of a poll no route to close or delete it once the list stopped navigating. The card
+   answers with a single quiet control that *opens the poll's own screen*, shown only to its
+   creator. It is still not a link - the card presses nowhere and this is a sibling target beside
+   the status, the same arrangement the eye already has beside a vote. What must not come back is
+   the pair of filled buttons under the options: that is the arrangement rule 3 removed from chat
+   on 2026-08-13 for making a member's own poll the loudest object on the screen, and a list of
+   six polls would multiply it by six.
 
    > **`PRD/07` rule 10 used to require a VIEW EVENT pill** and it was rewritten on 2026-08-13 to
    > match this. A card that is entirely a link does not also need to contain one.
@@ -97,6 +118,18 @@ they are a bib-and-title row built for scanning a column, and they are deliberat
 12. **A closed poll mutes but still shows its tally.** The fills grey and the eyebrow steps back,
     while the ring marking your own vote survives in a softer tone. Results are most of what a
     closed poll is for; hiding them would make closing it a deletion.
+
+### The card in a list of its own kind
+
+13. **On a screen that is all one kind, the eyebrow spends itself on state instead.** The kind
+    label is what makes a *conversation* scannable, per rule 1 - and in a list where every card is
+    a poll, a column of cards each labelled POLL says nothing at all. So the polls list replaces
+    the eyebrow with the state that rule 14 of [`PRD/11`](../PRD/11-polls.md) asks for: ACTIVE with
+    a countdown while it runs, CLOSED once it has stopped. Chat and the detail screens keep the
+    kind, because there the reader genuinely does not know which of the three they are looking at.
+
+    This is a **slot**, not a variant flag. The card takes whatever header it is given and defaults
+    to the eyebrow, so a fourth caller cannot arrive and add a fourth branch to a switch.
 
 ## Obligations this creates elsewhere
 

@@ -81,9 +81,16 @@ export function registerPollRoutes(app: FastifyInstance, deps: AppDeps): void {
       const resolved = await resolvePollScope(deps.db, scope, request.params.id);
       if (!resolved) return reply.code(404).send({ error: 'not_found' });
 
-      // `listPolls` answers with an empty list rather than a refusal for a scope the caller
-      // cannot reach, which is the right shape for a list and is why there is no status
-      // mapping here.
+      /*
+       * `listPolls` answers with an empty list rather than a refusal for a scope the caller
+       * cannot reach, which is the right shape for a list and is why there is no status
+       * mapping here.
+       *
+       * **A row is a whole poll, not a summary of one.** The polls screen draws the ballot and
+       * votes in place, so the list answers with the same `PollView` the single read does -
+       * gated by the same function, so counts stay public and identities stay private without
+       * this route or that query knowing either rule.
+       */
       return {
         polls: await listPolls(deps.db, request.access!, {
           scope,

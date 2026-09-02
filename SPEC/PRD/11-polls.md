@@ -58,10 +58,29 @@ coming".
 13. The list has an **ALL POLLS** tab and a **MY VOTES** tab (polls the viewer has voted in).
 14. An open poll is a live card with a countdown when it has a deadline; a closed poll is
     visually muted and labelled CLOSED.
+
+    **A row in the list is the whole poll and is votable in place**, exactly as the card in chat
+    is - the same options, the same tally bars, the same per-option control for voters, and the
+    same closed state. Answering every poll a club has open takes one tap each and never leaves
+    the list.
+
+    > **Until 2026-09-02 a row was a summary with a VOTE NOW button on it**, and the button only
+    > opened the poll. Six polls filled four and a half screens, every card ended in the same
+    > orange bar, and none of them showed an option or a leading answer - so the list could be
+    > scrolled but not read. The founder was shown nine designs for the screen and chose this one.
+    > Ordering (rule 16) and the two tabs (rule 13) are unchanged by it.
+
+    Because the row now carries controls, the row itself is not a link. The creator of a poll
+    reaches close, reopen and delete through a single quiet control on their own rows, which
+    opens the poll's own screen where those actions live - never by putting them on the card,
+    for the reason rule 11 gives.
 15. **Polls are not on the calendar**, in either of its views. Removed 2026-08-15; this rule
     used to put them in the Upcoming/Past list bucketed by open/closed rather than by date. The
     poll list in each scope is the only place a poll is enumerated. See
     [Calendar and events](07-calendar-and-events.md) rule 2.
+16. **Open polls are listed before closed ones, each group newest first.** A months-old poll that
+    is still open should not be buried under yesterday's closed one. This is decided once, where
+    the list is read, rather than by whatever draws it.
 
 **Out of scope.** Ranked or weighted voting. Editing a question or options after creation
 (would invalidate cast votes). Adding options after creation, or write-ins. Fully anonymous

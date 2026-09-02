@@ -23,6 +23,18 @@
  * themselves the tally bars. A poll being *made* is the composer below, built from
  * [the composer kit](../composer-kit.tsx): small type, sections separated by air, and the action
  * in the header. Both came from founder references on 2026-08-13.
+ *
+ * > **One card now, in three places, and that is a 2026-09-02 change.** The list used to draw its
+ * > own summary card - a status pill, a total, the question, and a full-width VOTE NOW button that
+ * > only opened the poll. Six polls filled four and a half screens and none of them said anything
+ * > about the vote. The founder picked "vote in place" from nine concepts, so `PollBody` is now
+ * > what the list, the detail screen and the chat card all render, and a poll is answered without
+ * > leaving the list. The summary shape is gone from the wire with it - see `listPolls`.
+ *
+ * What the three renderings still differ in is the line above the question, which is why
+ * `PollBody` takes a `header`: in chat and on the detail screen it says which KIND of card this
+ * is (POLL), and in a list where every card is a poll that would be noise, so the list spends it
+ * on the state instead - ACTIVE with a countdown, or CLOSED.
  */
 
 import type { ReactNode } from 'react';
@@ -31,7 +43,7 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { MaterialIcons } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { pollApi, type PollScope } from '../api.ts';
-import type { PollSummary, PollView } from '../api-types.ts';
+import type { PollView } from '../api-types.ts';
 import { formatCountdown, formatInstant, fromDateKey, toDateKey } from '../dates.ts';
 import { CardEyebrow, CardMeta, CardTitle, ContentCard } from '../content-card.tsx';
 import {
@@ -213,8 +225,13 @@ export function PollsList({
         padded, the two added up and the title sat a full gutter right of everything under it.
         A component that assumes its container's inset is only ever correct by coincidence.
       */}
+      {/*
+        "Active conversations" was v1's copy and was never true here: half the rows are closed
+        polls, and none of them is a conversation. The eyebrow keeps v1's voice; the title now
+        names what the screen actually lists.
+      */}
       <View style={styles.headingGutter}>
-        <ScreenHeading eyebrow="Community voice" title="Active conversations" />
+        <ScreenHeading eyebrow="Community voice" title="Polls" />
       </View>
 
       <View style={styles.tabsWrap}>
@@ -230,11 +247,25 @@ export function PollsList({
 
       <DataScreen load={load}>
         {(data) => {
-          const rows = tab === 'mine' ? data.polls.filter((poll) => poll.votedByMe) : data.polls;
-          // Open first, then closed. Within each group the server's own newest-first order stands.
-          const sorted = [...rows].sort((a, b) => Number(a.closed) - Number(b.closed));
+          /*
+            MY VOTES, from the ballot rather than from a flag beside it.
 
-          return sorted.length === 0 ? (
+            The list row used to carry a `votedByMe` of its own. Now that a row IS the poll, the
+            answer is in the options - and it has to be, or a screen could show a ticked option
+            inside a card the tab had filtered out.
+          */
+          const rows =
+            tab === 'mine'
+              ? data.polls.filter((poll) => poll.options.some((option) => option.votedByMe))
+              : data.polls;
+
+          /*
+            **No sort here.** Open polls before closed, newest first inside each group, is now
+            decided by `listPolls` in SQL. It had to move: the rows are fetched by id in the
+            order the list hands over, so re-sorting them afterwards would be the client
+            disagreeing with the order its own data arrived in.
+          */
+          return rows.length === 0 ? (
             <EmptyState
               title={tab === 'mine' ? 'You have not voted yet' : 'No polls yet'}
               body={
@@ -247,10 +278,17 @@ export function PollsList({
             />
           ) : (
             <Body>
-              {sorted.map((poll) => (
-                <PollCard key={poll.id} poll={poll} />
+              {rows.map((poll) => (
+                <ListPollCard key={poll.id} poll={poll} onVoted={load.reload} />
               ))}
               {canCreate && <NewPollPrompt onPress={() => setComposing(true)} />}
+              {/*
+                The floating button is drawn OVER this list, and `Body` ends in one `space.xl` of
+                padding while the button stands 56 tall on a `space.md` inset. So the last thing
+                in the list sat under it - reported as the button covering a card's own text.
+                Only where there is a button to clear.
+              */}
+              {canCreate && <View style={styles.fabClearance} />}
             </Body>
           );
         }}
@@ -263,51 +301,92 @@ export function PollsList({
   );
 }
 
-/** One row in the list. The whole card is the gesture, so nothing inside it is pressable. */
-function PollCard({ poll }: { poll: PollSummary }) {
+/**
+ * One poll in the list, drawn whole and answered in place.
+ *
+ * > **It used to be a summary with a VOTE NOW button that only opened the poll.** Six polls filled
+ * > four and a half screens, every card ended in the same orange slab, and none of them showed an
+ * > option, a split or a leading answer. The founder chose voting in place from nine concepts on
+ * > 2026-09-02, so this is now `PollBody` - the same component the detail screen and the chat card
+ * > render - and a tap on an option casts, moves or withdraws a vote without leaving the list.
+ *
+ * **Not a Pressable, and it must never become one.** Every option inside is its own button, so
+ * wrapping the card in one is failure mode 17: invalid on web, and on native the outer press
+ * swallows the gesture so tapping an option votes for nothing. The card needs no press target
+ * anyway - the only thing left behind the detail screen is the creator's own close, reopen and
+ * delete, and the control below reaches it as a sibling rather than as a parent.
+ *
+ * **The eye per option is the poll's privacy rule doing its job, and nothing here decides it.**
+ * `option.voters === null` means the viewer may not see identities, which is a different fact
+ * from nobody having voted, and `PollBody` reads it: a public poll shows an eye on every option
+ * that has a vote, and a private one shows none to anybody but its creator. That is `PRD/11`
+ * rules 3 and 5, decided by `readPolls` on the server and merely rendered here.
+ */
+function ListPollCard({ poll, onVoted }: { poll: PollView; onVoted: () => void }) {
   const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [votersFor, setVotersFor] = useState<string | null>(null);
+
+  const vote = async (optionId: string) => {
+    setBusy(true);
+    try {
+      await pollApi.vote(optionId);
+    } finally {
+      // Reload in both directions: a refused vote - a poll that closed under the reader - has to
+      // put the true tally back rather than leave the row showing what was tapped.
+      onVoted();
+      setBusy(false);
+    }
+  };
 
   return (
-    <Pressable
-      style={[styles.pollCard, poll.closed && styles.pollCardClosed]}
-      onPress={() => router.push(`/polls/${poll.id}`)}
-      accessibilityRole="button"
-      accessibilityLabel={`${poll.question}. ${poll.voteCount} ${
-        poll.voteCount === 1 ? 'vote' : 'votes'
-      }. ${poll.closed ? 'Closed, view results' : 'Open, vote now'}`}
-    >
-      <StatusRow closed={poll.closed} closesAt={poll.closesAt} />
+    <ContentCard>
+      <PollBody
+        poll={poll}
+        busy={busy}
+        onVote={(id) => void vote(id)}
+        onSeeVoters={setVotersFor}
+        header={
+          <View style={styles.listCardHead}>
+            <StatusRow closed={poll.closed} closesAt={poll.closesAt} />
+            {/*
+              The creator's own poll, and the only reason the detail screen still exists.
 
-      <View style={styles.tallyRow}>
-        <MaterialIcons
-          name={poll.closed ? 'group' : 'poll'}
-          size={18}
-          color={poll.closed ? color.secondary : color.accentPressed}
-        />
-        <Text style={[styles.tallyLabel, poll.closed && styles.tallyLabelClosed]}>
-          {poll.voteCount} VOTE{poll.voteCount === 1 ? '' : 'S'}
-        </Text>
-      </View>
-
-      <Text style={styles.pollQuestion}>{poll.question}</Text>
+              Close, reopen and delete are deliberately NOT on the card - two filled buttons under
+              a poll made a member's own the loudest object in a conversation, which is why rule 11
+              moved them off the chat card into the hold sheet. A list has no hold sheet, so this
+              is the quiet way through: an icon that opens the poll's own screen, shown only to
+              somebody who has something to do there.
+            */}
+            {poll.isCreator && (
+              <Pressable
+                style={styles.manage}
+                hitSlop={space.sm}
+                onPress={() => router.push(`/polls/${poll.id}`)}
+                accessibilityRole="button"
+                accessibilityLabel={`Manage your poll: ${poll.question}`}
+              >
+                <MaterialIcons name="more-horiz" size={20} color={color.textSecondary} />
+              </Pressable>
+            )}
+          </View>
+        }
+      />
 
       {/*
-        A View rather than an `Action`: this is the card's own affordance, and a real button here
-        would be a pressable inside a pressable - invalid on web and swallowing the outer gesture
-        on native (failure mode 17).
+        Rendered inside the card and still full screen: `VoterSheet` is a `Modal`, which has no
+        parent to be trapped by. That is the same reason the chat card can hold one inside a
+        bubble - see the note on the sheet itself.
       */}
-      {poll.closed ? (
-        <View style={styles.resultsCta}>
-          <Text style={styles.resultsCtaLabel}>VIEW RESULTS</Text>
-          <MaterialIcons name="assessment" size={16} color={color.textSecondary} />
-        </View>
-      ) : (
-        <View style={styles.voteCta}>
-          <Text style={styles.voteCtaLabel}>VOTE NOW</Text>
-          <MaterialIcons name="chevron-right" size={18} color={color.onAccentPressed} />
-        </View>
+      {votersFor !== null && (
+        <VoterSheet
+          poll={poll}
+          optionId={votersFor}
+          onPick={setVotersFor}
+          onDismiss={() => setVotersFor(null)}
+        />
       )}
-    </Pressable>
+    </ContentCard>
   );
 }
 
@@ -692,12 +771,22 @@ function PollBody({
   busy,
   onVote,
   onSeeVoters,
+  header,
 }: {
   poll: PollView;
   busy: boolean;
   onVote: (optionId: string) => void;
   /** Present on the chat card, where each option carries its own eye rather than one button. */
   onSeeVoters?: (optionId: string) => void;
+  /**
+   * What sits above the question, replacing the POLL eyebrow.
+   *
+   * The list passes its status row: on a screen where every card is a poll, labelling each one
+   * POLL says nothing, while ACTIVE with a countdown says the thing rule 14 asks for. Absent
+   * everywhere else, so chat and the detail screen keep the eyebrow that tells a reader which of
+   * the three card kinds they are looking at.
+   */
+  header?: ReactNode;
 }) {
   const total = poll.options.reduce((sum, option) => sum + option.voteCount, 0);
   /*
@@ -710,7 +799,7 @@ function PollBody({
 
   return (
     <>
-      <CardEyebrow label="POLL" chip={poll.closed ? 'CLOSED' : null} />
+      {header ?? <CardEyebrow label="POLL" chip={poll.closed ? 'CLOSED' : null} />}
       <CardTitle>{poll.question}</CardTitle>
 
       <View style={styles.options}>
@@ -1311,42 +1400,28 @@ const styles = StyleSheet.create({
   },
   countdownLabel: { ...type.label, fontSize: 10, color: color.onInverseSurface },
 
-  pollCard: {
-    backgroundColor: color.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.hairline,
-    padding: space.md,
+  /*
+    The list card's top line: the status row on the left, the creator's control on the right.
+
+    `space-between` with the status row growing, so the icon stays pinned to the card's right
+    edge whether the poll carries a countdown pill beside its state or not.
+  */
+  listCardHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: space.sm,
   },
-  pollCardClosed: { backgroundColor: color.chrome },
-  tallyRow: { flexDirection: 'row', alignItems: 'center', gap: space.xs + 2 },
-  tallyLabel: { ...type.numeric, fontSize: 15, color: color.textSecondary },
-  tallyLabelClosed: { color: color.secondary },
-  pollQuestion: { ...type.title, fontSize: 20, lineHeight: 26, color: color.textPrimary },
-  voteCta: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: space.xs + 2,
-    backgroundColor: color.accentPressed,
-    borderRadius: radius.md,
-    paddingVertical: space.sm + 4,
-    marginTop: space.xs,
-  },
-  voteCtaLabel: { ...type.label, fontSize: 13, color: color.onAccentPressed },
-  resultsCta: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: space.xs + 2,
-    borderWidth: 2,
-    borderColor: color.border,
-    borderRadius: radius.md,
-    paddingVertical: space.sm + 2,
-    marginTop: space.xs,
-  },
-  resultsCtaLabel: { ...type.label, fontSize: 13, color: color.textSecondary },
+  /* Icon-only, so the target comes from `hitSlop` rather than from padding that would move the
+     status row's baseline. */
+  manage: { alignItems: 'center', justifyContent: 'center' },
+  /*
+    Room under the last card for the floating button to sit in.
+
+    The button is 56 tall on a `space.md` inset, so it reaches 72 up from the bottom edge, and
+    `Body` ends in `space.xl`. The difference is what used to be covered.
+  */
+  fabClearance: { height: 32 },
 
   prompt: {
     marginTop: space.sm,

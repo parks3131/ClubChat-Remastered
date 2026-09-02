@@ -200,17 +200,6 @@ export type CarGroupsView = {
 // Polls
 // ---------------------------------------------------------------------------
 
-export type PollSummary = {
-  id: string;
-  question: string;
-  closed: boolean;
-  votedByMe: boolean;
-  /** Votes cast, not people: a multi-select poll counts one member several times. */
-  voteCount: number;
-  /** The deadline, for the countdown badge. Null on a poll that closes only by hand. */
-  closesAt: string | null;
-};
-
 export type PollView = {
   id: string;
   question: string;

@@ -38,7 +38,6 @@ import type {
   MeetingSummary,
   NewsPost,
   NewsPostDraft,
-  PollSummary,
   PollView,
   ClubBan,
   DmReportRow,
@@ -522,8 +521,15 @@ const readEvent = createBatchReader<EventDetail>({
 });
 
 export const pollApi = {
+  /**
+   * Every poll in a scope, each one whole.
+   *
+   * `PollView`, not a summary: the list draws the ballot and votes in place, so a row carries its
+   * options, their counts, the viewer's own vote and the gated voter list. Ordered by the server -
+   * open polls first, newest first inside each group - and rendered in the order it arrives.
+   */
   list: (scope: PollScope, scopeId: string) =>
-    apiFetch<{ polls: PollSummary[] }>(`/${scope}/${scopeId}/polls`),
+    apiFetch<{ polls: PollView[] }>(`/${scope}/${scopeId}/polls`),
 
   create: (
     scope: PollScope,

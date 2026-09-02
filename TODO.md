@@ -18,6 +18,21 @@ is "what is broken".
 
 ## Next up
 
+- [ ] **The polls list loads every voter's name for every poll, and nothing pages it yet.**
+      Introduced 2026-09-02 with the votable list. A row is now a whole `PollView`, so one read of
+      a scope carries every option, every count and - wherever the viewer may see them - every
+      voter on every option. It is still four statements regardless of how many polls there are,
+      because `readPolls` gathers with `= ANY(...)`; what grows is the payload, roughly members
+      times options times polls.
+
+      **Nothing is wrong at club size and there is no fix to make today.** A club with a dozen
+      polls and forty members is a few hundred names. The seam to watch is a club that has run
+      polls for a year: the list has no limit, no cursor and no lazy voter fetch, so the first one
+      to notice will notice it as a slow screen rather than as an error. When it matters, the
+      cheapest answer is probably to stop sending voters on the LIST read and fetch them when the
+      eye is tapped - which costs the "opening the voter list fetches nothing" property that
+      `PRD/11` rule 5 leans on, so it is a real trade rather than an oversight.
+
 - [ ] **A cold deep link into any club sub-screen shows a header with no club name, permanently.**
       Found 2026-09-02 while checking something else, and confirmed on the Simulator against
       `polls` and `weekly-meetups`, neither of which is special: the header band draws its back

@@ -290,11 +290,15 @@ describe('poll routes: voting', () => {
 
 describe('poll routes: what the list row carries', () => {
   /*
-   * The list card renders a tally and a countdown without opening the poll, so both have to be on
-   * the summary. Pinned here because the alternative is a client that shows "0 VOTES" on a poll
-   * with votes in it, and nothing else in the suite reads this row's shape.
+   * **The list row IS the poll, not a summary of it.** The polls screen draws a full ballot per
+   * row and votes in place, so a row carries every option, its count, the viewer's own vote and
+   * the same gated voter identity the single read answers with.
+   *
+   * Pinned here because the tempting implementation is a list query that computes the privacy
+   * rules itself, which is a second definition of them - the exact mistake `readPolls` exists to
+   * make impossible. These tests fail the moment the list stops delegating to it.
    */
-  it('sums votes ACROSS options and reports the deadline as ISO 8601', async () => {
+  it('carries every option with its count and the viewer own vote', async () => {
     const owner = await signUp('ListOwner');
     const voter = await signUp('ListVoter');
     const { clubId } = await createClubAs(owner);
@@ -308,26 +312,31 @@ describe('poll routes: what the list row carries', () => {
     const pollId = created.body.pollId;
     const options = (await as(owner, 'GET', `/polls/${pollId}`)).body.poll.options;
 
-    // A poll nobody has voted in reads 0, not null: SUM over no rows is null, and a null here
-    // would render as an empty badge rather than a zero.
+    // A poll nobody has voted in reads 0 on every option, not null: an absent count would render
+    // as an empty bar rather than an empty one at zero.
     const fresh = (await as(owner, 'GET', `/clubs/${clubId}/polls`)).body.polls[0];
-    expect(fresh.voteCount).toBe(0);
-    expect(fresh.votedByMe).toBe(false);
+    expect(fresh.options).toHaveLength(2);
+    expect(fresh.options.map((o: { voteCount: number }) => o.voteCount)).toEqual([0, 0]);
+    expect(fresh.options.every((o: { votedByMe: boolean }) => !o.votedByMe)).toBe(true);
 
-    // Two people, and one of them votes twice - the count is votes cast, not people.
+    // Two people, and one of them votes twice - the counts are votes cast, not people.
     await as(owner, 'POST', `/poll-options/${options[0].id}/vote`);
     await as(owner, 'POST', `/poll-options/${options[1].id}/vote`);
     await as(voter, 'POST', `/poll-options/${options[0].id}/vote`);
 
     const row = (await as(owner, 'GET', `/clubs/${clubId}/polls`)).body.polls[0];
-    expect(row.voteCount).toBe(3);
+    expect(row.options.map((o: { voteCount: number }) => o.voteCount)).toEqual([2, 1]);
+    expect(row.options.map((o: { votedByMe: boolean }) => o.votedByMe)).toEqual([true, true]);
     expect(row.closed).toBe(false);
-    expect(row.votedByMe).toBe(true);
+    // Everything the ballot needs to draw itself, without a second read.
+    expect(row.allowMultiple).toBe(true);
+    expect(row.isCreator).toBe(true);
 
-    // The other member sees the same public tally and their own vote state.
+    // The other member sees the same public counts and only their OWN vote state.
     const asVoter = (await as(voter, 'GET', `/clubs/${clubId}/polls`)).body.polls[0];
-    expect(asVoter.voteCount).toBe(3);
-    expect(asVoter.votedByMe).toBe(true);
+    expect(asVoter.options.map((o: { voteCount: number }) => o.voteCount)).toEqual([2, 1]);
+    expect(asVoter.options.map((o: { votedByMe: boolean }) => o.votedByMe)).toEqual([true, false]);
+    expect(asVoter.isCreator).toBe(false);
 
     /*
      * ISO 8601, not Postgres's own rendering.
@@ -338,6 +347,82 @@ describe('poll routes: what the list row carries', () => {
      */
     expect(row.closesAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/);
     expect(Number.isNaN(Date.parse(row.closesAt))).toBe(false);
+  });
+
+  /*
+   * The eye that reveals an option's voters is drawn per option on the list now, so the gate that
+   * decides whether it appears at all has to be right on the LIST read and not only on the single
+   * one. `voters: null` is "you may not see this" and is a different fact from nobody voting.
+   */
+  it('gates voter identity on a list row exactly as the single read does', async () => {
+    const creator = await signUp('ListPrivacyCreator');
+    const other = await signUp('ListPrivacyOther');
+    const { clubId } = await createClubAs(creator);
+    await join(clubId, other, 'admin');
+
+    const secret = await as(creator, 'POST', `/clubs/${clubId}/polls`, {
+      ...TWO_OPTIONS,
+      isPrivate: true,
+    });
+    const options = (await as(creator, 'GET', `/polls/${secret.body.pollId}`)).body.poll.options;
+    await as(other, 'POST', `/poll-options/${options[0].id}/vote`);
+
+    // The creator sees identities on their own private poll, from the list.
+    const asCreator = (await as(creator, 'GET', `/clubs/${clubId}/polls`)).body.polls[0];
+    expect(asCreator.options[0].voteCount).toBe(1);
+    expect(asCreator.options[0].voters.map((v: { userId: string }) => v.userId)).toEqual([
+      other.userId,
+    ]);
+
+    // Another admin sees the count and NOT the names - null, not an empty list, so the eye is
+    // absent rather than opening onto nothing.
+    const asOther = (await as(other, 'GET', `/clubs/${clubId}/polls`)).body.polls[0];
+    expect(asOther.options[0].voteCount).toBe(1);
+    expect(asOther.options[0].voters).toBeNull();
+    // ...but always sees their own vote.
+    expect(asOther.options[0].votedByMe).toBe(true);
+
+    // On a public poll in the same club, that same viewer does see the names.
+    const open = await as(creator, 'POST', `/clubs/${clubId}/polls`, TWO_OPTIONS);
+    const openOptions = (await as(creator, 'GET', `/polls/${open.body.pollId}`)).body.poll.options;
+    await as(other, 'POST', `/poll-options/${openOptions[0].id}/vote`);
+    const openRow = (await as(other, 'GET', `/clubs/${clubId}/polls`)).body.polls.find(
+      (poll: { id: string }) => poll.id === open.body.pollId,
+    );
+    expect(openRow.options[0].voters).toHaveLength(1);
+  });
+
+  /*
+   * **The server decides the order, not the screen.** It used to sort open-before-closed in the
+   * client over a list the server returned newest-first, which was two places holding one rule.
+   * It also cannot survive the move to a full ballot per row: the rows are now fetched by id in
+   * the order the list hands over, so that order has to already be the right one.
+   */
+  it('puts open polls before closed ones, newest first inside each group', async () => {
+    const owner = await signUp('ListOrderOwner');
+    const { clubId } = await createClubAs(owner);
+
+    const first = await as(owner, 'POST', `/clubs/${clubId}/polls`, {
+      ...TWO_OPTIONS,
+      question: 'Asked first, still open',
+    });
+    const second = await as(owner, 'POST', `/clubs/${clubId}/polls`, {
+      ...TWO_OPTIONS,
+      question: 'Asked second, then closed by hand',
+    });
+    const third = await as(owner, 'POST', `/clubs/${clubId}/polls`, {
+      ...TWO_OPTIONS,
+      question: 'Asked third, still open',
+    });
+    await as(owner, 'POST', `/polls/${second.body.pollId}/closed`, { closed: true });
+
+    const polls = (await as(owner, 'GET', `/clubs/${clubId}/polls`)).body.polls;
+    expect(polls.map((poll: { id: string }) => poll.id)).toEqual([
+      third.body.pollId,
+      first.body.pollId,
+      second.body.pollId,
+    ]);
+    expect(polls.map((poll: { closed: boolean }) => poll.closed)).toEqual([false, false, true]);
   });
 
   it('reports a null deadline for a poll that only closes by hand', async () => {

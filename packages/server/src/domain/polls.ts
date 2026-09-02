@@ -515,17 +515,32 @@ export async function deletePoll(
 
   return { ok: true, deleted: true };
 }
-
 /**
- * Polls the viewer can access in a scope, plus the ones they have voted in.
+ * Every poll the viewer can access in a scope, **each one whole.**
  *
- * `voteCount` is **votes cast, not people** - the sum of the options' maintained counts. On a
- * multi-select poll one member contributes several, which is the number the card means by
- * "42 VOTES": how much response there has been, not how many members responded. `closesAt` rides
- * along so the card can show a countdown without opening every poll to find its deadline.
+ * > **This used to answer with a summary - question, total, `votedByMe`, deadline - and the screen
+ * > drew a card with a Vote Now button on it.** The polls list now draws the ballot itself and
+ * > votes in place, so a row needs exactly what the single read gives: the options, their counts,
+ * > the viewer's own vote and the gated voter identity. Founder decision, 2026-09-02.
  *
- * Both are on the list rather than derived per row in the client, because a client cannot derive
- * them at all: it has the summary and nothing else.
+ * **It delegates to `readPolls` rather than growing its own query, and that is the whole point.**
+ * Counts are public, identity is gated by the poll's privacy setting, and a voter always sees
+ * their own vote either way - three rules that already live in exactly one place. A list query
+ * that computed them again would be a second definition, and the two would drift the first time
+ * one of them gained a case. What this function owns is *which polls, in what order*; what they
+ * contain is not its business.
+ *
+ * **The order is decided here, in SQL, and no longer half here and half in the client.** Open
+ * polls first, each group newest first: a months-old still-open poll should not bury yesterday's
+ * closed one. It matters more than it used to, because `readPolls` answers in the order it is
+ * handed - so this ordering is now the list's order rather than a suggestion the screen re-sorted.
+ * The trailing `p.id` is a tiebreak, so two polls created in the same instant cannot swap places
+ * between two reads of the same list.
+ *
+ * The cost worth knowing: a list of N polls now carries every option and, where the viewer may
+ * see them, every voter's name. That is four statements regardless of N - `readPolls` gathers
+ * with `= ANY(...)` - but the payload grows with members times options. At club size that is
+ * small; if a club ever runs hundreds of polls this is the seam to page.
  */
 export async function listPolls(
   db: Db,
@@ -533,19 +548,10 @@ export async function listPolls(
   // clubId is required, not optional: the club branch of canAccessPoll checks membership
   // against it, so passing a placeholder would deny every club poll silently.
   scope: { scope: 'club' | 'race' | 'eboard'; scopeId: string; clubId: string },
-): Promise<
-  Array<{
-    id: string;
-    question: string;
-    closed: boolean;
-    votedByMe: boolean;
-    voteCount: number;
-    closesAt: string | null;
-  }>
-> {
+): Promise<PollView[]> {
   // Checked ONCE, before the query, because access to a poll depends only on its scope -
-  // every poll in one scope is visible to exactly the same people. Filtering row by row
-  // afterwards would run the same predicate N times for the same answer.
+  // every poll in one scope is visible to exactly the same people. `readPolls` still runs the
+  // same predicate per id; this is the early exit that saves asking for the ids at all.
   const reachable = canAccessPoll(ctx, {
     id: '',
     clubId: scope.clubId,
@@ -556,38 +562,21 @@ export async function listPolls(
   });
   if (!reachable) return [];
 
-  const rows = await db.execute<{
-    id: string;
-    question: string;
-    closed: boolean;
-    voted: boolean;
-    vote_count: number;
-    // A string, not a Date: `db.execute` applies none of the ORM's coercion. Failure mode 7.
-    closes_at: string | null;
-  }>(sql`
-    SELECT p.id, p.question,
-           (p.closed_at IS NOT NULL OR (p.closes_at IS NOT NULL AND p.closes_at < now())) AS closed,
-           EXISTS (SELECT 1 FROM poll_votes v
-                    WHERE v.poll_id = p.id AND v.user_id = ${ctx.userId}) AS voted,
-           -- COALESCE, because a poll whose options have no votes yet must read 0 rather than
-           -- null. SUM over an empty set is null, and null would render as an empty badge.
-           COALESCE((SELECT SUM(o.vote_count) FROM poll_options o WHERE o.poll_id = p.id), 0)
-             AS vote_count,
-           -- isoUtc, never ::text: Postgres renders a timestamptz as "... +00", which is not
-           -- ISO 8601 and which this API's own validators reject. Failure mode 14.
-           ${isoUtc('p.closes_at')} AS closes_at
+  const rows = await db.execute<{ id: string }>(sql`
+    SELECT p.id
       FROM polls p
      WHERE p.scope = ${scope.scope} AND p.scope_id = ${scope.scopeId}
-     ORDER BY p.created_at DESC
+     -- A passed deadline reads as closed with nobody having closed it, exactly as pollRef
+     -- evaluates it per read. There is no job that closes polls, so the ordering has to ask
+     -- the same question the row's own closed flag answers, or the two disagree on screen.
+     ORDER BY (p.closed_at IS NOT NULL OR (p.closes_at IS NOT NULL AND p.closes_at < now())) ASC,
+              p.created_at DESC,
+              p.id DESC
   `);
 
-  return rows.rows.map((row) => ({
-    id: row.id,
-    question: row.question,
-    closed: row.closed,
-    votedByMe: row.voted,
-    // SUM returns a bigint, which the driver hands back as a string.
-    voteCount: Number(row.vote_count),
-    closesAt: row.closes_at,
-  }));
+  return readPolls(
+    db,
+    ctx,
+    rows.rows.map((row) => row.id),
+  );
 }
