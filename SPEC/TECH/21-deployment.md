@@ -379,6 +379,8 @@ project file when it cannot find one, and says nothing about having done so. So 
 real and its cause was inert: the bundle is that commit's code, which the string search above
 proves independently. **Running any `eas` command from the repo root can leave that file behind,
 and the next publish inherits the asterisk.** Delete it and re-check `git status` before publishing.
+**Two names to look for, not one**: `app.json` here, and a `tsconfig.json` holding
+`extends: expo/tsconfig.base`, which stamped the fifteenth update the same way.
 
 **Confirmed on the founder's iPhone: `Version 1.0.0 (6)` with `Update 01a06363, published Wed, Sep
 2 at 2:30 PM` at the foot of Profile.** Proved by the id rather than by behaviour, which is the
@@ -389,6 +391,53 @@ Note what the last five entries have converged on. The commit line is the proof 
 search is a second opinion, worth running only when the change happens to leave a distinctive
 string behind. Three of the last five did not, and saying so each time is what keeps the check from
 becoming a ritual that always passes.
+
+**The fifteenth update, 2026-09-02, and the first in a long while that could not go out alone.**
+Update group `16c16bd3-7578-4f59-ba27-57e9e592e69d`, iOS update
+`01a063b6-c700-7c71-95c3-30ecde89bd6f`, commit `c0574ce9e3d190818d80c42ca29d595c8b3f05a3`,
+runtime version `bfe9e13f237478450cf6a5383915466e1e15d392`. It carries the polls list redrawn as
+the ballot itself: every row is now the whole poll, votable in place, chosen by the founder from
+nine concepts.
+
+**A server deploy came first, and that is the entry's point.** Every update since the tenth has
+been client JavaScript alone, which is one `eas update` and nothing on Fly. This one changed what
+`GET /:scope/:id/polls` answers with, so rule 1 applied for the first time in weeks: image
+`sha256:19932b2a79dc4a51e6e95abec7e94338f4aa488f99750ab8d636c67ee6ada205` to api, gateway and
+worker in that order, `/__parity` reporting `c0574ce` before a byte of the bundle was published.
+Reversed, the new poll screen would have asked a server that still answered with a summary and
+crashed on `poll.options`.
+
+**Rule 5 caught a real defect, and it caught it by being read rather than by failing.** The first
+commit of this change moved the list from a summary to a whole `PollView` and took `voteCount` and
+`votedByMe` off the row with it. Nothing errored; the suite was green and the simulator was
+correct, because the simulator was running the new bundle. What it would have done is meet build 6
+during the hours `eas update` takes to reach a handset and render `undefined VOTES` on every card
+with an empty MY VOTES tab. Both fields are back, derived from `options` so they cannot disagree
+with the ballot beside them, with a test that was watched failing first and returned exactly the
+`undefined` an installed build would have shown. **Removing them is a release of its own** once
+build 6 has drained, per rule 2.
+
+**A `&&` chain of three `fly deploy` commands stopped after the first and said nothing.** The api
+deployed, printed its success and returned to the prompt; gateway and worker never ran and no
+error appeared anywhere. It was caught by `fly image show -a <app>` on all three rather than by
+reading the output, which showed two of them still on `sha256:459146c9`. **Verify the digest per
+app after a multi-role deploy, never the transcript** - the roles are separate Fly apps, a partial
+deploy is a legal state, and this one was invisible in everything the deploy printed. The two were
+then run as separate pastes and all three now report the same digest.
+
+**It carries an asterisk, and the cause is the fourteenth entry's, one file along.** The tree held
+an untracked root `tsconfig.json` containing `{"compilerOptions": {}, "extends":
+"expo/tsconfig.base"}` - Expo scaffolding at a monorepo root, dropped there by an `eas` command run
+from the wrong directory, exactly as the fourteenth's `app.json` was. It is inert: `Dockerfile`
+copies named paths only, so it never entered the image, and every tracked file in the bundle is
+`c0574ce`. But it is the second publish in a row stamped dirty by a file that is not part of the
+build. **The note above says to delete it and re-check `git status` before publishing, and it now
+has two names to look for.**
+
+**Confirmed on the founder's iPhone: "yeah the update is reflected in mobile."** Proved by the
+behaviour rather than by the id at the foot of Profile, which the tenth update's entry argues is
+the better instrument wherever the change is something a person can see - and this one is the most
+visible change since the cards left the bubbles.
 
 **Confirmed on the founder's iPhone: "yeah its working."** He opened the calendar, tapped a
 date that had gone by, and its items were grey. Proved by the behaviour rather than by the id at
