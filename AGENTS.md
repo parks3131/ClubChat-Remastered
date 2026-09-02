@@ -1284,3 +1284,36 @@ that records how to recognise the class._
     convenience**, and when asked what users are actually running, compare the build's
     `runtimeVersion` against the update's from `api.expo.dev/graphql` rather than assuming the
     newest update reached the newest build.
+
+42. **`apps/mobile/package.json` is a runtime-version input, so editing ANY of it - a script, a
+    version, anything - strands every installed build from over-the-air updates.** Symptom: none
+    at all until somebody publishes, and then `eas update` reports success and reaches nobody,
+    which is pitfall 42's silent half in [`SPEC/TECH/14`](SPEC/TECH/14-engineering-pitfalls.md).
+    Found 2026-09-02 by measuring rather than by anything failing: the fingerprint had moved off
+    the installed build's `bfe9e13f...` and no tracked NATIVE input had changed. Reverting that
+    one file returned it exactly, and reverting the root `package.json` as well changed nothing -
+    so the mobile manifest is the input and the workspace root is not.
+
+    **What moved it was one `&&` in the `ios` script**, added the same day to gate `expo run:ios`
+    behind the new pods check. There is a lesson in that beyond the mechanism: **a guard added to
+    prevent a native-versus-JavaScript mismatch had itself created one**, of a different and
+    quieter kind. The pods check catches a binary missing a module and shouts; this catches
+    nothing and says nothing.
+
+    **Rule: wire scripts that gate a mobile command from the ROOT `package.json`, never from
+    `apps/mobile/package.json`.** The root is not a fingerprint input, and every other command in
+    this repo is already a root script, so `npm run ios` from the repo root is the shape that was
+    wanted anyway. The cost is that running `npm run ios` from inside `apps/mobile` skips the
+    guard, which is accepted: it is a bypass somebody has to choose, against a break nobody can
+    see.
+
+    **How to recognise the class:** an edit that is obviously not native - a script, a comment in
+    a manifest, a bumped version - in a file the fingerprint happens to hash whole. The check is
+    one command and it is the only thing that will tell you:
+
+    ```
+    cd apps/mobile && npx expo-updates fingerprint:generate --platform ios
+    ```
+
+    Compare it against the runtime version of the build you intend to reach BEFORE publishing, and
+    treat a difference as "this update will reach nobody" rather than as a puzzle.

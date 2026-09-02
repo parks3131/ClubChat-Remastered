@@ -29,6 +29,7 @@
     "lint:emdash": "node scripts/check-emdash.mjs",
     "check:runtime": "node scripts/check-node-parse.mjs",
     "check:pods": "node scripts/check-pods.mjs",
+    "ios": "node scripts/check-pods.mjs && npm run ios -w @clubchat/mobile",
     "verify": "npm run typecheck && npm run check:runtime && npm run lint:emdash && npm run check:pods && npm test"
   },
   "devDependencies": {
