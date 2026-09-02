@@ -39,6 +39,40 @@ composition rather than a second rewrite.
    this replaced put every group in a bordered card, which at four groups reads as four unrelated
    panels rather than as one form.
 
+   1a. **Fields that belong together share ONE border, and that is not a reversal of the rule
+   above.** *(Added 2026-09-02.)* Air separates the sections; inside a section, several fields are
+   one bordered object with a hairline between them rather than several outlined boxes stacked.
+
+   The distinction is what each rule is protecting. Rule 1 is about **sections**, and the failure
+   it names is four panels that look unrelated. This is about **fields**, and the failure is the
+   opposite one: two outlined boxes with a small gap read as a single control with a line through
+   it, and with no gap they touch outright. Reported off the phone against the meetup composer's
+   map link and location notes, which shared an edge.
+
+   **Air cannot fix that class, which is why this is structural.** A gap can be tuned until it
+   looks right on one screen and be wrong on the next, and nothing stops a later change closing
+   it again. Inside a group there is only ever one border, so two fields cannot collide however
+   the spacing moves. `FieldGroup` in the composer kit is the implementation, and a group of one
+   is legitimate: it keeps a lone field on the same rail as the grouped ones above it.
+
+   1b. **The bright line is the group's edge. The line between two rows is the quiet one.**
+   `hairline` outlines the group; `divider` separates its rows, and the two are deliberately
+   different weights. The outside says where the object ends and the inside says where one row
+   becomes the next, which is a smaller claim and should look like one.
+
+   > **Got this wrong for one build, and the way it failed is worth keeping.** A grouped field had
+   > its background and its radius cleared but not its `borderWidth`, so every row still drew the
+   > border it would have drawn standing alone. What looked like a divider was really two adjacent
+   > field borders in the bright colour, the real divider underneath was never visible, and the
+   > group read as bright lines throughout rather than as a bright edge around quiet rows.
+   > Reported off the phone in one sentence: the segmenting line is as bright as the border.
+
+   1c. **Rows of one group are the same height unless one asks to be taller.** A multiline field
+   is floored at a height that makes it look like it takes more than a line, which is right when
+   it stands alone and wrong beside a single-line row sharing its border - the step is about
+   eighteen points and it makes the group the uneven thing it was introduced to fix. Inside a
+   group that floor is lifted; a field that genuinely wants the height asks for it explicitly.
+
 2. **Small type, generous padding.** The form is calm because the type is quiet and the fields are
    roomy, not because things are big. Tightening field padding is the first change that makes it
    feel cramped again, and it will be tempting because it fits more on screen.
@@ -57,9 +91,24 @@ composition rather than a second rewrite.
    primary actions. The header is the right place whenever the form can grow while being filled
    in - an expanding picker will push a trailing button off screen exactly as somebody finishes.
 
-7. **The way out matches where the action is.** A header carrying the primary action gets a close
-   control, because the form is a thing you are inside and are dismissing. A form whose action is
-   at its foot gets a back arrow, because you are stepping back through it.
+7. **The way out matches what the form IS, not only where its action sits.** A form presented over
+   the screen it came from is a thing you are inside and are dismissing, so it gets a close
+   control. A form that takes the WHOLE screen was navigated to, so it gets a back arrow - even
+   when it carries its own primary action in the header.
+
+   > **Reversed 2026-09-02, at the founder's request, and the earlier wording is worth keeping
+   > because it was right about the case it had seen.** It read: *a header carrying the primary
+   > action gets a close control, because the form is a thing you are inside and are dismissing.*
+   > That held while every such form sat under its space's own header - the meetup composer drew
+   > the club's avatar and name above its own title and Create, two headers stacked.
+   >
+   > The meetup composer now hides that header and takes the full screen, which changes what the
+   > control means rather than merely how it looks: a cross on a full screen says "abandon this",
+   > and the arrow says "go back", which is what it does. The action's position was never the real
+   > test; it was a proxy for whether the form was a layer or a screen.
+
+   The poll, event, race and meeting composers still sit under their space's header, so they keep
+   the close control and nothing about them changes.
 
 ### The wheel
 

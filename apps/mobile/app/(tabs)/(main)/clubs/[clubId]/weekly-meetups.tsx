@@ -36,10 +36,10 @@
  * > this too.
  */
 
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useDeclareClub } from '../../../../../src/current-space.tsx';
 import { clubApi, contentApi } from '../../../../../src/api.ts';
 import { meetupHeadline, type Meetup } from '../../../../../src/api-types.ts';
@@ -55,6 +55,7 @@ import {
 } from '../../../../../src/dates.ts';
 import {
   ComposerField,
+  FieldGroup,
   HeaderAction,
   SectionLabel,
   SettingNote,
@@ -66,7 +67,6 @@ import { KeyboardAvoider } from '../../../../../src/keyboard-avoider.tsx';
 import { longPressFeedback } from '../../../../../src/haptics.ts';
 import { color, radius, space, type } from '../../../../../src/theme.ts';
 import {
-  Action,
   ComposerHeader,
   ContextMenu,
   DataScreen,
@@ -209,6 +209,29 @@ export default function WeeklyMeetupsScreen() {
   // The screen's own state wins, so opening Add over an `?edit=` link does what it says.
   const composing = editing ?? editingFromLink;
 
+  /*
+    The composer takes the whole screen, so the club's header goes while it is open.
+
+    Founder's call on 2026-09-02: two headers were stacked, the club's avatar and name above the
+    form's own title and Create. The form is not about the club - you are already inside it - and
+    the second bar cost 48 points at the top of a screen holding five fields and a wheel.
+
+    **`setOptions` rather than `<Stack.Screen options>`, and that is not a style preference.** The
+    element form REPLACES this route's options, so asking for `headerShown: true` on the way back
+    also dropped the club's avatar and name that `(main)/_layout.tsx` supplies - which is exactly
+    what it did for one build, and it reads as the title having been deleted rather than as an
+    option being overwritten. `setOptions` merges, so everything the layout set survives.
+
+    **Both states are set, every render.** These options outlive the component that set them, so
+    setting only `false` leaves the WEEK headerless once the form closes. Same trap the news
+    composer hit on 2026-08-16, where a back control set by one step survived into the next and
+    silently did nothing. See `DESIGN/13` rule 11.
+  */
+  const navigation = useNavigation();
+  useLayoutEffect(() => {
+    navigation.setOptions({ headerShown: composing === null });
+  }, [navigation, composing]);
+
   if (composing !== null) {
     return (
       <MeetupComposer
@@ -237,13 +260,38 @@ export default function WeeklyMeetupsScreen() {
   return (
     <View style={styles.flex}>
       <View style={styles.weekNav}>
-        <Action label="Previous" variant="secondary" onPress={() => setMonday(shift(monday, -1))} />
+        {/*
+          A bare chevron, not a button. Founder's pick on 2026-09-02 from six treatments.
+
+          The pair that stood here were `Action` pills reading PREVIOUS and NEXT, and what was
+          wrong with them was not their styling: they were the two loudest objects above a week
+          that is meant to be scanned, and between them they spent most of the row's width saying
+          what an arrow says in twelve points. The glyph is small and its target is not - see
+          `weekStep`.
+        */}
+        <Pressable
+          onPress={() => setMonday(shift(monday, -1))}
+          style={styles.weekStep}
+          hitSlop={space.sm}
+          accessibilityRole="button"
+          accessibilityLabel="The week before this one"
+        >
+          <MaterialIcons name="chevron-left" size={28} color={color.accent} />
+        </Pressable>
         {/*
           The span, not the raw key. It reads as a week rather than as a database value, and it
           now carries the dates that used to sit in seven per-day headers - see `formatWeekRange`.
         */}
         <Text style={styles.weekLabel}>{formatWeekRange(monday)}</Text>
-        <Action label="Next" variant="secondary" onPress={() => setMonday(shift(monday, 1))} />
+        <Pressable
+          onPress={() => setMonday(shift(monday, 1))}
+          style={styles.weekStep}
+          hitSlop={space.sm}
+          accessibilityRole="button"
+          accessibilityLabel="The week after this one"
+        >
+          <MaterialIcons name="chevron-right" size={28} color={color.accent} />
+        </Pressable>
       </View>
 
       {nudgeNote !== null && <Text style={styles.note}>{nudgeNote}</Text>}
@@ -740,7 +788,19 @@ function MeetupComposer({
         title={existing === null ? 'New meetup' : 'Edit meetup'}
         discardLabel={existing === null ? 'Discard this meetup' : 'Discard these changes'}
         onCancel={onCancel}
-        dismiss="close"
+        /*
+          A back arrow rather than a cross, founder's call on 2026-09-02, and it reverses what
+          `DESIGN/06` rule 7 says: a header carrying its own primary action gets a close control,
+          because the form is a thing you are inside and dismissing rather than a step you are
+          going back from.
+
+          What changed is that the form now takes the WHOLE screen - the club's header is hidden
+          while it is open - so it reads as a screen that was navigated to rather than as a panel
+          over the week. A cross on a full screen says "abandon"; the arrow says "go back", which
+          is what the control actually does. The rule is rewritten in that file rather than left
+          disagreeing with this line.
+        */
+        dismiss="back"
         action={
           <HeaderAction
             /* "Create" on a new one, from the founder's sketch. Editing still saves. */
@@ -767,21 +827,31 @@ function MeetupComposer({
       >
         {/* No label above either. The placeholder says what it is, and a form whose first field
             is labelled "Place" above a box reading "Where should we meet?" says it twice. */}
-        <ComposerField
-          value={title}
-          onChangeText={setTitle}
-          placeholder="Untitled"
-          accessibilityLabel="What this meetup is called"
-          filled
-        />
-
         {/*
-          "Set date", one row with a chevron, from the founder's sketch on 2026-08-15. It carries
-          no section label above it: the form is four controls now, and a heading over a single
-          row names the row twice.
+          The name and the date as one object, which is the 2026-09-02 regrouping.
+
+          The two required fields are the two in this group, and that is why they are together
+          rather than because they happen to be first. `filled` came off the name in the same
+          change: inside a group the GROUP is the surface, and a grey block inside a white card
+          reads as a disabled field rather than as the one field the form is about.
         */}
-        <SettingRow
-          label="Set date"
+        <FieldGroup>
+          <ComposerField
+            value={title}
+            onChangeText={setTitle}
+            placeholder="Untitled"
+            accessibilityLabel="What this meetup is called"
+            grouped
+          />
+
+          {/*
+            "Set date", one row with a chevron, from the founder's sketch on 2026-08-15. It carries
+            no section label above it: the form is four controls now, and a heading over a single
+            row names the row twice.
+          */}
+          <SettingRow
+            grouped
+            label="Set date"
           /*
             Opening COMMITS the moment the wheel is showing (`DESIGN/06` rule 11). Without it the
             row reads "Pick a time" while the wheel underneath highlights six in the evening - the
@@ -809,12 +879,13 @@ function MeetupComposer({
               : `Meeting at ${formatTimeOfDay(when.toISOString())}. Change`
           }
         >
-          <SettingValue muted={when === null}>
-            {when === null
-              ? 'Not set'
-              : `${days.find((d) => d.key === toDateKey(when))?.label ?? toDateKey(when)}, ${formatTimeOfDay(when.toISOString())}`}
-          </SettingValue>
-        </SettingRow>
+            <SettingValue muted={when === null}>
+              {when === null
+                ? 'Not set'
+                : `${days.find((d) => d.key === toDateKey(when))?.label ?? toDateKey(when)}, ${formatTimeOfDay(when.toISOString())}`}
+            </SettingValue>
+          </SettingRow>
+        </FieldGroup>
 
         {/* In place, between the row it belongs to and the next thing - which is why the Save
             action lives in the header rather than at the foot of the form. */}
@@ -877,45 +948,76 @@ function MeetupComposer({
         */}
         <SectionLabel>Location link</SectionLabel>
 
+        {/*
+          The two fields that answer "where", as ONE object. This is the defect that produced the
+          regrouping, reported off the phone on 2026-09-02: outlined and stacked, they shared an
+          edge, so two controls read as one box with a line through it.
+
+          Air alone does not fix that class. A gap can be tuned until it looks right on one screen
+          and be wrong on the next, and nothing stops a later change closing it again. Inside a
+          group there is only ever one border, so they cannot touch however the spacing moves.
+
+          How to find the club once the link has got somebody to the right car park sits in this
+          section rather than opening one of its own, because both answer "where" and a heading
+          over a single field names it twice.
+        */}
+        <FieldGroup>
+          <ComposerField
+            value={mapUrl}
+            onChangeText={setMapUrl}
+            placeholder="Add a location link"
+            accessibilityLabel="A map link for this place"
+            autoCapitalize="none"
+            autoCorrect={false}
+            grouped
+          />
+          <ComposerField
+            value={locationNotes}
+            onChangeText={setLocationNotes}
+            placeholder="How to find us once you are there"
+            accessibilityLabel="Notes on how to find this place"
+            multiline
+            grouped
+          />
+        </FieldGroup>
+
+        {/*
+          One note, at the END of its section, which is `DESIGN/06` rule 5 finally obeyed here.
+
+          Both notes used to sit above the thing they explain, and the second one - "adding a
+          meetup notifies nobody" - sat between the location fields and the description with
+          nothing saying which it belonged to. It is about the meetup rather than about either,
+          so it now closes the form instead of interrupting it.
+        */}
         <SettingNote>
           Paste a link from Google or Apple Maps. It becomes a Directions button on the meetup.
         </SettingNote>
 
-        <ComposerField
-          value={mapUrl}
-          onChangeText={setMapUrl}
-          placeholder="Add a location link"
-          accessibilityLabel="A map link for this place"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-
         {/*
-          How to find the club once the link has got somebody to the right car park. Labelled for
-          the same reason the link above it is: it sits in that section rather than opening one of
-          its own, because both answer "where" and a heading over a single field names it twice.
-        */}
-        <ComposerField
-          value={locationNotes}
-          onChangeText={setLocationNotes}
-          placeholder="How to find us once you are there"
-          accessibilityLabel="Notes on how to find this place"
-          multiline
-        />
+          Labelled, and the placeholder stops repeating the label.
 
-        {/* One note, at the end of its section. */}
+          `DESIGN/06` rule 4 says a field is named by its section or by its placeholder and never
+          by both, and "Description" over a box reading "Description" is the both case. The label
+          names it and the placeholder prompts for it, which is the same split the location link
+          above already uses.
+        */}
+        <SectionLabel>Description</SectionLabel>
+
+        <FieldGroup>
+          <ComposerField
+            value={description}
+            onChangeText={setDescription}
+            placeholder="What the club will be doing"
+            accessibilityLabel="A description of this meetup"
+            multiline
+            tall
+            grouped
+          />
+        </FieldGroup>
+
         <SettingNote>
           Adding a meetup notifies nobody. Use Nudge on the week to tell the club.
         </SettingNote>
-
-        <ComposerField
-          value={description}
-          onChangeText={setDescription}
-          placeholder="Description"
-          accessibilityLabel="A description of this meetup"
-          multiline
-          tall
-        />
 
         {failed !== null && <Text style={styles.error}>{failed}</Text>}
       </ScrollView>
@@ -933,7 +1035,33 @@ const styles = StyleSheet.create({
     padding: space.md,
     paddingBottom: 0,
   },
-  weekLabel: { ...type.label, color: color.textSecondary, flex: 1, textAlign: 'center' },
+  /*
+    The week, in the display face, between two bare chevrons.
+
+    **Anton rather than the label role, as of 2026-09-02.** It was `type.label` between two
+    filled PREVIOUS and NEXT buttons, which were the loudest objects on a screen whose job is to
+    be read and took a third of its width to say what an arrow says. With the buttons gone the
+    week is the only thing left in this row, so it takes the weight they were spending.
+
+    Uppercased in style rather than in the string, so a screen reader says the dates rather than
+    spelling them.
+  */
+  weekLabel: {
+    ...type.headerTitle,
+    color: color.textPrimary,
+    flex: 1,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+  },
+  /*
+    A chevron's touch target, which is deliberately larger than the glyph drawn inside it.
+
+    40 rather than the 24 the icon occupies: what can be hit has to be bigger than what can be
+    seen, and a bare glyph is already the least obviously tappable thing on the screen without
+    also being the smallest. `AGENTS.md` failure mode 33 is the same rule learned on the crop
+    handles.
+  */
+  weekStep: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   body: { padding: space.md, paddingBottom: space.xl },
   composerBody: { padding: space.md, paddingBottom: space.xl },
   /*

@@ -18,6 +18,24 @@ is "what is broken".
 
 ## Next up
 
+- [ ] **A cold deep link into any club sub-screen shows a header with no club name, permanently.**
+      Found 2026-09-02 while checking something else, and confirmed on the Simulator against
+      `polls` and `weekly-meetups`, neither of which is special: the header band draws its back
+      arrow and nothing beside it.
+
+      `SpaceHeaderTitle` renders `null` when the declared space carries no name, and says why in
+      its own comment - the name is "milliseconds away" and a word swapping for another word is a
+      flicker worse than a beat of nothing. **That reasoning holds only for screens where the name
+      actually arrives.** Ten of the thirteen club screens call `useDeclareClub(clubId)` with no
+      name at all; only the hub, the profile and the share screen pass one. Reached from the hub
+      the context is already warm and the title is right, which is why this has never been
+      noticed - it is only visible cold, from a notification tap, a pasted link or a refresh.
+
+      **Not fixed here because the fix is a choice, not a patch.** Either every club screen loads
+      the club to declare its name, which is a read per screen for a header, or the context
+      resolves the name itself from the id once, or the fallback stops being empty. The third is
+      the smallest and it argues with the flicker rule the comment is protecting.
+
 - [ ] **Date of birth on Edit profile should be picked from a calendar, not typed.** Asked for by
       the founder on 2026-09-02, alongside the meetups design work, and noted rather than built.
       Today the field is typed, which asks somebody to know the format and gets it wrong quietly;

@@ -12,7 +12,7 @@
  */
 
 import type { ReactNode } from 'react';
-import { useEffect, useRef } from 'react';
+import { Children, Fragment, useEffect, useRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { color, radius, space, type } from './theme.ts';
@@ -24,6 +24,39 @@ import { color, radius, space, type } from './theme.ts';
  * spelling it. The air above it is the section break - there is no rule, no card and no border,
  * because a label with space around it already reads as the start of something.
  */
+/**
+ * Several fields as ONE bordered object, with a hairline between each.
+ *
+ * **Added 2026-09-02, and it is a deliberate exception to this module's own opening paragraph.**
+ * That paragraph says a section is a label with air above it rather than a card with a border,
+ * which was written after four bordered groups read as four unrelated panels. The exception is
+ * narrow and it exists for a defect air could not fix: two outlined fields stacked with a small
+ * gap read as one control with a line through it, and at zero gap they genuinely touch. Reported
+ * off the phone on 2026-09-02 against the meetup composer, where the map link and the location
+ * notes shared an edge.
+ *
+ * The fix is structural rather than cosmetic: inside a group there is only ever ONE border, so
+ * two fields cannot collide however the spacing is later adjusted. Air still separates the
+ * groups from each other, which is the half of the original rule that was doing the work.
+ *
+ * A group of one is legitimate and is not a card for its own sake - it is what keeps a lone
+ * field on the same rail as the grouped ones above it.
+ */
+export function FieldGroup({ children }: { children: ReactNode }) {
+  // `toArray` drops null and false, so `{cond && <Field/>}` does not leave a stray divider.
+  const items = Children.toArray(children);
+  return (
+    <View style={styles.fieldGroup}>
+      {items.map((child, index) => (
+        <Fragment key={index}>
+          {index > 0 && <View style={styles.fieldGroupDivider} />}
+          {child}
+        </Fragment>
+      ))}
+    </View>
+  );
+}
+
 export function SectionLabel({ children }: { children: string }) {
   return <Text style={styles.sectionLabel}>{children}</Text>;
 }
@@ -80,6 +113,7 @@ export function ComposerField({
   filled = false,
   multiline = false,
   tall = false,
+  grouped = false,
   trailing,
   autoCapitalize = 'sentences',
   autoCorrect = true,
@@ -90,6 +124,8 @@ export function ComposerField({
   accessibilityLabel: string;
   filled?: boolean;
   multiline?: boolean;
+  /** Inside a `FieldGroup`, which draws the border this field would otherwise draw itself. */
+  grouped?: boolean;
   /**
    * Open the field to several lines, for prose rather than a sentence.
    *
@@ -112,12 +148,21 @@ export function ComposerField({
   autoCorrect?: boolean;
 }) {
   return (
-    <View style={[styles.field, filled ? styles.fieldFilled : styles.fieldOutlined]}>
+    <View
+      style={[
+        styles.field,
+        filled ? styles.fieldFilled : styles.fieldOutlined,
+        /* Last, so it strips the border the outlined style just applied. See `FieldGroup`. */
+        grouped && styles.fieldGrouped,
+      ]}
+    >
       <TextInput
         style={[
           styles.fieldInput,
           multiline && styles.fieldInputMultiline,
           multiline && tall && styles.fieldInputTall,
+          /* Last, so it lifts the multiline floor rather than being overridden by it. */
+          grouped && !tall && styles.fieldInputEven,
         ]}
         value={value}
         onChangeText={onChangeText}
@@ -160,6 +205,7 @@ export function SettingRow({
   children,
   onPress,
   accessibilityLabel,
+  grouped = false,
 }: {
   label: string;
   /** The right-hand side: a switch, or a value that opens something. */
@@ -167,7 +213,17 @@ export function SettingRow({
   /** Present when the whole row opens something. A row with a switch passes nothing. */
   onPress?: () => void;
   accessibilityLabel?: string;
+  /**
+   * Inside a `FieldGroup`, which owns the border but not the inset.
+   *
+   * A bare row takes its horizontal inset from the form's own padding; inside a group that
+   * padding is outside the border, so the row would start hard against the edge while every
+   * field beside it is inset. This adds the field's own inset back.
+   */
+  grouped?: boolean;
 }) {
+  const rowStyle = [styles.settingRow, grouped && styles.settingRowGrouped];
+
   const body = (
     <>
       <Text style={styles.settingLabel}>{label}</Text>
@@ -175,11 +231,11 @@ export function SettingRow({
     </>
   );
 
-  if (onPress === undefined) return <View style={styles.settingRow}>{body}</View>;
+  if (onPress === undefined) return <View style={rowStyle}>{body}</View>;
 
   return (
     <Pressable
-      style={styles.settingRow}
+      style={rowStyle}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
@@ -358,6 +414,44 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.hairline,
   },
+  /*
+    Inside a `FieldGroup`: no border and no radius, because the group draws both.
+
+    The radius is zeroed rather than left alone even though nothing is painted under it - a
+    rounded transparent box clips nothing and looks identical, right up until somebody gives the
+    field a background and finds its corners cut inside a square group.
+  */
+  /*
+    Inside a `FieldGroup`: no border, no background, no radius. The group draws all three.
+
+    **`borderWidth: 0` is the load-bearing line and it was missing for one build.** Without it
+    every grouped field kept the hairline `fieldOutlined` gave it, so what looked like a divider
+    between two rows was really their two adjacent borders - drawn in `hairline`, the bright warm
+    colour reserved for the OUTSIDE of a card. The group then read as bright lines everywhere
+    rather than as a bright edge around quiet rows, and `fieldGroupDivider` underneath was never
+    visible at all. Reported off the phone on 2026-09-02 as the segmenting line being as bright as
+    the border, which is exactly what it was.
+  */
+  fieldGrouped: {
+    backgroundColor: 'transparent',
+    borderRadius: 0,
+    borderWidth: 0,
+  },
+  /*
+    The group: one border around several fields, so two of them can never share an edge.
+
+    `overflow: hidden` is what makes the corners work - the first and last field are square, and
+    the group clips them into its own radius rather than each field having to know where it sits.
+  */
+  fieldGroup: {
+    backgroundColor: color.card,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    borderRadius: radius.lg,
+    overflow: 'hidden',
+  },
+  /* The hairline BETWEEN two fields, inset by nothing: it divides rows of one object. */
+  fieldGroupDivider: { height: 1, backgroundColor: color.divider },
   fieldInput: { ...type.body, flex: 1, color: color.textPrimary },
   fieldInputMultiline: { minHeight: 44, textAlignVertical: 'top' },
   /*
@@ -368,6 +462,30 @@ const styles = StyleSheet.create({
     and the description of a meetup is meant to be more than that.
   */
   fieldInputTall: { minHeight: 132 },
+  /*
+    Inside a group, a multiline field starts at one line like its neighbours.
+
+    **Rows of one object have to be the same height, or the group is the uneven thing it was
+    introduced to fix.** `fieldInputMultiline` floors the input at 44 so that a multiline field
+    LOOKS like it takes more than a line - which is right when it stands alone with air around it,
+    and wrong beside a single-line row sharing its border: 12 + 44 + 12 against 12 + 26 + 12 is an
+    18 point step, and that step is exactly what was reported on 2026-09-02.
+
+    It removes the floor and nothing else, so the field still grows as it is typed into and still
+    aligns its text to the top. A field that genuinely wants the height asks with `tall`, which is
+    checked before this and wins.
+  */
+  fieldInputEven: {
+    minHeight: 0,
+    /*
+      iOS gives a multiline input its own vertical padding on top of the wrapper's, which is worth
+      about five points and is the whole of the residual once the 44 floor is lifted. The wrapper
+      already owns the air (`field.paddingVertical`), so this is the input declining to add more
+      rather than the row losing any.
+    */
+    paddingTop: 0,
+    paddingBottom: 0,
+  },
 
   addRow: {
     flexDirection: 'row',
@@ -389,6 +507,8 @@ const styles = StyleSheet.create({
     // itself to separate them.
     minHeight: 48,
   },
+  /* Matches `field`'s own inset, so a row and a field inside one group start on the same line. */
+  settingRowGrouped: { paddingHorizontal: space.md },
   settingLabel: { ...type.body, color: color.textPrimary, flex: 1 },
   settingValue: { ...type.bodySmall, color: color.accent },
   settingValueMuted: { color: color.textSecondary },

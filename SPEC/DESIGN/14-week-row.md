@@ -78,6 +78,24 @@ there a meetup sits among events and races and must not look like a different cl
    centre rather than as one line per day. A week has ends, and a full-height rail on every row
    runs past both of them.
 
+4d. **Moving between weeks is two bare chevrons, and the week itself is the only thing between
+   them.** *(Changed 2026-09-02, founder's pick from five treatments.)* An accent chevron at each
+   edge, and the date range set in the display face, centred.
+
+   **What went were two filled PREVIOUS and NEXT buttons**, and their fault was not styling. They
+   were the two loudest objects above a week whose whole job is to be scanned, and between them
+   they spent most of the row's width saying what an arrow says in twelve points. The week screen
+   already has exactly one thing that should be loud, which is today's solid badge.
+
+   **The glyph is small and its target is not.** A bare chevron is the least obviously tappable
+   thing on the screen, so it must not also be the smallest: the drawn icon sits inside a target
+   half again its size. Same rule the crop grips learned - what can be hit is larger than what can
+   be seen.
+
+   **There is deliberately no way back to the current week.** Three of the five treatments carried
+   one and this is not one of them, so paging is the only route. Worth revisiting if anyone
+   browses far enough to be stranded; it was left out rather than forgotten.
+
 4c. **A week can afford to breathe.** Seven rows is not a long list, and the screen has room the
    old three-line rows did not leave. Reported as *"too narrow and close"* in the same breath as
    the two above, which is the tell that they were one problem: a crushed layout is where a
