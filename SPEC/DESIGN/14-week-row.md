@@ -19,8 +19,10 @@ there a meetup sits among events and races and must not look like a different cl
 
 | Part | What it is |
 |---|---|
+| `rail` | The hairline running the length of the week behind the badges. Stops at the first and last |
+| `station` | The badge's column: the circle, and the rail passing through it |
 | `badge` | The circle carrying the day's letter. The only thing that says which day this is |
-| `body` | Everything that day holds: one row per meetup, or "Nothing planned" |
+| `body` | Everything that day holds: one card per meetup, or "Nothing planned" |
 | `headline` | The meetup's name, or its place when it has no name |
 | `time chip` | The tinted pill on the right |
 | `bell` | Nudge, for an admin. A sibling of the tappable area, never inside it |
@@ -53,11 +55,28 @@ there a meetup sits among events and races and must not look like a different cl
    not arithmetic** - centring the row does it for any number of meetups, and anything that counts
    them is a reimplementation of what the layout already knows.
 
-4b. **Two rules, at two weights, at two insets.** A heavier rule between days, a hairline between
-   meetups within one day, and **neither runs edge to edge**. The one dividing the deeper thing is
-   inset further, so the indentation says which level you are looking at before the colour does.
-   Full-width rules would make the week a table, and a table is what this stopped being when the
-   day headers went.
+4b. **The rail carries the week, and the card edge carries the meetup.** *(Changed 2026-09-02.)*
+   A hairline rail runs the length of the week behind the badge column, so each badge sits on it
+   as a station and the seven days read as one continuous run rather than as seven rows. A meetup
+   is a bounded card beside it, outlined in the same hairline, so the rail and the cards are one
+   material.
+
+   **The rule this replaced said the same thing with two horizontal rules** - a heavier one
+   between days, a hairline between meetups within one day, neither running edge to edge, the
+   deeper one inset further. What it was protecting is unchanged and is the thing to keep: **the
+   nesting has to read before the colour does.** The rail plus the card edge say it in one
+   direction rather than two, and nothing became a table, which is what the insets were guarding
+   against.
+
+   **The rail is `hairline` and must not be `cardSunken`.** It was, for about ten minutes on
+   2026-09-02, and only the running screen showed why that is wrong: `cardSunken` is also the fill
+   of an **empty** day's badge, so on the five quiet days of an ordinary week the badge and the
+   rail were one grey and the badge stopped reading as a station - it read as a bulge in the line.
+   The warm hairline separates them at all three badge weights.
+
+   **The rail stops at the first and last badge**, drawn as two segments meeting at each badge's
+   centre rather than as one line per day. A week has ends, and a full-height rail on every row
+   runs past both of them.
 
 4c. **A week can afford to breathe.** Seven rows is not a long list, and the screen has room the
    old three-line rows did not leave. Reported as *"too narrow and close"* in the same breath as
@@ -117,7 +136,7 @@ does not say which one.
 
 | | Behaviour |
 |---|---|
-| iOS | Unverified as of 2026-08-17 |
+| iOS | Verified on the Simulator 2026-09-02, for the rail: all seven stations, the two segments meeting at each badge, both ends stopping, and the long press still reaching the row through the card. The percentage insets the rail is built from resolve the same in Yoga as in CSS, which was the one thing worth checking on a device rather than in a browser. **Not run on the founder's phone** |
 | Android | Never checked |
 | Web | Verified 2026-08-17: badge weights, the time chip, title-only rows, row opens the detail, console clean |
 

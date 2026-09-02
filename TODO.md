@@ -18,6 +18,23 @@ is "what is broken".
 
 ## Next up
 
+- [ ] **Date of birth on Edit profile should be picked from a calendar, not typed.** Asked for by
+      the founder on 2026-09-02, alongside the meetups design work, and noted rather than built.
+      Today the field is typed, which asks somebody to know the format and gets it wrong quietly;
+      setting a date anywhere else in this product opens something to pick from.
+
+      **Two things to settle before building it, because neither is obvious.** The composer kit
+      already owns a `Wheel` (`src/composer-kit.tsx`), which is what the poll deadline and the
+      meetup moment both use - so the cheap answer is a wheel of day, month and year rather than a
+      month grid, and it would be consistent with every other date in the app. A birthday is the
+      one date that is decades away rather than a season either side of today, which is the exact
+      argument `PRD/07` rule 3d used to keep the calendar's picker a year stepper plus twelve
+      months. So this is either a third pattern or a reason to reuse the calendar's own.
+
+      Whichever it is, the picker must offer past dates only, and `PRD/03` wants updating in the
+      same change - it lists date of birth as a profile field and says nothing about how it is
+      entered.
+
 - [ ] **DMARC reports start arriving now, and want reading in about two weeks.**
       `_dmarc` is `v=DMARC1; p=none; rua=mailto:dmarc@clubchatapp.com; fo=1` as of 2026-08-25, and
       `dmarc@` genuinely receives - proved by an SMTP `RCPT TO` returning `250`, not by a test

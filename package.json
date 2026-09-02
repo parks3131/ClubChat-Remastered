@@ -28,7 +28,8 @@
     "dev:mobile": "npm run start -w @clubchat/mobile",
     "lint:emdash": "node scripts/check-emdash.mjs",
     "check:runtime": "node scripts/check-node-parse.mjs",
-    "verify": "npm run typecheck && npm run check:runtime && npm run lint:emdash && npm test"
+    "check:pods": "node scripts/check-pods.mjs",
+    "verify": "npm run typecheck && npm run check:runtime && npm run lint:emdash && npm run check:pods && npm test"
   },
   "devDependencies": {
     "typescript": "~6.0.3"

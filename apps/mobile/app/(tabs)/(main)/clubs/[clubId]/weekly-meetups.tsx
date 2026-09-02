@@ -36,7 +36,7 @@
  * > this too.
  */
 
-import { Fragment, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -271,42 +271,43 @@ export default function WeeklyMeetupsScreen() {
                 Tuesday with a morning and an evening meetup is one T against two stacked rows,
                 not the letter repeated down the column.
               */
-              <Fragment key={day.date}>
+              <View key={day.date} style={styles.day}>
                 {/*
-                  Two rules, and the difference between them is the whole point.
+                  The rail, and the badge sitting on it as a station.
 
-                  The heavier one separates DAYS and the hairline separates meetups INSIDE a day,
-                  so the week's structure is visible without reading a single word. Neither runs
-                  edge to edge: each is inset, and the deeper the thing it divides the further it
-                  is inset, so the indentation itself says which level you are looking at.
+                  Two rules used to do this job - a heavier one between days, a hairline between
+                  meetups inside one - and the rail plus the card edge replace both. What
+                  `DESIGN/14` rule 4b was really protecting survives: the nesting still reads
+                  before the colour does, because the rail is one continuous line the whole week
+                  hangs off and a meetup is a bounded object sitting beside it.
                 */}
-                {dayIndex > 0 && <View style={styles.dayRule} />}
-
-                <View style={styles.day}>
+                <View style={styles.station}>
+                  {dayIndex > 0 && <View style={[styles.rail, styles.railUp]} />}
+                  {dayIndex < data.days.length - 1 && (
+                    <View style={[styles.rail, styles.railDown]} />
+                  )}
                   <DayBadge date={day.date} hasMeetups={!day.empty} />
-
-                  <View style={styles.dayBody}>
-                    {day.empty && <Text style={styles.empty}>Nothing planned</Text>}
-
-                    {day.meetups.map((meetup, meetupIndex) => (
-                      <Fragment key={meetup.id}>
-                        {meetupIndex > 0 && <View style={styles.meetupRule} />}
-                        <MeetupRow
-                          meetup={meetup}
-                          isAdmin={isAdmin}
-                          bellBusy={nudging}
-                          onNudge={() => void nudge(meetup.id)}
-                          onGrey={setNudgeNote}
-                          onLongPress={(anchor) => {
-                            longPressFeedback();
-                            setMenuFor({ day: day.date, meetup, anchor });
-                          }}
-                        />
-                      </Fragment>
-                    ))}
-                  </View>
                 </View>
-              </Fragment>
+
+                <View style={styles.dayBody}>
+                  {day.empty && <Text style={styles.empty}>Nothing planned</Text>}
+
+                  {day.meetups.map((meetup) => (
+                    <MeetupRow
+                      key={meetup.id}
+                      meetup={meetup}
+                      isAdmin={isAdmin}
+                      bellBusy={nudging}
+                      onNudge={() => void nudge(meetup.id)}
+                      onGrey={setNudgeNote}
+                      onLongPress={(anchor) => {
+                        longPressFeedback();
+                        setMenuFor({ day: day.date, meetup, anchor });
+                      }}
+                    />
+                  ))}
+                </View>
+              </View>
             ))}
 
             {/*
@@ -935,11 +936,27 @@ const styles = StyleSheet.create({
   weekLabel: { ...type.label, color: color.textSecondary, flex: 1, textAlign: 'center' },
   body: { padding: space.md, paddingBottom: space.xl },
   composerBody: { padding: space.md, paddingBottom: space.xl },
+  /*
+    The row, and since 2026-09-02 the card.
+
+    A bounded object beside the rail rather than a line of text on the page, and that is what let
+    both rules go: the card's own edge separates one meetup from the next, and the rail carries
+    the week. `hairline` is the token every other card in the product outlines itself with, and
+    the one this screen had never spent.
+
+    The padding is the card's now, so the row does not also carry its own - two sources of vertical
+    padding is how one card ends up taller than the same card on another screen.
+  */
   meetup: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.sm,
     paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    backgroundColor: color.card,
+    borderWidth: 1,
+    borderColor: color.hairline,
+    borderRadius: radius.md,
   },
   /*
     The part of the row that opens the meetup, which is everything except the bell.
@@ -967,30 +984,67 @@ const styles = StyleSheet.create({
     The vertical padding is the room asked for in the same breath. A week is seven rows and can
     afford to breathe; it read as a list crushed against itself.
   */
-  day: { flexDirection: 'row', alignItems: 'center', gap: space.md, paddingVertical: space.md },
-  /** `justifyContent` centres "Nothing planned" against the badge on a day that holds nothing. */
-  dayBody: { flex: 1, justifyContent: 'center', minHeight: 46, gap: space.xs },
   /*
-    Between two DAYS: the heavier of the two rules, inset from the gutter and stopping well short
-    of the right edge. A full-width rule reads as a table; this reads as a break.
-  */
-  dayRule: {
-    height: 1,
-    backgroundColor: color.border,
-    marginRight: space.xl,
-  },
-  /*
-    Between two meetups on ONE day: the hairline, and inset further still.
+    **`alignItems` became `stretch` on 2026-09-02, and the centring moved rather than went.** The
+    rail has to span the whole row, so the station beside it must stretch; `justifyContent` on the
+    station is what now puts the badge at the middle of the stack. Everything the paragraph above
+    describes still holds, and is still the reason a day with two meetups puts its letter between
+    them - only the property doing it changed. Do not put `center` back here without moving the
+    centring somewhere else first.
 
-    It already begins after the badge, because it lives inside the day's body - so the two rules
-    start at different places as well as being different weights, and the eye reads the nesting
-    before it reads the colour.
+    **The vertical padding moved to the body in the same change.** Left on the row it sat outside
+    the station, so the rail stopped short at each end and the week read as a dashed line.
   */
-  meetupRule: {
-    height: 1,
-    backgroundColor: color.divider,
-    marginRight: space.xl,
+  day: { flexDirection: 'row', alignItems: 'stretch', gap: space.md },
+  /*
+    `justifyContent` centres "Nothing planned" against the badge on a day that holds nothing.
+
+    The gap is `sm` rather than `xs` since the meetups became cards: two bordered objects four
+    points apart read as one object with a line through it rather than as two.
+  */
+  dayBody: {
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 46,
+    gap: space.sm,
+    paddingVertical: space.md,
   },
+  /*
+    The station: the badge, and the rail passing through it.
+
+    Fixed width so every day's body starts on the same line, which is the reason the badge column
+    is a column at all. The row stretches it, so it is as tall as the day it marks.
+  */
+  station: { width: 46, alignItems: 'center', justifyContent: 'center' },
+  /*
+    The rail, drawn as two segments meeting at the badge's centre.
+
+    Two rather than one full-height line because the week has to stop at its ends: nothing above
+    Monday's badge and nothing below Sunday's. A single rail on every day would run past both, and
+    hiding it with a background would only work while the background is flat.
+
+    **`hairline`, which is the colour the meetup cards outline themselves with**, so the rail and
+    the card edges are one material and the whole structure reads as one system rather than as a
+    line that happens to pass some boxes.
+
+    It was `cardSunken` for about ten minutes and that was wrong for a reason only the running
+    screen shows: `cardSunken` is also the fill of an EMPTY day's badge, so on the five quiet days
+    of a normal week the badge and the rail were the same grey and the badge stopped reading as a
+    station on a line - it read as a bulge in the rail. The warm hairline separates them at every
+    badge weight: sunken grey, accent-soft, and solid accent.
+
+    Drawn BEFORE the badge, so the badge paints over it. No `zIndex`, deliberately - on Android it
+    holds until some ancestor gets an elevation, and source order does not.
+  */
+  rail: { position: 'absolute', width: 2, backgroundColor: color.hairline },
+  railUp: { top: 0, bottom: '50%' },
+  railDown: { top: '50%', bottom: 0 },
+  /*
+    The two rules this screen used to draw - a heavier one between days, a hairline between
+    meetups inside one - are gone as of 2026-09-02, replaced by the rail and the card edge. They
+    are not kept here for a caller that no longer exists: the reasoning they carried moved to
+    `station` and `rail` above, and `DESIGN/14` rule 4b records the swap.
+  */
   dayBadge: {
     width: 46,
     height: 46,

@@ -197,6 +197,12 @@ Order matters. Each step catches a class the previous one cannot.
 4. **For anything touching navigation, test direct URL entry and page refresh**, not just
    clicking through. A back control that only renders when history exists will never surface
    any other way.
+5. **Before blaming the simulator, photograph the device**, and before running the app after a
+   dependency change, confirm the build can contain it. `xcrun simctl io booted screenshot` costs
+   a second and tells you whether you are looking at a dead simulator or a redbox filling the
+   screen - they are indistinguishable from the outside, and the second is far more likely. If a
+   native package landed since the last build, `pod install` and rebuild first: reinstalling the
+   `.app` cannot fix a stale binary. See failure mode 41.
 6. **For anything destructive, confirm the underlying data actually changed.** A confirmation
    dialog can report success, log nothing, and do nothing, particularly where a platform
    stubs out the dialog API.
@@ -442,6 +448,11 @@ npm run typecheck            # every workspace, strict
 npm test                     # every workspace. Handler tests start throwaway containers
 npm run lint:emdash          # standing instruction 1, with a detector self-test
 npm run check:runtime        # imports every module the way Node runs it. See failure mode 5
+npm run check:pods           # apps/mobile/ios/Podfile.lock against package.json, so a native
+                             # dependency cannot reach a build that never linked it. Also gates
+                             # the mobile `ios` script and `verify`. Deliberately NOT `dev:mobile`
+                             # - that starts Metro for web too, and an iOS pod lock must not be
+                             # able to stop web work. See failure mode 41
 
 # What the DATABASE thinks it spent its time on, across the api, the worker and the gateway at
 # once, with no application instrumentation. The per-request counter on /dev/trace answers "what
@@ -1212,3 +1223,64 @@ that records how to recognise the class._
     at once, and the diagnosis came from printing `Object.keys` against real emulated R2 rather
     than from reading the type. Nothing short of executing it could have caught this, which is the
     argument for the harness rather than for more review.
+
+41. **The simulator's installed build drifts from `package.json` over days, and the app's
+    launch-time death reads as "the simulator will not open".** Symptom, 2026-09-02: the founder
+    reported the simulator would not open and a previous agent had failed to fix it. Simulator.app
+    was running, the iPhone 17 was Booted and its window was open the whole time; the app was
+    redboxing `Cannot find native module 'ExpoImage'` at `media-bubble.tsx:49` as **log 2 of 114**,
+    which fills the screen and leaves nothing of the app visible. Root cause: `expo-image` was
+    added 2026-08-27, `Podfile.lock` was last written 2026-08-17, and `pod install` was never
+    re-run - so Metro served JS that imports a native module the binary had never contained. Eight
+    pods were missing, not one: `ExpoImage`, `ReachabilitySwift`, and the entire OTA stack
+    (`EXUpdates`, `EXUpdatesInterface`, `EXManifests`, `EXJSONUtils`, `EXStructuredHeaders`,
+    `EASClient`), so EAS Update could not have been tested locally either.
+
+    **Rule: before concluding anything about the simulator, photograph the device.** `xcrun simctl
+    io booted screenshot` costs one second and answers the question outright. A booted device with
+    an open window and a dead-looking app is a redbox until proven otherwise - never a simulator
+    fault. Entry 32 is the same class one layer over: it covers a phone whose binary is minutes
+    behind during active work, this is a local build **days or weeks** behind, where nothing warns
+    you and the last build predates the dependency entirely.
+
+    **Rule: a native dependency landing in `package.json` is a `pod install` plus a rebuild, and
+    reinstalling the `.app` is not a fix** - the build products are the stale part, so an agent
+    that reinstalls and relaunches watches the identical redbox twice and concludes the tooling is
+    broken. `git log -S'<package>' -- apps/mobile/package.json` against the mtime of
+    `apps/mobile/ios/Podfile.lock` settles in one command whether the build can possibly contain
+    the module. **`npm run check:pods` now does exactly that comparison and is wired into the
+    mobile `ios` script and `verify`**, so the drift fails loudly before the app can launch.
+
+    **It is deliberately NOT wired into `dev:mobile`, and that is a correction rather than an
+    omission.** It was, for about an hour on 2026-09-02. `dev:mobile` starts Metro, which serves
+    web as well as the two native platforms, so gating it on `apps/mobile/ios/Podfile.lock` lets a
+    stale iOS pod lock stop web development - the surface this repo relies on for its fastest
+    feedback. It also does not catch the case that produced this entry: Metro was already running
+    and days old, and the stale thing was the installed `.app`, so a check at Metro's startup would
+    never have fired. The gate belongs where the build happens, which is `expo run:ios`. Note the
+    second-order cost of the wider placement, which is ADR-0024's argument one layer down: a check
+    that blocks unrelated work gets routed around (`npm run start -w @clubchat/mobile`), and a rule
+    people route around is not a boundary. It matches by podspec PATH rather than pod name, because names are mangled from
+    package names by no fixed rule; the boundary in that match is the whole trick, and its
+    self-test pins all three real spellings. Prefer fixing the check over working around it: this
+    entry exists because a document alone did not prevent the mistake the first time.
+
+    Two traps in the repair itself. **A plain `pod install` against a lock more than an SDK stale
+    FAILS**, with `could not find compatible versions for pod "ExpoModulesCore"` and advice to
+    `pod update ExpoModulesCore`; deleting `Podfile.lock` and reinstalling is faster than chasing
+    that one pod. And **`pod install 2>&1 | tail` reports `tail`'s exit status, so a failed install
+    reads as exit 0** - the first repair attempt was recorded as succeeding when CocoaPods had
+    errored out. Verify by content, never by exit code: `grep '^  - ExpoImage (' Podfile.lock`
+    after the install, and `ls ClubChat.app/Frameworks | grep ExpoImage` after the build, because
+    presence among the built *products* is not presence in the *bundle*.
+
+    **What kept this off real phones is one line, and it must not be traded away.** `app.json` sets
+    `runtimeVersion: {"policy": "fingerprint"}`, so adding a native module changes the fingerprint
+    and an update cannot be delivered to a binary lacking it: TestFlight build 1.0.0 (6) was built
+    from `4d7daf4`, the commit that added `expo-image`, on runtime `bfe9e13f...` which every update
+    since matches, while build (5) on `7d3ffda1...` is orphaned and receives nothing rather than
+    crashing. Under an `appVersion` or a literal policy this exact mistake ships this exact crash
+    to every TestFlight device. **Rule: never change that policy to a fixed string for
+    convenience**, and when asked what users are actually running, compare the build's
+    `runtimeVersion` against the update's from `api.expo.dev/graphql` rather than assuming the
+    newest update reached the newest build.
