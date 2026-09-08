@@ -1422,8 +1422,14 @@ Seven seconds, AST only, no API key, no network. **Three traps, all measured rat
   refresh is yours to run. The hooks use the `update` path, so a commit touching markdown adds doc
   nodes as above.
 
-**Setting it up in a new worktree.** The graph and the graphify skill are both untracked, so a
-fresh tree from `scripts/agent-worktree.sh` has neither. Two commands, about ten seconds:
+**How an agent finds any of this.** `.claude/skills/code-graph/SKILL.md` is tracked, loads itself
+into every session in every tree, and points here. It exists because this file does not auto-load
+and the vendored graphify skill is gitignored, so without it a fresh worktree announces nothing.
+Keep it a pointer: when 5.4 and that file disagree, this one is right.
+
+**Setting it up in a new worktree.** The graph and the vendored graphify skill are both untracked,
+so a fresh tree from `scripts/agent-worktree.sh` has neither, though the pointer skill above does
+travel. Two commands, about ten seconds:
 
 ```
 graphify install --project --platform claude   # then delete what it adds beyond the skill
