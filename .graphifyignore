@@ -1,0 +1,47 @@
+# graphify scoping. gitignore syntax, and it can only ever exclude MORE than
+# .gitignore already does, never re-include. See docs/graphify-adoption-plan.md 2.4.
+
+# Xcode intermediates and CocoaPods: 8.3 GB across 67,621 files.
+#
+# These are already excluded by apps/mobile/.gitignore line 40 (`/ios`), and graphify
+# does honour nested gitignore files - detect.py `_load_dir_own_ignore` is called per
+# directory inside the walk, not just at the scan root. Kept anyway, because the cost of
+# being wrong here is a first run that crawls 8 GB of build output and the cost of the
+# line is nothing.
+apps/mobile/ios/
+apps/mobile/android/
+
+# Expo output: 33 MB of bundled web/native build, plus 12 MB of Expo's own cache.
+# Machine-written, and the sources it was built from are already in the graph.
+apps/mobile/dist/
+apps/mobile/.expo/
+
+# Drizzle migration snapshots: 42 generated JSON files, 175,315 lines, 4.5 MB, and each
+# one restates the WHOLE schema. Excluded on value rather than size: 42 near-identical
+# clusters would bury packages/server/src/db/schema.ts, which is the file anyone edits.
+packages/server/src/db/migrations/meta/
+
+# Playwright MCP's captured runs. 156 files of session debris.
+.playwright-mcp/
+
+# Session recordings. Real message bodies and real user ids (root .gitignore line 31).
+# Already excluded by git; repeated because this one must never be indexed even if the
+# gitignore handling changes underneath us.
+.dev-trace/
+
+# Untracked scratch directories, currently empty, and unignored by git.
+.probe/
+dist-debugid-probe/
+
+# --- Below here only matters if --code-only is ever dropped. Cheap insurance. ---
+
+# 634 KB of milestone narrative, the largest text file in the repo. History, not
+# structure: it would dominate any doc pass and answer no structural question.
+HISTORY.md
+
+# Root-level debugging screenshots from August. Tracked, but not source.
+fig1.png
+fig2.png
+fig3.png
+fig4.png
+fixed.png

@@ -502,6 +502,14 @@ jq -r 'select(.kind=="http") | "\(.method) \(.route) \(.status) \(.ms)ms"' .dev-
 # Run in the same change as any edit to that file's first diagram, or the
 # checked-in image silently drifts from its source.
 ./scripts/render-diagrams.sh
+
+# Rebuild the code graph after changing code. Tree-sitter only: no API key, no network,
+# about seven seconds, and it writes nothing outside graphify-out/ (which is gitignored).
+# The `rm` is not optional: extract MERGES into an existing graph rather than replacing it,
+# and --force does not change that. Do not use `graphify update .` - it ignores --code-only
+# and pulls the whole SPEC/ corpus in. The post-commit hook covers the founder's tree ONLY,
+# never a worktree. See 5.4.
+rm -rf graphify-out && graphify extract . --code-only
 ```
 
 **Always pass `--name` to `db:generate`.** Without it drizzle-kit invents a random codename and
@@ -1317,3 +1325,120 @@ that records how to recognise the class._
 
     Compare it against the runtime version of the build you intend to reach BEFORE publishing, and
     treat a difference as "this update will reach nobody" rather than as a puzzle.
+
+### 5.4 The code graph
+
+<!-- graphify:begin -->
+`graphify-out/graph.json` is a tree-sitter parse of the repo: 3,617 nodes and 10,361 edges over
+433 code files, covering what imports what, what calls what, and what contains what. It is built
+locally in about seven seconds, it costs nothing, it needs no API key and nothing leaves the
+machine. It is gitignored, because it is a cache rather than a document: it can be wrong, and
+section 3's rule stands that the repo is right and the doc is the bug.
+
+**Use it to find the files, then read the files.** The order for a task that touches code:
+
+1. **`SPEC/PRD/` or `SPEC/TECH/` first**, per 2.1. The graph holds no intent and no rules, so it
+   cannot answer what the product is meant to do or what must not break.
+2. **Then the graph, to locate.** Which files carry this, what calls them, what breaks if they
+   change. This replaces the opening round of grepping and guessing, and it is much faster: a
+   scoped answer in under a second against a repo where the chat screen alone is 6,404 lines.
+3. **Then read the files it named, before changing any of them.**
+
+**Step 3 is not optional, and the graph is not a substitute for it.** The graph stores names and
+relationships, never logic: it knows `send-message.ts` imports `policy/context.ts`, and it does not
+know what either does, which conditions apply, or which of two similar-looking rules this one is.
+An answer derived from edges alone is a confident guess, and this repo has a standing instruction
+against those (0.9, and 2.2's warning that two features which look alike routinely have
+deliberately different permission rules). Treat the graph the way you would treat a good index: it
+tells you which page to turn to and nothing about what the page says.
+
+The commands it answers with, none of which any document does and all of which grep does badly:
+
+```
+graphify affected "packages/server/src/policy/predicates.ts"   # what breaks if I change this
+graphify explain  "packages/server/src/domain/scopes.ts"       # one file, its callers and callees
+graphify path     "<A>" "<B>"                                  # how two things connect
+graphify god-nodes --top 12                                    # the hubs
+```
+
+**Use those four. Do not reach for `graphify query "<question in words>"` here** - it is a
+keyword-seeded breadth-first walk, not a search, and on this repo it is noisy enough to mislead.
+Asked "how does a chat message get authorized before it is stored" it seeded from `get()` in a
+site-worker test harness and returned 559 nodes with the policy module nowhere in the first 69.
+Asked about "policy predicates authorization" it seeded `policy` from the `policy` key in
+`apps/mobile/app.json`. It reaches the right modules eventually and ranks nothing, so it costs more
+to read than it saves. Name the file or the symbol and use `explain` or `affected` instead.
+
+`explain` is the fastest way to obey 2.2's "find the closest existing feature and mirror it", and
+`affected` is a standing check on 2.2's rule that every predicate is defined once and reused, which
+is a thing grep cannot do. Where to start for the areas that bite most often:
+
+| Question | Start at |
+|---|---|
+| Authorization, or any predicate | `packages/server/src/policy/predicates.ts` and `policy/context.ts` (45 files import it) |
+| Owning-scope resolution | `packages/server/src/domain/scopes.ts` |
+| Schema and what touches it | `packages/server/src/db/schema.ts` |
+| A chat behaviour | `packages/server/src/domain/send-message.ts` and `append-message.ts`, and `apps/mobile/app/chat/[channelId].tsx` (6,404 lines, so query it before you open it) |
+| Anything crossing the wire | `packages/client-core/src/chat-client.ts` and `packages/server/src/api/routes/` |
+
+**Five things it will not tell you, each found by testing it rather than assuming:**
+
+1. **Name a file or a symbol, never a directory, a package, or a phrase.** `affected "packages/shared"`
+   answers "no unique node match". The graph holds files and symbols, not packages. Ask about
+   `packages/shared/src/media-signing.ts` instead.
+2. **Its counts are nodes, not files.** `affected` on `policy/context.ts` reports 78 at depth 1
+   where 45 files import it; the rest are symbols. Never quote a graph number as a file count.
+3. **The `.sql` files contribute nothing.** All 45 of them, because the SQL grammar is not
+   installed. Migrations and constraint proofs are invisible to every query above, so schema
+   questions go to `schema.ts` and to the migration directory by hand.
+4. **The mobile app and the server look unconnected, and that is correct.** They are joined by
+   HTTP, not by an import. `path` between a screen and a domain module answers "no directed path
+   found", which is the true answer rather than a gap.
+5. **An `INFERRED` or `AMBIGUOUS` edge is graphify's guess, not the source.** For an authorization
+   question non-negotiable 7 is unchanged: attempt the forbidden action and watch it be rejected.
+   Reading a graph edge and concluding it looks right is not verification either.
+
+**Keeping it current.** One command, and it is not the one the tool suggests:
+
+```
+rm -rf graphify-out && graphify extract . --code-only
+```
+
+Seven seconds, AST only, no API key, no network. **Three traps, all measured rather than assumed:**
+
+- **`extract` merges into an existing graph, it does not replace it, and `--force` does not change
+  that.** That is why the line above deletes the directory first. Without the `rm` you accumulate
+  nodes for code that no longer exists.
+- **`graphify update .` ignores `--code-only`.** It pulled 1,279 markdown nodes out of `SPEC/` and
+  `docs/` on its first run here. No LLM is involved and it costs nothing. **It does not degrade a
+  code query**, which was measured rather than assumed: with the doc nodes present, `explain` on
+  `domain/scopes.ts` returns the same three importers and `affected` on `policy/context.ts` returns
+  the same 78 nodes. The documents form an isolated subgraph with no edges into code. So this is
+  noise in `god-nodes` and in `query` (which 5.4 already tells you not to use), not damage, and the
+  line above clears it in seven seconds if you want a graph that is only code.
+- **The post-commit and post-checkout hooks run in the founder's own tree only.** Both exit
+  immediately when `git rev-parse --git-dir` differs from `--git-common-dir`, which is true in every
+  linked worktree. In a tree made by `scripts/agent-worktree.sh` nothing is automatic and the
+  refresh is yours to run. The hooks use the `update` path, so a commit touching markdown adds doc
+  nodes as above.
+
+**Setting it up in a new worktree.** The graph and the graphify skill are both untracked, so a
+fresh tree from `scripts/agent-worktree.sh` has neither. Two commands, about ten seconds:
+
+```
+graphify install --project --platform claude   # then delete what it adds beyond the skill
+rm -rf graphify-out && graphify extract . --code-only
+```
+
+**That first command adds four things you must remove**, which is why it is written out rather than
+left to run unattended: a root `CLAUDE.md`, a `.claude/CLAUDE.md`, a `.claude/settings.json`
+registering PreToolUse hooks over `Bash|Grep` and `Read|Glob`, and (from `hook install`) a
+`.gitattributes`. This repo deliberately has none of those. The skill itself is auto-discovered
+from `.claude/skills/graphify/`, so nothing is lost by deleting the two `CLAUDE.md` files. If you
+only want to query and not to run the slash command, skip the install entirely: the CLI is on PATH
+and this section is the guidance.
+
+Section 2.4 says commit only when asked, so the graph goes stale between commits even where the
+hook does run. And note that `packages/site-worker/test/markdown.test.ts` has never parsed (first
+error at line 175), so its symbols are absent by design rather than by staleness.
+<!-- graphify:end -->

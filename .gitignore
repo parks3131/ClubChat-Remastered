@@ -47,3 +47,18 @@ coverage/
 .dev.vars
 .dev.vars.*
 !.dev.vars.example
+
+# The graphify code graph. A derived, per-worktree cache rebuilt by the post-commit
+# hook; never a document. Untracked on purpose: `npm run lint:emdash` walks
+# `git ls-files`, so a tracked generated report would put CI at the mercy of whatever
+# punctuation graphify emits, and section 3 of AGENTS.md means a committed graph is a
+# document that is permanently a bug. See docs/graphify-adoption-plan.md section 2.6.
+graphify-out/
+
+# The vendored graphify skill and its references. Untracked for the same reason
+# `graphify-out/` is: the files carry 46 em dashes, `npm run lint:emdash` walks
+# `git ls-files`, and standing instruction 1 is not a rule to carve an exception into
+# for somebody else's generated prose. They are regenerable in one command
+# (`graphify install --project --platform claude`), and AGENTS.md 5.4 carries the
+# guidance that actually matters, so nothing is lost by keeping them local.
+.claude/skills/graphify/
