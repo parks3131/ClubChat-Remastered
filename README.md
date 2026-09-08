@@ -15,16 +15,18 @@ is the remaster: a full rebuild driven by a written postmortem of v1's architect
   <tr>
     <td width="33%"><img src="docs/screenshots/ios-club-hub.jpg" alt="Club hub" /></td>
     <td width="33%"><img src="docs/screenshots/ios-club-chat.jpg" alt="Club chat" /></td>
-    <td width="33%"><img src="docs/screenshots/ios-race-overflow.jpg" alt="A race space" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-race-chat.jpg" alt="A race space" /></td>
   </tr>
   <tr>
     <td valign="top"><sub><b>The club hub.</b> The three spaces a club owns - News &amp; Highlights, the
       main chat, and a private Eboard &amp; Council - with its races nested one level down. This one
       screen is the whole product bet.</sub></td>
-    <td valign="top"><sub><b>Club chat.</b> A durable per-channel log of messages, system events and
-      mentions, with a tray that turns a poll or an event into a first-class object.</sub></td>
+    <td valign="top"><sub><b>Club chat.</b> A durable per-channel log of messages, documents,
+      reactions and system events, with a tray that turns a poll or an event into a first-class
+      object.</sub></td>
     <td valign="top"><sub><b>A race is a club, nested down.</b> Open a race and it behaves like a small
-      club: its own roster, chat, polls, and car groups, all reached from the overflow menu.</sub></td>
+      club: its own chat, roster, polls, meet information and car groups. Same shape, one level
+      down.</sub></td>
   </tr>
 </table>
 
@@ -122,27 +124,51 @@ iOS, Android and web from one Expo codebase, phone-first and portrait only.
 
 ## Inside the app
 
-A guided tour of the app, grouped by the job each screen does. Every screenshot is the app
-running on a physical device.
+A guided tour, grouped by the job each screen does. Every screenshot is the real app talking to
+the real API and the real WebSocket gateway - nothing here is a mockup and nothing was drawn. The
+club in them is a seeded demo, **Binghamton Running Club**, with four races, an elected board,
+five direct-message threads and a fortnight of conversation, so the screens are as full as a real
+club's would be. Two shots are older and taken on a physical device; they say so in their caption.
 
 ### Getting in
 
 <table>
   <tr>
     <td width="33%"><img src="docs/screenshots/ios-add-club.jpg" alt="Add a club" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-create-club.jpg" alt="Create a club" /></td>
     <td width="33%"><img src="docs/screenshots/ios-chats.jpg" alt="Chats inbox" /></td>
-    <td width="33%"><img src="docs/screenshots/ios-new-message.jpg" alt="New direct message" /></td>
   </tr>
   <tr>
     <td valign="top"><sub><b>Join or create.</b> Search an open club and you are in instantly; a
-      closed one sends a request an admin approves; an invite link takes you straight in either way.
-      Create a club and you are its owner, with its chat and Eboard made alongside it.</sub></td>
+      closed one sends a request an admin approves; an invite link takes you straight in either way,
+      even into a club that normally asks.</sub></td>
+    <td valign="top"><sub><b>Create one and you own it.</b> Name it, say who can join, and the club,
+      its main chat and its private Eboard space are created together in a single transaction. There
+      is no half-made club.</sub></td>
     <td valign="top"><sub><b>One inbox.</b> Clubs and direct messages live in the same list, filtered
       by All, DMs, Unread or Clubs, and each row can be pinned, muted or deleted. There is no separate
       "messages" app bolted on.</sub></td>
-    <td valign="top"><sub><b>DM by shared club.</b> You can start a direct message with anyone who is in
-      a club with you - no phone number, no friend request. Read access and post access are separate
-      predicates, so a blocked person still reads the history they were part of.</sub></td>
+  </tr>
+</table>
+
+### The club itself
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/screenshots/ios-club-profile.jpg" alt="Club profile" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-news.jpg" alt="News and highlights" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-share-qr.jpg" alt="The club's join link as a QR code" /></td>
+  </tr>
+  <tr>
+    <td valign="top"><sub><b>The club, as its owner.</b> Crest, description, roster and gallery in one
+      place. Deleting the club is guarded behind transferring ownership first, because a club with no
+      owner cannot be recovered.</sub></td>
+    <td valign="top"><sub><b>News and highlights.</b> Posts with photos, tags and an edit history - the
+      club noticeboard, kept out of the chat so an announcement is not buried by an hour of
+      conversation.</sub></td>
+    <td valign="top"><sub><b>The join link, as a QR code.</b> Anybody can scan it, ClubChat installed or
+      not. Rotating the link invalidates every link already shared, which is the only way an invite is
+      ever taken back.</sub></td>
   </tr>
 </table>
 
@@ -151,23 +177,69 @@ running on a physical device.
 <table>
   <tr>
     <td width="25%"><img src="docs/screenshots/ios-club-chat.jpg" alt="Club chat" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-chat-tray.jpg" alt="The attachment tray" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-photo-compose.jpg" alt="Sending a photo" /></td>
     <td width="25%"><img src="docs/screenshots/ios-message-actions.jpg" alt="Message actions" /></td>
-    <td width="25%"><img src="docs/screenshots/ios-race-poll.jpg" alt="Poll card" /></td>
-    <td width="25%"><img src="docs/screenshots/ios-poll-voters.jpg" alt="Poll voters" /></td>
   </tr>
   <tr>
-    <td valign="top"><sub><b>The durable log.</b> Media, documents, reactions, mentions and pinning,
-      with a tray to attach a photo, document, poll or event. An <b>announcement</b> is rendered
-      differently because it <i>is</i> different: a pin is reference and notifies nobody, an
-      announcement is interruption and notifies everyone.</sub></td>
+    <td valign="top"><sub><b>The durable log.</b> Text, photos, documents, reactions, mentions and pins
+      in one per-channel log with a gapless sequence number, which is what turns "what did I miss"
+      into a single integer comparison.</sub></td>
+    <td valign="top"><sub><b>The tray.</b> Photos, camera, a document, a poll or an event. A poll or
+      event created here posts itself back into the channel as a real row in the log - it has a
+      sequence number and survives a reinstall.</sub></td>
+    <td valign="top"><sub><b>Sending a photo.</b> The client asks for a presigned upload, puts the bytes
+      straight into object storage and then sends the message with its caption. <b>The server never
+      touches file bytes.</b></sub></td>
     <td valign="top"><sub><b>Message actions are policy, not UI.</b> Delete is the sender or a space
       admin; pin is admin in a club but either participant in a DM; report is gated on membership, so
       a member who just blocked someone can still report what was said to them.</sub></td>
-    <td valign="top"><sub><b>A live poll card.</b> A poll created anywhere posts itself back into chat
-      as a real row in the channel log - it has a sequence number, survives a reinstall, and deleting
-      the poll removes the card instead of leaving a dead link.</sub></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="25%"><img src="docs/screenshots/ios-emoji-picker.jpg" alt="Emoji picker" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-announcement.jpg" alt="An announcement in chat" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-highlights.jpg" alt="Pinned items and announcements" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-gallery.jpg" alt="Channel gallery" /></td>
+  </tr>
+  <tr>
+    <td valign="top"><sub><b>Reactions.</b> Six on the quick row and the whole picker behind the plus,
+      with recents remembered. A reaction is a row keyed by message and user, so the same person
+      cannot react twice.</sub></td>
+    <td valign="top"><sub><b>An announcement is not a pin.</b> It is rendered differently because it
+      <i>is</i> different: a pin is reference and notifies nobody, an announcement is interruption and
+      notifies everyone in the space.</sub></td>
+    <td valign="top"><sub><b>Highlights.</b> Pinned items, announcements and reports on their own tabs,
+      so the material a club keeps referring back to stops competing with chat volume for
+      attention.</sub></td>
+    <td valign="top"><sub><b>The channel gallery.</b> Every photo posted to the channel, in one grid,
+      with the thumbnails derived by the worker rather than by the phone.</sub></td>
+  </tr>
+</table>
+
+### Polls and events
+
+<table>
+  <tr>
+    <td width="25%"><img src="docs/screenshots/ios-polls.jpg" alt="Club polls" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-poll-detail.jpg" alt="One poll" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-poll-voters.jpg" alt="Poll voters" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-event-detail.jpg" alt="An event" /></td>
+  </tr>
+  <tr>
+    <td valign="top"><sub><b>Every poll in the space.</b> Live tallies, a closing time, and an
+      <i>All polls</i> / <i>My votes</i> split. Each poll belongs to one space, and it is visible to
+      exactly the people that space is visible to.</sub></td>
+    <td valign="top"><sub><b>One poll.</b> The bars are the tally. The manage block underneath - close
+      it, delete it - renders only for the people actually allowed to do either, and the server
+      re-checks that rather than trusting the screen.</sub></td>
     <td valign="top"><sub><b>See the voters.</b> Tap the eye and the tally opens up into exactly who
       chose what, per option. Nothing about the vote is anonymous guesswork.</sub></td>
+    <td valign="top"><sub><b>An event.</b> Created in a club or in a race, posted into that space's chat
+      as a card, and placed on the calendar of everybody who can see the space - and nobody
+      else.</sub></td>
   </tr>
 </table>
 
@@ -175,18 +247,22 @@ running on a physical device.
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/screenshots/ios-race-overflow.jpg" alt="Race overflow menu" /></td>
-    <td width="33%"><img src="docs/screenshots/ios-meet-info.jpg" alt="Meet information" /></td>
-    <td width="33%"><img src="docs/screenshots/ios-car-groups.jpg" alt="Car groups" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-race-roster.jpg" alt="Race roster" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-meet-info.jpg" alt="Meet information" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-car-groups.jpg" alt="Car groups" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-race-polls.jpg" alt="Race polls" /></td>
   </tr>
   <tr>
-    <td valign="top"><sub><b>Its own everything.</b> The overflow menu is what a nested space owns:
-      members, meet information, polls, and car assignments - the same shape as a club, one level
-      down.</sub></td>
-    <td valign="top"><sub><b>Meet information.</b> Location, hotel, photos and results kept in one
-      structured place, instead of scattered across a hundred messages and lost by the next race.</sub></td>
+    <td valign="top"><sub><b>Its own roster.</b> Who is going, which car they are in, and who runs the
+      race. <b>Being a club admin grants nothing here until you are on this list</b> - the roster row is
+      the whole permission.</sub></td>
+    <td valign="top"><sub><b>Meet information.</b> Course, travel, kit, hotel, photos and results kept in
+      one structured place, instead of scattered across a hundred messages and lost by the next
+      race.</sub></td>
     <td valign="top"><sub><b>Car groups.</b> Who is driving whom, split into cars with an
       "Incharge" driver marked for each - the "who is driving" thread, made into a real object.</sub></td>
+    <td valign="top"><sub><b>Its own polls.</b> A race runs its own votes - vans, seats, singlets - and
+      they are answerable by its roster and invisible to the rest of the club.</sub></td>
   </tr>
 </table>
 
@@ -197,45 +273,104 @@ running on a physical device.
     <td width="25%"><img src="docs/screenshots/ios-members.jpg" alt="Members and roles" /></td>
     <td width="25%"><img src="docs/screenshots/ios-club-hub-locked.jpg" alt="A member's locked view" /></td>
     <td width="25%"><img src="docs/screenshots/ios-eboard-chat.jpg" alt="Eboard chat" /></td>
-    <td width="25%"><img src="docs/screenshots/ios-new-meeting.jpg" alt="New meeting" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-eboard-meetings.jpg" alt="Board meetings" /></td>
   </tr>
   <tr>
     <td valign="top"><sub><b>Owner, admin, member.</b> Role is the input to every authorization
-      question in the system, and every member is grouped under the role they actually hold in this
-      club.</sub></td>
+      question in the system, and every member is grouped under the role they actually hold. Join
+      requests wait at the top for an admin to accept or decline.</sub></td>
     <td valign="top"><sub><b>A member's locked view.</b> The same club, opened by a member: no Eboard
       space at all, and races they are not on the roster of appear <b>locked</b>. Access is earned per
-      space, not inherited from being in the club.</sub></td>
+      space, not inherited. <i>Shot on a physical device, on an earlier build.</i></sub></td>
     <td valign="top"><sub><b>The Eboard &amp; Council.</b> A private admin room with its own chat and
       membership granted by promotion - the side-group clubs used to fake, made real, with the app
       announcing when it is taken away.</sub></td>
-    <td valign="top"><sub><b>Scheduling a meeting.</b> Give it a title, link and agenda; it posts a
-      card into board chat and appears on the calendar of Eboard members only.</sub></td>
+    <td valign="top"><sub><b>Board meetings.</b> Upcoming and past, each with a date and an owner, on
+      the calendar of Eboard members only. A member of the club sees no trace of any of
+      it.</sub></td>
   </tr>
 </table>
 
-### Calendar, events, notifications and weekly meetups
+<table>
+  <tr>
+    <td width="25%"><img src="docs/screenshots/ios-eboard-members.jpg" alt="Eboard roster" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-eboard-polls.jpg" alt="Eboard polls" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-meeting-detail.jpg" alt="One meeting" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-new-meeting.jpg" alt="Scheduling a meeting" /></td>
+  </tr>
+  <tr>
+    <td valign="top"><sub><b>A roster nobody maintains.</b> Promotion to admin adds the row here
+      automatically and demotion removes it, so the board membership cannot drift out of sync with who
+      is actually an admin the way the second GroupMe always did.</sub></td>
+    <td valign="top"><sub><b>The board's own polls.</b> Charter bus or three vans, decided in private.
+      Same poll implementation, different space, and the club never sees the ballot.</sub></td>
+    <td valign="top"><sub><b>One meeting.</b> Agenda, joining link and who added it. Edit and cancel
+      render only for the people allowed to use them.</sub></td>
+    <td valign="top"><sub><b>Scheduling one.</b> Give it a title, link and agenda; it posts a card into
+      board chat and appears on the calendar of Eboard members only.</sub></td>
+  </tr>
+</table>
+
+### Calendar, events and the weekly plan
 
 <table>
   <tr>
     <td width="25%"><img src="docs/screenshots/ios-calendar.jpg" alt="Calendar" /></td>
-    <td width="25%"><img src="docs/screenshots/ios-events.jpg" alt="Upcoming events and polls" /></td>
-    <td width="25%"><img src="docs/screenshots/ios-notifications.jpg" alt="Notifications" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-events.jpg" alt="Upcoming events and meetups" /></td>
     <td width="25%"><img src="docs/screenshots/ios-weekly-routine.jpg" alt="Weekly meetups" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-meetup-detail.jpg" alt="One meetup" /></td>
   </tr>
   <tr>
     <td valign="top"><sub><b>One merged month.</b> Every scope you can see, merged by permission.
       <b>There is deliberately no calendar table</b> - a second copy would drift, a merged read cannot
       go stale, so two people in the same club see different months.</sub></td>
-    <td valign="top"><sub><b>Upcoming and past.</b> Events and polls from every space you belong to,
+    <td valign="top"><sub><b>Upcoming and past.</b> Events and meetups from every space you belong to,
       sorted into what is coming and what has been, so nothing sneaks up on the club.</sub></td>
-    <td valign="top"><sub><b>Read-cursor notifications.</b> Every row is a <b>type plus params</b>
-      rendered on the client, so renaming a club fixes history. "Caught up on 5 messages" is the read
-      cursor talking - the same cursor that decides whether a push was ever sent.</sub></td>
     <td valign="top"><sub><b>Weekly meetups.</b> The plan clubs used to screenshot into chat every
-      week, now a real dated object you page through week by week - where, when, and what you are
-      doing, with every empty day saying so. <i>Shown before the 2026-08-14 rename; it carried an
-      activity type then, and carries a place and a time now.</i></sub></td>
+      week, now a real dated object you page through week by week, with a time on every day and every
+      empty day saying so.</sub></td>
+    <td valign="top"><sub><b>One day of it.</b> What it is, where it starts, who it is for and who put
+      it there, with directions handed off to the phone's own map app.</sub></td>
+  </tr>
+</table>
+
+### Direct messages, and the safety tooling that shipped with them
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/screenshots/ios-new-message.jpg" alt="New direct message" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-dm-chat.jpg" alt="A direct message" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-dm-profile.jpg" alt="Direct message profile" /></td>
+  </tr>
+  <tr>
+    <td valign="top"><sub><b>DM by shared club.</b> You can start a direct message with anyone who is in
+      a club with you - no phone number, no friend request. The list is exactly the people that rule
+      allows, computed on the server.</sub></td>
+    <td valign="top"><sub><b>The same log, two people wide.</b> A DM is the same channel with the same
+      sequence numbers and the same offline cache. Read access and post access are separate predicates,
+      so a blocked person still reads the history they were part of.</sub></td>
+    <td valign="top"><sub><b>What you have in common.</b> The clubs you share and the photos in this
+      chat, with block and report behind the overflow. Blocking is one-directional and it does not
+      delete anything.</sub></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/screenshots/ios-club-reports.jpg" alt="Reports inside a club" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-moderation.jpg" alt="The platform report queue" /></td>
+    <td width="33%"><img src="docs/screenshots/ios-member-profile.jpg" alt="A member seen by an admin" /></td>
+  </tr>
+  <tr>
+    <td valign="top"><sub><b>Reports inside a club.</b> A club admin sees what was reported in their own
+      club, who reported it, and can delete the message or dismiss the report. Nothing else is theirs to
+      see.</sub></td>
+    <td valign="top"><sub><b>The platform queue.</b> Reports from direct messages never reach a club
+      admin, because no club owns a DM. They go to a platform moderator instead, and the screen says so
+      out loud.</sub></td>
+    <td valign="top"><sub><b>A member, seen by an admin.</b> Their profile, the clubs you share, and
+      <b>ban from club</b> - the destructive control, kept on the person rather than loose on the
+      roster.</sub></td>
   </tr>
 </table>
 
@@ -243,18 +378,24 @@ running on a physical device.
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/screenshots/ios-profile.jpg" alt="Profile" /></td>
-    <td width="33%"><img src="docs/screenshots/ios-account.jpg" alt="Account and ownership" /></td>
-    <td width="33%"></td>
+    <td width="25%"><img src="docs/screenshots/ios-notifications.jpg" alt="Notifications" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-profile.jpg" alt="Profile" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-profile-edit.jpg" alt="Editing your profile" /></td>
+    <td width="25%"><img src="docs/screenshots/ios-account.jpg" alt="Account and ownership" /></td>
   </tr>
   <tr>
+    <td valign="top"><sub><b>Read-cursor notifications.</b> Every row is a <b>type plus params</b>
+      rendered on the client, so renaming a club fixes history. "Caught up on 4 messages" is the read
+      cursor talking - the same cursor that decides whether a push was ever sent.</sub></td>
     <td valign="top"><sub><b>Profile.</b> Memberships carry their role, because role drives every
       authorization answer. It is also a privacy surface: <b>date of birth is withheld</b> when another
       member views the profile, asserted by a surface gate rather than trusted to the serializer.</sub></td>
+    <td valign="top"><sub><b>Editing it.</b> Name, description, city, date of birth and school. The
+      same fields the server validates, and the only ones it accepts.</sub></td>
     <td valign="top"><sub><b>An honest exit.</b> You cannot delete your account while you still own
       clubs - a club without an owner cannot be recovered - so the app points you at transferring or
-      deleting them first. Deletion then anonymises without erasing history.</sub></td>
-    <td valign="top"></td>
+      deleting them first. Deletion then anonymises without erasing history.
+      <i>Shot on a physical device, on an earlier build.</i></sub></td>
   </tr>
 </table>
 
