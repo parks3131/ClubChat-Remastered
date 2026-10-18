@@ -1,0 +1,513 @@
+<title>Clubby Connector</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo+Narrow:wght@400;500;600&family=Inter:wght@500;600&display=swap">
+<style>
+  /* Layout: one reading column, diagrams at full column width in their own scroll boxes.
+     ClubChat's own type system (Anton / Archivo Narrow / Inter) and its orange accent. */
+  :root {
+    --bg: #faf8f7;
+    --surface: #ffffff;
+    --s2: #f1ecea;
+    --ink: #191c1e;
+    --ink-2: #5c4037;
+    --line: #d8ccc7;
+    --accent: #ff4d00;
+    --accent-ink: #c23a00;
+    --accent-soft: #ffe3d8;
+    --out: #e7edf3;
+    --out-line: #61778f;
+    --display: "Anton", "Impact", "Arial Narrow", sans-serif;
+    --body: "Archivo Narrow", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+    --label: "Inter", "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141617; --surface: #1c1f21; --s2: #262a2d; --ink: #eef0f1; --ink-2: #cdb5ac;
+      --line: #3b4145; --accent: #ff6a2a; --accent-ink: #ff8a55; --accent-soft: #46200f;
+      --out: #1d2833; --out-line: #8aa1ba; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141617; --surface: #1c1f21; --s2: #262a2d; --ink: #eef0f1; --ink-2: #cdb5ac;
+    --line: #3b4145; --accent: #ff6a2a; --accent-ink: #ff8a55; --accent-soft: #46200f;
+    --out: #1d2833; --out-line: #8aa1ba; color-scheme: dark;
+  }
+
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--body); font-size: 17px; line-height: 1.55;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .page { max-width: 980px; margin: 0 auto; padding-block: 40px 72px; display: grid; gap: 56px; }
+  .prose { max-width: 68ch; }
+  h1, h2 { font-family: var(--display); font-weight: 400; text-transform: uppercase; letter-spacing: .01em; text-wrap: balance; margin: 0; line-height: 1.05; }
+  h1 { font-size: clamp(44px, 8vw, 76px); }
+  h2 { font-size: clamp(28px, 4.4vw, 38px); }
+  h3 { font-family: var(--label); font-size: 15px; font-weight: 600; margin: 0; }
+  p { margin: 0; }
+  .eyebrow { font-family: var(--label); font-weight: 600; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent-ink); }
+  .meta { font-family: var(--label); font-size: 13px; color: var(--ink-2); display: flex; flex-wrap: wrap; gap: 6px 16px; }
+  .lede { font-size: 21px; line-height: 1.45; max-width: 52ch; }
+  section { display: grid; gap: 18px; }
+  header { display: grid; gap: 16px; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .86em; background: var(--s2); padding: 1px 5px; border-radius: 4px; }
+
+  /* roles */
+  .roles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .role { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; display: grid; gap: 6px; align-content: start; }
+  .role.ours { border: 2px solid var(--accent); background: var(--accent-soft); }
+  .role .who { font-family: var(--label); font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2); }
+  .role .what { font-family: var(--display); font-size: 24px; text-transform: uppercase; line-height: 1.1; }
+  @media (max-width: 720px) { .roles { grid-template-columns: 1fr; } }
+
+  /* figures */
+  figure { margin: 0; display: grid; gap: 10px; }
+  .fig { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 14px; overflow-x: auto; }
+  .fig svg { display: block; width: 100%; min-width: 760px; height: auto; }
+  figcaption { font-size: 15px; color: var(--ink-2); max-width: 75ch; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 20px; font-family: var(--label); font-size: 12.5px; color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .sw { width: 18px; height: 12px; border-radius: 3px; border: 1px solid var(--line); background: var(--s2); }
+  .sw.new { background: var(--accent-soft); border: 2px solid var(--accent); }
+  .sw.out { background: var(--out); border-color: var(--out-line); }
+
+  /* svg vocabulary */
+  .b-old { fill: var(--s2); stroke: var(--line); stroke-width: 1.2; }
+  .b-core { fill: var(--s2); stroke: var(--ink-2); stroke-width: 1.6; }
+  .b-new { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+  .b-out { fill: var(--out); stroke: var(--out-line); stroke-width: 1.2; }
+  .b-dash { stroke-dasharray: 5 4; }
+  .zone { fill: none; stroke: var(--line); stroke-width: 1.5; }
+  .zone-api { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+  .zone-out { fill: none; stroke: var(--out-line); stroke-width: 1.4; stroke-dasharray: 6 5; }
+  .t { fill: var(--ink); font-family: var(--label); font-weight: 600; font-size: 14px; }
+  .s { fill: var(--ink-2); font-family: var(--body); font-size: 13.5px; }
+  .z { fill: var(--ink-2); font-family: var(--label); font-weight: 600; font-size: 11px; letter-spacing: .1em; }
+  .z-out { fill: var(--out-line); }
+  .a-old { stroke: var(--ink-2); stroke-width: 1.6; fill: none; }
+  .a-new { stroke: var(--accent); stroke-width: 2.2; fill: none; }
+  .a-dash { stroke-dasharray: 6 5; }
+  .ah-old { fill: var(--ink-2); }
+  .ah-new { fill: var(--accent); }
+  .life { stroke: var(--line); stroke-width: 1.4; stroke-dasharray: 4 5; }
+  .num { fill: var(--accent); }
+  .num-t { fill: #ffffff; font-family: var(--label); font-weight: 600; font-size: 11px; }
+  .lab { fill: var(--ink); font-family: var(--body); font-size: 14.5px; }
+  .note { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; }
+
+  /* tables */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 16px; }
+  th { font-family: var(--label); font-size: 11.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  td { padding: 10px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.say { font-style: italic; }
+  td.fn { color: var(--ink-2); }
+
+  /* rules */
+  .rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .rule { border-top: 3px solid var(--ink); padding-top: 12px; display: grid; gap: 6px; }
+  @media (max-width: 720px) { .rules { grid-template-columns: 1fr; } }
+
+  /* build order */
+  ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; counter-reset: s; }
+  ol.steps li { counter-increment: s; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 14px; align-items: start; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  ol.steps li::before { content: counter(s); font-family: var(--display); font-size: 30px; line-height: 1; color: var(--ink-2); }
+  ol.steps li.gate { border: 2px solid var(--accent); }
+  ol.steps li.gate::before { color: var(--accent); }
+  ol.steps li div { display: grid; gap: 4px; min-width: 0; }
+  .tag { font-family: var(--label); font-size: 10.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #fff; background: var(--accent); border-radius: 4px; padding: 2px 6px; justify-self: start; }
+
+  .split { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .col { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; display: grid; gap: 8px; align-content: start; }
+  .col.ours { border: 2px solid var(--accent); }
+  .col ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+  @media (max-width: 720px) { .split { grid-template-columns: 1fr; } }
+
+  .qs { display: grid; gap: 10px; margin: 0; padding-left: 22px; }
+  footer { font-size: 15px; color: var(--ink-2); border-top: 1px solid var(--line); padding-top: 18px; }
+  a { color: var(--accent-ink); }
+</style>
+
+<div class="page">
+
+<header>
+  <span class="eyebrow">ClubChat · Clubby stage one</span>
+  <h1>Clubby Connector</h1>
+  <p class="lede">Clubby reads your clubs and answers you, by voice, through the Claude app. In stage one it changes nothing: no sending, no voting, nothing marked read.</p>
+  <div class="meta"><span>Proposal, nothing built yet</span><span>18 Oct 2026</span><span>ClubChat-Remastered · main · bd53548</span></div>
+</header>
+
+<section>
+  <h2>Who builds what</h2>
+  <p class="prose">There are three roles in MCP. Two of them already exist and belong to Anthropic. We only build the third, so there is no client for us to write.</p>
+  <div class="roles">
+    <div class="role">
+      <span class="who">MCP host · Anthropic builds it</span>
+      <span class="what">Claude app</span>
+      <p>On your phone. Where you talk and hear the answer.</p>
+    </div>
+    <div class="role">
+      <span class="who">MCP client · Anthropic builds it</span>
+      <span class="what">Claude</span>
+      <p>Runs in Anthropic's cloud. Understands your question and picks which ClubChat tool to call.</p>
+    </div>
+    <div class="role ours">
+      <span class="who">MCP server · we build it</span>
+      <span class="what">ClubChat /mcp</span>
+      <p>A new entrance on our existing API. Answers with what you are allowed to see, and nothing else.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Where it fits</h2>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 1000 490" role="img" aria-label="The member's phone talks to ClubChat directly through the app, and to Claude through the Claude app. Claude, in Anthropic's cloud, calls a new /mcp entrance on the ClubChat API, which uses the same core as the app.">
+        <defs>
+          <marker id="m-old" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ah-old"/></marker>
+          <marker id="m-new" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ah-new"/></marker>
+        </defs>
+
+        <!-- phone -->
+        <rect x="16" y="40" width="200" height="430" rx="24" class="zone"/>
+        <text x="116" y="68" text-anchor="middle" class="z">MEMBER'S PHONE</text>
+        <rect x="36" y="92" width="160" height="72" rx="10" class="b-old"/>
+        <text x="116" y="123" text-anchor="middle" class="t">ClubChat app</text>
+        <text x="116" y="144" text-anchor="middle" class="s">chat, calendar, polls</text>
+        <rect x="36" y="296" width="160" height="72" rx="10" class="b-out"/>
+        <text x="116" y="327" text-anchor="middle" class="t">Claude app</text>
+        <text x="116" y="348" text-anchor="middle" class="s">you talk to it</text>
+        <rect x="36" y="388" width="160" height="62" rx="10" class="b-old b-dash"/>
+        <text x="116" y="414" text-anchor="middle" class="t">Browser</text>
+        <text x="116" y="434" text-anchor="middle" class="s">opens once, to sign in</text>
+
+        <!-- anthropic -->
+        <rect x="256" y="262" width="192" height="144" rx="16" class="zone-out"/>
+        <text x="352" y="288" text-anchor="middle" class="z z-out">ANTHROPIC'S CLOUD</text>
+        <rect x="272" y="300" width="160" height="92" rx="10" class="b-out"/>
+        <text x="352" y="330" text-anchor="middle" class="t">Claude</text>
+        <text x="352" y="351" text-anchor="middle" class="s">the MCP client</text>
+        <text x="352" y="371" text-anchor="middle" class="s">picks which tool</text>
+
+        <!-- clubchat -->
+        <rect x="510" y="40" width="340" height="430" rx="24" class="zone"/>
+        <text x="680" y="68" text-anchor="middle" class="z">CLUBCHAT SERVERS · FLY.IO</text>
+        <rect x="526" y="84" width="150" height="56" rx="10" class="b-old"/>
+        <text x="601" y="108" text-anchor="middle" class="t">Gateway</text>
+        <text x="601" y="127" text-anchor="middle" class="s">live chat</text>
+        <rect x="684" y="84" width="150" height="56" rx="10" class="b-old"/>
+        <text x="759" y="108" text-anchor="middle" class="t">Worker</text>
+        <text x="759" y="127" text-anchor="middle" class="s">pushes, effects</text>
+
+        <rect x="526" y="156" width="308" height="296" rx="14" class="zone-api"/>
+        <text x="542" y="180" class="z">API</text>
+        <rect x="542" y="196" width="150" height="60" rx="10" class="b-old"/>
+        <text x="617" y="221" text-anchor="middle" class="t">REST routes</text>
+        <text x="617" y="241" text-anchor="middle" class="s">what the app calls</text>
+        <rect x="542" y="272" width="150" height="72" rx="10" class="b-new"/>
+        <text x="617" y="301" text-anchor="middle" class="t">/mcp</text>
+        <text x="617" y="322" text-anchor="middle" class="s">13 read-only tools</text>
+        <rect x="542" y="360" width="150" height="72" rx="10" class="b-new"/>
+        <text x="617" y="389" text-anchor="middle" class="t">Sign-in pages</text>
+        <text x="617" y="410" text-anchor="middle" class="s">first connection only</text>
+
+        <rect x="712" y="196" width="106" height="236" rx="10" class="b-core"/>
+        <text x="765" y="226" text-anchor="middle" class="t">Same core</text>
+        <text x="765" y="262" text-anchor="middle" class="s">account check</text>
+        <text x="765" y="284" text-anchor="middle" class="s">rate limit</text>
+        <text x="765" y="306" text-anchor="middle" class="s">domain reads</text>
+        <text x="765" y="328" text-anchor="middle" class="s">policy rules</text>
+        <text x="765" y="404" text-anchor="middle" class="s">unchanged</text>
+
+        <path d="M692 226 L708 226" class="a-old" marker-end="url(#m-old)"/>
+        <path d="M692 308 L708 308" class="a-new" marker-end="url(#m-new)"/>
+        <path d="M692 396 L708 396" class="a-new" marker-end="url(#m-new)"/>
+        <path d="M601 140 L601 152" class="a-old" marker-end="url(#m-old)"/>
+
+        <rect x="876" y="280" width="110" height="80" rx="10" class="b-old"/>
+        <text x="931" y="314" text-anchor="middle" class="t">Postgres</text>
+        <text x="931" y="335" text-anchor="middle" class="s">Neon</text>
+        <text x="931" y="384" text-anchor="middle" class="s">Redis and R2</text>
+        <text x="931" y="402" text-anchor="middle" class="s">also unchanged</text>
+        <path d="M818 320 L872 320" class="a-old" marker-end="url(#m-old)"/>
+
+        <!-- phone to servers -->
+        <path d="M196 118 L522 112" class="a-old" marker-end="url(#m-old)"/>
+        <text x="360" y="104" text-anchor="middle" class="s">WebSocket</text>
+        <path d="M196 146 C 360 146, 420 226, 538 226" class="a-old" marker-end="url(#m-old)"/>
+        <text x="282" y="138" text-anchor="middle" class="s">HTTPS</text>
+        <path d="M196 332 L268 332" class="a-old" marker-end="url(#m-old)"/>
+        <text x="232" y="323" text-anchor="middle" class="s">voice</text>
+        <path d="M432 330 C 480 330, 490 308, 538 308" class="a-new" marker-end="url(#m-new)"/>
+        <text x="472" y="282" text-anchor="middle" class="s">HTTPS</text>
+        <text x="472" y="298" text-anchor="middle" class="s">+ token</text>
+        <path d="M196 420 C 380 470, 470 396, 538 396" class="a-new a-dash" marker-end="url(#m-new)"/>
+        <text x="330" y="472" text-anchor="middle" class="s">sign in, press Allow</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i class="sw new"></i>New for Clubby</span>
+      <span><i class="sw"></i>Already exists, unchanged</span>
+      <span><i class="sw out"></i>Anthropic's, not ours</span>
+    </div>
+    <figcaption>Claude never talks to your phone's ClubChat app. It calls our server from Anthropic's cloud, through one new entrance, and gets the same answers the app would. No new server, no new database.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>Inside the API</h2>
+  <p class="prose">A new entrance, the same building behind it. The two paths only differ at the top and in one middle step. Everything that decides what you may see is shared, so Clubby can never see more than the app shows you.</p>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 860 748" role="img" aria-label="Request layers inside the API. The app path and the Clubby path each have their own entrance and sign-in check, then share the account check and rate limit, split into a route handler or a tool, then share the domain read, the policy rules and Postgres.">
+        <defs>
+          <marker id="n-old" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" class="ah-old"/></marker>
+          <marker id="n-new" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" class="ah-new"/></marker>
+        </defs>
+        <text x="230" y="12" text-anchor="middle" class="z">THE APP, TODAY</text>
+        <text x="630" y="12" text-anchor="middle" class="z">CLUBBY, NEW</text>
+
+        <rect x="60" y="20" width="340" height="56" rx="10" class="b-old"/>
+        <text x="230" y="44" text-anchor="middle" class="t">ClubChat app</text>
+        <text x="230" y="64" text-anchor="middle" class="s">you, tapping</text>
+        <rect x="460" y="20" width="340" height="56" rx="10" class="b-out"/>
+        <text x="630" y="44" text-anchor="middle" class="t">Claude, from Anthropic's cloud</text>
+        <text x="630" y="64" text-anchor="middle" class="s">you, talking</text>
+
+        <rect x="60" y="102" width="340" height="56" rx="10" class="b-old"/>
+        <text x="230" y="126" text-anchor="middle" class="t">REST routes</text>
+        <text x="230" y="146" text-anchor="middle" class="s">/calendar, /channels, /events and the rest</text>
+        <rect x="460" y="102" width="340" height="56" rx="10" class="b-new"/>
+        <text x="630" y="126" text-anchor="middle" class="t">/mcp entrance</text>
+        <text x="630" y="146" text-anchor="middle" class="s">one address, speaks MCP</text>
+
+        <rect x="60" y="184" width="340" height="56" rx="10" class="b-old"/>
+        <text x="230" y="208" text-anchor="middle" class="t">Who are you?</text>
+        <text x="230" y="228" text-anchor="middle" class="s">the app's sign-in session</text>
+        <rect x="460" y="184" width="340" height="56" rx="10" class="b-new"/>
+        <text x="630" y="208" text-anchor="middle" class="t">Who are you?</text>
+        <text x="630" y="228" text-anchor="middle" class="s">Clubby token: only for /mcp, only for reading</text>
+
+        <rect x="60" y="266" width="740" height="56" rx="10" class="b-core"/>
+        <text x="430" y="290" text-anchor="middle" class="t">Account check</text>
+        <text x="430" y="310" text-anchor="middle" class="s">a suspended or deleted account stops here, on every single request</text>
+
+        <rect x="60" y="348" width="740" height="56" rx="10" class="b-core"/>
+        <text x="430" y="372" text-anchor="middle" class="t">Rate limit</text>
+        <text x="430" y="392" text-anchor="middle" class="s">the same per-person limit the app already has</text>
+
+        <rect x="60" y="430" width="340" height="56" rx="10" class="b-old"/>
+        <text x="230" y="454" text-anchor="middle" class="t">Route handler</text>
+        <text x="230" y="474" text-anchor="middle" class="s">for example GET /calendar</text>
+        <rect x="460" y="430" width="340" height="56" rx="10" class="b-new"/>
+        <text x="630" y="454" text-anchor="middle" class="t">Tool</text>
+        <text x="630" y="474" text-anchor="middle" class="s">for example my_calendar</text>
+
+        <rect x="60" y="512" width="740" height="56" rx="10" class="b-core"/>
+        <text x="430" y="536" text-anchor="middle" class="t">Domain read</text>
+        <text x="430" y="556" text-anchor="middle" class="s">readCalendarFeed: one function, called by both</text>
+
+        <rect x="60" y="594" width="740" height="56" rx="10" class="b-core"/>
+        <text x="430" y="618" text-anchor="middle" class="t">Policy rules</text>
+        <text x="430" y="638" text-anchor="middle" class="s">is this member allowed to see this club, chat or race?</text>
+
+        <rect x="60" y="676" width="740" height="56" rx="10" class="b-old"/>
+        <text x="430" y="700" text-anchor="middle" class="t">Postgres</text>
+        <text x="430" y="720" text-anchor="middle" class="s">no new tables for the tools; one migration for sign-in tokens</text>
+
+        <g class="a-old">
+          <path d="M230 76 L230 98" marker-end="url(#n-old)"/>
+          <path d="M230 158 L230 180" marker-end="url(#n-old)"/>
+          <path d="M230 240 L230 262" marker-end="url(#n-old)"/>
+          <path d="M230 322 L230 344" marker-end="url(#n-old)"/>
+          <path d="M230 404 L230 426" marker-end="url(#n-old)"/>
+          <path d="M230 486 L230 508" marker-end="url(#n-old)"/>
+          <path d="M430 568 L430 590" marker-end="url(#n-old)"/>
+          <path d="M430 650 L430 672" marker-end="url(#n-old)"/>
+        </g>
+        <g class="a-new">
+          <path d="M630 76 L630 98" marker-end="url(#n-new)"/>
+          <path d="M630 158 L630 180" marker-end="url(#n-new)"/>
+          <path d="M630 240 L630 262" marker-end="url(#n-new)"/>
+          <path d="M630 322 L630 344" marker-end="url(#n-new)"/>
+          <path d="M630 404 L630 426" marker-end="url(#n-new)"/>
+          <path d="M630 486 L630 508" marker-end="url(#n-new)"/>
+        </g>
+      </svg>
+    </div>
+    <figcaption>The darker-edged rows are shared by both paths. The tools are small: each one calls a function a screen in the app already calls.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>Connecting, once</h2>
+  <figure>
+    <div class="fig"><svg id="seq-connect" role="img" aria-label="First connection: you add ClubChat in Claude, Claude is told to sign in, you sign in to ClubChat in a browser and press Allow, and Claude receives a read-only token."></svg></div>
+    <figcaption>This is the standard MCP sign-in. You never give Claude your ClubChat password: you type it into ClubChat's own page, and Claude only gets a token that can read, through /mcp, and nothing else. You can disconnect it from Claude's settings at any time.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>One question in the car</h2>
+  <figure>
+    <div class="fig"><svg id="seq-ask" role="img" aria-label="Asking a question: you ask Claude, Claude calls the my_calendar tool on ClubChat with the token, ClubChat checks everything and reads your calendar, and Claude speaks the answer."></svg></div>
+    <figcaption>Nothing is sent, voted on or marked as read. Your unread counts stay exactly where they were, so you still get the notifications you would have got.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>What Clubby can answer</h2>
+  <p class="prose">Thirteen tools, all read-only, covering club chats and your direct messages. Claude works out which club you mean from the list of your clubs, and asks you if two match.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>You say</th><th>Tool</th><th>Calls, already in the code</th></tr></thead>
+      <tbody>
+        <tr><td class="say">What clubs am I in?</td><td><code>list_my_clubs</code></td><td class="fn">listClubsForUser</td></tr>
+        <tr><td class="say">What chats does Running Club have?</td><td><code>list_chats</code></td><td class="fn">listAccessibleChannels</td></tr>
+        <tr><td class="say">What did I miss?</td><td><code>whats_new</code></td><td class="fn">listAccessibleChannels, readHistory</td></tr>
+        <tr><td class="say">Read me the last few messages</td><td><code>read_messages</code></td><td class="fn">authorizeChannel, readHistory</td></tr>
+        <tr><td class="say">Did Sam message me?</td><td><code>list_direct_messages</code></td><td class="fn">listDmThreads</td></tr>
+        <tr><td class="say">What's on my calendar this week?</td><td><code>my_calendar</code></td><td class="fn">readCalendarFeed</td></tr>
+        <tr><td class="say">When and where is the next practice?</td><td><code>event_details</code></td><td class="fn">readEvent, readMeetup</td></tr>
+        <tr><td class="say">Anything for me?</td><td><code>my_notifications</code></td><td class="fn">readInbox</td></tr>
+        <tr><td class="say">What's pinned in Running Club?</td><td><code>pinned</code></td><td class="fn">authorizeChannel, readHighlights</td></tr>
+        <tr><td class="say">What's the latest club news?</td><td><code>club_news</code></td><td class="fn">readNewsFeed</td></tr>
+        <tr><td class="say">Any open polls?</td><td><code>open_polls</code></td><td class="fn">readPolls, readPoll</td></tr>
+        <tr><td class="say">Who's driving Saturday?</td><td><code>race_details</code></td><td class="fn">readRace, readCarGroups, readRaceRoster</td></tr>
+        <tr><td class="say">Who's in the club?</td><td><code>club_members</code></td><td class="fn">readClubRoster</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>The rules</h2>
+  <div class="rules">
+    <div class="rule"><h3>Clubby acts as you</h3><p>It sees exactly what you see in the app. If you can't open a chat, neither can Clubby.</p></div>
+    <div class="rule"><h3>Read-only, enforced twice</h3><p>There are no write tools, and the token itself only allows reading. A "send" tool added by mistake later would still be refused for every existing connection.</p></div>
+    <div class="rule"><h3>Stops the moment you're suspended</h3><p>The account check runs on every question, not only at sign-in. A suspended or deleted account stops working on its next question.</p></div>
+    <div class="rule"><h3>Marks nothing as read</h3><p>Unread counts decide who gets a push. Clubby reading a chat must not silence notifications you never saw.</p></div>
+    <div class="rule"><h3>Direct messages included</h3><p>Your call, 18 Oct. Clubby reads your own conversations, the same ones you can open in the app, and nobody else's.</p></div>
+    <div class="rule"><h3>Says where your data goes</h3><p>What Clubby reads, direct messages included, is sent to Anthropic to answer you. The Allow page says so, and the privacy policy gets a line.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>Build order</h2>
+  <p class="prose">Each step is tested and committed before the next one starts.</p>
+  <ol class="steps">
+    <li><div><h3>Upgrade the sign-in library</h3><p>better-auth from 1.6.25 to 1.7.10, on its own. It sits under every request, so sign-in, sign-out and password reset get checked on the phone before anything is added.</p></div></li>
+    <li><div><h3>Two small clean-ups</h3><p>The channel permission check and the calendar sorting move to where both the app and Clubby can call the same code. Nothing the app does changes.</p></div></li>
+    <li><div><h3>Sign-in for Claude</h3><p>The OAuth pieces, one database migration for tokens, the two "where to sign in" addresses, and the sign-in and Allow pages.</p></div></li>
+    <li class="gate"><div><span class="tag">Proves the chain</span><h3>One tool, all the way to your phone</h3><p>Only <code>list_my_clubs</code>. Deploy it, add ClubChat at claude.ai, then ask in the Claude phone app twice: once with the dictation mic, once in hands-free voice mode. Everything is proved end to end before twelve more tools get written.</p></div></li>
+    <li><div><h3>The other twelve tools</h3><p>Each one starts with a failing test against the seeded Binghamton Running Club.</p></div></li>
+    <li><div><h3>Prove the locks</h3><p>Try to read another member's club, use a suspended account, use a wrong or expired token, and read somebody else's direct messages. Watch each one get refused.</p></div></li>
+    <li><div><h3>Write it down</h3><p>Product and technical spec pages, three decision records, the privacy line.</p></div></li>
+  </ol>
+</section>
+
+<section>
+  <h2>New, reused, not built</h2>
+  <div class="split">
+    <div class="col ours"><h3>New</h3><ul><li><code>/mcp</code> entrance and 13 tools</li><li>Sign-in and Allow pages</li><li>Token tables, one migration</li><li>Server packages only, so the phone app needs no new build</li></ul></div>
+    <div class="col"><h3>Reused as is</h3><ul><li>Every read function</li><li>Policy rules</li><li>Account check and rate limit</li><li>Fly, Postgres, Redis, R2</li></ul></div>
+    <div class="col"><h3>Not built in stage one</h3><ul><li>An MCP client (Claude is the client)</li><li>Anything that sends or changes</li><li>A mic button inside ClubChat</li><li>"Hey Siri, ask ClubChat"</li></ul></div>
+  </div>
+</section>
+
+<section>
+  <h2>Settled</h2>
+  <ol class="qs">
+    <li><strong>Direct messages are in.</strong></li>
+    <li><strong>Typing or the dictation mic works with connectors.</strong> Dictation turns speech into text before Claude sees it. The only unknown is hands-free voice mode, where Claude talks back. That decides whether Clubby is hands-free in the car, not whether it works. Step 3 checks it.</li>
+    <li><strong>Claude Pro is enough.</strong> You add ClubChat once at claude.ai in a browser, and it then shows up in the phone app.</li>
+  </ol>
+</section>
+
+<footer>The full written plan is in the repo folder <code>docs/mcp/</code>. Start at <code>README.md</code>; the brief for the agent who builds it is <code>CLAUDE.md</code>.</footer>
+
+</div>
+
+<script>
+(function () {
+  var NS = 'http://www.w3.org/2000/svg';
+  function el(name, attrs, text) {
+    var n = document.createElementNS(NS, name);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  var lanes = { you: 130, claude: 450, api: 770 };
+  var heads = [
+    ['you', 'You', 'phone and browser', 'b-old'],
+    ['claude', 'Claude', "Anthropic's cloud", 'b-out'],
+    ['api', 'ClubChat API', '/mcp and sign-in', 'b-new']
+  ];
+  function draw(id, steps) {
+    var svg = document.getElementById(id);
+    if (!svg) return;
+    var top = 92, gap = 60, h = top + steps.length * gap + 10;
+    svg.setAttribute('viewBox', '0 0 900 ' + h);
+    var defs = el('defs', {});
+    ['old', 'new'].forEach(function (k) {
+      var m = el('marker', { id: id + '-' + k, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
+      m.appendChild(el('path', { d: 'M0 0L10 5L0 10z', 'class': 'ah-' + k }));
+      defs.appendChild(m);
+    });
+    svg.appendChild(defs);
+    heads.forEach(function (hd) {
+      var x = lanes[hd[0]];
+      svg.appendChild(el('line', { x1: x, y1: 64, x2: x, y2: h - 6, 'class': 'life' }));
+      svg.appendChild(el('rect', { x: x - 95, y: 8, width: 190, height: 54, rx: 10, 'class': hd[3] }));
+      svg.appendChild(el('text', { x: x, y: 31, 'text-anchor': 'middle', 'class': 't' }, hd[1]));
+      svg.appendChild(el('text', { x: x, y: 50, 'text-anchor': 'middle', 'class': 's' }, hd[2]));
+    });
+    steps.forEach(function (st, i) {
+      var y = top + i * gap + 22;
+      var kind = (st.from === 'api' || st.to === 'api') ? 'new' : 'old';
+      if (st.self) {
+        var x = lanes[st.self], w = 236;
+        svg.appendChild(el('rect', { x: x - w / 2, y: y - 30, width: w, height: 48, rx: 8, 'class': 'note' }));
+        svg.appendChild(el('text', { x: x, y: y - 11, 'text-anchor': 'middle', 'class': 'lab' }, st.label));
+        svg.appendChild(el('text', { x: x, y: y + 8, 'text-anchor': 'middle', 'class': 'lab' }, st.label2));
+        svg.appendChild(el('circle', { cx: x - w / 2 - 16, cy: y - 6, r: 10, 'class': 'num' }));
+        svg.appendChild(el('text', { x: x - w / 2 - 16, y: y - 2, 'text-anchor': 'middle', 'class': 'num-t' }, String(i + 1)));
+        return;
+      }
+      var x1 = lanes[st.from], x2 = lanes[st.to], dir = x2 > x1 ? 1 : -1;
+      svg.appendChild(el('path', {
+        d: 'M' + (x1 + dir * 6) + ' ' + y + ' L' + (x2 - dir * 8) + ' ' + y,
+        'class': 'a-' + kind + (st.dash ? ' a-dash' : ''),
+        'marker-end': 'url(#' + id + '-' + kind + ')'
+      }));
+      var mid = (x1 + x2) / 2;
+      svg.appendChild(el('text', { x: mid + 14, y: y - 10, 'text-anchor': 'middle', 'class': 'lab' }, st.label));
+      var lx = Math.min(x1, x2) + 18;
+      svg.appendChild(el('circle', { cx: lx, cy: y - 15, r: 10, 'class': 'num' }));
+      svg.appendChild(el('text', { x: lx, y: y - 11, 'text-anchor': 'middle', 'class': 'num-t' }, String(i + 1)));
+    });
+  }
+  draw('seq-connect', [
+    { from: 'you', to: 'claude', label: 'Add ClubChat as a connector' },
+    { from: 'claude', to: 'api', label: 'Calls /mcp with no token' },
+    { from: 'api', to: 'claude', label: '"Sign in first. Here is where."' },
+    { from: 'claude', to: 'api', label: 'Reads where ClubChat signs people in' },
+    { from: 'claude', to: 'you', label: "Opens ClubChat's sign-in page" },
+    { from: 'you', to: 'api', label: 'Email and password, then press Allow' },
+    { from: 'api', to: 'claude', label: 'A read-only Clubby token' },
+    { from: 'claude', to: 'api', label: 'Calls /mcp with the token: connected' }
+  ]);
+  draw('seq-ask', [
+    { from: 'you', to: 'claude', label: '"What\'s on my calendar this week?"' },
+    { from: 'claude', to: 'api', label: 'my_calendar, this week, with the token' },
+    { self: 'api', label: 'Checks token, account, rate limit,', label2: 'then reads your calendar' },
+    { from: 'api', to: 'claude', label: 'Tue 6 pm track, Sat 8 am long run' },
+    { from: 'claude', to: 'you', label: 'Says the answer out loud' }
+  ]);
+})();
+</script>
